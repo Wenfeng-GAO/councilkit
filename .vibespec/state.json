@@ -43,7 +43,32 @@
             "scopeNote": "6 files (scaffold incl. vite-env.d.ts); exceeds 3-5 cap by 1 — documented tension between Phase 4 cap and scaffolding's inherent file count."
           }
         },
-        "T2": { "status": "pending" },
+        "T2": {
+          "status": "completed",
+          "completedAt": "2026-06-23T20:20:00Z",
+          "selfCheck": {
+            "result": "passed",
+            "typecheck": "./node_modules/.bin/tsc --noEmit → pass",
+            "lint": "./node_modules/.bin/biome check src → Checked 4 files, No fixes applied, pass (retry after lint-error)",
+            "build": "./node_modules/.bin/vite build → 81 modules, built 673ms, dist 产出 ✓",
+            "attempts": [
+              {
+                "attempt": 1,
+                "result": "failed",
+                "faultType": "lint-error",
+                "reason": "biome 报 2 formatter 错误: globals.css font-family 多行应为单行; main.tsx import 未按 organizeImports 排序"
+              },
+              { "attempt": 2, "result": "passed", "fix": "biome check --write src 自动修复 formatter + organizeImports" }
+            ],
+            "evidence": [
+              { "file": "src/main.tsx", "exists": true, "substantive": true, "wired": true },
+              { "file": "src/app/router.tsx", "exists": true, "substantive": true, "wired": true },
+              { "file": "src/styles/globals.css", "exists": true, "substantive": true, "wired": true },
+              { "file": "tailwind.config.ts", "exists": true, "substantive": true, "wired": true },
+              { "file": "postcss.config.js", "exists": true, "substantive": true, "wired": true }
+            ]
+          }
+        },
         "T3": { "status": "pending" },
         "T4": { "status": "pending" },
         "T5": { "status": "pending", "note": "后续 task，本轮不执行" },
@@ -56,7 +81,7 @@
         "T12": { "status": "pending" }
       },
       "consecutiveFailures": 0,
-      "currentTask": "T2",
+      "currentTask": "T3",
       "startedAt": "2026-06-23T19:45:00Z",
       "environmentNotes": {
         "pnpmRunBlocked": "pnpm 11 不再读 package.json 的 pnpm 字段；run 前置 deps-check 与本地 ignored-builds 策略冲突，pnpm typecheck/lint 被 runDepsStatusCheck 阻塞。",

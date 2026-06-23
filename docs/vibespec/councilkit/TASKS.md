@@ -173,3 +173,13 @@ created: 2026-06-23
   - faultType: n/a（自检通过）
 - scope note: 6 文件含脚手架固有 vite-env.d.ts，超 3-5 cap 1，记录为 cap vs 脚手架固有文件数的张力。
 - 环境发现: pnpm 11 不读 package.json `pnpm` 字段，`pnpm run` 前置 deps-check 与 ignored-builds 冲突阻塞；验证改用 .bin 直调。详见 state.json environmentNotes。
+
+### T2 完成总结
+
+- 完成时间: 2026-06-23T20:20:00Z
+- 创建/修改的文件: src/main.tsx, src/app/router.tsx, src/styles/globals.css, tailwind.config.ts, postcss.config.js
+- 自检结果（attempt 2 passed）:
+  - attempt 1 FAILED, faultType=lint-error: globals.css font-family 多行 + main.tsx import 未排序（2 个 formatter 错误）
+  - attempt 2 PASSED: `biome check --write src` 自动修复；typecheck ✓ / lint ✓ / build ✓（81 modules, 673ms）
+  - Step 3.1 MUST-HAVE ✓（5 文件 EXISTS/SUBSTANTIVE/WIRED 全 passed；build 产出 CSS 证明 tailwind/postcss wired）
+- 机制观察: 真实展示了 faultType=lint-error 分类 + retry 链路；attempt 1 失败未达 Step 3.5 触发条件（consecutiveFailures 仅 1）。
