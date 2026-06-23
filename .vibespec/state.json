@@ -322,14 +322,22 @@
           "kind": "static"
         },
         "VT4": {
-          "status": "pending",
+          "status": "completed",
           "dimension": "视觉一致性",
-          "kind": "runtime"
+          "kind": "runtime",
+          "verdict": "static-fallback",
+          "evidencePointer": "VERIFY.md#vt4",
+          "fallbackReason": "无浏览器/截图工具",
+          "staticHeuristic": "已附核对清单(见VERIFY.md)"
         },
         "VT5": {
-          "status": "pending",
+          "status": "completed",
           "dimension": "响应式与a11y",
-          "kind": "runtime"
+          "kind": "runtime",
+          "verdict": "static-fallback",
+          "evidencePointer": "VERIFY.md#vt5",
+          "fallbackReason": "无浏览器/截图工具",
+          "staticHeuristic": "已附核对清单(见VERIFY.md)"
         },
         "VT6": {
           "status": "failed",
@@ -342,9 +350,13 @@
           "ftHandling": "deferred-ft"
         },
         "VT7": {
-          "status": "pending",
+          "status": "completed",
           "dimension": "浏览器QA",
-          "kind": "runtime"
+          "kind": "runtime",
+          "verdict": "static-fallback",
+          "evidencePointer": "VERIFY.md#vt7",
+          "fallbackReason": "无浏览器/截图工具",
+          "staticHeuristic": "已附核对清单(见VERIFY.md)"
         }
       },
       "consecutiveFailures": 0,
