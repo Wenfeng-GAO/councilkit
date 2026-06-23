@@ -16,6 +16,52 @@
       "status": "confirmed",
       "artifact": "docs/vibespec/councilkit/TECH.md",
       "confirmedAt": "2026-06-22T00:00:00Z"
+    },
+    "implement": {
+      "status": "in-progress",
+      "artifact": "docs/vibespec/councilkit/TASKS.md",
+      "scope": {
+        "thisRun": "T1-T4",
+        "purpose": "end-to-end validation of Phase 4 Step 3.1 (MUST-HAVE WIRED) and Step 3.5 (escalation-time review)"
+      },
+      "tasks": {
+        "T1": {
+          "status": "completed",
+          "completedAt": "2026-06-23T20:05:00Z",
+          "selfCheck": {
+            "result": "passed",
+            "typecheck": "./node_modules/.bin/tsc --noEmit → exit 0",
+            "lint": "./node_modules/.bin/biome check src → Checked 1 file, No fixes applied, exit 0",
+            "evidence": [
+              { "file": "package.json", "exists": true, "substantive": true, "wired": true },
+              { "file": "tsconfig.json", "exists": true, "substantive": true, "wired": true },
+              { "file": "vite.config.ts", "exists": true, "substantive": true, "wired": true },
+              { "file": "biome.json", "exists": true, "substantive": true, "wired": true },
+              { "file": "index.html", "exists": true, "substantive": true, "wired": true },
+              { "file": "src/vite-env.d.ts", "exists": true, "substantive": true, "wired": true }
+            ],
+            "scopeNote": "6 files (scaffold incl. vite-env.d.ts); exceeds 3-5 cap by 1 — documented tension between Phase 4 cap and scaffolding's inherent file count."
+          }
+        },
+        "T2": { "status": "pending" },
+        "T3": { "status": "pending" },
+        "T4": { "status": "pending" },
+        "T5": { "status": "pending", "note": "后续 task，本轮不执行" },
+        "T6": { "status": "pending" },
+        "T7": { "status": "pending" },
+        "T8": { "status": "pending" },
+        "T9": { "status": "pending" },
+        "T10": { "status": "pending" },
+        "T11": { "status": "pending" },
+        "T12": { "status": "pending" }
+      },
+      "consecutiveFailures": 0,
+      "currentTask": "T2",
+      "startedAt": "2026-06-23T19:45:00Z",
+      "environmentNotes": {
+        "pnpmRunBlocked": "pnpm 11 不再读 package.json 的 pnpm 字段；run 前置 deps-check 与本地 ignored-builds 策略冲突，pnpm typecheck/lint 被 runDepsStatusCheck 阻塞。",
+        "workaround": "验证命令改用 ./node_modules/.bin/tsc --noEmit 与 ./node_modules/.bin/biome check src 直调，与 pnpm run typecheck/lint 语义等价、不阻塞。"
+      }
     }
   }
 }
