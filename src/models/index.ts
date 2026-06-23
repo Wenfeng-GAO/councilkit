@@ -14,9 +14,11 @@ import { validateRoom } from "./room";
 import type { Room } from "./room";
 import { validateRound } from "./round";
 import type { Round, Summary } from "./round";
+import { validateTemplate } from "./template";
+import type { Template } from "./template";
 
-export type { Agent, Message, Round, Room, Summary };
-export { validateAgent, validateMessage, validateRound, validateRoom };
+export type { Agent, Message, Round, Room, Summary, Template };
+export { validateAgent, validateMessage, validateRound, validateRoom, validateTemplate };
 
 function now(): number {
   return Date.now();

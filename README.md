@@ -61,6 +61,28 @@ Historical (pre-transform) exploratory notes:
 - Tooling: Biome (lint/format), Vitest, Playwright, pnpm
 - Secrets: AES-encrypted API key in localStorage
 
+## Getting Started
+
+```bash
+pnpm install
+cp .env.example .env.local   # 填入模型 API Key
+pnpm dev                      # http://localhost:5173
+```
+
+验证命令（pnpm 11 在本机被前置 deps-check 阻塞时，用 .bin 等价直调）:
+
+```bash
+pnpm typecheck   # 或 ./node_modules/.bin/tsc --noEmit
+pnpm lint        # 或 ./node_modules/.bin/biome check src
+pnpm build
+```
+
+定义模型 API Key 的环境变量（`VITE_CLAUDE_API_KEY` / `VITE_OPENAI_API_KEY` / `VITE_DEEPSEEK_API_KEY`）后即可新建房间、添加 agent、发起多 agent 讨论。无 Key 时 agent 会静默离线，UI 正常。
+
+## Implementation Status
+
+T1–T12（构建 → 入口 → 模型 → db → 服务 → 工具函数 → 状态 → 布局 → 基础 UI → 页面 → 路由 → 质量收尾）全部完成，PRD P0（R1–R8）核心流程可走通：新建房间 → 添加 agent → 发起讨论（agents 互相看见并发言）→ 自动总结 → 用户追问。自动化测试与浏览器 QA 证据见 [集成验证报告](docs/vibespec/councilkit/VERIFY.md)。
+
 ## License
 
 MIT
