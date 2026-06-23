@@ -26,22 +26,40 @@ The core product idea is not "multi-agent chat". It is organized multi-agent dec
 
 ## Repository Status
 
-This repository currently contains the product and technical design documents for the initial public project setup. Implementation has not started yet.
+Implementation is in progress, driven by [VibeSpec](https://github.com/Wenfeng-GAO/vibespec) — a spec-first, checkpoint-driven workflow. Product definition (PRD), design (DESIGN), and tech plan (TECH) have been confirmed through VibeSpec and are the source of truth for current work.
+
+The VibeSpec pipeline also persists per-phase state under `.vibespec/` (state, tasks, gate evidence).
+
+## Technology Direction
+
+> **Note:** Earlier design notes explored a macOS SwiftUI/SwiftData implementation. The confirmed TECH plan resolves the open "Web app vs macOS native" question in favor of a **pure-client Web app**. The SwiftUI notes under `docs/` are retained as historical context only; live implementation follows the Web stack below.
 
 ## Documentation
+
+VibeSpec confirmed artifacts (current source of truth):
+
+- [PRD](docs/vibespec/councilkit/PRD.md)
+- [DESIGN](docs/vibespec/councilkit/DESIGN.md)
+- [TECH](docs/vibespec/councilkit/TECH.md)
+- [Implementation tasks](docs/vibespec/councilkit/TASKS.md)
+
+Historical (pre-transform) exploratory notes:
 
 - [Product document](docs/product.md)
 - [Technical design](docs/technical-design.md)
 - [Roadmap](docs/roadmap.md)
 
-## Suggested Stack
+## Confirmed Stack (per TECH.md)
 
-- macOS app: SwiftUI
-- Persistence: SwiftData, or SQLite plus GRDB if migration control becomes important
-- Concurrency: Swift Concurrency
-- Networking: URLSession
-- Secrets: Keychain
-- Export: Markdown first, PDF later
+- Runtime: browser
+- Language: TypeScript 5.x (strict)
+- Framework: React 18 + Vite 5
+- Routing: React Router 6
+- Styling: Tailwind CSS 3 (dark theme built-in)
+- State: Zustand (client) + TanStack Query (server)
+- Persistence: IndexedDB via Dexie.js
+- Tooling: Biome (lint/format), Vitest, Playwright, pnpm
+- Secrets: AES-encrypted API key in localStorage
 
 ## License
 

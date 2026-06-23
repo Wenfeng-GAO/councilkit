@@ -5,3 +5,14 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.playground/xcuserdata/
+
+# Node / Web (VibeSpec Phase 4 implementation stack)
+node_modules/
+dist/
+.vite/
+*.log
+.env
+.env.local
+coverage/
+playwright-report/
+test-results/

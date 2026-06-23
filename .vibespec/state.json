@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "projectSlug": "councilkit",
+  "phases": {
+    "define": {
+      "status": "confirmed",
+      "artifact": "docs/vibespec/councilkit/PRD.md",
+      "confirmedAt": "2026-06-12T17:30:00Z"
+    },
+    "design": {
+      "status": "confirmed",
+      "artifact": "docs/vibespec/councilkit/DESIGN.md",
+      "confirmedAt": "2026-06-16T00:00:00Z"
+    },
+    "tech": {
+      "status": "confirmed",
+      "artifact": "docs/vibespec/councilkit/TECH.md",
+      "confirmedAt": "2026-06-22T00:00:00Z"
+    }
+  }
+}
