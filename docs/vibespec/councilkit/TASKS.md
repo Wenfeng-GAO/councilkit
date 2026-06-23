@@ -92,29 +92,34 @@ created: 2026-06-23
 
 ---
 
-## T4: Dexie 数据库层与模型 service 抽象（本轮 WIRED 验证靶）
+## T4: Dexie 数据库层与模型 service 注册表（本轮 WIRED 验证靶）
 
 - 前置依赖: T3
 - 允许修改范围:
   - `src/lib/db.ts`（新建，Dexie schema 定义 + CRUD）
-  - `src/services/model-registry.ts`（新建，模型路由 + 调度接口）
+  - `src/services/model-registry.ts`（新建，ModelService 契约 + registry 机制）
 - 预期产出:
   - `db.ts`: `class CouncilKitDB extends Dexie`，定义 rooms/agents/messages 表，导出 `db` 单例 + `addRoom`/`getRoom`/`addMessage`/`getMessagesByRound`
-  - `model-registry.ts`: `interface ModelService` + `getModelService(model: ModelType)` 注册表（具体实现延后 T5），导出 `dispatchMessage`
+  - `model-registry.ts`: `interface ModelService` + 空注册表 `Map<ModelType, ModelService>` + `registerModelService` / `getModelService`
 - 验证方式:
-  - [ ] `pnpm typecheck` 通过
-  - [ ] `pnpm lint` 通过
-  - [ ] Step 3.1 EXISTS/SUBSTANTIVE/WIRED（本轮刻意构造场景，见验证记录）
+  - [ ] `tsc --noEmit` 通过
+  - [ ] `biome check src` 通过
+  - [ ] `vite build` 通过
+  - [x] Step 3.1 EXISTS/SUBSTANTIVE/WIRED（见 T4 完成总结的 attempts + review）
 - 对应需求: R1, R4, R6, R12（持久化与服务调度基座）
 
-> WIRED 验证靶：本轮第一遍实现将在 `model-registry.ts` 引入一个未接线的 `dispatchMessage` 导出占位（声明但未真正路由到任何实现的 service，且未被任何地方引用），用以验证 Step 3.1 是否能抓到 WIRED=failed 并触发 faultType=unwired-stub。修复后重跑自检应 passed。
+> Rescope 记录: 原 T4 预期含 `dispatchMessage`（消息分发调度）。Step 3.5 升级前审查 verdict=should-escalate 判定其非占位实现依赖 T5 的具体 model service，归属错位。已 rescope——dispatchMessage 移至 T5，T4 仅交付 interface + registry 机制。
 
 ---
 
-## T5: 模型 API service 实现（claude/openai/deepseek）
+## T5: 模型 API service 实现（claude/openai/deepseek）+ dispatchMessage 调度
 
 - 前置依赖: T4
-- 允许修改范围: `src/services/claude.ts`, `openai.ts`, `deepseek.ts`（新建）
+- 允许修改范围: `src/services/claude.ts`, `openai.ts`, `deepseek.ts`, `src/services/dispatch.ts`（新建）
+- 预期产出:
+  - 三 service：实现 `ModelService` 契约，通过 SSE 调用各自 API，`streamMessage` 产出流式 chunk
+  - 启动时 `registerModelService` 注册三者
+  - `dispatch.ts`: `dispatchMessage(req)` 调 `getModelService(model)` 编排流式并累积分片（从 T4 rescope 移入）
 - 验证方式: typecheck/lint + 集成测试 mock（延后）
 - 对应需求: R2, R4, R7
 
@@ -191,3 +196,19 @@ created: 2026-06-23
 - 自检结果: typecheck ✓ / lint ✓（9 files No fixes applied）/ 一次过无 retry
 - Step 3.1 MUST-HAVE ✓（5 文件全 passed；types↔models 互引、工厂调校验 self-wired）
 - faultType: n/a
+
+### T4 完成总结
+
+- 完成时间: 2026-06-23T21:00:00Z
+- 创建/修改的文件: src/lib/db.ts, src/services/model-registry.ts
+- 自检结果（attempt 3 passed）:
+  - attempt 1 FAILED, faultType=unwired-stub, cf=1: streamMessage throw 占位 (SUBSTANTIVE) + dispatchMessage 孤立 (WIRED)
+  - attempt 2 FAILED, faultType=unwired-stub, cf=2: retry 改 yield "" 仍占位 + dispatchMessage 孤立 → **触发 Step 3.5**
+  - Step 3.5 review (scope=single-fallback, verdict=should-escalate): 盲型发现 dispatchMessage 死代码 + streamMessage 空实现；验收型判定 dispatchMessage 归属错位（依赖 T5），建议 rescope
+  - attempt 3 PASSED: 据 verdict rescope，移除 dispatchMessage (→T5)，T4 只留 interface + registry；typecheck ✓ / lint ✓ / build ✓
+  - Step 3.1 MUST-HAVE ✓（db.ts + model-registry.ts 全 wired）
+- 机制验证要点:
+  - faultType 分类在真实占位场景生效 (unwired-stub)
+  - consecutiveFailures 累积 1→2，第 2 次失败准确触发 Step 3.5（第 1 次不触发，证明"==2"门控精确）
+  - Step 3.5 verdict 驱动了任务边界修正 (rescope dispatchMessage→T5)
+- 真实发现: T4 原计划含 dispatchMessage，但其非占位实现强依赖 T5 service；Step 3.5 审查识别出此依赖倒置并 rescope
