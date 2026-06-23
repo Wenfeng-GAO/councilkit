@@ -97,13 +97,11 @@ verified_at: 2026-06-24
 | 约定命令 | 实际命令（等价性降级） | 退出码 | 结论 |
 |----------|----------------------|--------|------|
 | pnpm typecheck | .bin/tsc --noEmit | 0 | ✓ |
-| pnpm lint | .bin/biome check src | 0 (42 files) | ✓ |
+| pnpm lint | .bin/biome check src | 0 (43 files) | ✓ |
 | pnpm build | .bin/vite build | 0 (485KB) | ✓ |
-| pnpm test:unit | — | n/a | **defect** |
+| pnpm test:unit | .bin/vitest run | 0 (25 tests passed) | ✓ |
 
-**verdict: defect** — typecheck/lint/build 全绿；但 TECH 要求"关键数据模型（Room/Message/Round）须有校验函数单测"，当前 0 测试文件。属已实现代码范围缺口（非产品未完成）。
-
-**建议 FT**: 补 models 校验函数单测（Room/Agent/Message/Round/Template validate + create）。本轮记 FT2，留后续执行。
+**verdict: passed** — typecheck/lint/build 全绿；FT2 已补 models 校验函数单测（tests/unit/models.test.ts，25 用例覆盖 Room/Agent/Message/Round/Template 的 validate 边界与 create 工厂 stamp/throw 行为）。TECH"关键数据模型须有校验单测"要求满足。
 
 ## VT7: 浏览器 QA
 
