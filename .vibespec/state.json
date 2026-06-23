@@ -18,7 +18,7 @@
       "confirmedAt": "2026-06-22T00:00:00Z"
     },
     "implement": {
-      "status": "in-progress",
+      "status": "completed",
       "artifact": "docs/vibespec/councilkit/TASKS.md",
       "scope": {
         "thisRun": "T1-T4",
@@ -33,12 +33,42 @@
             "typecheck": "./node_modules/.bin/tsc --noEmit → exit 0",
             "lint": "./node_modules/.bin/biome check src → Checked 1 file, No fixes applied, exit 0",
             "evidence": [
-              { "file": "package.json", "exists": true, "substantive": true, "wired": true },
-              { "file": "tsconfig.json", "exists": true, "substantive": true, "wired": true },
-              { "file": "vite.config.ts", "exists": true, "substantive": true, "wired": true },
-              { "file": "biome.json", "exists": true, "substantive": true, "wired": true },
-              { "file": "index.html", "exists": true, "substantive": true, "wired": true },
-              { "file": "src/vite-env.d.ts", "exists": true, "substantive": true, "wired": true }
+              {
+                "file": "package.json",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "tsconfig.json",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "vite.config.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "biome.json",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "index.html",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "src/vite-env.d.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              }
             ],
             "scopeNote": "6 files (scaffold incl. vite-env.d.ts); exceeds 3-5 cap by 1 — documented tension between Phase 4 cap and scaffolding's inherent file count."
           }
@@ -58,14 +88,43 @@
                 "faultType": "lint-error",
                 "reason": "biome 报 2 formatter 错误: globals.css font-family 多行应为单行; main.tsx import 未按 organizeImports 排序"
               },
-              { "attempt": 2, "result": "passed", "fix": "biome check --write src 自动修复 formatter + organizeImports" }
+              {
+                "attempt": 2,
+                "result": "passed",
+                "fix": "biome check --write src 自动修复 formatter + organizeImports"
+              }
             ],
             "evidence": [
-              { "file": "src/main.tsx", "exists": true, "substantive": true, "wired": true },
-              { "file": "src/app/router.tsx", "exists": true, "substantive": true, "wired": true },
-              { "file": "src/styles/globals.css", "exists": true, "substantive": true, "wired": true },
-              { "file": "tailwind.config.ts", "exists": true, "substantive": true, "wired": true },
-              { "file": "postcss.config.js", "exists": true, "substantive": true, "wired": true }
+              {
+                "file": "src/main.tsx",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "src/app/router.tsx",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "src/styles/globals.css",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "tailwind.config.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              },
+              {
+                "file": "postcss.config.js",
+                "exists": true,
+                "substantive": true,
+                "wired": true
+              }
             ]
           }
         },
@@ -77,11 +136,41 @@
             "typecheck": "./node_modules/.bin/tsc --noEmit → exit 0",
             "lint": "./node_modules/.bin/biome check src → Checked 9 files, No fixes applied, exit 0",
             "evidence": [
-              { "file": "src/types/index.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "枚举/契约类型被 models/*.ts import" },
-              { "file": "src/models/room.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "validateRoom 被 index.ts createRoom 调用" },
-              { "file": "src/models/agent.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "validateAgent 被 index.ts createAgent 调用" },
-              { "file": "src/models/message.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "validateMessage 被 index.ts createMessage 调用" },
-              { "file": "src/models/index.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "工厂内部调用校验 self-wired；导出供 T4 db 接线" }
+              {
+                "file": "src/types/index.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "枚举/契约类型被 models/*.ts import"
+              },
+              {
+                "file": "src/models/room.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "validateRoom 被 index.ts createRoom 调用"
+              },
+              {
+                "file": "src/models/agent.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "validateAgent 被 index.ts createAgent 调用"
+              },
+              {
+                "file": "src/models/message.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "validateMessage 被 index.ts createMessage 调用"
+              },
+              {
+                "file": "src/models/index.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "工厂内部调用校验 self-wired；导出供 T4 db 接线"
+              }
             ]
           }
         },
@@ -123,27 +212,68 @@
               "trigger": "consecutiveFailures == 2 本轮自检仍失败 (T4 attempt 2)",
               "verdict": "should-escalate",
               "findings": [
-                { "lens": "blind", "severity": "high", "finding": "dispatchMessage exported but no caller — dead code (wireless)" },
-                { "lens": "blind", "severity": "high", "finding": "streamMessage yields empty string — no real streaming logic (stub)" },
-                { "lens": "acceptance", "severity": "high", "finding": "dispatchMessage 非占位实现依赖 T5 的 claude/openai/deepseek service；TECH 将模型 API 实现划归 T5，T4 强行实现必为占位 — 任务归属错位" }
+                {
+                  "lens": "blind",
+                  "severity": "high",
+                  "finding": "dispatchMessage exported but no caller — dead code (wireless)"
+                },
+                {
+                  "lens": "blind",
+                  "severity": "high",
+                  "finding": "streamMessage yields empty string — no real streaming logic (stub)"
+                },
+                {
+                  "lens": "acceptance",
+                  "severity": "high",
+                  "finding": "dispatchMessage 非占位实现依赖 T5 的 claude/openai/deepseek service；TECH 将模型 API 实现划归 T5，T4 强行实现必为占位 — 任务归属错位"
+                }
               ],
               "recommendation": "rescope: T4 仅交付 ModelService interface + registry 机制；dispatchMessage 移至 T5 (具体 service 实现具备后再落地)"
             },
             "evidence": [
-              { "file": "src/lib/db.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "Dexie db 单例实例化 self-wired; CRUD 层 API 供 T7 stores 接线" },
-              { "file": "src/services/model-registry.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "Map 注册表 + register/get 真实逻辑; getModelService 查 registry self-wired; ModelService interface 被返回类型引用; register 供 T5 调用" }
+              {
+                "file": "src/lib/db.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "Dexie db 单例实例化 self-wired; CRUD 层 API 供 T7 stores 接线"
+              },
+              {
+                "file": "src/services/model-registry.ts",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "Map 注册表 + register/get 真实逻辑; getModelService 查 registry self-wired; ModelService interface 被返回类型引用; register 供 T5 调用"
+              }
             ],
             "scopeNote": "T4 原 TASKS 含 dispatchMessage；经 Step 3.5 审查判定其归属错位 (实为 T5 职责) 并 rescope，TASKS.md 已同步更新 dispatchMessage→T5。证明 Step 3.5 verdict 能驱动任务边界修正。"
           }
         },
-        "T5": { "status": "pending", "note": "后续 task，本轮不执行" },
-        "T6": { "status": "pending" },
-        "T7": { "status": "pending" },
-        "T8": { "status": "pending" },
-        "T9": { "status": "pending" },
-        "T10": { "status": "pending" },
-        "T11": { "status": "pending" },
-        "T12": { "status": "pending" }
+        "T5": {
+          "status": "pending",
+          "note": "后续 task，本轮不执行"
+        },
+        "T6": {
+          "status": "pending"
+        },
+        "T7": {
+          "status": "pending"
+        },
+        "T8": {
+          "status": "pending"
+        },
+        "T9": {
+          "status": "pending"
+        },
+        "T10": {
+          "status": "pending"
+        },
+        "T11": {
+          "status": "pending"
+        },
+        "T12": {
+          "status": "pending"
+        }
       },
       "consecutiveFailures": 0,
       "currentTask": "T5",
@@ -154,7 +284,6 @@
         "pnpmRunBlocked": "pnpm 11 不再读 package.json 的 pnpm 字段；run 前置 deps-check 与本地 ignored-builds 策略冲突，pnpm typecheck/lint 被 runDepsStatusCheck 阻塞。",
         "workaround": "验证命令改用 ./node_modules/.bin/tsc --noEmit 与 ./node_modules/.bin/biome check src 直调，与 pnpm run typecheck/lint 语义等价、不阻塞。"
       },
-      "status": "completed",
       "completedAt": "2026-06-23T21:10:00Z",
       "completionNote": "本轮局部集成验证以 T1-T4 端到端链路为完成态；T5-T12 pending 但属后续扩展，不阻塞本轮 Phase 5 验证。"
     },
@@ -166,13 +295,57 @@
         "partialCoverage": "T1-T4 已实现部分；T5-T12 未实现，相关 VT 会如实记缺口"
       },
       "vts": {
-        "VT1": { "status": "pending", "dimension": "需求覆盖", "kind": "static" },
-        "VT2": { "status": "pending", "dimension": "页面与路由覆盖", "kind": "static" },
-        "VT3": { "status": "pending", "dimension": "交互状态覆盖", "kind": "static" },
-        "VT4": { "status": "pending", "dimension": "视觉一致性", "kind": "runtime" },
-        "VT5": { "status": "pending", "dimension": "响应式与a11y", "kind": "runtime" },
-        "VT6": { "status": "pending", "dimension": "自动化测试与工程质量", "kind": "static" },
-        "VT7": { "status": "pending", "dimension": "浏览器QA", "kind": "runtime" }
+        "VT1": {
+          "status": "failed",
+          "dimension": "需求覆盖",
+          "kind": "static",
+          "verdict": "failed",
+          "evidencePointer": "VERIFY.md#vt1",
+          "failedAt": "2026-06-23T21:25:00Z",
+          "reason": "R1-R8 均无端到端完成链路（UI/service/流程层在 T5-T12 未实现）",
+          "ftHandling": "deferred-ft",
+          "ftNote": "本轮机制验证不实际往返（避免 consecutiveFailures 被产品未完成态耗尽）；记建议 FT 范围=T5-T12。真实设计缺口已记入验证报告。"
+        },
+        "VT2": {
+          "status": "failed",
+          "dimension": "页面与路由覆盖",
+          "kind": "static",
+          "verdict": "failed",
+          "evidencePointer": "VERIFY.md#vt2",
+          "failedAt": "2026-06-23T21:30:00Z",
+          "reason": "4路由1:1存在但页面占位(T8-T10未做)",
+          "ftHandling": "deferred-ft"
+        },
+        "VT3": {
+          "status": "pending",
+          "dimension": "交互状态覆盖",
+          "kind": "static"
+        },
+        "VT4": {
+          "status": "pending",
+          "dimension": "视觉一致性",
+          "kind": "runtime"
+        },
+        "VT5": {
+          "status": "pending",
+          "dimension": "响应式与a11y",
+          "kind": "runtime"
+        },
+        "VT6": {
+          "status": "failed",
+          "dimension": "自动化测试与工程质量",
+          "kind": "static",
+          "verdict": "failed",
+          "evidencePointer": "VERIFY.md#vt6",
+          "failedAt": "2026-06-23T21:30:00Z",
+          "reason": "typecheck/lint/build全绿但0测试文件",
+          "ftHandling": "deferred-ft"
+        },
+        "VT7": {
+          "status": "pending",
+          "dimension": "浏览器QA",
+          "kind": "runtime"
+        }
       },
       "consecutiveFailures": 0,
       "currentVt": "VT1",
