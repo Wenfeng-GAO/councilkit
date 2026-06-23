@@ -1,13 +1,22 @@
-import type { AgentStatus, ModelType, RoomStatus, SenderType, ValidationResult } from "@/types";
+import type {
+  AgentStatus,
+  ModelType,
+  RoomStatus,
+  RoundStatus,
+  SenderType,
+  ValidationResult,
+} from "@/types";
 import { validateAgent } from "./agent";
 import type { Agent } from "./agent";
 import { validateMessage } from "./message";
 import type { Message } from "./message";
 import { validateRoom } from "./room";
 import type { Room } from "./room";
+import { validateRound } from "./round";
+import type { Round, Summary } from "./round";
 
-export type { Agent, Message, Room };
-export { validateAgent, validateMessage, validateRoom };
+export type { Agent, Message, Round, Room, Summary };
+export { validateAgent, validateMessage, validateRound, validateRoom };
 
 function now(): number {
   return Date.now();
@@ -82,4 +91,38 @@ export function createMessage(input: CreateMessageInput): Message {
   };
   assertValid(validateMessage(message), "Message");
   return message;
+}
+
+export interface CreateRoundInput {
+  roundNumber: number;
+  roomId: string;
+  status?: RoundStatus;
+}
+
+export function createRound(input: CreateRoundInput): Round {
+  const round: Round = {
+    id: uuid(),
+    roundNumber: input.roundNumber,
+    roomId: input.roomId,
+    messageIds: [],
+    status: input.status ?? "active",
+  };
+  assertValid(validateRound(round), "Round");
+  return round;
+}
+
+export interface CreateSummaryInput {
+  roundId: string;
+  content: string;
+  model: ModelType;
+}
+
+export function createSummary(input: CreateSummaryInput): Summary {
+  return {
+    id: uuid(),
+    roundId: input.roundId,
+    content: input.content,
+    generatedAt: now(),
+    model: input.model,
+  };
 }
