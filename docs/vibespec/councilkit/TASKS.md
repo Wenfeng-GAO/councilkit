@@ -212,3 +212,19 @@ created: 2026-06-23
   - consecutiveFailures 累积 1→2，第 2 次失败准确触发 Step 3.5（第 1 次不触发，证明"==2"门控精确）
   - Step 3.5 verdict 驱动了任务边界修正 (rescope dispatchMessage→T5)
 - 真实发现: T4 原计划含 dispatchMessage，但其非占位实现强依赖 T5 service；Step 3.5 审查识别出此依赖倒置并 rescope
+
+---
+
+## FT1: 修复 VT3 交互状态覆盖缺口（Phase 5 往返验证）
+
+- 来源: Phase 5 VT3 集成验证（交互状态覆盖为 0，组件层缺失）
+- 失败证据: VERIFY.md#vt3 — src/components/ 不存在，DESIGN 声明的交互状态(loading/empty/error/edge)无任何实现
+- 允许修改范围: `src/components/shared/EmptyState.tsx`（新建，作为交互状态基座，验证往返机制）
+- 预期产出:
+  - `EmptyState.tsx`: 通用空状态组件，props { title, hint }，符合 DESIGN EmptyState 约定
+- 验证方式:
+  - [ ] typecheck 通过
+  - [ ] lint 通过
+  - [ ] 重跑 VT3 应能看到至少 1 个交互状态组件落地
+- 对应需求: R1(创建房间空状态)、空数据兜底
+- 往返说明: 本 FT 为 Phase 5 阶段往返验证的最小修复——证明 failed VT → FT → 回 Phase 4 → retry VT3 的闭环。不全量补 T9（保持机制验证聚焦）。

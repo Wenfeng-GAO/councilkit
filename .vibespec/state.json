@@ -273,6 +273,24 @@
         },
         "T12": {
           "status": "pending"
+        },
+        "FT1": {
+          "status": "completed",
+          "completedAt": "2026-06-23T21:50:00Z",
+          "selfCheck": {
+            "result": "passed",
+            "typecheck": "exit 0",
+            "lint": "Checked 12 files No fixes applied",
+            "evidence": [
+              {
+                "file": "src/components/shared/EmptyState.tsx",
+                "exists": true,
+                "substantive": true,
+                "wired": true,
+                "wiredReason": "FT1 产物，将供 T8/T10 页面接线；层 API self-wired"
+              }
+            ]
+          }
         }
       },
       "consecutiveFailures": 0,
@@ -285,7 +303,8 @@
         "workaround": "验证命令改用 ./node_modules/.bin/tsc --noEmit 与 ./node_modules/.bin/biome check src 直调，与 pnpm run typecheck/lint 语义等价、不阻塞。"
       },
       "completedAt": "2026-06-23T21:10:00Z",
-      "completionNote": "本轮局部集成验证以 T1-T4 端到端链路为完成态；T5-T12 pending 但属后续扩展，不阻塞本轮 Phase 5 验证。"
+      "completionNote": "本轮局部集成验证以 T1-T4 端到端链路为完成态；T5-T12 pending 但属后续扩展，不阻塞本轮 Phase 5 验证。",
+      "resumedFromVerify": false
     },
     "verify": {
       "status": "in-progress",
@@ -317,9 +336,43 @@
           "ftHandling": "deferred-ft"
         },
         "VT3": {
-          "status": "pending",
+          "status": "failed",
           "dimension": "交互状态覆盖",
-          "kind": "static"
+          "kind": "static",
+          "verdict": "failed",
+          "evidencePointer": "VERIFY.md#vt3-retry",
+          "failedAt": "2026-06-23T21:55:00Z",
+          "reason": "retry后交互状态1/N(EmptyState落地)，仍远未达标",
+          "fixTask": "FT1(retry)",
+          "attempts": [
+            {
+              "attempt": 1,
+              "cf": 1,
+              "faultType": "coverage-gap"
+            },
+            {
+              "attempt": 2,
+              "cf": 2,
+              "step35": "触发"
+            }
+          ],
+          "review": {
+            "scope": "single-fallback",
+            "triggeredAt": "2026-06-23T21:55:00Z",
+            "verdict": "should-escalate",
+            "findings": [
+              {
+                "lens": "blind",
+                "severity": "med",
+                "finding": "EmptyState真实非占位，但交互状态仅1/N"
+              },
+              {
+                "lens": "acceptance",
+                "severity": "high",
+                "finding": "failed属产品未完成(T9-T10)非验证误判；不宜继续逐FT补"
+              }
+            ]
+          }
         },
         "VT4": {
           "status": "completed",
@@ -359,10 +412,11 @@
           "staticHeuristic": "已附核对清单(见VERIFY.md)"
         }
       },
-      "consecutiveFailures": 0,
-      "currentVt": "VT1",
+      "consecutiveFailures": 2,
+      "currentVt": "VT3",
       "pendingFixTasks": [],
-      "startedAt": "2026-06-23T21:15:00Z"
+      "startedAt": "2026-06-23T21:15:00Z",
+      "roundtripValidated": true
     }
   }
 }
