@@ -183,3 +183,11 @@ created: 2026-06-23
   - attempt 2 PASSED: `biome check --write src` 自动修复；typecheck ✓ / lint ✓ / build ✓（81 modules, 673ms）
   - Step 3.1 MUST-HAVE ✓（5 文件 EXISTS/SUBSTANTIVE/WIRED 全 passed；build 产出 CSS 证明 tailwind/postcss wired）
 - 机制观察: 真实展示了 faultType=lint-error 分类 + retry 链路；attempt 1 失败未达 Step 3.5 触发条件（consecutiveFailures 仅 1）。
+
+### T3 完成总结
+
+- 完成时间: 2026-06-23T20:35:00Z
+- 创建/修改的文件: src/types/index.ts, src/models/room.ts, src/models/agent.ts, src/models/message.ts, src/models/index.ts
+- 自检结果: typecheck ✓ / lint ✓（9 files No fixes applied）/ 一次过无 retry
+- Step 3.1 MUST-HAVE ✓（5 文件全 passed；types↔models 互引、工厂调校验 self-wired）
+- faultType: n/a

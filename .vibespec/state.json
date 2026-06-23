@@ -69,7 +69,22 @@
             ]
           }
         },
-        "T3": { "status": "pending" },
+        "T3": {
+          "status": "completed",
+          "completedAt": "2026-06-23T20:35:00Z",
+          "selfCheck": {
+            "result": "passed",
+            "typecheck": "./node_modules/.bin/tsc --noEmit → exit 0",
+            "lint": "./node_modules/.bin/biome check src → Checked 9 files, No fixes applied, exit 0",
+            "evidence": [
+              { "file": "src/types/index.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "枚举/契约类型被 models/*.ts import" },
+              { "file": "src/models/room.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "validateRoom 被 index.ts createRoom 调用" },
+              { "file": "src/models/agent.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "validateAgent 被 index.ts createAgent 调用" },
+              { "file": "src/models/message.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "validateMessage 被 index.ts createMessage 调用" },
+              { "file": "src/models/index.ts", "exists": true, "substantive": true, "wired": true, "wiredReason": "工厂内部调用校验 self-wired；导出供 T4 db 接线" }
+            ]
+          }
+        },
         "T4": { "status": "pending" },
         "T5": { "status": "pending", "note": "后续 task，本轮不执行" },
         "T6": { "status": "pending" },
@@ -81,7 +96,7 @@
         "T12": { "status": "pending" }
       },
       "consecutiveFailures": 0,
-      "currentTask": "T3",
+      "currentTask": "T4",
       "startedAt": "2026-06-23T19:45:00Z",
       "environmentNotes": {
         "pnpmRunBlocked": "pnpm 11 不再读 package.json 的 pnpm 字段；run 前置 deps-check 与本地 ignored-builds 策略冲突，pnpm typecheck/lint 被 runDepsStatusCheck 阻塞。",
