@@ -15,7 +15,9 @@
     "tech": {
       "status": "confirmed",
       "artifact": "docs/vibespec/councilkit/TECH.md",
-      "confirmedAt": "2026-06-22T00:00:00Z"
+      "confirmedAt": "2026-06-24T08:05:00Z",
+      "reconfirmedVia": "CR1-redo",
+      "cr1Change": "base_url 可配 + 多网关决策 + API 契约说明"
     },
     "implement": {
       "status": "completed",
@@ -321,63 +323,36 @@
       },
       "completedAt": "2026-06-23T21:10:00Z",
       "completionNote": "T5-T12 完成，PRD P0 R1-R8 核心流程代码层完整",
-      "resumedFromVerify": false
+      "resumedFromVerify": false,
+      "stale": false,
+      "cr1Reverify": {
+        "checkedAt": "2026-06-24T08:06:00Z",
+        "result": "consistent",
+        "ft": "T5-redo: claude.ts base_url 改 VITE_CLAUDE_BASE_URL 可配 + vite.config server.proxy + .env.example 更新",
+        "verification": "typecheck/lint/build/vitest 全绿 25/25"
+      }
     },
     "verify": {
       "status": "ready-for-confirm",
       "artifact": "docs/vibespec/councilkit/VERIFY.md",
-      "scope": {
-        "partialCoverage": false,
-        "coveredTasks": "T1-T12"
-      },
-      "vts": {
-        "VT1": {
-          "status": "completed",
-          "verdict": "passed",
-          "evidencePointer": "VERIFY.md#vt1"
-        },
-        "VT2": {
-          "status": "completed",
-          "verdict": "passed",
-          "evidencePointer": "VERIFY.md#vt2"
-        },
-        "VT3": {
-          "status": "completed",
-          "verdict": "passed",
-          "evidencePointer": "VERIFY.md#vt3"
-        },
-        "VT4": {
-          "status": "completed",
-          "verdict": "static-fallback",
-          "evidencePointer": "VERIFY.md#vt4",
-          "fallbackReason": "无浏览器工具"
-        },
-        "VT5": {
-          "status": "completed",
-          "verdict": "static-fallback",
-          "evidencePointer": "VERIFY.md#vt5",
-          "fallbackReason": "无浏览器工具"
-        },
-        "VT6": {
-          "status": "completed",
-          "verdict": "passed",
-          "evidencePointer": "VERIFY.md#vt6",
-          "note": "FT2 已补 models 单测 25 用例"
-        },
-        "VT7": {
-          "status": "completed",
-          "verdict": "static-fallback",
-          "evidencePointer": "VERIFY.md#vt7",
-          "fallbackReason": "无浏览器/无 API Key"
-        }
-      },
-      "consecutiveFailures": 0,
-      "currentVt": null,
-      "pendingFixTasks": [],
-      "startedAt": "2026-06-23T21:15:00Z",
-      "roundtripValidated": true,
-      "pendingCoverage": [],
-      "readyForConfirm": "2026-06-24T00:00:00Z"
+      "stale": false,
+      "cr1Reverify": "R2 模型选择需求未被削弱反增强(base_url 可配支持更多 provider)；VT6 测试仍全绿；其余 VT 结论不变",
+      "readyForConfirm": "2026-06-24T08:07:00Z"
+    }
+  },
+  "changeRequests": {
+    "CR1": {
+      "id": "CR1",
+      "entryPhase": "tech",
+      "affectedPhases": [
+        "tech",
+        "implement",
+        "verify"
+      ],
+      "status": "closed",
+      "reason": "模型 base_url 可配复用 Anthropic 兼容网关",
+      "phaseRevisedAt": "2026-06-24T08:05:00Z",
+      "closedAt": "2026-06-24T08:07:00Z"
     }
   }
 }

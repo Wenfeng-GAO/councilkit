@@ -1,0 +1,18 @@
+{
+  "id": "CR1",
+  "createdAt": "2026-06-24T08:00:00Z",
+  "reason": "用户变更: 模型 endpoint base_url 可配，复用 Anthropic 兼容网关（cld 的 ant/deepseek/zenmux provider），不限于 api.anthropic.com",
+  "entryPhase": "tech",
+  "affectedPhases": ["tech", "implement", "verify"],
+  "staleCascade": {
+    "tech": "stale-needs-revision",
+    "implement": "stale-code-contract",
+    "verify": "stale-pending"
+  },
+  "sanityNudge": {
+    "triggered": false,
+    "note": "声明 --phase=tech 与描述（base_url/网关/API）一致，无纠偏提示"
+  },
+  "status": "confirmed",
+  "confirmedAt": "2026-06-24T08:01:00Z"
+}

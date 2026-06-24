@@ -2,7 +2,9 @@ import { collectText, streamDeltas } from "@/lib/stream";
 import type { ModelMessage, ModelRequest } from "@/types";
 import type { ModelService } from "./model-registry";
 
-const CLAUDE_URL = "https://api.anthropic.com/v1/messages";
+const CLAUDE_URL =
+  (import.meta.env.VITE_CLAUDE_BASE_URL as string | undefined) ??
+  "https://api.anthropic.com/v1/messages";
 
 function toClaudeMessages(messages: ModelMessage[]): {
   system?: string;

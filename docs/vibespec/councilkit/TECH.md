@@ -218,6 +218,8 @@ public/                   # 静态资源
 
 三个模型 API（Claude / OpenAI / DeepSeek）统一封装为此契约。
 
+> **endpoint 可配（CR1）**: 各 service 的 base_url 不硬编码，由 Vite 环境变量覆写（`VITE_CLAUDE_BASE_URL` / `VITE_OPENAI_BASE_URL` / `VITE_DEEPSEEK_BASE_URL`）。允许多模型复用同一 Anthropic 协议兼容网关（如 cld 配置的智谱/DeepSeek/zenmux 网关）。浏览器跨域时经 vite dev server proxy 转发。
+
 - 用途: 发送消息并获取流式回复
 - 对应 PRD 需求: R4, R7
 - 请求:
@@ -421,6 +423,7 @@ interface StreamChunk {
 | 上下文压缩 | 滑动窗口 + 摘要注入 | 智能摘要链 | MVP 阶段实现简单，每轮已有总结可复用，注入成本低 |
 | 代码规范 | Biome | ESLint + Prettier | 单一工具替代两个，配置更简单，速度更快 |
 | Git hooks | lefthook | Husky | 更轻量，pnpm 兼容性好 |
+| 模型 endpoint 可配 | base_url 环境变量可覆写（VITE_CLAUDE_BASE_URL 等），复用 Anthropic 协议兼容网关 | 硬编码 api.anthropic.com | 允许接入 cld 已配的 Anthropic 兼容网关（智谱 GLM / DeepSeek / zenmux 等），同一 service 复用多 provider；浏览器跨域时经 vite dev proxy |
 
 ## 延后到实现
 
