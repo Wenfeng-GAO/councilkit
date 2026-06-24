@@ -2,9 +2,13 @@ import { collectText, streamDeltas } from "@/lib/stream";
 import type { ModelMessage, ModelRequest } from "@/types";
 import type { ModelService } from "./model-registry";
 
-const CLAUDE_URL =
-  (import.meta.env.VITE_CLAUDE_BASE_URL as string | undefined) ??
-  "https://api.anthropic.com/v1/messages";
+// base_url 可配（CR1）。dev 走 vite proxy /api/claude 避浏览器 CORS；
+// prod 直连 base/v1/messages（部署侧自行处理 CORS/反代）。
+const CLAUDE_BASE =
+  (import.meta.env.VITE_CLAUDE_BASE_URL as string | undefined) ?? "https://api.anthropic.com";
+const CLAUDE_URL = import.meta.env.DEV
+  ? "/api/claude/v1/messages"
+  : `${CLAUDE_BASE.replace(/\/$/, "")}/v1/messages`;
 
 function toClaudeMessages(messages: ModelMessage[]): {
   system?: string;
