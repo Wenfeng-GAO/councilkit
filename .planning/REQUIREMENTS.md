@@ -62,23 +62,33 @@
 
 ## Traceability
 
-roadmap 创建时填充。每条 v1 需求映射到恰好一个 phase。
+每条 v1 需求映射到恰好一个 phase（见 `.planning/ROADMAP.md`）。P0 R1-R8 已在 VibeSpec MVP 交付，记录为 Completed prior milestone（不占本里程碑新工作）。
+
+### v1 (本里程碑)
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| VERIFY-01 | — | Pending |
-| VERIFY-02 | — | Pending |
-| VERIFY-03 | — | Pending |
-| GW-01 | — | Pending |
-| AGENT-01 | — | Pending |
-| AGENT-02 | — | Pending |
-| AGENT-03 | — | Pending |
+| GW-01 | Phase 1: Production Model Gateway | Pending |
+| VERIFY-01 | Phase 2: Verification Gate Closure | Pending |
+| VERIFY-02 | Phase 2: Verification Gate Closure | Pending |
+| VERIFY-03 | Phase 2: Verification Gate Closure | Pending |
+| AGENT-01 | Phase 3: Agent Templates | Pending |
+| AGENT-02 | Phase 4: Independent-Answer Mode | Pending |
+| AGENT-03 | Phase 5: Mid-Discussion Agent Management | Pending |
+
+### Validated (prior MVP — traceability only)
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| R1 / R2 / R3 / R4 / R5 / R6 / R7 / R8 | Prior milestone (VibeSpec MVP) | Validated (2026-06-23) |
 
 **Coverage:**
 - v1 requirements: 7 total
-- Mapped to phases: 0（待 roadmap）
-- Unmapped: 7 ⚠️（roadmap 创建后清零）
+- Mapped to phases: 7 ✓
+- Unmapped: 0 ✓
+- Duplicates: 0 ✓
+- Traceability (v1 + validated): 15/15 records ✓
 
 ---
 *Requirements defined: 2026-06-25*
-*Last updated: 2026-06-25 after GSD brownfield initialization*
+*Last updated: 2026-06-25 — traceability populated after ROADMAP.md creation*
