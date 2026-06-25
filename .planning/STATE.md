@@ -6,9 +6,9 @@ current_phase: 01
 current_phase_name: Production Model Gateway
 status: executing
 stopped_at: Phase 1 plans created (5 plans, waves 1-5)
-last_updated: "2026-06-25T16:26:41.201Z"
-last_activity: 2026-06-25
-last_activity_desc: Phase 01 execution started
+last_updated: "2026-06-26T00:00:00.000Z"
+last_activity: 2026-06-26
+last_activity_desc: Phase 01 plan 05 Task 1 done; Task 2 human-verify checkpoint pending
 progress:
   total_phases: 5
   completed_phases: 0
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-06-25)
 
 ## Current Position
 
-Phase: 01 (Production Model Gateway) — EXECUTING
-Plan: 5 of 5
-Status: Ready to execute
-Last activity: 2026-06-25 — Phase 01 execution started
+Phase: 01 (Production Model Gateway) — EXECUTING (checkpoint)
+Plan: 5 of 5 — Task 1 done; Task 2 human-verify PENDING
+Status: checkpoint-pending (awaiting user real-API E2E run)
+Last activity: 2026-06-26 — 01-05 Task 1 committed (087bc08); Task 2 (D-13 Anthropic CORS + SC#1/2/3/4 real run) blocked on user-supplied valid API keys in /settings
 
-Progress: [████████░░] 80% (4/5 plans in Phase 01)
+Progress: [████████░░] 80% (4/5 plans in Phase 01; plan 01-05 automation done, human-verify pending → Phase 1 NOT yet complete)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [████████░░] 80% (4/5 plans in Phase 01)
 | Phase 01 P02 | 12 min | 3 tasks | 16 files |
 | Phase 1 P3 | 12 min | 3 tasks | 17 files |
 | Phase 1 P4 | 6 min | 2 tasks | 8 files |
+| Phase 1 P5 (automation) | 12 min | 1/2 tasks | 5 files | Task 2 human-verify pending |
 
 ## Accumulated Context
 
@@ -100,6 +101,7 @@ Items acknowledged and carried forward (origin: VibeSpec import / PROJECT.md):
 
 ## Session Continuity
 
-Last session: 2026-06-25T16:26:27.034Z
-Stopped at: Phase 1 UI-SPEC approved
-Resume file: .planning/phases/01-production-model-gateway/01-UI-SPEC.md
+Last session: 2026-06-26T00:00:00.000Z
+Stopped at: 01-05 Task 2 checkpoint:human-verify (D-13 Anthropic CORS + SC#1/2/3/4 real-run pending user API keys)
+Resume file: .planning/phases/01-production-model-gateway/01-05-SUMMARY.md
+Resume signal: user runs 7-step real-browser E2E with valid Anthropic + OpenAI/DeepSeek keys in /settings, replies "approved" (or describes failure for rollback to 01-02/01-03/01-04)
