@@ -6,15 +6,17 @@ import { TextInput } from "@/components/ui/TextInput";
 import { Textarea } from "@/components/ui/Textarea";
 import { addAgent, addRoom } from "@/lib/db";
 import { type Agent, createAgent, createRoom } from "@/models";
-import type { ModelType } from "@/types";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-const MODEL_OPTIONS = [
-  { value: "claude", label: "Claude" },
-  { value: "openai", label: "GPT (OpenAI)" },
-  { value: "deepseek", label: "DeepSeek" },
-];
+// P02 过渡：P03 settings UI 接入后会按已注册 gateway 选择 model；此处仅保留标签 → 占位 gatewayId+真实 model 映射，让 UI 在 P02 期间可编译。
+type LegacyModelTag = "claude" | "openai" | "deepseek";
+const MODEL_OPTIONS: { value: LegacyModelTag; label: string; gatewayId: string; model: string }[] =
+  [
+    { value: "claude", label: "Claude", gatewayId: "legacy-claude", model: "claude-sonnet-4" },
+    { value: "openai", label: "GPT (OpenAI)", gatewayId: "legacy-openai", model: "gpt-4o" },
+    { value: "deepseek", label: "DeepSeek", gatewayId: "legacy-deepseek", model: "deepseek-chat" },
+  ];
 
 const COLORS = ["#6366f1", "#3fb950", "#d29922", "#f85149", "#58a6ff", "#a371f7"];
 
@@ -25,12 +27,14 @@ export function NewRoomPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [draftRole, setDraftRole] = useState("");
-  const [draftModel, setDraftModel] = useState<ModelType>("claude");
+  const [draftModelTag, setDraftModelTag] = useState<LegacyModelTag>("claude");
 
   const addAgentConfig = () => {
     if (draftRole.trim().length === 0) return;
+    const spec = MODEL_OPTIONS.find((o) => o.value === draftModelTag) ?? MODEL_OPTIONS[0];
     const agent = createAgent({
-      model: draftModel,
+      gatewayId: spec.gatewayId,
+      model: spec.model,
       role: draftRole.trim(),
       color: COLORS[agents.length % COLORS.length],
     });
@@ -99,9 +103,9 @@ export function NewRoomPage() {
           />
           <Select
             label="模型"
-            options={MODEL_OPTIONS}
-            value={draftModel}
-            onChange={(e) => setDraftModel(e.target.value as ModelType)}
+            options={MODEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            value={draftModelTag}
+            onChange={(e) => setDraftModelTag(e.target.value as LegacyModelTag)}
           />
           <Button onClick={addAgentConfig} disabled={draftRole.trim().length === 0}>
             确认添加

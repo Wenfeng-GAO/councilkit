@@ -1,4 +1,4 @@
-import type { ModelType, RoundStatus, ValidationResult } from "@/types";
+import type { RoundStatus, ValidationResult } from "@/types";
 
 export interface Round {
   id: string;
@@ -14,7 +14,8 @@ export interface Summary {
   roundId: string;
   content: string;
   generatedAt: number;
-  model: ModelType;
+  gatewayId: string;
+  model: string;
 }
 
 export function validateRound(round: Round): ValidationResult {

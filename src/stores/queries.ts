@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { generateSummary } from "@/lib/summary";
 import { type Agent, type Room, createMessage, createRound, createSummary } from "@/models";
 import { dispatchStream } from "@/services/dispatch";
+import type { ModelType } from "@/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDiscussionStore } from "./discussion";
 
@@ -61,6 +62,12 @@ export async function runRound(params: {
 
   const allMessages: ReturnType<typeof createMessage>[] = [];
 
+  if (agents.length === 0) {
+    store.setRunning(false);
+    return;
+  }
+  const summaryAgent = agents[0];
+
   try {
     for (const agent of agents) {
       store.setAgentStatus(agent.id, "typing");
@@ -69,7 +76,7 @@ export async function runRound(params: {
       let local = "";
       try {
         await dispatchStream(
-          agent.model,
+          agent.model as ModelType,
           {
             model: agent.model,
             stream: true,
@@ -103,7 +110,8 @@ export async function runRound(params: {
 
     // R5: 独立总结
     const summaryText = await generateSummary({
-      model: agents[0]?.model ?? "claude",
+      gatewayId: summaryAgent.gatewayId,
+      model: summaryAgent.model,
       topic: room.topic,
       messages: allMessages,
       priorSummary: getPriorSummary(),
@@ -111,7 +119,8 @@ export async function runRound(params: {
     const summary = createSummary({
       roundId: round.id,
       content: summaryText,
-      model: agents[0]?.model ?? "claude",
+      gatewayId: summaryAgent.gatewayId,
+      model: summaryAgent.model,
     });
     await db.summaries.add(summary);
     await setSummary(round.id, summaryText);

@@ -216,7 +216,9 @@ function makeMockDB(agents: Agent[], gateways: Gateway[] = []): MockDB {
 function legacyAgent(id: string, model: string): Agent {
   return {
     id,
-    model: model as Agent["model"],
+    // Pre-migration: gatewayId empty (filled by migrator); model is the legacy tag.
+    gatewayId: "",
+    model,
     role: "r",
     color: "#6366f1",
     status: "online",

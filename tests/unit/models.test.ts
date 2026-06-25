@@ -3,6 +3,7 @@ import {
   createMessage,
   createRoom,
   createRound,
+  createSummary,
   createTemplate,
   validateAgent,
   validateMessage,
@@ -10,7 +11,7 @@ import {
   validateRound,
   validateTemplate,
 } from "@/models";
-import type { Agent, Message, Room, Round } from "@/models";
+import type { Agent, GatewayError, GatewayErrorKind, Message, Room, Round } from "@/models";
 import { describe, expect, it } from "vitest";
 
 function validRoom(over: Partial<Room> = {}): Room {
@@ -29,7 +30,8 @@ function validRoom(over: Partial<Room> = {}): Room {
 function validAgent(over: Partial<Agent> = {}): Agent {
   return {
     id: "a1",
-    model: "claude",
+    gatewayId: "g1",
+    model: "claude-sonnet-4",
     role: "产品经理",
     color: "#6366f1",
     status: "online",
@@ -72,6 +74,16 @@ describe("validateAgent", () => {
   });
   it("accepts valid 6-digit hex", () => {
     expect(validateAgent(validAgent({ color: "#AbCdEf" })).ok).toBe(true);
+  });
+  it("rejects empty gatewayId", () => {
+    const r = validateAgent(validAgent({ gatewayId: "" }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toContain("gatewayId");
+  });
+  it("rejects empty model", () => {
+    const r = validateAgent(validAgent({ model: "" }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toContain("model");
   });
 });
 
@@ -130,7 +142,7 @@ describe("validateTemplate", () => {
       validateTemplate({
         id: "t1",
         name: "技术评审团",
-        agentConfigs: [{ model: "claude", role: "架构师", color: "#6366f1" }],
+        agentConfigs: [{ gatewayId: "g1", model: "gpt-4o", role: "架构师", color: "#6366f1" }],
         createdAt: 0,
       }).ok,
     ).toBe(true);
@@ -140,7 +152,7 @@ describe("validateTemplate", () => {
       validateTemplate({
         id: "t1",
         name: "",
-        agentConfigs: [{ model: "claude", role: "r", color: "#6366f1" }],
+        agentConfigs: [{ gatewayId: "g1", model: "gpt-4o", role: "r", color: "#6366f1" }],
         createdAt: 0,
       }).ok,
     ).toBe(false);
@@ -149,6 +161,43 @@ describe("validateTemplate", () => {
     expect(validateTemplate({ id: "t1", name: "n", agentConfigs: [], createdAt: 0 }).ok).toBe(
       false,
     );
+  });
+});
+
+describe("createSummary", () => {
+  it("stamps gatewayId + model from new signature", () => {
+    const s = createSummary({
+      roundId: "ro1",
+      content: "总结内容",
+      gatewayId: "g1",
+      model: "claude-sonnet-4",
+    });
+    expect(s.gatewayId).toBe("g1");
+    expect(s.model).toBe("claude-sonnet-4");
+    expect(s.id).toBeTruthy();
+    expect(s.generatedAt).toBeGreaterThan(0);
+  });
+});
+
+describe("GatewayError contract", () => {
+  it("kind field narrows to the 5 allowed literals", () => {
+    const kinds: GatewayErrorKind[] = [
+      "invalid_key",
+      "rate_limit",
+      "upstream",
+      "timeout",
+      "network",
+    ];
+    const errors: GatewayError[] = kinds.map((k) => ({
+      kind: k,
+      message: `err ${k}`,
+    }));
+    expect(errors).toHaveLength(5);
+    // httpStatus is optional and only meaningful for non-timeout/non-network.
+    const withStatus: GatewayError = { kind: "invalid_key", message: "no key", httpStatus: 401 };
+    expect(withStatus.httpStatus).toBe(401);
+    const withoutStatus: GatewayError = { kind: "timeout", message: "10s" };
+    expect(withoutStatus.httpStatus).toBeUndefined();
   });
 });
 
@@ -162,10 +211,17 @@ describe("factories stamp + validate", () => {
   it("createRoom throws on invalid input", () => {
     expect(() => createRoom({ topic: "", agentIds: ["a1"] })).toThrow();
   });
-  it("createAgent stamps id + default status", () => {
-    const a = createAgent({ model: "openai", role: "反对者", color: "#f85149" });
+  it("createAgent stamps id + default status + gatewayId/model", () => {
+    const a = createAgent({
+      gatewayId: "g1",
+      model: "gpt-4o",
+      role: "反对者",
+      color: "#f85149",
+    });
     expect(a.id).toBeTruthy();
     expect(a.status).toBe("online");
+    expect(a.gatewayId).toBe("g1");
+    expect(a.model).toBe("gpt-4o");
   });
   it("createMessage throws when user message has wrong senderId", () => {
     expect(() =>
@@ -181,7 +237,7 @@ describe("factories stamp + validate", () => {
   it("createTemplate stamps id + createdAt", () => {
     const t = createTemplate({
       name: "评审团",
-      agentConfigs: [{ model: "deepseek", role: "r", color: "#3fb950" }],
+      agentConfigs: [{ gatewayId: "g2", model: "deepseek-chat", role: "r", color: "#3fb950" }],
     });
     expect(t.id).toBeTruthy();
     expect(t.createdAt).toBeGreaterThan(0);
