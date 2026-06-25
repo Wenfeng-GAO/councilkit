@@ -65,7 +65,6 @@ Historical (pre-transform) exploratory notes:
 
 ```bash
 pnpm install
-cp .env.example .env.local   # 填入模型 API Key
 pnpm dev                      # http://localhost:5173
 ```
 
@@ -77,7 +76,21 @@ pnpm lint        # 或 ./node_modules/.bin/biome check src
 pnpm build
 ```
 
-定义模型 API Key 的环境变量（`VITE_CLAUDE_API_KEY` / `VITE_OPENAI_API_KEY` / `VITE_DEEPSEEK_API_KEY`）后即可新建房间、添加 agent、发起多 agent 讨论。无 Key 时 agent 会静默离线，UI 正常。
+## Production Setup (Phase 1)
+
+1. `pnpm dev` 启动 vite（无需启动 `scripts/model-proxy.mjs`）
+2. 浏览器打开 `/settings` → 「+ 添加网关」→ 填 name / type (Anthropic | OpenAI 兼容) /
+   Base URL (host 如 `https://api.anthropic.com`) / API 密钥 / 默认模型 ID
+3. 点「测试连接」验证 key + 浏览器直连 CORS（Anthropic 需
+   `anthropic-dangerous-direct-browser-access: true` 头通过 CORS）
+4. `/rooms/new` 创建房间 + 添加 agent（选 gateway + 模型 ID）→ 发起讨论
+
+API key 以 AES 加密存于浏览器 localStorage，按 gateway 分别管理，不出本机。
+推荐使用 `https://` 端点以避免 key 在传输中暴露；`localhost` 自定义端点
+（如本地 Ollama）用 `http://` 合理。`.env.example` 中的 `VITE_*` 与
+`MODEL_PROXY_*` 仅 dev-only optional，生产运行不读取。
+
+无 gateway 配置时 agent 会静默离线，UI 正常。
 
 ## Implementation Status
 

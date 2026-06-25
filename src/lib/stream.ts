@@ -85,15 +85,3 @@ function parseChunk(payload: string): StreamChunk | null {
     return null;
   }
 }
-
-/**
- * @deprecated Phase 1: dispatchMessage 不再调用 collectText（自行 for-await 累加并
- *   在 GatewayError 上 throw）。P05 Task 1 显式删除；保留供未迁移的旧调用方兼容。
- */
-export async function collectText(deltas: AsyncIterable<string>): Promise<string> {
-  let acc = "";
-  for await (const text of deltas) {
-    acc += text;
-  }
-  return acc;
-}
