@@ -45,12 +45,12 @@ The VibeSpec MVP (P0 R1-R8) was delivered and code-verified on 2026-06-23 (T1-T1
   2. A full discussion flow (create room → add agents → run round → auto-summary → follow-up) completes end-to-end through the production gateway with real model output visible to the user.
   3. The app runs on a clean checkout using only the user's configured API key, and `scripts/model-proxy.mjs` is no longer on the required runtime path.
   4. Gateway errors (invalid key / rate limit / upstream failure / timeout) surface a clear user-visible message and the affected agent is marked offline while other agents continue.
-**Plans**: 5 plans (execution waves 1→5; sequential due to atomic Agent model + adapter coupling)
-- [ ] 01-01-PLAN.md — gateway 实体 + Dexie gateways 表 + 多 key AES crypto + 占位 gateway 迁移 (D-01/D-03/D-06/D-07)
-- [ ] 01-02-PLAN.md — Agent {gatewayId,model} 改造 + 双 adapter (anthropic/openai-compatible) + GatewayError 5 类契约 (D-02/D-04/D-09/D-13 header)
-- [ ] 01-03-PLAN.md — /settings 页 + 设计 token (success/warn/error/info/surface-2) + sidebar/router + agent 创建流 (D-05/D-08 + D-02 配套)
-- [ ] 01-04-PLAN.md — 5 类错误处理 + runRound 编排 (致命扩散/全离线跳总结) + ErrorBanner/MessageBubble 双重呈现 (D-09/D-10/D-11/D-12)
-- [ ] 01-05-PLAN.md — E2E 实跑 human-verify (D-13 Anthropic CORS) + SC#1/2/3/4 + dev proxy 路径清理
+**Plans**: 5 plans (execution waves 1→5; dependencies: P01→P02→{P03,P04?}→P05; P03 depends on P01+P02 for Agent field shape)
+- [ ] 01-01-PLAN.md (wave 1) — gateway 实体 + Dexie gateways 表 + 多 key AES crypto + 占位 gateway 迁移 (D-01/D-03/D-06/D-07)
+- [ ] 01-02-PLAN.md (wave 2, deps: 01-01) — Agent {gatewayId,model} 改造 + 双 adapter (anthropic/openai-compatible) + GatewayError 5 类契约 (D-02/D-04/D-09/D-13 header)
+- [ ] 01-03-PLAN.md (wave 3, deps: 01-01, 01-02) — /settings 页 + 设计 token (success/warn/error/info/surface-2) + sidebar/router + agent 创建流 (D-05/D-08 + D-02 配套)
+- [ ] 01-04-PLAN.md (wave 4, deps: 01-02) — 5 类错误处理 + runRound 编排 (致命扩散/全离线跳总结) + ErrorBanner/MessageBubble 双重呈现 (D-09/D-10/D-11/D-12)
+- [ ] 01-05-PLAN.md (wave 5, deps: 01-02, 01-03, 01-04) — E2E 实跑 human-verify (D-13 Anthropic CORS) + SC#1/2/3/4 + dev proxy 路径清理
 **UI hint**: yes
 
 ### Phase 2: Verification Gate Closure
