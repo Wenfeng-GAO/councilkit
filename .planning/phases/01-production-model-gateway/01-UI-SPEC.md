@@ -1,7 +1,8 @@
 ---
 phase: 1
 slug: production-model-gateway
-status: draft
+status: approved
+reviewed_at: 2026-06-25
 shadcn_initialized: false
 preset: none
 created: 2026-06-25
@@ -71,7 +72,9 @@ Map to Tailwind in `tailwind.config.ts` `extend.colors` (alongside existing entr
 | 5xl | 48px | Major section breaks |
 | 6xl | 64px | Page-level top/bottom spacing |
 
-**Exceptions:** minimum touch target 32px (h-8) for icon-less inline buttons is acceptable in this desktop-first local-first tool — minimum 40px (`h-10`) required only for the gateway **测试连接** primary action and **保存** primary button to reduce misfires. Sidebar collapse toggle is 28px (matches existing `p-2` button).
+**Authorized scale (record for executors — do not second-guess):** project's authorized extended scale = `{4, 8, 12, 16, 20, 24, 28, 32, 48, 64}`, 9 values, all multiples of 4. Extensions beyond the canonical 7 `{4,8,16,24,32,48,64}` are: **12px** (aligns with existing `px-3`/`gap-3` utility usage), **20px** & **28px** (`sketch-locked`, per `sketch-findings-councilkit`). No other spacing values are permitted in Phase 1 code (every `gap-*`/`p-*`/`m-*`/inset must map to this scale; forbid arbitrary pixel values).
+
+**Exceptions:** minimum touch target 32px (h-8) for icon-less inline buttons is acceptable in this desktop-first local-first tool — minimum 40px (`h-10`) required only for the gateway **测试连接** primary action and **保存网关** primary button to reduce misfires. Sidebar collapse toggle is 28px (matches existing `p-2` button).
 
 ---
 
@@ -112,7 +115,7 @@ Weights in use: **400 + 600 only.** Do not introduce 500 or 700 in new Phase 1 c
 | Muted text | `#8b919a` (`muted`) | Labels, meta, placeholder, secondary copy |
 
 **Accent (#6366f1) reserved for — never "all interactive elements":**
-1. Primary CTAs: 「保存」「创建并进入」「测试连接 (idle)」「确认添加」 — solid `bg-accent text-white`.
+1. Primary CTAs: 「保存网关」「创建并进入」「测试连接 (idle)」「确认添加」 — solid `bg-accent text-white`.
 2. Sidebar active nav state (existing) — `bg-accent/20 text-fg` background tints.
 3. Focused input border — `focus:border-accent`.
 4. Gateway list-item hover border — `hover:border-accent`.
@@ -132,7 +135,7 @@ Weights in use: **400 + 600 only.** Do not introduce 500 or 700 in new Phase 1 c
 | Section heading | `模型网关` |
 | Section description (sub) | `配置浏览器直连的模型 endpoint。密钥以 AES 加密存储在本机 localStorage，按 gateway 分别管理。` |
 | Add CTA (primary, top-right) | `+ 添加网关` |
-| Primary CTA (form save) | `保存` |
+| Primary CTA (form save) | `保存网关` (shared label for add+edit flows; `+ 添加网关` is already the list-page entry CTA) |
 | Secondary CTA (form cancel) | `取消` |
 | Test connection button (idle) | `测试连接` |
 | Test connection button (testing) | `测试中…`（disabled）|
@@ -227,12 +230,15 @@ Used for agents sharing a gateway whose sibling hit `invalid_key`:
 
 ## Interaction Flows
 
+### Visual focal point (/settings primary screen)
+**Primary focal unit:** the gateway list cards — each card is the most visually weighted element (semibold name + status pill + accent-on-hover border), drawing the eye first. **Secondary anchor:** the `+ 添加网关` top-right accent button. The test-connection button's transient success/error pill is the only element that may momentarily override focus (state change, settles back). Hierarchy is reinforced by type scale (20px title → 16px section → 14px card name → 12px meta), 60/30/10 color, and single-accent CTAs.
+
 ### /settings — gateway CRUD
 
-1. **List view:** page title 「设置」 → section 「模型网关」 with description → gateway list (cards, `bg-surface border-edge rounded`, padding `lg` 16px, gap `sm` 8px between items) → each card shows: gateway name (14px semibold) · type badge (12px `bg-surface-2` pill) · baseUrl (12px mono `font-mono`, muted) · defaultModel (12px muted) · status pill (test-connection state) · actions on right: `测试连接` · `编辑` · `删除`.
+1. **List view:** page title 「设置」 → section 「模型网关」 with description → gateway list (cards, `bg-surface border-edge rounded`, padding `lg` 16px, gap `sm` 8px between items) → each card shows: gateway name (14px semibold) · type badge (12px `bg-surface-2` pill) · baseUrl (12px mono `font-mono`, muted) · defaultModel (12px muted) · status pill (test-connection state) · actions on right: `测试连接` · `编辑网关` · `删除` (red ghost).
 2. **Empty state:** centered `EmptyState` component (`src/components/shared/EmptyState.tsx`) with heading + body + CTA.
-3. **Add flow:** click `+ 添加网关` → opens existing `Modal` → form fields (section above) → 「保存」 validates non-empty (name, type, baseUrl, apiKey) → `testConnection` is **not** auto-run on save; user may click 「测试连接」 any time after save.
-4. **Edit flow:** click `编辑` → same Modal, prefilled → apiKey field shows `••••••••` masked placeholder (leave empty to keep existing; typing replaces). Save preserves existing cipher if apiKey field untouched.
+3. **Add flow:** click `+ 添加网关` → opens existing `Modal` → form fields (section above) → 「保存网关」 validates non-empty (name, type, baseUrl, apiKey) → `testConnection` is **not** auto-run on save; user may click 「测试连接」 any time after save.
+4. **Edit flow:** click `编辑网关` → same Modal, prefilled → apiKey field shows `••••••••` masked placeholder (leave empty to keep existing; typing replaces). Save preserves existing cipher if apiKey field untouched.
 5. **Delete flow (destructive):** click `删除` (red ghost text) → confirmation Modal: `删除网关「{name}」？` + body `该网关下 {N} 个 agent 的 gatewayId 将被清空并标记为离线。密钥将从本机删除。此操作不可撤销。` + `[取消] [删除]` (delete = `bg-error text-white`).
 6. **Test connection (D-08):** click `测试连接` → button enters `testing` state (disabled,「测试中…」) → fires minimal stream request (`gateway.defaultModel`, `max_tokens=1`, `stream:true`) → on HTTP 200 + ≥1 delta: pill → success「已连接」, button → 「已连接」 (disabled, success tint). On error: pill → failed (`密钥无效` / `连接失败`), button → `重试测试`; show inline error text below the card.
 7. **Responsive:** page uses existing `mx-auto max-w-2xl px-6 py-8` pattern (consistent with `NewRoomPage`).
