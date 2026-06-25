@@ -15,6 +15,12 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 export function validateAgent(agent: Agent): ValidationResult {
   const errors: string[] = [];
+  if (agent.gatewayId.length === 0) {
+    errors.push("gatewayId must be non-empty");
+  }
+  if (agent.model.length === 0) {
+    errors.push("model must be non-empty");
+  }
   if (agent.role.length === 0) {
     errors.push("role must be non-empty");
   }
