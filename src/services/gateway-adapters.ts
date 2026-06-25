@@ -66,6 +66,8 @@ export async function* anthropicAdapter(params: {
   model: string;
   messages: ModelMessage[];
   signal?: AbortSignal;
+  /** Override default max_tokens (1024). testGatewayConnection passes 1 (T-03-05). */
+  maxTokens?: number;
 }): AsyncIterable<string | GatewayError> {
   const { system, messages } = toAnthropicPayload(params.messages);
   const url = `${normalizeBaseUrl(params.baseUrl)}/v1/messages`;
@@ -80,7 +82,7 @@ export async function* anthropicAdapter(params: {
     system,
     messages,
     stream: true,
-    max_tokens: 1024,
+    max_tokens: params.maxTokens ?? 1024,
   };
   const stream = streamDeltas({ url, headers, body, signal: params.signal });
   for await (const chunk of stream) {
@@ -100,17 +102,22 @@ export async function* openaiCompatibleAdapter(params: {
   model: string;
   messages: ModelMessage[];
   signal?: AbortSignal;
+  /** Override default. testGatewayConnection passes 1 (T-03-05). */
+  maxTokens?: number;
 }): AsyncIterable<string | GatewayError> {
   const url = `${normalizeBaseUrl(params.baseUrl)}/v1/chat/completions`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${params.apiKey}`,
     "Content-Type": "application/json",
   };
-  const body = {
+  const body: Record<string, unknown> = {
     model: params.model,
     messages: params.messages.map((m) => ({ role: m.role, content: m.content })),
     stream: true,
   };
+  if (params.maxTokens !== undefined) {
+    body.max_tokens = params.maxTokens;
+  }
   const stream = streamOpenAIDeltas({ url, headers, body, signal: params.signal });
   for await (const chunk of stream) {
     if (chunk.type === "content_block_delta") {
