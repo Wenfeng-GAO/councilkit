@@ -19,6 +19,9 @@ CouncilKit is a local-first web app for running structured multi-agent discussio
 
 <!-- GSD:project-end -->
 
+## Auto-Load
+- **Sketch findings for councilkit** (design decisions, CSS patterns, visual direction) → `Skill("sketch-findings-councilkit")`
+
 <!-- GSD:stack-start source:STACK.md -->
 
 ## Technology Stack
