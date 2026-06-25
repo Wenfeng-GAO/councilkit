@@ -8,6 +8,8 @@ import type {
 } from "@/types";
 import { validateAgent } from "./agent";
 import type { Agent } from "./agent";
+import { createGateway, validateGateway } from "./gateway";
+import type { Gateway, GatewayType } from "./gateway";
 import { validateMessage } from "./message";
 import type { Message } from "./message";
 import { validateRoom } from "./room";
@@ -17,10 +19,12 @@ import type { Round, Summary } from "./round";
 import { createTemplate, validateTemplate } from "./template";
 import type { Template } from "./template";
 
-export type { Agent, Message, Round, Room, Summary, Template };
+export type { Agent, Gateway, GatewayType, Message, Round, Room, Summary, Template };
 export {
+  createGateway,
   createTemplate,
   validateAgent,
+  validateGateway,
   validateMessage,
   validateRound,
   validateRoom,

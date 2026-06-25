@@ -1,4 +1,4 @@
-import type { Agent, Message, Room, Round, Summary } from "@/models";
+import type { Agent, Gateway, Message, Room, Round, Summary } from "@/models";
 import Dexie, { type Table } from "dexie";
 
 export class CouncilKitDB extends Dexie {
@@ -7,6 +7,7 @@ export class CouncilKitDB extends Dexie {
   messages!: Table<Message, string>;
   rounds!: Table<Round, string>;
   summaries!: Table<Summary, string>;
+  gateways!: Table<Gateway, string>;
 
   constructor() {
     super("councilkit");
@@ -16,6 +17,14 @@ export class CouncilKitDB extends Dexie {
       messages: "id, roundId, senderId",
       rounds: "id, roomId, roundNumber",
       summaries: "id, roundId",
+    });
+    this.version(2).stores({
+      rooms: "id, status, lastActiveAt",
+      agents: "id, roomId, model",
+      messages: "id, roundId, senderId",
+      rounds: "id, roomId, roundNumber",
+      summaries: "id, roundId",
+      gateways: "id, type",
     });
   }
 }
@@ -56,4 +65,27 @@ export async function getRoundsByRoom(roomId: string): Promise<Round[]> {
 
 export async function getSummary(roundId: string): Promise<Summary | undefined> {
   return db.summaries.where("roundId").equals(roundId).first();
+}
+
+export async function addGateway(gateway: Gateway): Promise<string> {
+  return db.gateways.add(gateway);
+}
+
+export async function getGateway(id: string): Promise<Gateway | undefined> {
+  return db.gateways.get(id);
+}
+
+export async function listGateways(): Promise<Gateway[]> {
+  return db.gateways.orderBy("createdAt").toArray();
+}
+
+export async function updateGateway(
+  id: string,
+  changes: Partial<Omit<Gateway, "id">>,
+): Promise<number> {
+  return db.gateways.update(id, changes);
+}
+
+export async function deleteGateway(id: string): Promise<void> {
+  await db.gateways.delete(id);
 }
