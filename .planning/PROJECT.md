@@ -25,14 +25,13 @@ Shipped and code-verified in the VibeSpec MVP (T1–T12 + FT1/FT2, 2026-06-23). 
 
 ### Active
 
-Next milestone — to be confirmed with user. Hypotheses until scoped.
+Next GSD milestone — confirmed scope (2026-06-25). Hypotheses until shipped and verified.
 
 - [ ] Close VibeSpec Phase 5 verify gate with real-browser evidence (VT4 visual consistency / VT5 responsive+a11y / VT7 browser QA) — currently static-fallback
 - [ ] Production model-gateway path (current `scripts/model-proxy.mjs` is dev-only via `cld ant glm5.2`; prod needs own API key direct or backend proxy)
 - [ ] P1: Save and reuse agent configurations / "技术评审团" combos (R9)
 - [ ] P1: Independent-answer mode — agents answer independently for side-by-side comparison (R10)
 - [ ] P1: Add/remove agents mid-discussion (R11)
-- [ ] P2: Export discussion record + summary as Markdown/PDF (R13)
 
 ### Out of Scope
 
@@ -44,6 +43,7 @@ From PRD "不做什么" — documented to prevent re-adding.
 - Workflow automation (AutoGen-like task orchestration) — CouncilKit is a discussion tool, not a task-orchestration framework.
 - Voice/video discussions — text is core; multimodal adds complexity. Reconsider when tech matures and demand exists.
 - Cloud sync / team collaboration / marketplace / mobile app / real-time chat — excluded from V1 (local-first focused MVP).
+- Export discussion record + summary as Markdown/PDF (R13, PRD P2) — deferred to a later milestone; not in the current GSD milestone (user confirmed 2026-06-25).
 
 ## Context
 
