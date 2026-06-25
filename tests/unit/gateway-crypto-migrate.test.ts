@@ -1,7 +1,89 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "@/lib/db";
+import {
+  clearApiKey,
+  clearGatewayApiKey,
+  loadApiKey,
+  loadGatewayApiKey,
+  saveApiKey,
+  saveGatewayApiKey,
+} from "@/lib/crypto";
 import { createGateway, validateGateway, type Gateway } from "@/models";
+
+// Node test env has no localStorage — provide a minimal Map-backed shim.
+class LocalStorageShim {
+  private store = new Map<string, string>();
+  getItem(k: string): string | null {
+    return this.store.has(k) ? this.store.get(k) as string : null;
+  }
+  setItem(k: string, v: string): void {
+    this.store.set(k, String(v));
+  }
+  removeItem(k: string): void {
+    this.store.delete(k);
+  }
+  clear(): void {
+    this.store.clear();
+  }
+}
+
+describe("crypto multi-key (per-gatewayId)", () => {
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).localStorage = new LocalStorageShim();
+  });
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).localStorage;
+  });
+
+  it("saveGatewayApiKey writes non-plaintext cipher to localStorage[gatewayKey]", () => {
+    saveGatewayApiKey("g1", "sk-abc");
+    const stored = localStorage.getItem("councilkit.gateways.g1.enc");
+    expect(stored).toBeTruthy();
+    expect(stored).not.toBe("sk-abc");
+    // AES output contains cipher meta (U2FsdGVkX1 prefix is crypto-js OpenSSL salted format)
+    expect(stored.length).toBeGreaterThan(10);
+  });
+
+  it("loadGatewayApiKey returns plaintext", () => {
+    saveGatewayApiKey("g1", "sk-abc");
+    expect(loadGatewayApiKey("g1")).toBe("sk-abc");
+  });
+
+  it("loadGatewayApiKey returns null when not stored", () => {
+    expect(loadGatewayApiKey("nope")).toBeNull();
+  });
+
+  it("loadGatewayApiKey returns null for corrupt cipher (no throw)", () => {
+    localStorage.setItem("councilkit.gateways.g1.enc", "not-a-valid-cipher");
+    expect(loadGatewayApiKey("g1")).toBeNull();
+  });
+
+  it("clearGatewayApiKey removes the key", () => {
+    saveGatewayApiKey("g1", "sk-abc");
+    clearGatewayApiKey("g1");
+    expect(loadGatewayApiKey("g1")).toBeNull();
+  });
+
+  it("different gatewayIds do not interfere", () => {
+    saveGatewayApiKey("g1", "sk-one");
+    saveGatewayApiKey("g2", "sk-two");
+    expect(loadGatewayApiKey("g1")).toBe("sk-one");
+    expect(loadGatewayApiKey("g2")).toBe("sk-two");
+    clearGatewayApiKey("g1");
+    expect(loadGatewayApiKey("g1")).toBeNull();
+    expect(loadGatewayApiKey("g2")).toBe("sk-two");
+  });
+
+  it("legacy saveApiKey/loadApiKey still work on councilkit.key.enc", () => {
+    saveApiKey("legacy-key");
+    expect(localStorage.getItem("councilkit.key.enc")).toBeTruthy();
+    expect(localStorage.getItem("councilkit.key.enc")).not.toBe("legacy-key");
+    expect(loadApiKey()).toBe("legacy-key");
+    clearApiKey();
+    expect(loadApiKey()).toBeNull();
+  });
+});
 
 describe("createGateway", () => {
   const validInput = {
