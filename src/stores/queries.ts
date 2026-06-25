@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { generateSummary } from "@/lib/summary";
 import { type Agent, type Room, createMessage, createRound, createSummary } from "@/models";
 import { dispatchStream } from "@/services/dispatch";
-import type { ModelType } from "@/types";
+import type { GatewayError } from "@/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDiscussionStore } from "./discussion";
 
@@ -45,6 +45,9 @@ export function useCreateRoom() {
  * R4 核心: agents 依次发言并互相看见。
  * 每个 agent 的上下文含话题 + 该轮此前所有发言（含其他 agent 的），
  * 故后发言者可质疑/补充先发言者。
+ *
+ * P02: dispatchStream 现在按 agent.gatewayId resolve adapter；遇 GatewayError chunk
+ *   即 throw（catch→offline 维持旧行为等价）。P04 再按 kind 分类处理。
  */
 export async function runRound(params: {
   room: Room;
@@ -75,18 +78,19 @@ export async function runRound(params: {
       const systemContent = `${ctx.system}\n\n你的角色立场: ${agent.role}。请从该立场参与讨论，可质疑或补充其他发言者。`;
       let local = "";
       try {
-        await dispatchStream(
-          agent.model as ModelType,
-          {
-            model: agent.model,
-            stream: true,
-            messages: [{ role: "system", content: systemContent }, ...ctx.messages],
-          },
-          (delta) => {
-            local += delta;
-            store.appendDelta(agent.id, delta);
-          },
-        );
+        for await (const chunk of dispatchStream(agent, {
+          model: agent.model,
+          stream: true,
+          messages: [{ role: "system", content: systemContent }, ...ctx.messages],
+        })) {
+          if (typeof chunk === "string") {
+            local += chunk;
+            store.appendDelta(agent.id, chunk);
+          } else {
+            const err: GatewayError = chunk;
+            throw new Error(err.message);
+          }
+        }
       } catch (err) {
         store.setError(err instanceof Error ? err.message : "agent error");
         store.setAgentStatus(agent.id, "offline");

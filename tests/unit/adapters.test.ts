@@ -88,14 +88,16 @@ describe("anthropicAdapter", () => {
   });
 
   it("requests the canonical /v1/messages URL on a bare host baseUrl", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse(
-        sseBody([
-          'data: {"type":"content_block_delta","delta":{"text":"hi"}}\n',
-          "data: [DONE]\n",
-        ]),
-      ),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse(
+          sseBody([
+            'data: {"type":"content_block_delta","delta":{"text":"hi"}}\n',
+            "data: [DONE]\n",
+          ]),
+        ),
+      );
     (globalThis as { fetch: unknown }).fetch = fetchMock;
     const chunks = await collect(
       anthropicAdapter({
@@ -117,9 +119,7 @@ describe("anthropicAdapter", () => {
   });
 
   it("normalizes baseUrl with /v1 and trailing slash (no double /v1)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse(sseBody(["data: [DONE]\n"])),
-    );
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse(sseBody(["data: [DONE]\n"])));
     (globalThis as { fetch: unknown }).fetch = fetchMock;
     await collect(
       anthropicAdapter({
@@ -134,15 +134,17 @@ describe("anthropicAdapter", () => {
   });
 
   it("parses Anthropic content_block_delta SSE", async () => {
-    (globalThis as { fetch: unknown }).fetch = vi.fn().mockResolvedValue(
-      mockResponse(
-        sseBody([
-          'data: {"type":"content_block_delta","delta":{"text":"hel"}}\n',
-          'data: {"type":"content_block_delta","delta":{"text":"lo"}}\n',
-          "data: [DONE]\n",
-        ]),
-      ),
-    );
+    (globalThis as { fetch: unknown }).fetch = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse(
+          sseBody([
+            'data: {"type":"content_block_delta","delta":{"text":"hel"}}\n',
+            'data: {"type":"content_block_delta","delta":{"text":"lo"}}\n',
+            "data: [DONE]\n",
+          ]),
+        ),
+      );
     const chunks = await collect(
       anthropicAdapter({
         baseUrl: "https://api.anthropic.com",
@@ -179,14 +181,13 @@ describe("openaiCompatibleAdapter", () => {
   });
 
   it("requests {baseUrl normalized}/v1/chat/completions with Bearer header", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      mockResponse(
-        sseBody([
-          'data: {"choices":[{"delta":{"content":"hi"}}]}\n',
-          "data: [DONE]\n",
-        ]),
-      ),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse(
+          sseBody(['data: {"choices":[{"delta":{"content":"hi"}}]}\n', "data: [DONE]\n"]),
+        ),
+      );
     (globalThis as { fetch: unknown }).fetch = fetchMock;
     const chunks = await collect(
       openaiCompatibleAdapter({
@@ -199,21 +200,23 @@ describe("openaiCompatibleAdapter", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     const headers = init.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBe("Bearer sk-xxx");
+    expect(headers.Authorization).toBe("Bearer sk-xxx");
     expect(headers["Content-Type"]).toBe("application/json");
     expect(chunks).toEqual(["hi"]);
   });
 
   it("parses OpenAI choices[].delta.content SSE", async () => {
-    (globalThis as { fetch: unknown }).fetch = vi.fn().mockResolvedValue(
-      mockResponse(
-        sseBody([
-          'data: {"choices":[{"delta":{"content":"hel"}}]}\n',
-          'data: {"choices":[{"delta":{"content":"lo"}}]}\n',
-          "data: [DONE]\n",
-        ]),
-      ),
-    );
+    (globalThis as { fetch: unknown }).fetch = vi
+      .fn()
+      .mockResolvedValue(
+        mockResponse(
+          sseBody([
+            'data: {"choices":[{"delta":{"content":"hel"}}]}\n',
+            'data: {"choices":[{"delta":{"content":"lo"}}]}\n',
+            "data: [DONE]\n",
+          ]),
+        ),
+      );
     const chunks = await collect(
       openaiCompatibleAdapter({
         baseUrl: "https://api.openai.com",
