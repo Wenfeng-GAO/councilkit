@@ -42,6 +42,12 @@ export function Sidebar() {
           模板 (P1)
         </NavLink>
       </nav>
+      <div className="border-t border-edge my-2" />
+      <div className="px-2">
+        <NavLink to="/settings" className={({ isActive }) => roundedLink(isActive)}>
+          设置
+        </NavLink>
+      </div>
       <p className="px-4 py-3 text-xs text-muted">local-first · 多 agent 决策</p>
     </aside>
   );

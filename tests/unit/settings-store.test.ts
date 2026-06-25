@@ -54,7 +54,10 @@ vi.mock("@/services/gateway-adapters", () => ({
 
 // Hooks: capture react-query mutation config so we can drive it directly.
 const invalidateSpy = vi.fn();
-let capturedConfigs: Array<{ mutationFn: (...args: unknown[]) => Promise<unknown>; onSuccess?: () => void }> = [];
+const capturedConfigs: Array<{
+  mutationFn: (...args: unknown[]) => Promise<unknown>;
+  onSuccess?: () => void;
+}> = [];
 
 vi.mock("@tanstack/react-query", () => ({
   useQuery: vi.fn(() => ({ data: undefined })),
@@ -166,7 +169,9 @@ describe("deleteGatewayAction", () => {
 
 describe("useCreateGateway / useUpdateGateway / useDeleteGateway hooks (wiring)", () => {
   it("registers three mutation configs that invalidate the gateways list on success", async () => {
-    const { useCreateGateway, useUpdateGateway, useDeleteGateway } = await import("@/stores/gateways");
+    const { useCreateGateway, useUpdateGateway, useDeleteGateway } = await import(
+      "@/stores/gateways"
+    );
     useCreateGateway();
     useUpdateGateway();
     useDeleteGateway();
@@ -201,9 +206,7 @@ describe("testGatewayConnection", () => {
 
   it("returns ok:true when adapter yields a string chunk", async () => {
     cryptoMocks.loadGatewayApiKey.mockReturnValue("sk-test");
-    adapterMocks.anthropic.mockReturnValue(
-      makeStream(["hello", "world"]),
-    );
+    adapterMocks.anthropic.mockReturnValue(makeStream(["hello", "world"]));
     const res = await testGatewayConnection(gateway());
     expect(res).toEqual({ ok: true });
   });

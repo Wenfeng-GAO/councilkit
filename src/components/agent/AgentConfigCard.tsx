@@ -2,10 +2,12 @@ import type { Agent } from "@/models";
 
 interface AgentConfigCardProps {
   agent: Agent;
+  gatewayName?: string;
   onRemove?: () => void;
 }
 
-export function AgentConfigCard({ agent, onRemove }: AgentConfigCardProps) {
+export function AgentConfigCard({ agent, gatewayName, onRemove }: AgentConfigCardProps) {
+  const subtitle = gatewayName ? `${gatewayName} · ${agent.model}` : agent.model;
   return (
     <div className="flex items-center justify-between rounded border border-edge bg-surface px-3 py-2">
       <div className="flex items-center gap-2">
@@ -18,7 +20,7 @@ export function AgentConfigCard({ agent, onRemove }: AgentConfigCardProps) {
         </span>
         <div>
           <p className="text-sm font-medium text-fg">{agent.role}</p>
-          <p className="text-xs text-muted">{agent.model}</p>
+          <p className="text-xs text-muted">{subtitle}</p>
         </div>
       </div>
       {onRemove ? (
