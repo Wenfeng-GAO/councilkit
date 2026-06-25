@@ -6,10 +6,15 @@
   color-scheme: dark;
   --color-bg: #0b0d10;
   --color-surface: #15181d;
+  --color-surface-2: #1e2128;
   --color-fg: #e6e8ec;
   --color-muted: #8b919a;
   --color-accent: #6366f1;
   --color-border: #232830;
+  --color-success: #22c55e;
+  --color-warn: #d29922;
+  --color-error: #f85149;
+  --color-info: #58a6ff;
 }
 
 @layer base {
