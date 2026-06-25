@@ -30,7 +30,7 @@
 
 ### Model Gateway（生产加固）
 
-- [ ] **GW-01**: 生产可用的模型网关路径落地，取代 dev-only `scripts/model-proxy.mjs`（自持 API key 直连，或后端代理；不再依赖 `cld ant glm5.2`，浏览器可直达）
+- [x] **GW-01**: 生产可用的模型网关路径落地，取代 dev-only `scripts/model-proxy.mjs`（自持 API key 直连，或后端代理；不再依赖 `cld ant glm5.2`，浏览器可直达）
 
 ### Agents（P1 特性）
 
@@ -68,7 +68,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GW-01 | Phase 1: Production Model Gateway | Pending |
+| GW-01 | Phase 1: Production Model Gateway | Complete |
 | VERIFY-01 | Phase 2: Verification Gate Closure | Pending |
 | VERIFY-02 | Phase 2: Verification Gate Closure | Pending |
 | VERIFY-03 | Phase 2: Verification Gate Closure | Pending |
@@ -83,6 +83,7 @@
 | R1 / R2 / R3 / R4 / R5 / R6 / R7 / R8 | Prior milestone (VibeSpec MVP) | Validated (2026-06-23) |
 
 **Coverage:**
+
 - v1 requirements: 7 total
 - Mapped to phases: 7 ✓
 - Unmapped: 0 ✓
