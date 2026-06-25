@@ -49,7 +49,7 @@ The VibeSpec MVP (P0 R1-R8) was delivered and code-verified on 2026-06-23 (T1-T1
   3. The app runs on a clean checkout using only the user's configured API key, and `scripts/model-proxy.mjs` is no longer on the required runtime path.
   4. Gateway errors (invalid key / rate limit / upstream failure / timeout) surface a clear user-visible message and the affected agent is marked offline while other agents continue.
 
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 **Wave 1**
 
 - [x] 01-01-PLAN.md (wave 1) — gateway 实体 + Dexie gateways 表 + 多 key AES crypto + 占位 gateway 迁移 (D-01/D-03/D-06/D-07)
@@ -64,7 +64,7 @@ The VibeSpec MVP (P0 R1-R8) was delivered and code-verified on 2026-06-23 (T1-T1
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-04-PLAN.md (wave 4, deps: 01-02) — 5 类错误处理 + runRound 编排 (致命扩散/全离线跳总结) + ErrorBanner/MessageBubble 双重呈现 (D-09/D-10/D-11/D-12)
+- [x] 01-04-PLAN.md (wave 4, deps: 01-02) — 5 类错误处理 + runRound 编排 (致命扩散/全离线跳总结) + ErrorBanner/MessageBubble 双重呈现 (D-09/D-10/D-11/D-12)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -144,7 +144,7 @@ Phases 3, 4, and 5 (the P1 agent features) are largely independent of each other
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Production Model Gateway | 3/5 | In Progress|  |
+| 1. Production Model Gateway | 4/5 | In Progress|  |
 | 2. Verification Gate Closure | 0/TBD | Not started | - |
 | 3. Agent Templates | 0/TBD | Not started | - |
 | 4. Independent-Answer Mode | 0/TBD | Not started | - |
