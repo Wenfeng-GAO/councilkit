@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { db } from "@/lib/db";
 import {
   clearApiKey,
   clearGatewayApiKey,
@@ -9,13 +8,16 @@ import {
   saveApiKey,
   saveGatewayApiKey,
 } from "@/lib/crypto";
-import { createGateway, validateGateway, type Gateway } from "@/models";
+import { db } from "@/lib/db";
+import { migrateLegacyAgentsToGateways } from "@/lib/gateway-migrate";
+import { type Gateway, createGateway, validateGateway } from "@/models";
+import type { Agent } from "@/models";
 
 // Node test env has no localStorage — provide a minimal Map-backed shim.
 class LocalStorageShim {
   private store = new Map<string, string>();
   getItem(k: string): string | null {
-    return this.store.has(k) ? this.store.get(k) as string : null;
+    return this.store.has(k) ? (this.store.get(k) as string) : null;
   }
   setItem(k: string, v: string): void {
     this.store.set(k, String(v));
@@ -33,7 +35,7 @@ describe("crypto multi-key (per-gatewayId)", () => {
     (globalThis as Record<string, unknown>).localStorage = new LocalStorageShim();
   });
   afterEach(() => {
-    delete (globalThis as Record<string, unknown>).localStorage;
+    (globalThis as Record<string, unknown>).localStorage = undefined;
   });
 
   it("saveGatewayApiKey writes non-plaintext cipher to localStorage[gatewayKey]", () => {
@@ -105,39 +107,27 @@ describe("createGateway", () => {
   });
 
   it("throws when name is empty", () => {
-    expect(() =>
-      createGateway({ ...validInput, name: "" }),
-    ).toThrow();
+    expect(() => createGateway({ ...validInput, name: "" })).toThrow();
   });
 
   it("throws when type is not in the allowed set", () => {
-    expect(() =>
-      createGateway({ ...validInput, type: "gemini" as never }),
-    ).toThrow();
+    expect(() => createGateway({ ...validInput, type: "gemini" as never })).toThrow();
   });
 
   it("throws when baseUrl is empty", () => {
-    expect(() =>
-      createGateway({ ...validInput, baseUrl: "" }),
-    ).toThrow();
+    expect(() => createGateway({ ...validInput, baseUrl: "" })).toThrow();
   });
 
   it("throws when baseUrl is not http(s)://", () => {
-    expect(() =>
-      createGateway({ ...validInput, baseUrl: "ftp://api.anthropic.com" }),
-    ).toThrow();
+    expect(() => createGateway({ ...validInput, baseUrl: "ftp://api.anthropic.com" })).toThrow();
   });
 
   it("throws when defaultModel is empty", () => {
-    expect(() =>
-      createGateway({ ...validInput, defaultModel: "" }),
-    ).toThrow();
+    expect(() => createGateway({ ...validInput, defaultModel: "" })).toThrow();
   });
 
   it("throws when name exceeds 50 chars", () => {
-    expect(() =>
-      createGateway({ ...validInput, name: "x".repeat(51) }),
-    ).toThrow();
+    expect(() => createGateway({ ...validInput, name: "x".repeat(51) })).toThrow();
   });
 
   it("accepts openai-compatible type", () => {
@@ -190,5 +180,135 @@ describe("CouncilKitDB v2 schema", () => {
     expect(schema.primKey.keyPath).toBe("id");
     const indexNames = schema.indexes.map((i) => i.keyPath);
     expect(indexNames).toContain("type");
+  });
+});
+
+// --- Migration tests (D-03) ---
+
+interface MockDB {
+  agents: { toArray(): Promise<Agent[]>; put(a: Agent): Promise<string> };
+  gateways: { toArray(): Promise<Gateway[]>; add(g: Gateway): Promise<string> };
+}
+
+function makeMockDB(agents: Agent[], gateways: Gateway[] = []): MockDB {
+  const agentStore = [...agents];
+  const gatewayStore = [...gateways];
+  return {
+    agents: {
+      toArray: async () => [...agentStore],
+      put: async (a: Agent) => {
+        const idx = agentStore.findIndex((x) => x.id === a.id);
+        if (idx >= 0) agentStore[idx] = a;
+        else agentStore.push(a);
+        return a.id;
+      },
+    },
+    gateways: {
+      toArray: async () => [...gatewayStore],
+      add: async (g: Gateway) => {
+        gatewayStore.push(g);
+        return g.id;
+      },
+    },
+  };
+}
+
+function legacyAgent(id: string, model: string): Agent {
+  return {
+    id,
+    model: model as Agent["model"],
+    role: "r",
+    color: "#6366f1",
+    status: "online",
+  };
+}
+
+describe("migrateLegacyAgentsToGateways", () => {
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).localStorage = new LocalStorageShim();
+  });
+  afterEach(() => {
+    (globalThis as Record<string, unknown>).localStorage = undefined;
+  });
+
+  it("seeds placeholder gateways for claude + deepseek tags and backfills agents", async () => {
+    const mock = makeMockDB([legacyAgent("a1", "claude"), legacyAgent("a2", "deepseek")]);
+    const result = await migrateLegacyAgentsToGateways(mock);
+    expect(result.seeded).toBe(2);
+    expect(result.migrated).toBe(2);
+
+    const gateways = await mock.gateways.toArray();
+    expect(gateways.length).toBe(2);
+    const claudeGw = gateways.find((g) => g.name === "Claude");
+    const deepseekGw = gateways.find((g) => g.name === "DeepSeek");
+    expect(claudeGw).toBeTruthy();
+    expect(claudeGw?.type).toBe("anthropic");
+    expect(claudeGw?.baseUrl).toBe("https://api.anthropic.com");
+    expect(claudeGw?.defaultModel).toBe("claude-sonnet-4");
+    expect(deepseekGw).toBeTruthy();
+    expect(deepseekGw?.type).toBe("openai-compatible");
+    expect(deepseekGw?.baseUrl).toBe("https://api.deepseek.com/v1");
+    expect(deepseekGw?.defaultModel).toBe("deepseek-chat");
+
+    const agents = await mock.agents.toArray();
+    const a1 = agents.find((a) => a.id === "a1") as Agent & { gatewayId?: string };
+    const a2 = agents.find((a) => a.id === "a2") as Agent & { gatewayId?: string };
+    expect(a1.model).toBe("claude-sonnet-4");
+    expect(a1.gatewayId).toBe(claudeGw?.id);
+    expect(a2.model).toBe("deepseek-chat");
+    expect(a2.gatewayId).toBe(deepseekGw?.id);
+  });
+
+  it("seeds openai placeholder when openai tag present", async () => {
+    const mock = makeMockDB([legacyAgent("a1", "openai")]);
+    const result = await migrateLegacyAgentsToGateways(mock);
+    expect(result.seeded).toBe(1);
+    const gateways = await mock.gateways.toArray();
+    const openaiGw = gateways.find((g) => g.name === "OpenAI");
+    expect(openaiGw?.type).toBe("openai-compatible");
+    expect(openaiGw?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(openaiGw?.defaultModel).toBe("gpt-4o");
+  });
+
+  it("does not write any apiKey to localStorage for seeded placeholders", async () => {
+    const mock = makeMockDB([legacyAgent("a1", "claude")]);
+    await migrateLegacyAgentsToGateways(mock);
+    const gateways = await mock.gateways.toArray();
+    for (const g of gateways) {
+      expect(loadGatewayApiKey(g.id)).toBeNull();
+    }
+  });
+
+  it("is idempotent: second call seeds nothing and migrates nothing", async () => {
+    const mock = makeMockDB([legacyAgent("a1", "claude")]);
+    await migrateLegacyAgentsToGateways(mock);
+    const result = await migrateLegacyAgentsToGateways(mock);
+    expect(result.seeded).toBe(0);
+    expect(result.migrated).toBe(0);
+    const gateways = await mock.gateways.toArray();
+    expect(gateways.length).toBe(1);
+  });
+
+  it("does not touch agents already holding real model ids", async () => {
+    const mock = makeMockDB([legacyAgent("a1", "claude-sonnet-4")]);
+    const result = await migrateLegacyAgentsToGateways(mock);
+    expect(result.seeded).toBe(0);
+    expect(result.migrated).toBe(0);
+    const agents = await mock.agents.toArray();
+    expect(agents[0].model).toBe("claude-sonnet-4");
+  });
+
+  it("returns zero stats and does not throw on empty db", async () => {
+    const mock = makeMockDB([]);
+    const result = await migrateLegacyAgentsToGateways(mock);
+    expect(result.seeded).toBe(0);
+    expect(result.migrated).toBe(0);
+  });
+
+  it("handles mixed legacy + real agents, only migrating legacy", async () => {
+    const mock = makeMockDB([legacyAgent("a1", "claude"), legacyAgent("a2", "gpt-4o")]);
+    const result = await migrateLegacyAgentsToGateways(mock);
+    expect(result.seeded).toBe(1);
+    expect(result.migrated).toBe(1);
   });
 });
