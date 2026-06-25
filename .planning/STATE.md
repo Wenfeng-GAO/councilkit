@@ -6,14 +6,14 @@ current_phase: 01
 current_phase_name: Production Model Gateway
 status: executing
 stopped_at: Phase 1 plans created (5 plans, waves 1-5)
-last_updated: "2026-06-25T15:56:12.558Z"
+last_updated: "2026-06-25T16:13:53.978Z"
 last_activity: 2026-06-25
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-06-25)
 ## Current Position
 
 Phase: 01 (Production Model Gateway) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-06-25 — Phase 01 execution started
 
@@ -58,6 +58,7 @@ Progress: [░░░░░░░░░░] 0%
 *Updated after each plan completion*
 | Phase 01 P01 | 5 | 3 tasks | 6 files |
 | Phase 01 P02 | 12 min | 3 tasks | 16 files |
+| Phase 1 P3 | 12 min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase ?]: 01-01 deviation: migrateLegacyAgentsToGateways 接受可选 db 参数以支持单测注 mock（生产 runStartupMigration 用真实 db）
 - [Phase ?]: 01-02: adapter-by-gateway-type 分派取代 ModelType Map registry (D-04); GatewayError 5-class 透传 (D-09); apiKey 经 loadGatewayApiKey(gatewayId) 注入 (D-07); src/ 内零 VITE_*_API_KEY
 - [Phase ?]: 01-02: streamOpenAIDeltas 独立 helper 替换 streamDeltas parseChunk (choices[].delta.content); Anthropic path 不动; collectText @deprecated 由 P05 删
+- [Phase ?]: Gateway store 拆 action 函数 + hooks，action 函数可独立单测 (node env)
+- [Phase ?]: useDeleteGateway mutationFn 主动清空 agent.gatewayId 与 UI-SPEC 删除 Modal 文案一致 (T-03-03)
+- [Phase ?]: gateway-adapters 增加可选 maxTokens 参数，测试连接走 maxTokens=1 (T-03-05)
 
 ### Pending Todos
 
@@ -94,6 +98,6 @@ Items acknowledged and carried forward (origin: VibeSpec import / PROJECT.md):
 
 ## Session Continuity
 
-Last session: 2026-06-25T15:55:55.223Z
+Last session: 2026-06-25T16:13:39.822Z
 Stopped at: Phase 1 UI-SPEC approved
 Resume file: .planning/phases/01-production-model-gateway/01-UI-SPEC.md
