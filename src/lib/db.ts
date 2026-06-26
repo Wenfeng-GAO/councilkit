@@ -26,6 +26,17 @@ export class CouncilKitDB extends Dexie {
       summaries: "id, roundId",
       gateways: "id, type",
     });
+    // v3: 为 gateways 增加 createdAt 索引 —— listGateways() 用 orderBy("createdAt")，
+    // Dexie 要求 orderBy 的字段必须是索引列，否则抛 OrderByError 导致列表查询失败、
+    // 保存成功却看不到网关。
+    this.version(3).stores({
+      rooms: "id, status, lastActiveAt",
+      agents: "id, roomId, model",
+      messages: "id, roundId, senderId",
+      rounds: "id, roomId, roundNumber",
+      summaries: "id, roundId",
+      gateways: "id, type, createdAt",
+    });
   }
 }
 
