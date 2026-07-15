@@ -41,8 +41,20 @@ export function SettingsPage() {
   useEffect(() => {
     setStatuses((prev) => {
       const next: Record<string, StatusState> = {};
+      let changed = false;
       for (const g of gateways) {
-        next[g.id] = prev[g.id] ?? { status: "idle" };
+        const existing = prev[g.id];
+        if (existing) {
+          next[g.id] = existing;
+        } else {
+          next[g.id] = { status: "idle" };
+          changed = true;
+        }
+      }
+      // 内容无变化时返回同一引用，避免 setStatuses 触发无意义 re-render
+      // （Maximum update depth 回归根因：updater 总返回新对象 + gateways 引用每帧变）
+      if (!changed && Object.keys(next).length === Object.keys(prev).length) {
+        return prev;
       }
       return next;
     });
