@@ -273,6 +273,34 @@ describe("runRound error orchestration", () => {
     expect(call.model).toBe("model-a2");
   });
 
+  it("first round with no prior context still sends a non-empty messages payload (TC-3)", async () => {
+    const g1 = makeGateway("g1", "Claude");
+    mocks.gatewaysGet.mockResolvedValue(g1);
+    mocks.generateSummary.mockResolvedValue("summary-text");
+    // 捕获 dispatchStream 实际收到的请求 messages
+    let capturedReqMessages: { role: string }[] | undefined;
+    mocks.dispatchStream.mockImplementation((agent: Agent, req: { messages: { role: string }[] }) => {
+      capturedReqMessages = req.messages;
+      return streamFrom(plan[agent.id] ?? []);
+    });
+    const plan = { a1: ["首轮发言"] };
+
+    await runRound({
+      room: makeRoom(),
+      agents: [makeAgent("a1", "g1")],
+      getPriorSummary: () => null,
+      setSummary: async () => {},
+    });
+
+    const state = useDiscussionStore.getState();
+    // Anthropic /v1/messages 要求 messages 非空；首轮无历史时仍应注入可应答的 user 消息。
+    const nonSystemMessages = (capturedReqMessages ?? []).filter((m) => m.role !== "system");
+    expect(nonSystemMessages.length).toBeGreaterThan(0);
+    // 发言应被持有为 online，未被错误地标记 offline
+    expect(state.agentStatus.a1).toBe("online");
+    expect(state.agentErrors.a1).toBeUndefined();
+  });
+
   it("generateSummary throw → catch fallback + summaryFailed warn (D-12)", async () => {
     const g1 = makeGateway("g1", "Claude");
     mocks.gatewaysGet.mockResolvedValue(g1);

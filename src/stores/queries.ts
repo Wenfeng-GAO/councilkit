@@ -122,11 +122,19 @@ export async function runRound(params: {
       let local = "";
       let hadError = false;
 
+      // 首轮（无历史消息且无过往摘要）时 ctx.messages 为空，Anthropic /v1/messages 要求
+      // messages 非空，否则 400 被映射成离线 → 首轮 agent 无发言（TC-3）。补一条可应答的
+      // user 消息作为发言请求，仅当窗口内确无历史时注入，不污染多轮上下文。
+      const turnMessages =
+        ctx.messages.length > 0
+          ? ctx.messages
+          : [{ role: "user" as const, content: "请就当前话题给出你的发言。" }];
+
       try {
         for await (const chunk of dispatchStream(agent, {
           model: agent.model,
           stream: true,
-          messages: [{ role: "system", content: systemContent }, ...ctx.messages],
+          messages: [{ role: "system", content: systemContent }, ...turnMessages],
         })) {
           if (typeof chunk === "string") {
             local += chunk;
