@@ -1,6 +1,7 @@
 import { MessageBubble } from "@/components/message/MessageBubble";
 import { ErrorBanner } from "@/components/room/ErrorBanner";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { enumerateErrorOnlyAgents } from "@/lib/round-errors";
 import type { Agent, Message } from "@/models";
 import { useDiscussionStore } from "@/stores/discussion";
 
@@ -17,6 +18,12 @@ export function DiscussionStream({ messages, agents }: DiscussionStreamProps) {
 
   const isEmpty = messages.length === 0 && draftEntries.length === 0 && !roundErrorSummary;
 
+  // 已被渲染为发言 bubble 的 agent（有 message）；其余出错 agent 需补 error-only bubble (TC-5)
+  const renderedSenderIds = new Set(
+    messages.filter((m) => m.senderType === "agent").map((m) => m.senderId),
+  );
+  const errorOnlyAgentIds = enumerateErrorOnlyAgents(agentErrors, renderedSenderIds);
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-4">
       <ErrorBanner summary={roundErrorSummary} onDismiss={clearRoundErrorSummary} />
@@ -31,6 +38,15 @@ export function DiscussionStream({ messages, agents }: DiscussionStreamProps) {
           errorPropagated={
             m.senderType === "agent" && !!agentErrors[m.senderId]?.message?.includes("网关已离线")
           }
+        />
+      ))}
+      {errorOnlyAgentIds.map((agentId) => (
+        <MessageBubble
+          key={`error-${agentId}`}
+          agent={agents.find((a) => a.id === agentId)}
+          error={agentErrors[agentId]}
+          gateway={agentErrorGateway[agentId]}
+          errorPropagated={!!agentErrors[agentId]?.message?.includes("网关已离线")}
         />
       ))}
       {draftEntries.map(([agentId, text]) => {

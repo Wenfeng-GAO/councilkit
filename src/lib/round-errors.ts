@@ -144,3 +144,19 @@ export function formatGatewayOfflineInline(): {
     body: (gatewayName) => `网关 ${gatewayName} 已被标记离线，本轮跳过该 agent。`,
   };
 }
+
+/**
+ * 一轮里「出错且无发言消息」的 agent —— runRound 对出错 agent 不创建 message
+ * (D-10/D-12)，故这些 agent 没有 MessageBubble 可挂 inline error。UI 层需为它们
+ * 单独渲染 error-only bubble（TC-5）。本函数纯逻辑计算该列表，供 DiscussionStream
+ * 消费并单测覆盖（不引入组件渲染测试依赖）。
+ *
+ * @param agentErrors runRound 记录的 agentId -> GatewayError
+ * @param renderedSenderIds 已被渲染为 MessageBubble 的 senderId 集合（即有 message 的 agent）
+ */
+export function enumerateErrorOnlyAgents(
+  agentErrors: Record<string, GatewayError>,
+  renderedSenderIds: ReadonlySet<string>,
+): string[] {
+  return Object.keys(agentErrors).filter((id) => !renderedSenderIds.has(id));
+}

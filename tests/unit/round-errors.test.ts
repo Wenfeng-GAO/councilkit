@@ -27,6 +27,7 @@ vi.mock("@/lib/db", () => ({
 
 import {
   classifyRoundErrors,
+  enumerateErrorOnlyAgents,
   formatGatewayOfflineInline,
   formatInlineBody,
   formatInlineHeader,
@@ -170,6 +171,20 @@ describe("round-errors helpers", () => {
       const fmt = formatGatewayOfflineInline();
       expect(fmt.header).toBe("⚠ 网关已离线");
       expect(fmt.body("Claude")).toBe("网关 Claude 已被标记离线，本轮跳过该 agent。");
+    });
+  });
+
+  describe("enumerateErrorOnlyAgents", () => {
+    it("lists agents with errors but no rendered message (TC-5)", () => {
+      // 出错 agent a1/a2 无 message；a3 成功有 message；renderedSenderIds 含 a3 且不含 a1/a2
+      const errs = { a1: ge("invalid_key"), a2: ge("timeout"), a3: ge("network") };
+      const rendered = new Set(["a3"]);
+      expect(enumerateErrorOnlyAgents(errs, rendered).sort()).toEqual(["a1", "a2"]);
+    });
+
+    it("is empty when every errored agent already has a rendered message", () => {
+      const errs = { a1: ge("rate_limit") };
+      expect(enumerateErrorOnlyAgents(errs, new Set(["a1"]))).toEqual([]);
     });
   });
 });

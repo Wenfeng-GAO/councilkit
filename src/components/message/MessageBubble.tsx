@@ -9,7 +9,8 @@ import type { GatewayError } from "@/types";
 import ReactMarkdown from "react-markdown";
 
 interface MessageBubbleProps {
-  message: Message;
+  /** 正常发言消息；error-only bubble（出错 agent 无发言，TC-5）时省略。 */
+  message?: Message;
   agent?: Agent;
   /** 本轮该 agent 遭遇的 GatewayError（可选）；存在则在 content 下方渲染 inline block。 */
   error?: GatewayError;
@@ -26,7 +27,7 @@ export function MessageBubble({
   gateway,
   errorPropagated = false,
 }: MessageBubbleProps) {
-  const isUser = message.senderType === "user";
+  const isUser = message?.senderType === "user";
   const name = isUser ? "你" : (agent?.role ?? "agent");
   const color = isUser ? "#8b919a" : (agent?.color ?? "#6366f1");
 
@@ -41,13 +42,17 @@ export function MessageBubble({
           {name.slice(0, 1)}
         </span>
         <span className="text-sm font-medium text-fg">{name}</span>
-        <span className="text-xs text-muted">
-          {new Date(message.timestamp).toLocaleTimeString()}
-        </span>
+        {message ? (
+          <span className="text-xs text-muted">
+            {new Date(message.timestamp).toLocaleTimeString()}
+          </span>
+        ) : null}
       </div>
-      <div className="ml-8 text-sm leading-relaxed text-fg">
-        <ReactMarkdown>{message.content}</ReactMarkdown>
-      </div>
+      {message ? (
+        <div className="ml-8 text-sm leading-relaxed text-fg">
+          <ReactMarkdown>{message.content}</ReactMarkdown>
+        </div>
+      ) : null}
       {renderInlineError(error, gateway, errorPropagated)}
     </div>
   );
