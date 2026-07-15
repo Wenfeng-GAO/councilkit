@@ -160,3 +160,72 @@ export function enumerateErrorOnlyAgents(
 ): string[] {
   return Object.keys(agentErrors).filter((id) => !renderedSenderIds.has(id));
 }
+
+/**
+ * TC-5 渲染序列项 —— message（成功发言）或 errorOnly（出错无发言）或非 agent（user 等）。
+ * DiscussionStream 不能「先全渲染 message 再全渲染 error」，否则「前序 agent 失败、后序
+ * 成功」会时序反转（失败跑到成功后面）。本函数把本轮渲染项按 agent 执行顺序统一编排，
+ * 非 agent 消息（user 追问等）按原顺序保留在前。纯逻辑 + 单测覆盖。
+ */
+export type RenderItem =
+  | { kind: "message"; key: string; agentOrder: number; message: unknown }
+  | { kind: "errorOnly"; key: string; agentOrder: number; agentId: string }
+  | { kind: "other"; key: string; order: number; message: unknown };
+
+interface MessageLike {
+  id: string;
+  senderId: string;
+  senderType: string;
+}
+
+/**
+ * @param messages 本轮消息列表（含 agent 发言 + user 消息等）
+ * @param agents agent 列表（顺序 = runRound 执行顺序）
+ * @param agentErrors runRound 记录的 agentId -> GatewayError
+ * @returns 按 agent 执行顺序排列的 RenderItem[]，非 agent 消息保序在前
+ */
+export function buildRenderSequence(
+  messages: MessageLike[],
+  agents: { id: string }[],
+  agentErrors: Record<string, GatewayError>,
+): RenderItem[] {
+  const agentOrder = new Map<string, number>();
+  agents.forEach((a, i) => agentOrder.set(a.id, i));
+
+  const items: RenderItem[] = [];
+  // 非 agent 消息（user 等）保序排在前
+  let otherOrder = 0;
+  for (const m of messages) {
+    if (m.senderType === "agent") continue;
+    items.push({ kind: "other", key: m.id, order: otherOrder++, message: m });
+  }
+
+  // 本轮 agent：有 message 取其 agentOrder 为排序键；无 message 但出错 → errorOnly
+  const errOnlyAgentIds = enumerateErrorOnlyAgents(
+    agentErrors,
+    new Set(messages.filter((m) => m.senderType === "agent").map((m) => m.senderId)),
+  );
+
+  type AgentItem = Extract<RenderItem, { agentOrder: number }>;
+  const agentItems: AgentItem[] = [];
+  for (const m of messages) {
+    if (m.senderType !== "agent") continue;
+    agentItems.push({
+      kind: "message",
+      key: m.id,
+      agentOrder: agentOrder.get(m.senderId) ?? Number.MAX_SAFE_INTEGER,
+      message: m,
+    });
+  }
+  for (const agentId of errOnlyAgentIds) {
+    agentItems.push({
+      kind: "errorOnly",
+      key: `error-${agentId}`,
+      agentOrder: agentOrder.get(agentId) ?? Number.MAX_SAFE_INTEGER,
+      agentId,
+    });
+  }
+  agentItems.sort((a, b) => a.agentOrder - b.agentOrder);
+
+  return [...items, ...agentItems];
+}

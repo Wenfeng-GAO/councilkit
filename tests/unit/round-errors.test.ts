@@ -26,13 +26,14 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import {
+  type AgentRoundError,
+  buildRenderSequence,
   classifyRoundErrors,
   enumerateErrorOnlyAgents,
   formatGatewayOfflineInline,
   formatInlineBody,
   formatInlineHeader,
   isFatal,
-  type AgentRoundError,
 } from "@/lib/round-errors";
 import { useDiscussionStore } from "@/stores/discussion";
 import { runRound } from "@/stores/queries";
@@ -83,7 +84,8 @@ function streamFrom(chunks: Array<string | GatewayError>): AsyncIterable<string 
       let i = 0;
       return {
         async next() {
-          if (i < chunks.length) return { value: chunks[i++] as string | GatewayError, done: false };
+          if (i < chunks.length)
+            return { value: chunks[i++] as string | GatewayError, done: false };
           return { value: undefined, done: true } as const;
         },
       };
@@ -141,10 +143,7 @@ describe("round-errors helpers", () => {
     });
 
     it("preserves allOfflineNoSummary flag", () => {
-      const summary = classifyRoundErrors(
-        [{ agentId: "a1", error: ge("network") }],
-        true,
-      );
+      const summary = classifyRoundErrors([{ agentId: "a1", error: ge("network") }], true);
       expect(summary?.allOfflineNoSummary).toBe(true);
     });
   });
@@ -185,6 +184,75 @@ describe("round-errors helpers", () => {
     it("is empty when every errored agent already has a rendered message", () => {
       const errs = { a1: ge("rate_limit") };
       expect(enumerateErrorOnlyAgents(errs, new Set(["a1"]))).toEqual([]);
+    });
+  });
+
+  describe("buildRenderSequence", () => {
+    // 本轮 message 形状最小构造（buildRenderSequence 只读 id/senderId/senderType）
+    function msg(id: string, senderId: string, senderType: "agent" | "user" = "agent") {
+      return { id, senderId, senderType };
+    }
+
+    it("interleaves message and error-only by agent execution order (前序失败→后序成功 不反转)", () => {
+      // agents 执行顺序 a1→a2→a3；a1 出错无 message，a2 出错无 message，a3 成功有 message
+      const agents = [{ id: "a1" }, { id: "a2" }, { id: "a3" }];
+      const messages = [msg("m3", "a3")];
+      const errs = { a1: ge("invalid_key"), a2: ge("timeout") };
+      const seq = buildRenderSequence(messages, agents, errs);
+
+      const kinds = seq.map((i) =>
+        i.kind === "message"
+          ? `msg:${(i.message as { senderId: string }).senderId}`
+          : i.kind === "errorOnly"
+            ? `err:${i.agentId}`
+            : "other",
+      );
+      // 渲染序列必须按 agent 执行顺序：a1(error) → a2(error) → a3(msg)，不反转
+      expect(kinds).toEqual(["err:a1", "err:a2", "msg:a3"]);
+    });
+
+    it("success→fail order preserved (前序成功→后序失败)", () => {
+      const agents = [{ id: "a1" }, { id: "a2" }];
+      const messages = [msg("m1", "a1")];
+      const errs = { a2: ge("network") };
+      const seq = buildRenderSequence(messages, agents, errs);
+      const kinds = seq.map((i) =>
+        i.kind === "message"
+          ? `msg:${(i.message as { senderId: string }).senderId}`
+          : `err:${(i as { agentId: string }).agentId}`,
+      );
+      expect(kinds).toEqual(["msg:a1", "err:a2"]);
+    });
+
+    it("TC-5 5a scenario: first agent invalid_key + second propagated, both error-only, no message", () => {
+      // 全出错无发言 → 两个 error-only，按顺序；无 message
+      const agents = [{ id: "a1" }, { id: "a2" }];
+      const messages: ReturnType<typeof msg>[] = [];
+      const errs = {
+        a1: ge("invalid_key"),
+        a2: ge("invalid_key"), // propagated（message 含「网关已离线」，但本纯函数不查文案，只判 errorOnly）
+      };
+      const seq = buildRenderSequence(messages, agents, errs);
+      expect(seq.every((i) => i.kind === "errorOnly")).toBe(true);
+      expect(seq.map((i) => (i as { agentId: string }).agentId)).toEqual(["a1", "a2"]);
+    });
+
+    it("keeps non-agent (user) messages aside in original order", () => {
+      const agents = [{ id: "a1" }, { id: "a2" }];
+      const messages = [msg("u1", "user", "user"), msg("m1", "a1")];
+      const seq = buildRenderSequence(messages, agents, { a2: ge("timeout") });
+      const kinds = seq.map((i) => `${i.kind}:${i.key}`);
+      // other(u1) 在前，之后 agent 序列 a1(msg) → a2(err)
+      expect(kinds).toEqual(["other:u1", "message:m1", "errorOnly:error-a2"]);
+    });
+
+    it("agent with message AND error (inline on existing bubble) is not duplicated as errorOnly", () => {
+      // a1 成功发言但本轮也记了 error（实际不会发生，但防御性：有 message 则不进 errorOnly）
+      const agents = [{ id: "a1" }];
+      const messages = [msg("m1", "a1")];
+      const seq = buildRenderSequence(messages, agents, { a1: ge("rate_limit") });
+      expect(seq).toHaveLength(1);
+      expect(seq[0].kind).toBe("message");
     });
   });
 });
@@ -263,9 +331,7 @@ describe("runRound error orchestration", () => {
   it("partial success → generateSummary uses the successful agent (not agents[0]) (D-12)", async () => {
     const g1 = makeGateway("g1", "Claude");
     const g2 = makeGateway("g2", "OpenAI");
-    mocks.gatewaysGet.mockImplementation((id: string) =>
-      Promise.resolve(id === "g1" ? g1 : g2),
-    );
+    mocks.gatewaysGet.mockImplementation((id: string) => Promise.resolve(id === "g1" ? g1 : g2));
     mocks.generateSummary.mockResolvedValue("summary-text");
     setPlan({
       a1: [ge("rate_limit")],
@@ -294,10 +360,12 @@ describe("runRound error orchestration", () => {
     mocks.generateSummary.mockResolvedValue("summary-text");
     // 捕获 dispatchStream 实际收到的请求 messages
     let capturedReqMessages: { role: string }[] | undefined;
-    mocks.dispatchStream.mockImplementation((agent: Agent, req: { messages: { role: string }[] }) => {
-      capturedReqMessages = req.messages;
-      return streamFrom(plan[agent.id] ?? []);
-    });
+    mocks.dispatchStream.mockImplementation(
+      (agent: Agent, req: { messages: { role: string }[] }) => {
+        capturedReqMessages = req.messages;
+        return streamFrom(plan[agent.id] ?? []);
+      },
+    );
     const plan = { a1: ["首轮发言"] };
 
     await runRound({

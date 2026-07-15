@@ -1,7 +1,7 @@
 import { MessageBubble } from "@/components/message/MessageBubble";
 import { ErrorBanner } from "@/components/room/ErrorBanner";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { enumerateErrorOnlyAgents } from "@/lib/round-errors";
+import { buildRenderSequence } from "@/lib/round-errors";
 import type { Agent, Message } from "@/models";
 import { useDiscussionStore } from "@/stores/discussion";
 
@@ -18,37 +18,40 @@ export function DiscussionStream({ messages, agents }: DiscussionStreamProps) {
 
   const isEmpty = messages.length === 0 && draftEntries.length === 0 && !roundErrorSummary;
 
-  // 已被渲染为发言 bubble 的 agent（有 message）；其余出错 agent 需补 error-only bubble (TC-5)
-  const renderedSenderIds = new Set(
-    messages.filter((m) => m.senderType === "agent").map((m) => m.senderId),
-  );
-  const errorOnlyAgentIds = enumerateErrorOnlyAgents(agentErrors, renderedSenderIds);
+  // TC-5: 单一渲染序列 —— agent 发言(message) 与 出错(error-only) 按 agent 执行顺序
+  // 交错编排，避免「先全渲染成功、再全渲染失败」造成的时序反转（前序失败跑到后序成功后）。
+  const renderItems = buildRenderSequence(messages, agents, agentErrors);
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-4">
       <ErrorBanner summary={roundErrorSummary} onDismiss={clearRoundErrorSummary} />
       {isEmpty ? <EmptyState title="还没有讨论" hint="发起讨论后，agent 会依次发言。" /> : null}
-      {messages.map((m) => (
-        <MessageBubble
-          key={m.id}
-          message={m}
-          agent={agents.find((a) => a.id === m.senderId)}
-          error={m.senderType === "agent" ? agentErrors[m.senderId] : undefined}
-          gateway={m.senderType === "agent" ? agentErrorGateway[m.senderId] : undefined}
-          errorPropagated={
-            m.senderType === "agent" && !!agentErrors[m.senderId]?.message?.includes("网关已离线")
-          }
-        />
-      ))}
-      {errorOnlyAgentIds.map((agentId) => (
-        <MessageBubble
-          key={`error-${agentId}`}
-          agent={agents.find((a) => a.id === agentId)}
-          error={agentErrors[agentId]}
-          gateway={agentErrorGateway[agentId]}
-          errorPropagated={!!agentErrors[agentId]?.message?.includes("网关已离线")}
-        />
-      ))}
+      {renderItems.map((item) => {
+        if (item.kind === "errorOnly") {
+          return (
+            <MessageBubble
+              key={item.key}
+              agent={agents.find((a) => a.id === item.agentId)}
+              error={agentErrors[item.agentId]}
+              gateway={agentErrorGateway[item.agentId]}
+              errorPropagated={!!agentErrors[item.agentId]?.message?.includes("网关已离线")}
+            />
+          );
+        }
+        const m = item.message as Message;
+        return (
+          <MessageBubble
+            key={item.key}
+            message={m}
+            agent={agents.find((a) => a.id === m.senderId)}
+            error={m.senderType === "agent" ? agentErrors[m.senderId] : undefined}
+            gateway={m.senderType === "agent" ? agentErrorGateway[m.senderId] : undefined}
+            errorPropagated={
+              m.senderType === "agent" && !!agentErrors[m.senderId]?.message?.includes("网关已离线")
+            }
+          />
+        );
+      })}
       {draftEntries.map(([agentId, text]) => {
         const agent = agents.find((a) => a.id === agentId);
         return (
