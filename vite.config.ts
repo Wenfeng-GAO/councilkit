@@ -13,9 +13,11 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      // CR1 模型路径(dev): 浏览器无法直连 antchat（claude binary 专有鉴权），
-      // 故 dev 代理到本地 model-proxy（scripts/model-proxy.mjs），由它经
-      // `cld ant glm5.2` 完成鉴权并返回 Anthropic SSE。生产需另行方案。
+      // Phase 1: 此 dev proxy 仅 dev 模式语法保留，生产路径已切到 /settings gateway
+      // 浏览器直连（P02 anthropicAdapter/openaiCompatibleAdapter + D-13 Anthropic CORS
+      // header anthropic-dangerous-direct-browser-access:true）。proxy 不删除以免破坏
+      // dev 临时 mock 验证；production build 不含此 server.proxy 路径（vite build 仅产
+      // pure client bundle，SC#3 干净检出）。
       proxy: {
         "/api/claude": {
           target: env.MODEL_PROXY_URL || "http://127.0.0.1:8788",

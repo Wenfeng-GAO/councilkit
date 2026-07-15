@@ -2,6 +2,12 @@
 // 代理给 `cld ant glm5.2`（cld 能完成 antchat 网关鉴权，浏览器/curl 不能直连）。
 // 输出 Anthropic SSE 格式，app 的 stream.ts 无需改动。
 // 生产环境不适用——仅 dev 验证模型连通性与端到端流程。
+//
+// Note (Phase 1 Production Gateway, 2026-06-25): 生产路径不再依赖此 proxy。
+// 用户在 /settings 自持 key 浏览器直连（P02 adapter + D-13 Anthropic CORS header
+// anthropic-dangerous-direct-browser-access:true）。
+// 保留此脚本仅供 dev 临时验证或本地 mock 场景；production build (vite build) 不含
+// 此路径（SC#3 干净检出）。
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -49,7 +49,6 @@ export function RoomPage() {
   });
 
   const running = useDiscussionStore((s) => s.running);
-  const lastError = useDiscussionStore((s) => s.lastError);
   const [summaryText, setSummaryText] = useState<string | null>(null);
 
   if (!room) return <EmptyState title="加载中…" />;
@@ -84,7 +83,6 @@ export function RoomPage() {
           {running ? "讨论中…" : room.roundIds.length === 0 ? "发起讨论" : "开始新一轮"}
         </Button>
       </div>
-      {lastError ? <p className="px-6 text-xs text-red-400">错误: {lastError}</p> : null}
       <DiscussionStream messages={messages ?? []} agents={agents} />
       <SummaryBlock content={summary?.content ?? summaryText} />
       <UserInputBar disabled={running} onSubmit={onUserSubmit} />

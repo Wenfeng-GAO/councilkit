@@ -1,6 +1,7 @@
 import type {
   AgentStatus,
-  ModelType,
+  GatewayError,
+  GatewayErrorKind,
   RoomStatus,
   RoundStatus,
   SenderType,
@@ -8,6 +9,8 @@ import type {
 } from "@/types";
 import { validateAgent } from "./agent";
 import type { Agent } from "./agent";
+import { createGateway, validateGateway } from "./gateway";
+import type { Gateway, GatewayType } from "./gateway";
 import { validateMessage } from "./message";
 import type { Message } from "./message";
 import { validateRoom } from "./room";
@@ -17,10 +20,23 @@ import type { Round, Summary } from "./round";
 import { createTemplate, validateTemplate } from "./template";
 import type { Template } from "./template";
 
-export type { Agent, Message, Round, Room, Summary, Template };
+export type {
+  Agent,
+  Gateway,
+  GatewayError,
+  GatewayErrorKind,
+  GatewayType,
+  Message,
+  Round,
+  Room,
+  Summary,
+  Template,
+};
 export {
+  createGateway,
   createTemplate,
   validateAgent,
+  validateGateway,
   validateMessage,
   validateRound,
   validateRoom,
@@ -62,7 +78,8 @@ export function createRoom(input: CreateRoomInput): Room {
 }
 
 export interface CreateAgentInput {
-  model: ModelType;
+  gatewayId: string;
+  model: string;
   role: string;
   color: string;
   status?: AgentStatus;
@@ -72,6 +89,7 @@ export interface CreateAgentInput {
 export function createAgent(input: CreateAgentInput): Agent {
   const agent: Agent = {
     id: uuid(),
+    gatewayId: input.gatewayId,
     model: input.model,
     role: input.role,
     color: input.color,
@@ -123,7 +141,8 @@ export function createRound(input: CreateRoundInput): Round {
 export interface CreateSummaryInput {
   roundId: string;
   content: string;
-  model: ModelType;
+  gatewayId: string;
+  model: string;
 }
 
 export function createSummary(input: CreateSummaryInput): Summary {
@@ -132,6 +151,7 @@ export function createSummary(input: CreateSummaryInput): Summary {
     roundId: input.roundId,
     content: input.content,
     generatedAt: now(),
+    gatewayId: input.gatewayId,
     model: input.model,
   };
 }

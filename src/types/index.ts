@@ -1,4 +1,13 @@
+/**
+ * @deprecated Phase 1 gateway 改造后保留仅供迁移期 P05 清理；新代码用 Agent.gatewayId + Agent.model。
+ */
 export type ModelType = "claude" | "openai" | "deepseek";
+export type GatewayErrorKind = "invalid_key" | "rate_limit" | "upstream" | "timeout" | "network";
+export interface GatewayError {
+  kind: GatewayErrorKind;
+  message: string;
+  httpStatus?: number;
+}
 export type SenderType = "agent" | "user";
 export type RoomStatus = "idle" | "discussing" | "paused";
 export type RoundStatus = "pending" | "active" | "completed";

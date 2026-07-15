@@ -1,6 +1,7 @@
 import { HomePage } from "@/app/pages/HomePage";
 import { NewRoomPage } from "@/app/pages/NewRoomPage";
 import { RoomPage } from "@/app/pages/RoomPage";
+import { SettingsPage } from "@/app/pages/SettingsPage";
 import { AppShell } from "@/components/layout/AppShell";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { createBrowserRouter } from "react-router-dom";
@@ -14,4 +15,5 @@ export const router = createBrowserRouter([
   { path: "/rooms/new", element: withShell(<NewRoomPage />) },
   { path: "/rooms/:roomId", element: withShell(<RoomPage />) },
   { path: "/templates", element: withShell(templatesPage) },
+  { path: "/settings", element: withShell(<SettingsPage />) },
 ]);

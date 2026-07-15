@@ -1,7 +1,8 @@
-import type { ModelType, ValidationResult } from "@/types";
+import type { ValidationResult } from "@/types";
 
 export interface TemplateAgentConfig {
-  model: ModelType;
+  gatewayId: string;
+  model: string;
   role: string;
   color: string;
 }

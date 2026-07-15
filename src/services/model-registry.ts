@@ -1,26 +1,10 @@
-import type { ModelRequest, ModelType } from "@/types";
+import type { GatewayError, ModelRequest } from "@/types";
 
 /**
- * ModelService is the unitary contract every concrete model client
- * (claude/openai/deepseek, implemented in T5) must satisfy.
+ * ModelService 契约：每个 model client 必须实现。P02 起 adapter 按 gateway.type
+ * 直接分派（src/services/gateway-adapters.ts），不再走 Map<ModelType, ModelService>
+ * 全局注册；该接口仅保留为 streamMessage 返回类型契约。
  */
 export interface ModelService {
-  streamMessage(req: ModelRequest): AsyncIterable<string>;
-}
-
-/**
- * Registry populated by T5 via registerModelService; T4 only owns the
- * contract + registry mechanism. dispatchMessage (actual streaming
- * orchestration) is intentionally deferred to T5/T7 where concrete
- * ModelService implementations exist — writing it in T4 produced only
- * stubs (caught by Step 3.1 MUST-HAVE WIRED/SUBSTANTIVE).
- */
-const registry = new Map<ModelType, ModelService>();
-
-export function registerModelService(model: ModelType, service: ModelService): void {
-  registry.set(model, service);
-}
-
-export function getModelService(model: ModelType): ModelService | undefined {
-  return registry.get(model);
+  streamMessage(req: ModelRequest): AsyncIterable<string | GatewayError>;
 }

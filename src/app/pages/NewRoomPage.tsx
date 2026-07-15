@@ -6,36 +6,36 @@ import { TextInput } from "@/components/ui/TextInput";
 import { Textarea } from "@/components/ui/Textarea";
 import { addAgent, addRoom } from "@/lib/db";
 import { type Agent, createAgent, createRoom } from "@/models";
-import type { ModelType } from "@/types";
+import { useGateways } from "@/stores/gateways";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-
-const MODEL_OPTIONS = [
-  { value: "claude", label: "Claude" },
-  { value: "openai", label: "GPT (OpenAI)" },
-  { value: "deepseek", label: "DeepSeek" },
-];
 
 const COLORS = ["#6366f1", "#3fb950", "#d29922", "#f85149", "#58a6ff", "#a371f7"];
 
 export function NewRoomPage() {
   const navigate = useNavigate();
+  const { data: gateways = [] } = useGateways();
   const [topic, setTopic] = useState("");
   const [background, setBackground] = useState("");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [draftRole, setDraftRole] = useState("");
-  const [draftModel, setDraftModel] = useState<ModelType>("claude");
+  const [draftGatewayId, setDraftGatewayId] = useState("");
+  const [draftModel, setDraftModel] = useState("");
 
   const addAgentConfig = () => {
-    if (draftRole.trim().length === 0) return;
+    if (draftRole.trim().length === 0 || !draftGatewayId) return;
     const agent = createAgent({
-      model: draftModel,
+      gatewayId: draftGatewayId,
+      model:
+        (draftModel.trim() || gateways.find((g) => g.id === draftGatewayId)?.defaultModel) ?? "",
       role: draftRole.trim(),
       color: COLORS[agents.length % COLORS.length],
     });
     setAgents((prev) => [...prev, agent]);
     setDraftRole("");
+    setDraftGatewayId("");
+    setDraftModel("");
     setModalOpen(false);
   };
 
@@ -50,6 +50,21 @@ export function NewRoomPage() {
     }
     navigate(`/rooms/${room.id}`);
   };
+
+  const openModal = () => {
+    setDraftGatewayId(gateways[0]?.id ?? "");
+    setDraftModel(gateways[0]?.defaultModel ?? "");
+    setDraftRole("");
+    setModalOpen(true);
+  };
+
+  const onGatewayChange = (id: string) => {
+    setDraftGatewayId(id);
+    const g = gateways.find((x) => x.id === id);
+    if (g) setDraftModel(g.defaultModel);
+  };
+
+  const confirmDisabled = draftRole.trim().length === 0 || !draftGatewayId;
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-8">
@@ -70,7 +85,7 @@ export function NewRoomPage() {
         <div>
           <div className="mb-2 flex items-center justify-between">
             <span className="text-sm text-muted">参与 agent（至少 1 个）</span>
-            <Button variant="ghost" onClick={() => setModalOpen(true)}>
+            <Button variant="ghost" onClick={openModal}>
               + 添加 agent
             </Button>
           </div>
@@ -79,6 +94,7 @@ export function NewRoomPage() {
               <AgentConfigCard
                 key={a.id}
                 agent={a}
+                gatewayName={gateways.find((g) => g.id === a.gatewayId)?.name}
                 onRemove={() => setAgents((prev) => prev.filter((_, idx) => idx !== i))}
               />
             ))}
@@ -97,13 +113,34 @@ export function NewRoomPage() {
             onChange={(e) => setDraftRole(e.target.value)}
             placeholder="例: 产品经理 / 反对者"
           />
-          <Select
-            label="模型"
-            options={MODEL_OPTIONS}
-            value={draftModel}
-            onChange={(e) => setDraftModel(e.target.value as ModelType)}
-          />
-          <Button onClick={addAgentConfig} disabled={draftRole.trim().length === 0}>
+          {gateways.length === 0 ? (
+            <div className="rounded border border-warn bg-warn/10 p-4 text-fg">
+              <p className="text-sm">尚未配置任何网关。前往「设置」添加一个网关后再创建 agent。</p>
+              <button
+                type="button"
+                onClick={() => navigate("/settings")}
+                className="mt-2 text-sm text-accent hover:underline"
+              >
+                前往设置
+              </button>
+            </div>
+          ) : (
+            <>
+              <Select
+                label="网关"
+                options={gateways.map((g) => ({ value: g.id, label: g.name }))}
+                value={draftGatewayId}
+                onChange={(e) => onGatewayChange(e.target.value)}
+              />
+              <TextInput
+                label="模型 ID"
+                value={draftModel}
+                onChange={(e) => setDraftModel(e.target.value)}
+                placeholder="例: claude-sonnet-4"
+              />
+            </>
+          )}
+          <Button onClick={addAgentConfig} disabled={confirmDisabled}>
             确认添加
           </Button>
         </div>

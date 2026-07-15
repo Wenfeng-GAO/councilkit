@@ -85,11 +85,3 @@ function parseChunk(payload: string): StreamChunk | null {
     return null;
   }
 }
-
-export async function collectText(deltas: AsyncIterable<string>): Promise<string> {
-  let acc = "";
-  for await (const text of deltas) {
-    acc += text;
-  }
-  return acc;
-}
