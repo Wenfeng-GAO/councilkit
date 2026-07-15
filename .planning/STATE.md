@@ -5,15 +5,15 @@ milestone_name: milestone
 current_phase: 01
 current_phase_name: Production Model Gateway
 status: executing
-stopped_at: Phase 1 plans created (5 plans, waves 1-5)
-last_updated: "2026-06-26T00:00:00.000Z"
-last_activity: 2026-06-26
-last_activity_desc: Phase 01 plan 05 Task 1 done; Task 2 human-verify checkpoint pending
+stopped_at: Phase 1 代码合并入主干 + 单测全绿;真实浏览器验收 deferred
+last_updated: "2026-07-15T00:00:00.000Z"
+last_activity: 2026-07-15
+last_activity_desc: Phase 1 GSD 分支 45 commit merge 入 main(c1fc52d)并 push origin;4 项 debug 修复(TC-3/TC-5×2/SettingsPage,两轮 codex review 闭环)随合并入主干;TC-3/5 真实浏览器端到端验收仍 deferred
 progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -28,12 +28,19 @@ See: .planning/PROJECT.md (updated 2026-06-25)
 
 ## Current Position
 
-Phase: 01 (Production Model Gateway) — EXECUTING (checkpoint)
-Plan: 5 of 5 — Task 1 done; Task 2 human-verify PENDING
-Status: checkpoint-pending (awaiting user real-API E2E run)
-Last activity: 2026-06-26 — 01-05 Task 1 committed (087bc08); Task 2 (D-13 Anthropic CORS + SC#1/2/3/4 real run) blocked on user-supplied valid API keys in /settings
+Phase: 01 (Production Model Gateway) — EXECUTING (real-browser verify pending)
+Plan: 5 of 5 — 5 plans 全部实现并合并入 main;真实浏览器验收(TC-3/TC-5 E2E)deferred
+Status: code-merged (main@c1fc52d, pushed);自动化验收 tsc/biome/build/vitest(112)全绿,两轮 codex review 闭环;真实浏览器端到端待 key 备好后补跑
+Last activity: 2026-07-15 — GSD 分支(45 commit:Phase 1 五 plan 01-01~01-05 + 4 项 debug 修复)merge 入 main 并 push;debug 修复含 TC-3 首轮 Anthropic messages 为空、TC-5 inline error 渲染+时序交错、SettingsPage Maximum update depth
 
-Progress: [████████░░] 80% (4/5 plans in Phase 01; plan 01-05 automation done, human-verify pending → Phase 1 NOT yet complete)
+Progress: [█████████░] 90% (5/5 plans 全部实现入主干;仅真实浏览器验收未跑通 → Phase 1 NOT yet closed)
+
+### 真实验收现状(2026-07-15)
+- ✅ 单测: vitest 112/112、tsc 0 错、biome clean、vite build 成功
+- ✅ DeepSeek 网关 curl+浏览器测试连接连通 → OpenAI-compatible adapter 链路验证成立
+- ⚠️ Anthropic 直连(D-13):本地 cfuse 9637 网关 CORS 仅放行 content-type,traceId,不含鉴权头(x-api-key/authorization)→ 浏览器 fetch 被 CORS 拦;待真 sk-ant key 打 api.anthropic.com 跑
+- ⚠️ cld ant glm5.2 报 401 实为 model 缺 antchat/ 前缀致网关 422 误包装(诊断 /tmp/cld-401-diagnosis-for-codex.md),另案处理
+- ⏳ TC-3/TC-5 真实浏览器端到端(非空发言/自动总结/inline 错误渲染):deferred,待可用模型网关
 
 ## Performance Metrics
 

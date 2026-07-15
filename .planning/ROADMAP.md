@@ -49,7 +49,7 @@ The VibeSpec MVP (P0 R1-R8) was delivered and code-verified on 2026-06-23 (T1-T1
   3. The app runs on a clean checkout using only the user's configured API key, and `scripts/model-proxy.mjs` is no longer on the required runtime path.
   4. Gateway errors (invalid key / rate limit / upstream failure / timeout) surface a clear user-visible message and the affected agent is marked offline while other agents continue.
 
-**Plans**: 4/5 plans executed (01-05 automation done; Task 2 human-verify pending → phase NOT closed)
+**Plans**: 5/5 plans implemented & merged into main (c1fc52d, pushed 2026-07-15); real-browser verify (TC-3/TC-5 E2E) deferred → phase NOT yet closed
 **Wave 1**
 
 - [x] 01-01-PLAN.md (wave 1) — gateway 实体 + Dexie gateways 表 + 多 key AES crypto + 占位 gateway 迁移 (D-01/D-03/D-06/D-07)
@@ -68,7 +68,7 @@ The VibeSpec MVP (P0 R1-R8) was delivered and code-verified on 2026-06-23 (T1-T1
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [~] 01-05-PLAN.md (wave 5, deps: 01-02, 01-03, 01-04) — Task 1 自动化完成 (087bc08: runStartupMigration 接入 + dev proxy 清理 + collectText 删除); Task 2 human-verify PENDING (D-13 Anthropic CORS + SC#1/2/3/4 real run, await user API keys) — Phase 1 NOT closed
+- [x] 01-05-PLAN.md (wave 5, deps: 01-02, 01-03, 01-04) — Task 1 自动化完成 (087bc08); Phase 1 debug 4 修复 (TC-3/TC-5×2/SettingsPage, 两轮 codex review 闭环)并入主干;真实浏览器 E2E (D-13 Anthropic CORS + SC#1/2/3/4) deferred — Phase 1 NOT closed
 
 **UI hint**: yes
 
