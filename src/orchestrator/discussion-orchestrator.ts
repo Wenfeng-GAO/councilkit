@@ -2,6 +2,7 @@ import type { ControllerToken } from "@/lib/discussion-transactions";
 import {
   abortRound,
   activateRuntimeBinding,
+  appendUserMessage,
   beginExecution,
   createRound,
   createRuntimeBindingTx,
@@ -17,7 +18,12 @@ import {
   transitionRound,
 } from "@/lib/discussion-transactions";
 import type { CouncilKitRuntimeDB } from "@/lib/runtime-db";
-import type { DiscussionRoom, DiscussionRound, Participant } from "@/models/discussion/entities";
+import type {
+  DiscussionMessage,
+  DiscussionRoom,
+  DiscussionRound,
+  Participant,
+} from "@/models/discussion/entities";
 import { createModelExecution, createParticipant } from "@/models/discussion/factories";
 import type {
   ModelExecution,
@@ -44,7 +50,12 @@ import { type ExecutionProfileDto, executionProfileSchema } from "@shared/runtim
  * re-invokes the model on reconnect, replay, or takeover.
  */
 
-export type ControlState = "acquiring" | "controlling" | "observing" | "lost-control";
+export type ControlState =
+  | "acquiring"
+  | "controlling"
+  | "observing"
+  | "lost-control"
+  | "takeover_failed";
 
 export interface OrchestratorDisplay {
   onControlState?(roomId: string, state: ControlState): void;
@@ -138,6 +149,9 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         if (error instanceof RuntimeClientError && error.status === 404) {
           await markBindingClosed(db, binding.id);
         } else {
+          // A live Host refused/errored the takeover: the page must surface
+          // the failure instead of silently observing.
+          display.onControlState?.(roomId, "takeover_failed");
           throw error;
         }
       }
@@ -740,6 +754,24 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     );
   }
 
+  /** User follow-up into the Room's ACTIVE round: a shared-projection write
+   * (bumps the Room revision exactly once), never a model dispatch. */
+  async function sendUserMessage(roomId: string, content: string): Promise<DiscussionMessage> {
+    const token = await currentToken(roomId);
+    const room = await db.rooms.get(roomId);
+    if (!room?.activeRoundId) {
+      throw new Error(`room ${roomId} has no active round for a user message`);
+    }
+    const message = await appendUserMessage(db, {
+      roomId,
+      roundId: room.activeRoundId,
+      token,
+      content,
+    });
+    notify(roomId);
+    return message;
+  }
+
   /** The page may only END a paused Round; fixes happen on a new Round. */
   async function abortPausedRound(roomId: string): Promise<void> {
     const token = await currentToken(roomId);
@@ -764,6 +796,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     resumeRoom,
     cancelActiveExecution,
     abortPausedRound,
+    sendUserMessage,
     activeParticipants,
   };
 }

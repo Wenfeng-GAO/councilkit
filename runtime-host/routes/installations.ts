@@ -2,7 +2,6 @@ import { makeError } from "@shared/runtime/errors";
 import {
   type InstallationDto,
   type InstallationsResponse,
-  type ProfileReadiness,
   type ResolveProfileRequest,
   type ResolveProfileResponse,
   installationDtoSchema,
@@ -11,17 +10,18 @@ import {
   resolveProfileResponseSchema,
 } from "@shared/runtime/schemas";
 import { InstallationError, type InstallationRegistry } from "../installations/registry";
-import { assessProfileStatic } from "../profiles/readiness";
+import type { ProfileProbe } from "../profiles/probe";
 import { type HostServices, type Route, httpError } from "../server";
 
 /**
- * Session-authenticated Installation inventory and static Profile readiness.
+ * Session-authenticated Installation inventory and dynamic Profile readiness.
  *
  * Reads require the session capability; the Profile readiness mutation
  * additionally requires Origin + CSRF. Revalidation is read-only metadata
- * work (no promotion, no spawn), so it stays at session level. U2 never
- * fabricates a ResolvedBinding and never reports final readiness: the dynamic
- * driver handshake and binding digest land in U3.
+ * work (no promotion, no spawn), so it stays at session level. Profile
+ * readiness is dynamic: the route delegates to the profile probe, which runs
+ * the same Driver handshake as execution on a throwaway driver and reports
+ * failures as readiness states — never as fabricated bindings.
  */
 export function installationRoutes(services: HostServices): Route[] {
   function registry(): InstallationRegistry {
@@ -31,6 +31,14 @@ export function installationRoutes(services: HostServices): Route[] {
         500,
         makeError("INTERNAL", "discovery", "Installation registry is not configured."),
       );
+    }
+    return value;
+  }
+
+  function probe(): ProfileProbe {
+    const value = services.profileProbe as ProfileProbe | undefined;
+    if (!value) {
+      throw httpError(500, makeError("INTERNAL", "prewarm", "Profile probe is not configured."));
     }
     return value;
   }
@@ -72,16 +80,11 @@ export function installationRoutes(services: HostServices): Route[] {
       auth: "mutation",
       bodySchema: resolveProfileRequestSchema,
       responseSchema: resolveProfileResponseSchema,
-      handler: (ctx): ResolveProfileResponse => {
+      handler: async (ctx): Promise<ResolveProfileResponse> => {
         // bodySchema already rejected executable/argv/shell/env/token
         // injection with 400 BAD_REQUEST; only the typed DTO reaches here.
-        const { profile } = ctx.body as ResolveProfileRequest;
-        const staticPart = assessProfileStatic(profile, registry());
-        const readiness: ProfileReadiness =
-          staticPart.state === "ready"
-            ? { state: "runtime_unavailable", detail: "dynamic driver handshake required (U3)" }
-            : { state: staticPart.state, detail: staticPart.detail };
-        return { readiness, binding: null };
+        const { profile, modelId } = ctx.body as ResolveProfileRequest;
+        return probe().readiness(profile, modelId);
       },
     },
   ];

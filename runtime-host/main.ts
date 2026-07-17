@@ -15,6 +15,7 @@ import { createExecutionRegistry } from "./executions/execution-registry";
 import { createInstallationRegistry } from "./installations/registry";
 import { createLogger } from "./logging";
 import { createProcessSupervisor } from "./process/process-supervisor";
+import { createProfileProbe } from "./profiles/probe";
 import { healthRoutes } from "./routes/health";
 import { installationRoutes } from "./routes/installations";
 import { scopeRoutes } from "./routes/scopes";
@@ -108,6 +109,9 @@ async function main(): Promise<void> {
     hostInstanceId,
   });
 
+  // Dynamic Profile readiness: same factories/handshake as execution.
+  const profileProbe = createProfileProbe({ installations, driverFactories, logger });
+
   const services: HostServices = {
     config,
     logger,
@@ -117,6 +121,7 @@ async function main(): Promise<void> {
     installationRegistry: installations,
     executionRegistry: executions,
     scopeManager,
+    profileProbe,
     driverCapabilities: () =>
       DRIVER_IDS.map((driverId) => ({
         driverId,

@@ -8,8 +8,13 @@ import {
   type CreateScopeResponse,
   type ExecuteRequest,
   type ExecuteResponse,
+  type ExecutionProfileDto,
   type ExecutionStatus,
   type HealthResponse,
+  type InstallationDto,
+  type InstallationsResponse,
+  type ResolveProfileRequest,
+  type ResolveProfileResponse,
   type ScopeStatus,
   type TakeoverControllerResponse,
   ackResponseSchema,
@@ -18,6 +23,9 @@ import {
   executeResponseSchema,
   executionStatusSchema,
   healthResponseSchema,
+  installationDtoSchema,
+  installationsResponseSchema,
+  resolveProfileResponseSchema,
   scopeStatusSchema,
   takeoverControllerResponseSchema,
 } from "@shared/runtime/schemas";
@@ -100,6 +108,30 @@ export class RuntimeClient {
 
   health(): Promise<HealthResponse> {
     return this.call("GET", "/api/v1/health", { schema: healthResponseSchema, auth: "session" });
+  }
+
+  listInstallations(): Promise<InstallationsResponse> {
+    return this.call("GET", "/api/v1/installations", {
+      schema: installationsResponseSchema,
+      auth: "session",
+    });
+  }
+
+  /** Revalidation is read-only metadata work on the Host: session-level auth,
+   * no CSRF mutation header. */
+  revalidateInstallation(installationId: string): Promise<InstallationDto> {
+    return this.call("POST", `/api/v1/installations/${installationId}/revalidate`, {
+      schema: installationDtoSchema,
+      auth: "session",
+    });
+  }
+
+  profileReadiness(profile: ExecutionProfileDto, modelId: string): Promise<ResolveProfileResponse> {
+    const body: ResolveProfileRequest = { profile, modelId };
+    return this.call("POST", "/api/v1/profiles/readiness", {
+      body,
+      schema: resolveProfileResponseSchema,
+    });
   }
 
   createScope(request: CreateScopeRequest): Promise<CreateScopeResponse> {

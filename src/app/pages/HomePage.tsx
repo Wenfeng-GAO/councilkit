@@ -1,12 +1,11 @@
 import { RoomListItem } from "@/components/room/RoomListItem";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
-import { listRooms } from "@/lib/db";
-import { useQuery } from "@tanstack/react-query";
+import { useRuntimeRooms } from "@/stores/runtime-queries";
 import { Link } from "react-router-dom";
 
 export function HomePage() {
-  const { data: rooms } = useQuery({ queryKey: ["rooms"], queryFn: listRooms });
+  const { data: rooms } = useRuntimeRooms();
 
   return (
     <div className="px-6 py-8">
@@ -17,11 +16,14 @@ export function HomePage() {
         </Link>
       </div>
       {!rooms || rooms.length === 0 ? (
-        <EmptyState title="还没有房间" hint="新建一个房间来发起多 agent 讨论。" />
+        <EmptyState
+          title="还没有房间"
+          hint="新建一个房间来发起多 Agent 讨论。V1 不会导入旧版本地数据，但也没有删除它。"
+        />
       ) : (
         <div className="grid gap-2">
-          {rooms.map((r) => (
-            <RoomListItem key={r.id} room={r} />
+          {rooms.map((room) => (
+            <RoomListItem key={room.id} room={room} />
           ))}
         </div>
       )}

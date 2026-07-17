@@ -1,5 +1,7 @@
 import { type OutgoingHttpHeaders, request } from "node:http";
 import { InstallationError, type InstallationRegistry } from "@host/installations/registry";
+import type { Logger } from "@host/logging";
+import { createProfileProbe } from "@host/profiles/probe";
 import { installationRoutes } from "@host/routes/installations";
 import type { HostServices, Route } from "@host/server";
 import { CANONICAL_HOST_HEADER, CANONICAL_ORIGIN, CANONICAL_PORT } from "@shared/runtime/contracts";
@@ -148,7 +150,17 @@ function probeRoutes(): Route[] {
 }
 
 async function startHost(): Promise<TestHost> {
-  const standIn = { installationRegistry: fakeRegistry() } as unknown as HostServices;
+  // The fake registry's assertExecutable always throws INSTALLATION_UNTRUSTED,
+  // so the probe never reaches a driver factory here ({} is intentional).
+  const registry = fakeRegistry();
+  const standIn = {
+    installationRegistry: registry,
+    profileProbe: createProfileProbe({
+      installations: registry,
+      driverFactories: {},
+      logger: { info: () => {}, warn: () => {}, error: () => {} } as unknown as Logger,
+    }),
+  } as unknown as HostServices;
   host = await createTestHost({ routes: [...probeRoutes(), ...installationRoutes(standIn)] });
   return host;
 }
@@ -417,7 +429,7 @@ describe("installation + readiness routes", () => {
     );
   });
 
-  it("caps profile readiness at the static result and never fabricates a binding", async () => {
+  it("reports a failed dynamic probe as readiness, never as a fabricated binding", async () => {
     const target = await startHost();
     const res = await fetch(`${target.baseUrl}/api/v1/profiles/readiness`, {
       method: "POST",
@@ -429,9 +441,10 @@ describe("installation + readiness routes", () => {
       data: { readiness: { state: string; detail: string | null }; binding: unknown };
     };
     expect(body.data.binding).toBeNull();
-    // Static part is ready, but U2 must never report final readiness.
+    // Static gate passes (trusted DTO), but the probe's fresh revalidation
+    // gate rejects the spawn — a readiness state, not an HTTP error.
     expect(body.data.readiness.state).toBe("runtime_unavailable");
-    expect(body.data.readiness.detail).toBe("dynamic driver handshake required (U3)");
+    expect(body.data.readiness.detail).toBe("not exercised here.");
   });
 
   it("reports invalid_binding / runtime_unavailable through the readiness route", async () => {

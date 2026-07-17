@@ -8,15 +8,19 @@ import { useQuery } from "@tanstack/react-query";
  */
 
 export const runtimeKeys = {
-  rooms: ["rt-rooms"] as const,
-  room: (id: string) => ["rt-room", id] as const,
-  rounds: (roomId: string) => ["rt-rounds", roomId] as const,
-  round: (roundId: string) => ["rt-round", roundId] as const,
-  messages: (roundId: string) => ["rt-messages", roundId] as const,
-  participants: (roomId: string) => ["rt-participants", roomId] as const,
-  executions: (roundId: string) => ["rt-executions", roundId] as const,
-  agents: ["rt-agents"] as const,
-  profiles: ["rt-profiles"] as const,
+  /** Shared root: invalidateQueries({ queryKey: runtimeKeys.all }) refetches
+   * every runtime query (the Orchestrator's display bridge uses it). */
+  all: ["rt"] as const,
+  rooms: ["rt", "rooms"] as const,
+  room: (id: string) => ["rt", "room", id] as const,
+  rounds: (roomId: string) => ["rt", "rounds", roomId] as const,
+  round: (roundId: string) => ["rt", "round", roundId] as const,
+  messages: (roundId: string) => ["rt", "messages", roundId] as const,
+  summary: (roundId: string) => ["rt", "summary", roundId] as const,
+  participants: (roomId: string) => ["rt", "participants", roomId] as const,
+  executions: (roundId: string) => ["rt", "executions", roundId] as const,
+  agents: ["rt", "agents"] as const,
+  profiles: ["rt", "profiles"] as const,
 };
 
 export function useRuntimeRooms(tick = 0) {
@@ -28,7 +32,7 @@ export function useRuntimeRooms(tick = 0) {
 
 export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
   return useQuery({
-    queryKey: roomId ? [...runtimeKeys.room(roomId), tick] : ["rt-room", "none"],
+    queryKey: roomId ? [...runtimeKeys.room(roomId), tick] : ["rt", "room", "none"],
     enabled: !!roomId,
     queryFn: () => runtimeDb.rooms.get(roomId as string),
   });
@@ -36,7 +40,7 @@ export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
 
 export function useRuntimeRounds(roomId: string | undefined, tick = 0) {
   return useQuery({
-    queryKey: roomId ? [...runtimeKeys.rounds(roomId), tick] : ["rt-rounds", "none"],
+    queryKey: roomId ? [...runtimeKeys.rounds(roomId), tick] : ["rt", "rounds", "none"],
     enabled: !!roomId,
     queryFn: async () => {
       const rounds = await runtimeDb.rounds
@@ -50,7 +54,7 @@ export function useRuntimeRounds(roomId: string | undefined, tick = 0) {
 
 export function useRoundMessages(roundId: string | undefined, tick = 0) {
   return useQuery({
-    queryKey: roundId ? [...runtimeKeys.messages(roundId), tick] : ["rt-messages", "none"],
+    queryKey: roundId ? [...runtimeKeys.messages(roundId), tick] : ["rt", "messages", "none"],
     enabled: !!roundId,
     queryFn: async () => {
       const messages = await runtimeDb.messages
@@ -64,7 +68,7 @@ export function useRoundMessages(roundId: string | undefined, tick = 0) {
 
 export function useRoundSummary(roundId: string | undefined, tick = 0) {
   return useQuery({
-    queryKey: roundId ? ["rt-summary", roundId, tick] : ["rt-summary", "none"],
+    queryKey: roundId ? [...runtimeKeys.summary(roundId), tick] : ["rt", "summary", "none"],
     enabled: !!roundId,
     queryFn: () =>
       runtimeDb.summaries
@@ -76,7 +80,7 @@ export function useRoundSummary(roundId: string | undefined, tick = 0) {
 
 export function useParticipants(roomId: string | undefined, tick = 0) {
   return useQuery({
-    queryKey: roomId ? [...runtimeKeys.participants(roomId), tick] : ["rt-participants", "none"],
+    queryKey: roomId ? [...runtimeKeys.participants(roomId), tick] : ["rt", "participants", "none"],
     enabled: !!roomId,
     queryFn: async () => {
       const participants = await runtimeDb.participants
@@ -90,7 +94,7 @@ export function useParticipants(roomId: string | undefined, tick = 0) {
 
 export function useRoundExecutions(roundId: string | undefined, tick = 0) {
   return useQuery({
-    queryKey: roundId ? [...runtimeKeys.executions(roundId), tick] : ["rt-executions", "none"],
+    queryKey: roundId ? [...runtimeKeys.executions(roundId), tick] : ["rt", "executions", "none"],
     enabled: !!roundId,
     queryFn: () =>
       runtimeDb.modelExecutions

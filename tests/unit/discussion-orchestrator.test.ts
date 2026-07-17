@@ -1723,4 +1723,81 @@ describe("discussion orchestrator (U5)", () => {
     expect(round?.pauseReason?.code).toBe("execution_failed");
     expect(host.executeCalls.filter((call) => call.participantId === p1.id)).toHaveLength(2);
   });
+
+  it("16. sendUserMessage appends to the active round and bumps the Room revision", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    const { token } = await orchestrator.ensureScope(room.id, [p1, p2]);
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+
+    const revisionBefore = (await db.rooms.get(room.id))?.contextRevision ?? 0;
+    const message = await orchestrator.sendUserMessage(room.id, "补充一点背景");
+    expect(message.role).toBe("user");
+    expect(message.participantId).toBeNull();
+    expect(message.roundId).toBe(round.id);
+    expect(message.sourceExecutionId).toBeNull();
+    expect((await db.messages.get(message.id))?.content).toBe("补充一点背景");
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(revisionBefore + 1);
+    // A user message never touches the Round cursor or its phase.
+    const storedRound = await db.rounds.get(round.id);
+    expect(storedRound?.phase).toBe("running");
+    expect(storedRound?.nextParticipantIndex).toBe(0);
+
+    // A room with a controller but no active round gets a clear error.
+    const seed2 = await seedBase();
+    await orchestrator.ensureScope(seed2.room.id, [seed2.p1, seed2.p2]);
+    await expect(orchestrator.sendUserMessage(seed2.room.id, "hi")).rejects.toThrow(
+      /no active round/,
+    );
+  });
+
+  it("17. controlRoom surfaces takeover_failed when the Host takeover fails (non-404)", async () => {
+    const { room } = await seedBase();
+    const controlStates: ControlState[] = [];
+    const failingFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/controller")) {
+        return Promise.resolve(errorResponse(500, "INTERNAL", "takeover exploded"));
+      }
+      return host.fetch(input, init);
+    };
+    const client = new RuntimeClient({
+      baseUrl: "http://fake-host",
+      csrfToken: "csrf-token",
+      fetchFn: failingFetch,
+    });
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client,
+      display: {
+        onControlState: (_roomId, state) => {
+          controlStates.push(state);
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    // An ACTIVE local binding whose Host scope takeover will fail.
+    const binding = await createRuntimeBindingTx(db, {
+      roomId: room.id,
+      scopeRequestId: "req-takeover-fail",
+    });
+    await activateRuntimeBinding(db, {
+      id: binding.id,
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-takeover-fail",
+      controllerId: "ctrl-old",
+      leaseEpoch: 1,
+    });
+
+    await expect(orchestrator.controlRoom(room.id)).rejects.toThrow("takeover exploded");
+    expect(controlStates).toEqual(["acquiring", "takeover_failed"]);
+  });
 });
