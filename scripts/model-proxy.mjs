@@ -10,9 +10,9 @@
 // 此路径（SC#3 干净检出）。
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import http from "node:http";
 
 const PORT = Number(process.env.MODEL_PROXY_PORT ?? 8788);
 
@@ -31,7 +31,9 @@ const server = http.createServer((req, res) => {
     return;
   }
   let body = "";
-  req.on("data", (c) => (body += c));
+  req.on("data", (c) => {
+    body += c;
+  });
   req.on("end", () => {
     let parsed = {};
     try {
@@ -48,7 +50,9 @@ const server = http.createServer((req, res) => {
       env: { ...process.env, CLAUDE_CONFIG_DIR: cwd },
     });
     let out = "";
-    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stdout.on("data", (d) => {
+      out += d.toString();
+    });
     child.stderr.on("data", (d) => process.stderr.write(`[cld] ${d}`));
     child.on("error", (e) => {
       res.writeHead(502);

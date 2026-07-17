@@ -9,6 +9,7 @@ DerivedData/
 # Node / Web (VibeSpec Phase 4 implementation stack)
 node_modules/
 dist/
+dist-host/
 .vite/
 *.log
 .env
@@ -16,3 +17,4 @@ dist/
 coverage/
 playwright-report/
 test-results/
+.claude/worktrees/

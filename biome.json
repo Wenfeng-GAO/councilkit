@@ -7,7 +7,16 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["node_modules", "dist", "coverage"]
+    "ignore": [
+      "node_modules",
+      "dist",
+      "dist-host",
+      "coverage",
+      "tests/fixtures",
+      "tests/e2e",
+      "test-results",
+      "playwright-report"
+    ]
   },
   "formatter": {
     "enabled": true,

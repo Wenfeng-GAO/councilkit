@@ -17,8 +17,17 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@shared/*": ["shared/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "shared", "tests/unit"],
+  // Legacy gateway tests carry pre-existing type errors and are deleted in U7
+  // (docs/plans/2026-07-17-001); they run under Vitest but stay outside the
+  // default typecheck until removal.
+  "exclude": [
+    "tests/unit/settings-store.test.ts",
+    "tests/unit/gateway-crypto-migrate.test.ts",
+    "tests/unit/round-errors.test.ts"
+  ]
 }
