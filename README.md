@@ -71,7 +71,7 @@ pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
 - Web Lock + `leaseEpoch` fencing 保证一个 Execution Scope 同时只有一个 Scope Controller 可以执行 Host mutation 与 Dexie 提交；其他标签页只读观察。
 - 每个活跃 Participant 保持一个长期 Driver 进程和隔离的 Execution Session；纯追加轮次只向健康 Session 下发增量 Context Snapshot。
 - 页面刷新使用同一 Scope 与 `executionId` 重连事件流，从最后收到的 `eventSeq` 继续，不重新调用模型。
-- V1 只有两个内置 Runtime Driver：`claude-stream-json` 与 `codex-app-server`；legacy browser-direct Gateway 在目标路径不可达，将在 U7 删除。
+- V1 只有两个内置 Runtime Driver：`claude-stream-json` 与 `codex-app-server`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
 
 ## Legacy 数据说明
 
