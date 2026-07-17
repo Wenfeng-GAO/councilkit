@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -16,12 +17,14 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
+      "@/*": ["src/*"],
       "@shared/*": ["shared/*"],
       "@host/*": ["runtime-host/*"]
     }
   },
-  "include": ["runtime-host", "shared", "tests/host", "tests/integration", "tests/fixtures", "tests/smoke"],
-  // discussion-runtime.test.ts spans src (@/) + host (@host); it is
-  // typechecked by tsconfig.integration.json instead.
-  "exclude": ["tests/integration/discussion-runtime.test.ts"]
+  // tests/integration/discussion-runtime.test.ts spans the browser (@/) and
+  // host (@host) worlds in one file; the transitive import graph is checked
+  // from here. Neither the app tsconfig (no @host) nor the host tsconfig
+  // (no @/) can cover it.
+  "include": ["tests/integration/discussion-runtime.test.ts"]
 }

@@ -160,6 +160,22 @@ export async function updateRoomSharedConfig(
   );
 }
 
+/** Room-level user scheduling gate: independent of the active Round's
+ * phase; a paused Room dispatches no new executions but keeps its Scope
+ * warm while the controller renews. */
+export async function setRoomRunState(
+  db: CouncilKitRuntimeDB,
+  input: { roomId: string; token: ControllerToken; runState: "idle" | "running" | "paused" },
+): Promise<void> {
+  await db.transaction("rw", [db.rooms, db.runtimeBindings], async () => {
+    const room = await requireRoom(db, input.roomId);
+    await requireController(db, input.roomId, input.token);
+    room.runState = input.runState;
+    room.lastActiveAt = ts();
+    await db.rooms.put(room);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Round lifecycle
 // ---------------------------------------------------------------------------
@@ -783,7 +799,9 @@ export async function discardExecution(
 }
 
 /** No-ACK terminal (crash / protocol failure / interrupt without an ACKable
- * terminal): never becomes committed or discarded; Round pauses. */
+ * terminal): never becomes committed or discarded. `pause: false` records
+ * the terminal without pausing the Round — the Orchestrator's retry-once
+ * path uses it before dispatching the replacement execution. */
 export async function failExecution(
   db: CouncilKitRuntimeDB,
   input: {
@@ -791,6 +809,7 @@ export async function failExecution(
     token: ControllerToken;
     error: ModelExecutionError;
     kind: "failed" | "interrupted";
+    pause?: boolean;
   },
 ): Promise<void> {
   await db.transaction(
@@ -814,7 +833,7 @@ export async function failExecution(
       await db.modelExecutions.put(execution);
       if (round.activeExecutionId === execution.executionId) {
         round.activeExecutionId = null;
-        if (round.phase === "running" || round.phase === "summarizing") {
+        if (input.pause !== false && (round.phase === "running" || round.phase === "summarizing")) {
           round.pausedFrom = round.phase;
           round.phase = "paused";
           round.pauseReason = {

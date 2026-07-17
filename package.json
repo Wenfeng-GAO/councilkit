@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build && node scripts/build-host.mjs",
     "build:host": "node scripts/build-host.mjs",
     "start": "node dist-host/main.mjs",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.host.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.host.json && tsc --noEmit -p tsconfig.integration.json",
     "lint": "biome check src shared runtime-host tests scripts playwright.config.ts",
     "format": "biome format --write src shared runtime-host tests scripts",
     "test": "vitest run",
