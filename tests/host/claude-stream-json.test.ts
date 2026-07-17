@@ -408,6 +408,8 @@ describe("claude-stream-json driver protocol", () => {
     });
     // Canonical is the route's declared serving model, not the catalog default.
     expect(rig.prewarmResult.canonicalModelId).toBe("Kimi-K3[1m]");
+    // The route declares its provider window class (no 64k false-throttle).
+    expect(rig.driver.contextWindowTokens()).toBe(1_000_000);
     const run = executeCollecting(rig.driver, {
       executionId: "exec-1",
       prompt: "Hello.",

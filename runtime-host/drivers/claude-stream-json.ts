@@ -45,6 +45,13 @@ interface RouteDef {
    * turns mismatch and pause until this mapping is updated — by design.
    */
   servesModel?: string;
+  /**
+   * Provider-declared context window class (the catalog ids' `[1m]` suffix =
+   * 1M tokens). The Session Reconciler's 50% cumulative-input threshold uses
+   * this instead of its 64k unknown-window default — reporting null here
+   * false-throttles long-running rooms into a spurious needs_rebase pause.
+   */
+  contextWindowTokens?: number;
 }
 
 /**
@@ -56,9 +63,13 @@ interface RouteDef {
  * drift-remedy precedent).
  */
 const ROUTES: Record<ClaudeRoute, RouteDef> = {
-  "ant-glm5.2": { argv: ["ant", "glm5.2"] },
-  moonshot: { argv: ["moonshot"], servesModel: "Kimi-K3[1m]" },
-  deepseek: { argv: ["deepseek"] },
+  "ant-glm5.2": { argv: ["ant", "glm5.2"], contextWindowTokens: 1_000_000 },
+  moonshot: {
+    argv: ["moonshot"],
+    servesModel: "Kimi-K3[1m]",
+    contextWindowTokens: 1_000_000,
+  },
+  deepseek: { argv: ["deepseek"], contextWindowTokens: 1_000_000 },
 };
 
 const ENV_INHERIT = [
@@ -819,9 +830,11 @@ export function createClaudeStreamJsonDriver(
       },
 
       contextWindowTokens() {
-        // claude stream-json does not report a context window; callers fall
-        // back to the plan's 64k-token default threshold.
-        return null;
+        // The claude handshake carries no window metadata; the route table
+        // declares the provider's window class instead of falling back to the
+        // plan's 64k unknown-window default (which false-throttles long
+        // rooms into spurious needs_rebase pauses).
+        return ROUTES[currentRoute()].contextWindowTokens ?? null;
       },
     };
   };
