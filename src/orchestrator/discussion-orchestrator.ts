@@ -219,6 +219,12 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     let created: Awaited<ReturnType<RuntimeClient["createScope"]>> | null = null;
     try {
       created = await client.createScope({ scopeRequestId, participants: specs });
+      // The Host only dispatches on an ACTIVE scope (a creating one is reaped
+      // after 30s): activate before persisting the active binding.
+      await client.activateScope(created.scopeId, {
+        controllerId: created.controllerId,
+        leaseEpoch: created.leaseEpoch,
+      });
       const activated = await activateRuntimeBinding(db, {
         id: binding.id,
         hostInstanceId: created.scope.hostInstanceId,
@@ -434,7 +440,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
           },
         });
         notify(roomId);
-        return round;
+        return (await db.rounds.get(round.id)) ?? null;
       }
     } catch (error) {
       await pauseRound(db, {
@@ -447,7 +453,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         },
       });
       notify(roomId);
-      return round;
+      return (await db.rounds.get(round.id)) ?? null;
     }
 
     await transitionRound(db, { roomId, roundId: round.id, token, to: "running" });
@@ -485,6 +491,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     round: DiscussionRound,
     participantId: string,
     resultKind: ResultKind,
+    retryOfExecutionId: string | null = null,
   ): Promise<boolean> {
     const token = await currentToken(room.id);
     const participant = await db.participants.get(participantId);
@@ -512,6 +519,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       expectedRoomDigest: room.contextDigest,
       participantSnapshotDigest: participant.participantSnapshotDigest,
       instructionDigest: computeInstructionDigest(instruction),
+      retryOfExecutionId,
     });
     // Persist the anchor BEFORE any Host call: retries reconnect, never
     // re-dispatch.
@@ -657,8 +665,16 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       });
       const retried = await db.rounds.get(round.id);
       if (!retried || retried.phase !== "running") return false;
-      await dispatchTurn(room, retried, execution.participantId, execution.resultKind);
-      return false;
+      // The retry drives the SAME turn with a fresh executionId; its result
+      // decides whether the loop continues (returning false here would stop
+      // the loop on a still-running round).
+      return dispatchTurn(
+        room,
+        retried,
+        execution.participantId,
+        execution.resultKind,
+        execution.executionId,
+      );
     }
     await failExecution(db, {
       executionId,

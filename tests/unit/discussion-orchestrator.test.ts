@@ -65,15 +65,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * - The first scope of a room is booted via the public `ensureScope` API:
  *   `startRound` requires an active binding token before it can create the
  *   first Round, so scope creation must precede the first `startRound`.
- * - The fake Host is permissive about scope state (the orchestrator never
- *   calls POST /scopes/:id/activate — a reported bug pinned by an it.fails
- *   test below); the integration suite enforces it against the real Host.
- * - Three reported implementation bugs are pinned with it.fails tests at the
- *   bottom (missing Host activate, missing retryOfExecutionId link, run loop
- *   stopping after a successful retry); case 15 compensates the third with an
- *   explicit runLoop call. The prewarm-pause path of startRound returns the
- *   stale pre-transition Round copy, so pause assertions read the durable
- *   Dexie row instead.
+ * - The U5-review bugs (missing Host activate, missing retryOfExecutionId
+ *   link, run loop stopping after a successful retry, stale Round return on
+ *   the prewarm-pause path) were fixed in the U6 pre-pass; their former
+ *   it.fails pins are ordinary regression tests at the bottom of this file.
  */
 
 // ---------------------------------------------------------------------------
@@ -1195,12 +1190,12 @@ describe("discussion orchestrator (U5)", () => {
     host.failPrewarmFor(p2.id);
     await orchestrator.ensureScope(room.id, [p1, p2]);
     const round = await orchestrator.startRound(room.id);
-    // NOTE: the prewarm-pause path returns the stale pre-transition Round
-    // copy; assert the durable Dexie row (the source of truth).
-    const stored = (await db.rounds.get(round?.id ?? "")) as DiscussionRound;
-    expect(stored.phase).toBe("paused");
-    expect(stored.pausedFrom).toBe("prewarming");
-    expect(stored.pauseReason).toMatchObject({ code: "prewarm_failed", participantId: p2.id });
+    expect(round?.phase).toBe("paused");
+    expect(round?.pausedFrom).toBe("prewarming");
+    expect(round?.pauseReason).toMatchObject({ code: "prewarm_failed", participantId: p2.id });
+    // Durable row agrees with the returned Round.
+    const stored = await db.rounds.get(round?.id ?? "");
+    expect(stored?.phase).toBe("paused");
     expect(host.executeCalls).toHaveLength(0);
     expect(await db.modelExecutions.where("roomId").equals(room.id).count()).toBe(0);
   });
@@ -1629,13 +1624,7 @@ describe("discussion orchestrator (U5)", () => {
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
       { kind: "complete" },
     );
-    let round: DiscussionRound | null = await orchestrator.startRound(room.id);
-    if (round?.phase === "running") {
-      // WORKAROUND (known bug pinned by an it.fails below: the run loop stops
-      // after a successful retry): drive the remaining turns explicitly.
-      await orchestrator.runLoop(room.id);
-      round = (await db.rounds.get(round.id)) ?? null;
-    }
+    const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("completed");
     // p1 twice (original + retry), then p2, then the facilitator summary.
     expect(host.executeCalls.map((call) => call.participantId)).toEqual([
@@ -1676,21 +1665,17 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.executeCalls.filter((call) => call.participantId === seed2.p1.id)).toHaveLength(2);
   });
 
-  // KNOWN BUG (reported in the U5 verification record, not fixed here):
-  // ensureScope never calls the Host's POST /scopes/:id/activate — against the
-  // real Host the scope stays `creating` and every execute is rejected with
-  // 409 SCOPE_CLOSED. This test fails as soon as the orchestrator activates.
-  it.fails("known bug: ensureScope activates the Host scope before the first execute", async () => {
+  // Regression guards for U5-review bugs fixed in the U6 pre-pass (previously
+  // pinned with it.fails): Host scope activation, the retry chain link, and
+  // run-loop continuation after a successful retry.
+  it("ensureScope activates the Host scope before the first execute", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
     await orchestrator.ensureScope(room.id, [p1, p2]);
-    expect(host.activateCalls.length).toBeGreaterThan(0);
+    expect(host.activateCalls).toHaveLength(1);
   });
 
-  // KNOWN BUG (reported in the U5 verification record, not fixed here): the
-  // retry path never persists retryOfExecutionId, so the at-most-once limit is
-  // unenforced — a second retryable pre-dispatch failure would retry forever.
-  it.fails("known bug: the retried execution carries retryOfExecutionId", async () => {
+  it("the retried execution carries retryOfExecutionId (at-most-once enforced)", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
     await orchestrator.ensureScope(room.id, [p1, p2]);
@@ -1709,11 +1694,7 @@ describe("discussion orchestrator (U5)", () => {
     expect(attempts[1]?.retryOfExecutionId).toBe(attempts[0]?.executionId);
   });
 
-  // KNOWN BUG (reported in the U5 verification record, not fixed here): after
-  // a successful retry the run loop stops (handleTerminal returns false), so
-  // a retried round never continues on its own. Case 15 above compensates
-  // with an explicit runLoop call.
-  it.fails("known bug: startRound continues the round after a successful retry", async () => {
+  it("startRound continues the round after a successful retry", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
     await orchestrator.ensureScope(room.id, [p1, p2]);
@@ -1724,5 +1705,22 @@ describe("discussion orchestrator (U5)", () => {
     );
     const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("completed");
+  });
+
+  // The at-most-once limit itself: a second retryable pre-dispatch failure
+  // must pause, never dispatch a third time.
+  it("a retryable failure on the RETRY pauses without a third dispatch", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(
+      p1.id,
+      { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
+      { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
+    );
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(host.executeCalls.filter((call) => call.participantId === p1.id)).toHaveLength(2);
   });
 });

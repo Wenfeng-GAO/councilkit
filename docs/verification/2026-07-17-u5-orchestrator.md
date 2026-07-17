@@ -43,13 +43,15 @@ U5 两套测试落地，完成信号达成：**已提交 Room 状态不再依赖
 
 ## 发现的实现 bug（如实报告；按交接约束未改 src/，测试侧绕开/钉住）
 
+> **2026-07-17 后续（U6 前置修复）**：以下 bug 1–4 已在 U6 前置 commit 中修复（ensureScope 增加 Host activate；dispatchTurn 透传 retryOfExecutionId；重试路径返回嵌套 dispatchTurn 结果；startRound pause 路径改返回新读行）。原 3 个 `it.fails` 已转为普通回归测试，并新增「RETRY 上再次 retryable 失败 → paused、无第三次派发」用例；集成套件移除 ActivatingClient 绕开，裸 RuntimeClient 对真 Host 全绿即修复实证。bug 5 为设计内行为（见下），保持不变。
+
 1. **ensureScope 从不调用 Host 的 `POST /scopes/:id/activate`**（`src/orchestrator/discussion-orchestrator.ts` ensureScope；client 的 `activateScope` 全 src 无调用）。真 Host 上 scope 永远停在 `creating`，execute 被 409 SCOPE_CLOSED 拒绝，30s TTL 后还会被回收——**U6 的真实 UI/E2E/冒烟必经此路径，属阻塞级**。实证：集成套件把 ActivatingClient 换回裸 RuntimeClient 后 4/4 全挂（"Scope is not active."）。单测 `it.fails` 钉住（fake 对 scope 状态宽松）；集成用测试侧子类 `ActivatingClient`（create 后立即 activate）绕开。
 2. **retry 链断链**：`handleTerminal` 重试时 `dispatchTurn`→`createModelExecution` 未传 `retryOfExecutionId`（恒 null），"最多重试一次"上限不可达——第二次 retryable+not_dispatched 失败会无限重试。用例 15 只能覆盖「重试成功」与「第二次非 retryable 失败暂停」，链本身以 `it.fails` 钉住。
 3. **重试成功后 runLoop 停转**：重试路径 `handleTerminal` 无条件 `return false`，runLoop 在 cursor 已推进的 running Round 上退出，后续 Participant 永不再派发。用例 15 以显式 `orchestrator.runLoop(roomId)` 补偿，bug 以 `it.fails` 钉住。
 4. **startRound prewarm-pause 路径返回陈旧 Round 对象**（createRound 时的内存副本，phase 仍 "pending"；runLoop 路径则返回新读行）。durable 状态正确，属 API 一致性 wart；用例 7 断言改读 Dexie 行。U6 UI 消费该返回值前宜修。
 5. **user_cancelled 无 inline discarded ACK**：`handleTerminal` 的 user_cancelled 分支 discardExecution 后不发 ACK（ackState 留 pending），由恢复扫描补发收敛。与设计点「user_cancelled 走 discarded（ACK discarded）」的最终语义一致、但时机靠审计。用例 13/集成 3 按实际行为断言（pending → 审计 → acknowledged）。
 
-`it.fails` 的语义：bug 修复后对应测试会以 "expected to fail but passed" 变红，提示摘除标记——三个 bug 各有一个活的最小复现留在套件里。
+`it.fails` 的语义：bug 修复后对应测试会以 "expected to fail but passed" 变红，提示摘除标记——三个 bug 各有一个活的最小复现留在套件里。（修复落地后已按此机制摘标转正，见本节顶部后续注。）
 
 ## 取舍与偏差（同 U4 口径，有意为之）
 

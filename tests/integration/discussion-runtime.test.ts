@@ -35,13 +35,7 @@ import { type ScopeManager, createScopeManager } from "@host/scopes/scope-manage
 import { createSessionReconciler } from "@host/scopes/session-reconciler";
 import { CREDENTIAL_MODE } from "@shared/runtime/contracts";
 import type { RuntimeEvent } from "@shared/runtime/events";
-import type {
-  ContextSnapshot,
-  CreateScopeRequest,
-  CreateScopeResponse,
-  InstallationDto,
-  ParticipantSpec,
-} from "@shared/runtime/schemas";
+import type { ContextSnapshot, InstallationDto, ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type TestHost, authedHeaders, createTestHost } from "../host/helpers";
 
@@ -52,11 +46,11 @@ import { type TestHost, authedHeaders, createTestHost } from "../host/helpers";
  * fake-indexeddb. Covers: end-to-end two-round flow, SSE afterSeq resume,
  * cancel → discarded ACK, and Host-restart convergence.
  *
- * WORKAROUND (reported bug, see the U5 verification record): the U5
- * orchestrator's ensureScope never calls the Host's POST /scopes/:id/activate,
- * so against the real Host a created scope would stay `creating` and every
- * execute would be rejected with 409 SCOPE_CLOSED. ActivatingClient performs
- * the activate the orchestrator owes, immediately after each create.
+ * Regression note: an earlier version of this suite needed an ActivatingClient
+ * subclass because the orchestrator never activated the Host scope (fixed in
+ * the U6 pre-pass — ensureScope now activates before persisting the binding).
+ * The plain RuntimeClient below is the load-bearing proof of that fix: scope
+ * state is enforced by the real Host.
  */
 
 // ---------------------------------------------------------------------------
@@ -248,20 +242,8 @@ async function createRig(hostInstanceId: string): Promise<Rig> {
   return { host, scopeManager, executions, drivers, callLog };
 }
 
-/** See the file-header note: compensates the orchestrator's missing activate. */
-class ActivatingClient extends RuntimeClient {
-  override async createScope(request: CreateScopeRequest): Promise<CreateScopeResponse> {
-    const created = await super.createScope(request);
-    await this.activateScope(created.scopeId, {
-      controllerId: created.controllerId,
-      leaseEpoch: created.leaseEpoch,
-    });
-    return created;
-  }
-}
-
 function clientFor(host: TestHost): RuntimeClient {
-  return new ActivatingClient({
+  return new RuntimeClient({
     baseUrl: host.baseUrl,
     csrfToken: host.session.csrfToken,
     headers: {
@@ -461,6 +443,7 @@ describe("discussion runtime integration (U5)", () => {
       participants: [spec("p-1")],
     });
     const controller = { controllerId: created.controllerId, leaseEpoch: created.leaseEpoch };
+    await client.activateScope(created.scopeId, controller);
     const executed = await client.execute(created.scopeId, {
       ...controller,
       executionId: "exec-resume-0001",
