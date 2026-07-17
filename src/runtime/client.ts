@@ -13,6 +13,7 @@ import {
   type HealthResponse,
   type InstallationDto,
   type InstallationsResponse,
+  type ModelCatalogResponse,
   type ResolveProfileRequest,
   type ResolveProfileResponse,
   type ScopeStatus,
@@ -25,6 +26,7 @@ import {
   healthResponseSchema,
   installationDtoSchema,
   installationsResponseSchema,
+  modelCatalogResponseSchema,
   resolveProfileResponseSchema,
   scopeStatusSchema,
   takeoverControllerResponseSchema,
@@ -131,6 +133,16 @@ export class RuntimeClient {
     return this.call("POST", "/api/v1/profiles/readiness", {
       body,
       schema: resolveProfileResponseSchema,
+    });
+  }
+
+  /** Closed canonical model catalog of a Driver + trusted Installation
+   * (session-authenticated read; Settings is the only consumer). */
+  modelCatalog(driverId: string, installationId: string): Promise<ModelCatalogResponse> {
+    const params = new URLSearchParams({ driverId, installationId });
+    return this.call("GET", `/api/v1/models/catalog?${params.toString()}`, {
+      schema: modelCatalogResponseSchema,
+      auth: "session",
     });
   }
 

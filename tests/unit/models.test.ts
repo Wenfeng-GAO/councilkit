@@ -1,245 +1,257 @@
 import {
-  createAgent,
-  createMessage,
-  createRoom,
-  createRound,
-  createSummary,
-  createTemplate,
-  validateAgent,
-  validateMessage,
-  validateRoom,
-  validateRound,
-  validateTemplate,
-} from "@/models";
-import type { Agent, GatewayError, GatewayErrorKind, Message, Room, Round } from "@/models";
+  TransactionError,
+  createDiscussionAgent,
+  createDiscussionRoom,
+  createModelExecution,
+  createParticipant,
+  createRuntimeBinding,
+  digestOf,
+  participantSnapshotDigestOf,
+} from "@/models/discussion/factories";
 import { describe, expect, it } from "vitest";
 
-function validRoom(over: Partial<Room> = {}): Room {
+/**
+ * Discussion domain factories (U6): pure validation + invariant coverage,
+ * migrated from the legacy `@/models` suite. Complements
+ * domain-models.test.ts (Dexie schema, constraints, transaction flows) —
+ * this file needs no IndexedDB and pins the factory contract itself:
+ * stamping defaults, rejection cases, and digest determinism/sensitivity.
+ */
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+function expectInvalid(fn: () => unknown): void {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TransactionError);
+    expect((error as TransactionError).code).toBe("INVALID");
+    return;
+  }
+  expect.unreachable("expected TransactionError INVALID");
+}
+
+function expectIsoTimestamp(value: string): void {
+  expect(new Date(value).toISOString()).toBe(value);
+}
+
+const validAgentInput = {
+  name: "Reviewer",
+  personaPrompt: "You are a strict reviewer.",
+  executionProfileId: "prof-1",
+  modelId: "model-a",
+  color: "#a1b2c3",
+};
+
+function makeAgent() {
+  return createDiscussionAgent(validAgentInput);
+}
+
+type ExecutionInput = Parameters<typeof createModelExecution>[0];
+
+function makeExecutionInput(over: Partial<ExecutionInput> = {}): ExecutionInput {
   return {
-    id: "r1",
-    topic: "话题",
-    createdAt: 0,
-    lastActiveAt: 0,
-    agentIds: ["a1"],
-    roundIds: [],
-    status: "idle",
+    executionId: "e-1",
+    roomId: "r-1",
+    roundId: "round-1",
+    participantId: "p-1",
+    resultKind: "message",
+    requestedModel: "model-a",
+    contextRevision: 0,
+    expectedRoomDigest: "room-digest",
+    participantSnapshotDigest: "participant-digest",
+    instructionDigest: "instruction-digest",
     ...over,
   };
 }
 
-function validAgent(over: Partial<Agent> = {}): Agent {
-  return {
-    id: "a1",
-    gatewayId: "g1",
-    model: "claude-sonnet-4",
-    role: "产品经理",
-    color: "#6366f1",
-    status: "online",
-    ...over,
-  };
-}
+describe("createDiscussionAgent", () => {
+  it("stamps a uuid id, revision 1 and equal ISO createdAt/updatedAt", () => {
+    const agent = makeAgent();
+    expect(agent.id).toMatch(UUID_SHAPE);
+    expect(agent.revision).toBe(1);
+    expectIsoTimestamp(agent.createdAt);
+    expectIsoTimestamp(agent.updatedAt);
+    expect(agent.updatedAt).toBe(agent.createdAt);
+  });
 
-describe("validateRoom", () => {
-  it("accepts a valid room", () => {
-    expect(validateRoom(validRoom()).ok).toBe(true);
+  it("rejects an empty name, personaPrompt, executionProfileId or modelId", () => {
+    expectInvalid(() => createDiscussionAgent({ ...validAgentInput, name: "" }));
+    expectInvalid(() => createDiscussionAgent({ ...validAgentInput, personaPrompt: "   " }));
+    expectInvalid(() => createDiscussionAgent({ ...validAgentInput, executionProfileId: "" }));
+    expectInvalid(() => createDiscussionAgent({ ...validAgentInput, modelId: " " }));
   });
-  it("rejects empty topic", () => {
-    const r = validateRoom(validRoom({ topic: "" }));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("topic");
-  });
-  it("rejects topic over 200 chars", () => {
-    const r = validateRoom(validRoom({ topic: "x".repeat(201) }));
-    expect(r.ok).toBe(false);
-  });
-  it("rejects room with no agents", () => {
-    const r = validateRoom(validRoom({ agentIds: [] }));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("agentIds");
+
+  it("rejects colors that are not 6-digit hex and preserves valid casing", () => {
+    for (const color of ["a1b2c3", "#12345", "#1234567", "#gg0000", "#a1b2c3ff"]) {
+      expectInvalid(() => createDiscussionAgent({ ...validAgentInput, color }));
+    }
+    const agent = createDiscussionAgent({ ...validAgentInput, color: "#A1B2C3" });
+    expect(agent.color).toBe("#A1B2C3");
   });
 });
 
-describe("validateAgent", () => {
-  it("accepts a valid agent", () => {
-    expect(validateAgent(validAgent()).ok).toBe(true);
+describe("createParticipant", () => {
+  it("copies the agent's join-time snapshot fields onto the participant", () => {
+    const agent = { ...makeAgent(), revision: 7 };
+    const participant = createParticipant({ roomId: "r-1", agent, profileDigest: "pd" });
+    expect(participant.id).toMatch(UUID_SHAPE);
+    expect(participant.roomId).toBe("r-1");
+    expect(participant.agentId).toBe(agent.id);
+    expect(participant.personaPrompt).toBe(agent.personaPrompt);
+    expect(participant.executionProfileId).toBe(agent.executionProfileId);
+    expect(participant.profileRevision).toBe(7);
+    expect(participant.profileDigest).toBe("pd");
+    expect(participant.modelId).toBe(agent.modelId);
   });
-  it("rejects empty role", () => {
-    expect(validateAgent(validAgent({ role: "" })).ok).toBe(false);
-  });
-  it("rejects role over 100 chars", () => {
-    expect(validateAgent(validAgent({ role: "x".repeat(101) })).ok).toBe(false);
-  });
-  it("rejects non-hex color", () => {
-    expect(validateAgent(validAgent({ color: "blue" })).ok).toBe(false);
-  });
-  it("accepts valid 6-digit hex", () => {
-    expect(validateAgent(validAgent({ color: "#AbCdEf" })).ok).toBe(true);
-  });
-  it("rejects empty gatewayId", () => {
-    const r = validateAgent(validAgent({ gatewayId: "" }));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("gatewayId");
-  });
-  it("rejects empty model", () => {
-    const r = validateAgent(validAgent({ model: "" }));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toContain("model");
-  });
-});
 
-describe("validateMessage", () => {
-  function validMessage(over: Partial<Message> = {}): Message {
-    return {
-      id: "m1",
-      senderId: "a1",
-      senderType: "agent",
-      content: "hi",
-      roundId: "ro1",
-      timestamp: 0,
-      ...over,
-    };
-  }
-  it("accepts a valid agent message", () => {
-    expect(validateMessage(validMessage()).ok).toBe(true);
-  });
-  it("rejects empty content", () => {
-    expect(validateMessage(validMessage({ content: "" })).ok).toBe(false);
-  });
-  it("enforces user senderId === 'user'", () => {
-    const r = validateMessage(validMessage({ senderType: "user", senderId: "a1" }));
-    expect(r.ok).toBe(false);
-  });
-  it("accepts user message with senderId 'user'", () => {
-    expect(validateMessage(validMessage({ senderType: "user", senderId: "user" })).ok).toBe(true);
-  });
-});
-
-describe("validateRound", () => {
-  function validRound(over: Partial<Round> = {}): Round {
-    return {
-      id: "ro1",
-      roundNumber: 1,
-      roomId: "r1",
-      messageIds: [],
-      status: "active",
-      ...over,
-    };
-  }
-  it("accepts a valid round", () => {
-    expect(validateRound(validRound()).ok).toBe(true);
-  });
-  it("rejects roundNumber < 1", () => {
-    expect(validateRound(validRound({ roundNumber: 0 })).ok).toBe(false);
-  });
-  it("rejects empty roomId", () => {
-    expect(validateRound(validRound({ roomId: "" })).ok).toBe(false);
-  });
-});
-
-describe("validateTemplate", () => {
-  it("accepts a valid template", () => {
-    expect(
-      validateTemplate({
-        id: "t1",
-        name: "技术评审团",
-        agentConfigs: [{ gatewayId: "g1", model: "gpt-4o", role: "架构师", color: "#6366f1" }],
-        createdAt: 0,
-      }).ok,
-    ).toBe(true);
-  });
-  it("rejects empty name", () => {
-    expect(
-      validateTemplate({
-        id: "t1",
-        name: "",
-        agentConfigs: [{ gatewayId: "g1", model: "gpt-4o", role: "r", color: "#6366f1" }],
-        createdAt: 0,
-      }).ok,
-    ).toBe(false);
-  });
-  it("rejects empty agentConfigs", () => {
-    expect(validateTemplate({ id: "t1", name: "n", agentConfigs: [], createdAt: 0 }).ok).toBe(
-      false,
+  it("starts active with endedAt null and the digest of its own snapshot", () => {
+    const agent = makeAgent();
+    const participant = createParticipant({ roomId: "r-1", agent, profileDigest: "pd" });
+    expect(participant.state).toBe("active");
+    expect(participant.endedAt).toBeNull();
+    expectIsoTimestamp(participant.createdAt);
+    expect(participant.participantSnapshotDigest).toBe(
+      participantSnapshotDigestOf({
+        personaPrompt: participant.personaPrompt,
+        executionProfileId: participant.executionProfileId,
+        profileRevision: participant.profileRevision,
+        profileDigest: participant.profileDigest,
+        modelId: participant.modelId,
+      }),
     );
   });
-});
 
-describe("createSummary", () => {
-  it("stamps gatewayId + model from new signature", () => {
-    const s = createSummary({
-      roundId: "ro1",
-      content: "总结内容",
-      gatewayId: "g1",
-      model: "claude-sonnet-4",
+  it("produces a digest that is stable across snapshot key order", () => {
+    const first = participantSnapshotDigestOf({
+      personaPrompt: "p",
+      executionProfileId: "prof-1",
+      profileRevision: 1,
+      profileDigest: "pd",
+      modelId: "m",
     });
-    expect(s.gatewayId).toBe("g1");
-    expect(s.model).toBe("claude-sonnet-4");
-    expect(s.id).toBeTruthy();
-    expect(s.generatedAt).toBeGreaterThan(0);
+    const reordered = participantSnapshotDigestOf({
+      modelId: "m",
+      profileDigest: "pd",
+      profileRevision: 1,
+      executionProfileId: "prof-1",
+      personaPrompt: "p",
+    });
+    expect(reordered).toBe(first);
+    expect(first).toMatch(SHA256_HEX);
   });
-});
 
-describe("GatewayError contract", () => {
-  it("kind field narrows to the 5 allowed literals", () => {
-    const kinds: GatewayErrorKind[] = [
-      "invalid_key",
-      "rate_limit",
-      "upstream",
-      "timeout",
-      "network",
+  it("changes the digest when any single snapshot field changes", () => {
+    const base = {
+      personaPrompt: "p",
+      executionProfileId: "prof-1",
+      profileRevision: 1,
+      profileDigest: "pd",
+      modelId: "m",
+    };
+    const baseDigest = participantSnapshotDigestOf(base);
+    const mutations = [
+      { ...base, personaPrompt: "p2" },
+      { ...base, executionProfileId: "prof-2" },
+      { ...base, profileRevision: 2 },
+      { ...base, profileDigest: "pd2" },
+      { ...base, modelId: "m2" },
     ];
-    const errors: GatewayError[] = kinds.map((k) => ({
-      kind: k,
-      message: `err ${k}`,
-    }));
-    expect(errors).toHaveLength(5);
-    // httpStatus is optional and only meaningful for non-timeout/non-network.
-    const withStatus: GatewayError = { kind: "invalid_key", message: "no key", httpStatus: 401 };
-    expect(withStatus.httpStatus).toBe(401);
-    const withoutStatus: GatewayError = { kind: "timeout", message: "10s" };
-    expect(withoutStatus.httpStatus).toBeUndefined();
+    for (const mutated of mutations) {
+      expect(participantSnapshotDigestOf(mutated)).not.toBe(baseDigest);
+    }
   });
 });
 
-describe("factories stamp + validate", () => {
-  it("createRoom produces a valid room with id/timestamps", () => {
-    const room = createRoom({ topic: "新项目命名", agentIds: ["a1"] });
-    expect(room.id).toBeTruthy();
-    expect(room.createdAt).toBeGreaterThan(0);
-    expect(room.status).toBe("idle");
+describe("createDiscussionRoom", () => {
+  it("requires a non-blank topic and a facilitatorParticipantId", () => {
+    expectInvalid(() => createDiscussionRoom({ topic: "", facilitatorParticipantId: "p-1" }));
+    expectInvalid(() => createDiscussionRoom({ topic: "  ", facilitatorParticipantId: "p-1" }));
+    expectInvalid(() => createDiscussionRoom({ topic: "T", facilitatorParticipantId: "" }));
   });
-  it("createRoom throws on invalid input", () => {
-    expect(() => createRoom({ topic: "", agentIds: ["a1"] })).toThrow();
+
+  it("defaults to idle with no active round, contextRevision 0 and empty background", () => {
+    const room = createDiscussionRoom({ topic: "T", facilitatorParticipantId: "p-1" });
+    expect(room.id).toMatch(UUID_SHAPE);
+    expect(room.runState).toBe("idle");
+    expect(room.activeRoundId).toBeNull();
+    expect(room.contextRevision).toBe(0);
+    expect(room.contextDigest).toBe("");
+    expect(room.background).toBe("");
+    expectIsoTimestamp(room.createdAt);
+    expect(room.lastActiveAt).toBe(room.createdAt);
   });
-  it("createAgent stamps id + default status + gatewayId/model", () => {
-    const a = createAgent({
-      gatewayId: "g1",
-      model: "gpt-4o",
-      role: "反对者",
-      color: "#f85149",
+
+  it("keeps an explicit background", () => {
+    const room = createDiscussionRoom({
+      topic: "T",
+      background: "ctx",
+      facilitatorParticipantId: "p-1",
     });
-    expect(a.id).toBeTruthy();
-    expect(a.status).toBe("online");
-    expect(a.gatewayId).toBe("g1");
-    expect(a.model).toBe("gpt-4o");
+    expect(room.background).toBe("ctx");
   });
-  it("createMessage throws when user message has wrong senderId", () => {
-    expect(() =>
-      createMessage({ senderId: "a1", senderType: "user", content: "hi", roundId: "ro1" }),
-    ).toThrow();
+});
+
+describe("createModelExecution", () => {
+  it("defaults toolState to none and nulls the retry link unless provided", () => {
+    const fresh = createModelExecution(makeExecutionInput());
+    expect(fresh.toolState).toBe("none");
+    expect(fresh.retryOfExecutionId).toBeNull();
+
+    const retry = createModelExecution(makeExecutionInput({ retryOfExecutionId: "e-0" }));
+    expect(retry.retryOfExecutionId).toBe("e-0");
   });
-  it("createRound stamps id + active status", () => {
-    const r = createRound({ roundNumber: 2, roomId: "r1" });
-    expect(r.id).toBeTruthy();
-    expect(r.status).toBe("active");
-    expect(r.messageIds).toEqual([]);
+
+  it("fixes resultKind at creation while committedEntityType stays null", () => {
+    for (const resultKind of ["message", "summary"] as const) {
+      const execution = createModelExecution(makeExecutionInput({ resultKind }));
+      expect(execution.resultKind).toBe(resultKind);
+      expect(execution.committedEntityType).toBeNull();
+    }
   });
-  it("createTemplate stamps id + createdAt", () => {
-    const t = createTemplate({
-      name: "评审团",
-      agentConfigs: [{ gatewayId: "g2", model: "deepseek-chat", role: "r", color: "#3fb950" }],
-    });
-    expect(t.id).toBeTruthy();
-    expect(t.createdAt).toBeGreaterThan(0);
+});
+
+describe("createRuntimeBinding", () => {
+  it("starts creating with null Host facts and rejects an empty scopeRequestId", () => {
+    const binding = createRuntimeBinding({ roomId: "r-1", scopeRequestId: "req-1" });
+    expect(binding.id).toMatch(UUID_SHAPE);
+    expect(binding.state).toBe("creating");
+    expect(binding.hostInstanceId).toBeNull();
+    expect(binding.executionScopeId).toBeNull();
+    expect(binding.controllerId).toBeNull();
+    expect(binding.leaseEpoch).toBeNull();
+    expectIsoTimestamp(binding.createdAt);
+    expect(binding.updatedAt).toBe(binding.createdAt);
+
+    expectInvalid(() => createRuntimeBinding({ roomId: "r-1", scopeRequestId: "" }));
+  });
+});
+
+describe("digestOf", () => {
+  it("returns a 64-char lowercase sha256 hex", () => {
+    expect(digestOf({ a: 1 })).toMatch(SHA256_HEX);
+  });
+
+  it("is deterministic across key order and drops undefined fields", () => {
+    expect(digestOf({ a: 1, b: { c: 2, d: [3, 4] } })).toBe(
+      digestOf({ b: { d: [3, 4], c: 2 }, a: 1 }),
+    );
+    expect(digestOf({ a: 1, extra: undefined })).toBe(digestOf({ a: 1 }));
+  });
+
+  it("changes when the value changes", () => {
+    expect(digestOf({ a: 1 })).not.toBe(digestOf({ a: 2 }));
+    expect(digestOf(["a", "b"])).not.toBe(digestOf(["b", "a"]));
+  });
+});
+
+describe("TransactionError", () => {
+  it("exposes name and code and is an Error", () => {
+    const error = new TransactionError("INVALID", "bad input");
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("TransactionError");
+    expect(error.code).toBe("INVALID");
+    expect(error.message).toBe("bad input");
   });
 });

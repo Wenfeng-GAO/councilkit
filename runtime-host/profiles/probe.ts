@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { DriverId } from "@shared/runtime/contracts";
 import type {
   ExecutionProfileDto,
+  ModelCatalogResponse,
   ParticipantSpec,
   ResolveProfileResponse,
 } from "@shared/runtime/schemas";
@@ -20,8 +22,8 @@ import { buildBinding, resolveStatic } from "./resolver";
  * is always closed, so no CLI process can leak. The probe never touches
  * scopes, the execution registry or the reconciler, and nothing is cached in
  * V1: every call pays a fresh handshake. Composed once in `main.ts` (and in
- * tests) via `createProfileProbe`; the readiness route resolves it from
- * `services.profileProbe`.
+ * tests) via `createProfileProbe`; the readiness and model-catalog routes
+ * resolve it from `services.profileProbe`.
  */
 
 export interface ProfileProbeDeps {
@@ -33,9 +35,20 @@ export interface ProfileProbeDeps {
 
 export interface ProfileProbe {
   readiness(profile: ExecutionProfileDto, modelId: string): Promise<ResolveProfileResponse>;
+  /**
+   * Closed canonical model catalog of a trusted installation's driver. The
+   * catalog is model-agnostic, so the probe prewarms with a placeholder
+   * modelId and returns `prewarm.catalog` verbatim. Throws `InstallationError`
+   * (unknown/changed/untrusted installation) or a driver handshake failure —
+   * the route maps those to HTTP errors; a catalog is never fabricated.
+   */
+  catalog(driverId: DriverId, installationId: string): Promise<ModelCatalogResponse>;
 }
 
 const MAX_DETAIL = 256;
+
+/** Placeholder modelId for the model-agnostic catalog handshake. */
+const CATALOG_PROBE_MODEL_ID = "__catalog__";
 
 export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
   const { installations, driverFactories, logger } = deps;
@@ -57,41 +70,76 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
     };
   }
 
+  /**
+   * Shared static gate + fresh fingerprint revalidation + probe driver
+   * construction. Throws `InstallationError` on any installation gate failure
+   * and `Error` when no factory is registered for the driver.
+   */
+  function gateProbeDriver(
+    profile: ExecutionProfileDto,
+    modelId: string,
+  ): { driver: ParticipantDriver; installation: InstallationRecord; spec: ParticipantSpec } {
+    const staticResolution = resolveStatic(profile, modelId, installations);
+    if (!staticResolution.installation || staticResolution.readiness.state !== "ready") {
+      throw new InstallationError(
+        staticResolution.readiness.state === "invalid_binding"
+          ? {
+              code: "INSTALLATION_NOT_FOUND",
+              phase: "discovery",
+              retryable: false,
+              message: staticResolution.readiness.detail ?? "static binding failed",
+            }
+          : {
+              code: "INSTALLATION_UNTRUSTED",
+              phase: "discovery",
+              retryable: false,
+              message: staticResolution.readiness.detail ?? "installation is not trusted",
+            },
+      );
+    }
+
+    // Same spawn gate as execution: fresh fingerprint revalidation.
+    const installation = installations.assertExecutable(
+      staticResolution.installation.installationId,
+    );
+
+    const factory = driverFactories[profile.driverId];
+    if (!factory) {
+      throw new Error(`No driver factory is registered for "${profile.driverId}".`);
+    }
+
+    const participantId = `probe-${randomUUID()}`;
+    const spec: ParticipantSpec = { participantId, profile, modelId };
+    return { driver: factory(participantId), installation, spec };
+  }
+
   async function readiness(
     profile: ExecutionProfileDto,
     modelId: string,
   ): Promise<ResolveProfileResponse> {
     // Static gate first: schema-valid DTO + trusted installation, no spawn.
-    const staticResolution = resolveStatic(profile, modelId, installations);
-    if (!staticResolution.installation || staticResolution.readiness.state !== "ready") {
-      return { readiness: staticResolution.readiness, binding: null };
-    }
-
-    // Same spawn gate as execution: fresh fingerprint revalidation.
-    let installation: InstallationRecord;
+    let gated: ReturnType<typeof gateProbeDriver>;
     try {
-      installation = installations.assertExecutable(staticResolution.installation.installationId);
+      gated = gateProbeDriver(profile, modelId);
     } catch (error) {
       if (error instanceof InstallationError) return installationGateError(error);
-      throw error;
-    }
-
-    const factory = driverFactories[profile.driverId];
-    if (!factory) {
+      // No registered factory: a runtime gap, not an HTTP error.
       return {
         readiness: {
           state: "runtime_unavailable",
-          detail: `No driver factory is registered for "${profile.driverId}".`,
+          detail: error instanceof Error ? error.message.slice(0, MAX_DETAIL) : "probe failed",
         },
         binding: null,
       };
     }
 
-    const participantId = `probe-${randomUUID()}`;
-    const spec: ParticipantSpec = { participantId, profile, modelId };
-    const driver = factory(participantId);
+    const { driver, installation, spec } = gated;
     try {
-      const prewarm = await driver.prewarm({ participantId, spec, installation });
+      const prewarm = await driver.prewarm({
+        participantId: spec.participantId,
+        spec,
+        installation,
+      });
       return buildBinding(spec, installation, prewarm);
     } catch (error) {
       // Same mapping as the scope manager: driver-reported unavailability
@@ -114,5 +162,39 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
     }
   }
 
-  return { readiness };
+  async function catalog(
+    driverId: DriverId,
+    installationId: string,
+  ): Promise<ModelCatalogResponse> {
+    // Catalog needs no real profile options; the schema-valid minimal DTO only
+    // carries the binding target (driver + trusted installation).
+    const profile: ExecutionProfileDto =
+      driverId === "claude-stream-json"
+        ? {
+            driverId,
+            installationId,
+            credentialMode: "installation-managed",
+            options: { route: "ant-glm5.2" },
+          }
+        : {
+            driverId,
+            installationId,
+            credentialMode: "installation-managed",
+            options: {},
+          };
+    const { driver, installation, spec } = gateProbeDriver(profile, CATALOG_PROBE_MODEL_ID);
+    try {
+      const prewarm = await driver.prewarm({
+        participantId: spec.participantId,
+        spec,
+        installation,
+      });
+      return { catalog: prewarm.catalog };
+    } finally {
+      // Best effort: a probe must never leak a CLI process.
+      await driver.close().catch(() => undefined);
+    }
+  }
+
+  return { readiness, catalog };
 }

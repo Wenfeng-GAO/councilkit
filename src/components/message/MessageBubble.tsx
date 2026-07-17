@@ -1,39 +1,27 @@
-import {
-  type InlineGatewayInfo,
-  formatGatewayOfflineInline,
-  formatInlineBody,
-  formatInlineHeader,
-} from "@/lib/round-errors";
-import type { Agent, Message } from "@/models";
-import type { GatewayError } from "@/types";
-import ReactMarkdown from "react-markdown";
+import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 
 interface MessageBubbleProps {
-  /** 正常发言消息；error-only bubble（出错 agent 无发言，TC-5）时省略。 */
-  message?: Message;
-  agent?: Agent;
-  /** 本轮该 agent 遭遇的 GatewayError（可选）；存在则在 content 下方渲染 inline block。 */
-  error?: GatewayError;
-  /** 对应 gateway 的 name/baseUrl，注入 formatInlineBody 文案。 */
-  gateway?: InlineGatewayInfo;
-  /** D-11 propagation 标记 —— true 时使用 formatGatewayOfflineInline 文案。 */
-  errorPropagated?: boolean;
+  /** Resolved speaker display name (参与者名 / 你). */
+  name: string;
+  /** Resolved speaker color; the name text is always shown alongside. */
+  color: string;
+  /** Untrusted markdown body — rendered through SafeMarkdown only. */
+  content: string;
+  /** ISO timestamp of the committed message; omitted for previews. */
+  timestamp?: string | null;
+  /** Text badge (e.g. 生成中·尚未保存) — status is never color-only. */
+  badge?: string | null;
 }
 
-export function MessageBubble({
-  message,
-  agent,
-  error,
-  gateway,
-  errorPropagated = false,
-}: MessageBubbleProps) {
-  const isUser = message?.senderType === "user";
-  const name = isUser ? "你" : (agent?.role ?? "agent");
-  const color = isUser ? "#8b919a" : (agent?.color ?? "#6366f1");
-
+/**
+ * One discussion bubble (U6). Dumb presentational component: speaker
+ * resolution happens in the DiscussionStream, content stays untrusted and
+ * only ever passes through SafeMarkdown.
+ */
+export function MessageBubble({ name, color, content, timestamp, badge }: MessageBubbleProps) {
   return (
     <div className="flex flex-col gap-1 py-2">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span
           className="inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium text-white"
           style={{ backgroundColor: color }}
@@ -42,50 +30,16 @@ export function MessageBubble({
           {name.slice(0, 1)}
         </span>
         <span className="text-sm font-medium text-fg">{name}</span>
-        {message ? (
-          <span className="text-xs text-muted">
-            {new Date(message.timestamp).toLocaleTimeString()}
+        {badge ? (
+          <span className="rounded border border-info bg-info/10 px-2 py-0.5 text-xs text-info">
+            {badge}
           </span>
         ) : null}
+        {timestamp ? (
+          <span className="text-xs text-muted">{new Date(timestamp).toLocaleTimeString()}</span>
+        ) : null}
       </div>
-      {message ? (
-        <div className="ml-8 text-sm leading-relaxed text-fg">
-          <ReactMarkdown>{message.content}</ReactMarkdown>
-        </div>
-      ) : null}
-      {renderInlineError(error, gateway, errorPropagated)}
-    </div>
-  );
-}
-
-function renderInlineError(
-  error: GatewayError | undefined,
-  gateway: InlineGatewayInfo | undefined,
-  propagated: boolean,
-) {
-  if (!error) return null;
-
-  let header: string;
-  let body: string;
-  // fatal (invalid_key 且非 propagation) → 红；recoverable → 黄；propagation → 红（同 fatal 调性）
-  const isError = error.kind === "invalid_key";
-
-  if (propagated) {
-    const fmt = formatGatewayOfflineInline();
-    header = fmt.header;
-    body = fmt.body(gateway?.name ?? "未知网关");
-  } else {
-    header = formatInlineHeader(error);
-    body = formatInlineBody(error, gateway);
-  }
-
-  const toneClass = isError ? "border border-error bg-error/10" : "border border-warn bg-warn/10";
-
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: inline status block needs div + explicit role for AT
-    <div role="status" className={`ml-8 mt-2 rounded p-2 ${toneClass}`} data-testid="inline-error">
-      <p className="text-sm font-semibold leading-snug text-fg">{header}</p>
-      <p className="text-xs leading-snug text-fg">{body}</p>
+      <SafeMarkdown className="ml-8 text-sm text-fg" content={content} />
     </div>
   );
 }

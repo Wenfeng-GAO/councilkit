@@ -18,6 +18,7 @@ import { createProcessSupervisor } from "./process/process-supervisor";
 import { createProfileProbe } from "./profiles/probe";
 import { healthRoutes } from "./routes/health";
 import { installationRoutes } from "./routes/installations";
+import { modelRoutes } from "./routes/models";
 import { scopeRoutes } from "./routes/scopes";
 import { createScopeManager } from "./scopes/scope-manager";
 import { createSessionReconciler } from "./scopes/session-reconciler";
@@ -132,6 +133,7 @@ async function main(): Promise<void> {
   const routes: Route[] = [
     ...healthRoutes(services),
     ...installationRoutes(services),
+    ...modelRoutes(services),
     ...scopeRoutes(services),
   ];
 

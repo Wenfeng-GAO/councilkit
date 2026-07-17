@@ -134,4 +134,21 @@ describe("RuntimeClient installations / profile readiness (U6)", () => {
 
     await expect(client.listInstallations()).rejects.toThrow();
   });
+
+  it("modelCatalog: GET session call with driverId + installationId query params", async () => {
+    const { fetchFn, calls } = stubFetch(okResponse({ catalog: ["gpt-5.6-sol"] }));
+    const client = makeClient(fetchFn);
+
+    const result = await client.modelCatalog("codex-app-server", "inst-1");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(
+      "/api/v1/models/catalog?driverId=codex-app-server&installationId=inst-1",
+    );
+    expect(calls[0]?.method).toBe("GET");
+    // Session kind: no CSRF mutation header, no JSON content type.
+    expect(calls[0]?.headers[CSRF_HEADER_NAME]).toBeUndefined();
+    expect(calls[0]?.headers["Content-Type"]).toBeUndefined();
+    expect(result.catalog).toEqual(["gpt-5.6-sol"]);
+  });
 });

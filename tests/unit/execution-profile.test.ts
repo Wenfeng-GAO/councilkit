@@ -1,4 +1,10 @@
-import { type ExecutionProfileRecord, toDto, validateProfileDto } from "@/models/execution-profile";
+import { digestOf } from "@/models/discussion/factories";
+import {
+  type ExecutionProfileRecord,
+  profileDigestOf,
+  toDto,
+  validateProfileDto,
+} from "@/models/execution-profile";
 import { buildSettingsReadiness } from "@/runtime/readiness";
 import {
   CREDENTIAL_MODE,
@@ -101,6 +107,52 @@ describe("execution profile DTO", () => {
   it("toDto refuses to emit an invalid DTO", () => {
     const bad = claudeRecord({ options: { route: "zenmux" } as never });
     expect(() => toDto(bad)).toThrow();
+  });
+});
+
+describe("profileDigestOf (join-time Profile digest)", () => {
+  it("equals the canonical digest regardless of object key order", () => {
+    const record = claudeRecord();
+    // Same fields, deliberately different construction order: canonicalJson
+    // sorts keys, so the digest must be identical.
+    const manual = digestOf({
+      revision: record.revision,
+      options: record.options,
+      credentialMode: record.credentialMode,
+      installationId: record.installationId,
+      driverId: record.driverId,
+      digestVersion: 1,
+    });
+    expect(profileDigestOf(record)).toBe(manual);
+    expect(profileDigestOf(record)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("ignores record metadata outside the snapshot", () => {
+    const a = claudeRecord();
+    const b = claudeRecord({
+      id: "prof-other",
+      name: "另一个名字",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    });
+    expect(profileDigestOf(a)).toBe(profileDigestOf(b));
+  });
+
+  it("changes when the revision changes", () => {
+    expect(profileDigestOf(claudeRecord({ revision: 3 }))).not.toBe(
+      profileDigestOf(claudeRecord({ revision: 4 })),
+    );
+  });
+
+  it("changes when options or binding change", () => {
+    const base = profileDigestOf(claudeRecord());
+    expect(profileDigestOf(claudeRecord({ options: { route: "moonshot" } }))).not.toBe(base);
+    expect(profileDigestOf(claudeRecord({ installationId: "cld-fedcba987654" }))).not.toBe(base);
+    expect(
+      profileDigestOf(
+        claudeRecord({ driverId: "codex-app-server", options: { reasoningEffort: "high" } }),
+      ),
+    ).not.toBe(base);
   });
 });
 

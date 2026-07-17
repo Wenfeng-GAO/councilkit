@@ -1,74 +1,215 @@
 import { MessageBubble } from "@/components/message/MessageBubble";
-import { ErrorBanner } from "@/components/room/ErrorBanner";
+import { ExecutionFailureRecord } from "@/components/room/ExecutionFailureRecord";
+import { SummaryBlock } from "@/components/room/SummaryBlock";
+import {
+  USER_SPEAKER,
+  isFailedExecution,
+  resolveSpeaker,
+  roundPhaseLabel,
+  roundPhaseTone,
+} from "@/components/room/round-timeline";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { buildRenderSequence } from "@/lib/round-errors";
-import type { Agent, Message } from "@/models";
-import { useDiscussionStore } from "@/stores/discussion";
+import { StatusPill } from "@/components/shared/StatusPill";
+import type { DiscussionAgent, DiscussionRound, Participant } from "@/models/discussion/entities";
+import { useRuntimeDiscussionStore } from "@/stores/runtime-discussion";
+import { useRoundExecutions, useRoundMessages, useRoundSummary } from "@/stores/runtime-queries";
+import { useState } from "react";
+
+/**
+ * Round-grouped timeline (U6): one ascending list of Rounds. Each Round
+ * section shows committed Messages in order, the committed Summary, and one
+ * collapsed failure record per discarded/failed execution. Historical Rounds
+ * default collapsed; the current (or latest) Round defaults expanded, with
+ * the active streaming preview pinned at its tail.
+ */
 
 interface DiscussionStreamProps {
-  messages: Message[];
-  agents: Agent[];
+  roomId: string;
+  rounds: DiscussionRound[];
+  participants: Participant[];
+  agents: DiscussionAgent[];
+  /** room.activeRoundId — the Round that owns the active preview. */
+  activeRoundId: string | null;
+  tick: number;
 }
 
-export function DiscussionStream({ messages, agents }: DiscussionStreamProps) {
-  const { drafting, agentErrors, agentErrorGateway, roundErrorSummary, clearRoundErrorSummary } =
-    useDiscussionStore();
-
-  const draftEntries = Object.entries(drafting).filter(([, text]) => text.length > 0);
-
-  const isEmpty = messages.length === 0 && draftEntries.length === 0 && !roundErrorSummary;
-
-  // TC-5: 单一渲染序列 —— agent 发言(message) 与 出错(error-only) 按 agent 执行顺序
-  // 交错编排，避免「先全渲染成功、再全渲染失败」造成的时序反转（前序失败跑到后序成功后）。
-  const renderItems = buildRenderSequence(messages, agents, agentErrors);
+export function DiscussionStream({
+  roomId,
+  rounds,
+  participants,
+  agents,
+  activeRoundId,
+  tick,
+}: DiscussionStreamProps) {
+  if (rounds.length === 0) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-6 py-4">
+        <EmptyState title="还没有讨论" hint="点击「开始新一轮」，参与者会依次发言。" />
+      </div>
+    );
+  }
+  const participantsById = new Map(
+    participants.map((participant) => [participant.id, participant]),
+  );
+  const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
+  const expandedRoundId = activeRoundId ?? rounds[rounds.length - 1]?.id ?? null;
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-4">
-      <ErrorBanner summary={roundErrorSummary} onDismiss={clearRoundErrorSummary} />
-      {isEmpty ? <EmptyState title="还没有讨论" hint="发起讨论后，agent 会依次发言。" /> : null}
-      {renderItems.map((item) => {
-        if (item.kind === "errorOnly") {
-          return (
-            <MessageBubble
-              key={item.key}
-              agent={agents.find((a) => a.id === item.agentId)}
-              error={agentErrors[item.agentId]}
-              gateway={agentErrorGateway[item.agentId]}
-              errorPropagated={!!agentErrors[item.agentId]?.message?.includes("网关已离线")}
-            />
-          );
-        }
-        const m = item.message as Message;
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-4">
+      {rounds.map((round) => (
+        <RoundSection
+          key={round.id}
+          roomId={roomId}
+          round={round}
+          isCurrent={round.id === activeRoundId}
+          defaultOpen={round.id === expandedRoundId}
+          participantsById={participantsById}
+          agentsById={agentsById}
+          tick={tick}
+        />
+      ))}
+    </div>
+  );
+}
+
+interface RoundSectionProps {
+  roomId: string;
+  round: DiscussionRound;
+  isCurrent: boolean;
+  defaultOpen: boolean;
+  participantsById: ReadonlyMap<string, Participant>;
+  agentsById: ReadonlyMap<string, DiscussionAgent>;
+  tick: number;
+}
+
+function RoundSection({
+  roomId,
+  round,
+  isCurrent,
+  defaultOpen,
+  participantsById,
+  agentsById,
+  tick,
+}: RoundSectionProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <details
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      className="rounded border border-edge bg-surface"
+      data-testid={`round-section-${round.roundNumber}`}
+    >
+      <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 px-4 py-3">
+        <span className="text-sm font-semibold text-fg">第 {round.roundNumber} 轮</span>
+        <StatusPill tone={roundPhaseTone(round.phase)} text={roundPhaseLabel(round.phase)} />
+        {isCurrent ? <span className="text-xs text-muted">（当前轮）</span> : null}
+      </summary>
+      {open ? (
+        <RoundSectionBody
+          roomId={roomId}
+          round={round}
+          isCurrent={isCurrent}
+          participantsById={participantsById}
+          agentsById={agentsById}
+          tick={tick}
+        />
+      ) : null}
+    </details>
+  );
+}
+
+function RoundSectionBody({
+  round,
+  isCurrent,
+  participantsById,
+  agentsById,
+  tick,
+}: Omit<RoundSectionProps, "defaultOpen">) {
+  const { data: messages } = useRoundMessages(round.id, tick);
+  const { data: summary } = useRoundSummary(round.id, tick);
+  const { data: executions } = useRoundExecutions(round.id, tick);
+
+  const activeExecutionId = isCurrent ? round.activeExecutionId : null;
+  const previewText = useRuntimeDiscussionStore((state) =>
+    activeExecutionId ? state.previewByExecution[activeExecutionId] : undefined,
+  );
+
+  const failed = (executions ?? [])
+    .filter(isFailedExecution)
+    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  const activeExecution = activeExecutionId
+    ? (executions ?? []).find((execution) => execution.executionId === activeExecutionId)
+    : undefined;
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-edge px-4 py-3">
+      {(messages ?? []).map((message) => {
+        const speaker =
+          message.role === "user"
+            ? USER_SPEAKER
+            : resolveSpeaker(message.participantId, participantsById, agentsById);
         return (
           <MessageBubble
-            key={item.key}
-            message={m}
-            agent={agents.find((a) => a.id === m.senderId)}
-            error={m.senderType === "agent" ? agentErrors[m.senderId] : undefined}
-            gateway={m.senderType === "agent" ? agentErrorGateway[m.senderId] : undefined}
-            errorPropagated={
-              m.senderType === "agent" && !!agentErrors[m.senderId]?.message?.includes("网关已离线")
-            }
+            key={message.id}
+            name={speaker.name}
+            color={speaker.color}
+            content={message.content}
+            timestamp={message.createdAt}
           />
         );
       })}
-      {draftEntries.map(([agentId, text]) => {
-        const agent = agents.find((a) => a.id === agentId);
-        return (
-          <MessageBubble
-            key={`draft-${agentId}`}
-            message={{
-              id: `draft-${agentId}`,
-              senderId: agentId,
-              senderType: "agent",
-              content: text,
-              roundId: "draft",
-              timestamp: Date.now(),
-            }}
-            agent={agent}
-          />
-        );
-      })}
+      <SummaryBlock content={summary?.content ?? null} />
+      {failed.map((execution) => (
+        <ExecutionFailureRecord
+          key={execution.executionId}
+          execution={execution}
+          participantsById={participantsById}
+          agentsById={agentsById}
+        />
+      ))}
+      {activeExecutionId ? (
+        <ActivePreview
+          previewText={previewText ?? ""}
+          isSummary={activeExecution?.resultKind === "summary"}
+          speaker={resolveSpeaker(activeExecution?.participantId, participantsById, agentsById)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Streaming preview pinned at the current Round's tail (U6): disposable
+ * display state only — on commit the store clears it and the committed
+ * Message appears in its place; on discard it vanishes and a collapsed
+ * failure record is left behind. */
+function ActivePreview({
+  previewText,
+  isSummary,
+  speaker,
+}: {
+  previewText: string;
+  isSummary: boolean;
+  speaker: { name: string; color: string };
+}) {
+  const badge = isSummary ? "总结生成中·尚未保存" : "生成中·尚未保存";
+  return (
+    <div data-testid="active-preview" aria-label={badge}>
+      {previewText.length > 0 ? (
+        <MessageBubble
+          name={speaker.name}
+          color={speaker.color}
+          content={previewText}
+          badge={badge}
+        />
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 py-2 text-sm text-muted">
+          <span aria-hidden="true">⟳</span>
+          <span>{speaker.name} 正在生成…</span>
+          <span className="rounded border border-info bg-info/10 px-2 py-0.5 text-xs text-info">
+            {badge}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { digestOf } from "@/models/discussion/factories";
 import type { CREDENTIAL_MODE, DriverId } from "@shared/runtime/contracts";
 import { type ExecutionProfileDto, executionProfileSchema } from "@shared/runtime/schemas";
 
@@ -38,5 +39,22 @@ export function toDto(record: ExecutionProfileRecord): ExecutionProfileDto {
     installationId: record.installationId,
     credentialMode: record.credentialMode,
     options: record.options,
+  });
+}
+
+/**
+ * Deterministic join-time Profile digest (digestVersion 1): a Participant
+ * snapshots it at join time so a later Profile edit (revision/options) is
+ * detectable from the snapshot. Record metadata (id, name, timestamps) is
+ * NOT part of the digest.
+ */
+export function profileDigestOf(record: ExecutionProfileRecord): string {
+  return digestOf({
+    digestVersion: 1,
+    driverId: record.driverId,
+    installationId: record.installationId,
+    credentialMode: record.credentialMode,
+    options: record.options,
+    revision: record.revision,
   });
 }

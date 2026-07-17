@@ -77,6 +77,15 @@ export const installationsResponseSchema = z
 export type InstallationsResponse = z.infer<typeof installationsResponseSchema>;
 
 // ---------------------------------------------------------------------------
+// Model catalog (session-authenticated)
+// ---------------------------------------------------------------------------
+
+/** Closed canonical model catalog reported by a live Driver handshake. The
+ * catalog is model-agnostic: it never carries accounts, paths or secrets. */
+export const modelCatalogResponseSchema = z.object({ catalog: z.array(z.string()) }).strict();
+export type ModelCatalogResponse = z.infer<typeof modelCatalogResponseSchema>;
+
+// ---------------------------------------------------------------------------
 // Execution Profiles
 // ---------------------------------------------------------------------------
 
