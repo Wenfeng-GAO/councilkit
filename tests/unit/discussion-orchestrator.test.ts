@@ -62,13 +62,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * binding convergence, Dexie-only restore, pause/abort and retry-once.
  *
  * Notes on test-side decisions (documented in the U5 verification record):
- * - The first scope of a room is booted via the public `ensureScope` API:
- *   `startRound` requires an active binding token before it can create the
- *   first Round, so scope creation must precede the first `startRound`.
+ * - Most cases boot the first scope via the public `ensureScope` API for
+ *   clarity; since the U6 E2E-pass fixes, `startRound` also bootstraps a
+ *   fresh room itself (covered by case 21).
  * - The U5-review bugs (missing Host activate, missing retryOfExecutionId
  *   link, run loop stopping after a successful retry, stale Round return on
  *   the prewarm-pause path) were fixed in the U6 pre-pass; their former
- *   it.fails pins are ordinary regression tests at the bottom of this file.
+ *   it.fails pins are ordinary regression tests in this file. Cases 18-21 pin
+ *   the U6 E2E-pass fixes (lock-aware audit, creating-binding reuse,
+ *   re-entrant controlRoom, fresh-room bootstrap).
  */
 
 // ---------------------------------------------------------------------------
@@ -1799,5 +1801,125 @@ describe("discussion orchestrator (U5)", () => {
 
     await expect(orchestrator.controlRoom(room.id)).rejects.toThrow("takeover exploded");
     expect(controlStates).toEqual(["acquiring", "takeover_failed"]);
+  });
+
+  it("18. startup audit never converges a room whose lock another page holds", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const locks = createFakeLocks();
+    // Seed a running execution dispatched on the current Host.
+    const binding = await createRuntimeBindingTx(db, {
+      roomId: room.id,
+      scopeRequestId: "req-audit-lock-01",
+    });
+    await activateRuntimeBinding(db, {
+      id: binding.id,
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-audit-lock",
+      controllerId: "ctrl-audit-lock",
+      leaseEpoch: 1,
+    });
+    const token = { controllerId: "ctrl-audit-lock", leaseEpoch: 1 };
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    const execution = createModelExecution({
+      executionId: "exec-audit-lock-01",
+      roomId: room.id,
+      roundId: round.id,
+      participantId: p1.id,
+      resultKind: "message",
+      requestedModel: p1.modelId,
+      contextRevision: room.contextRevision,
+      expectedRoomDigest: room.contextDigest,
+      participantSnapshotDigest: p1.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "message", text: "answer" }),
+    });
+    await beginExecution(db, { execution, token });
+    await markExecutionDispatched(db, {
+      executionId: execution.executionId,
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-audit-lock",
+      dispatchState: "unknown",
+    });
+
+    // Another page holds the room lock: the audit must leave the in-flight
+    // execution alone (it would otherwise pause the controller's live round).
+    const foreign = await locks.tryAcquire(`councilkit-room-${room.id}`);
+    const { orchestrator: auditor } = makeOrchestrator({ locks });
+    await auditor.startupAudit();
+    expect((await db.modelExecutions.get(execution.executionId))?.state).toBe("running");
+    expect((await db.rounds.get(round.id))?.phase).toBe("running");
+
+    // Once the lock drops (controller gone), the audit converges it.
+    foreign?.release();
+    await auditor.startupAudit();
+    const converged = await db.modelExecutions.get(execution.executionId);
+    expect(converged?.state).toBe("interrupted");
+    expect(converged?.error?.code).toBe("SAFE_INTERRUPTION");
+    expect((await db.rounds.get(round.id))?.phase).toBe("paused");
+  });
+
+  it("19. ensureScope resumes an interrupted create with the same scopeRequestId", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    // First attempt dies inside the Host create (binding already persisted).
+    host.onCreateScope = async () => {
+      throw new Error("simulated create failure");
+    };
+    await expect(orchestrator.ensureScope(room.id, [p1, p2])).rejects.toThrow(
+      "simulated create failure",
+    );
+    const leftover = await db.runtimeBindings.where("roomId").equals(room.id).first();
+    expect(leftover?.state).toBe("creating");
+
+    // Retry: reuses the creating row and its scopeRequestId — the Host's
+    // idempotent create returns the SAME scope (no duplicate, no BINDING_ACTIVE_EXISTS).
+    host.onCreateScope = null;
+    const { binding, token } = await orchestrator.ensureScope(room.id, [p1, p2]);
+    expect(binding.id).toBe(leftover?.id);
+    expect(binding.scopeRequestId).toBe(leftover?.scopeRequestId);
+    expect(binding.state).toBe("active");
+    expect(token.controllerId).toBe(binding.controllerId);
+    expect(await db.runtimeBindings.where("roomId").equals(room.id).count()).toBe(1);
+    expect(host.createScopeCalls).toHaveLength(1);
+    expect(host.closeCalls).toHaveLength(0);
+  });
+
+  it("20. controlRoom is re-entrant: a mount-held lock never deadlocks startRound", async () => {
+    const { room } = await seedBase();
+    const locks = createFakeLocks();
+    const { orchestrator } = makeOrchestrator({ locks });
+    // RoomPage-style mount: take and HOLD the room lock for the page lifetime.
+    const handle = await orchestrator.controlRoom(room.id);
+    expect(handle).not.toBeNull();
+    // Re-entrant control: returns the held handle, no second Host takeover.
+    const again = await orchestrator.controlRoom(room.id);
+    expect(again).toBe(handle);
+    expect(host.takeoverCalls).toHaveLength(0);
+    // The first-ever startRound on a fresh room re-enters controlRoom
+    // internally; with a naive lock it would queue behind itself forever.
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+    handle?.release();
+  });
+
+  it("21. startRound bootstraps a fresh room without a prior ensureScope call", async () => {
+    const { room } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    expect(binding?.executionScopeId).toBe(host.createScopeCalls[0]?.scopeId);
+    expect(host.activateCalls).toHaveLength(1);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
+    expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
   });
 });

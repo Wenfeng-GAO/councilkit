@@ -109,6 +109,18 @@ export function RoomPage() {
     executionId: activeExecutionId,
   });
 
+  // Observer freshness (plan §547): the invalidation tick only bumps on the
+  // controlling page, so while observing we poll — bumping the local tick on
+  // an interval re-keys the runtime queries above. V1 uses polling; a Dexie
+  // liveQuery / BroadcastChannel channel is follow-up work.
+  useEffect(() => {
+    if (!roomId || controlState !== "observing") return;
+    const timer = setInterval(() => {
+      useRuntimeDiscussionStore.getState().bumpChanged(roomId);
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [roomId, controlState]);
+
   const announcement = useRoomAnnouncer({
     currentRound,
     messages: currentMessages,

@@ -5,7 +5,13 @@
  * Host driver state is scripted exclusively through the E2E Host's test-only
  * /api/v1/__test__ control namespace (see tests/e2e/host-entry.mts).
  */
-import { type Browser, type BrowserContext, type Locator, type Page, expect } from "@playwright/test";
+import {
+  type Browser,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  expect,
+} from "@playwright/test";
 
 // ---------------------------------------------------------------------------
 // Test-only Host control API (session cookie rides with the page context)
@@ -38,7 +44,10 @@ export interface DriverCounters {
 const TEST_API = "/api/v1/__test__";
 
 async function controlPost<T>(page: Page, path: string, data?: unknown): Promise<T> {
-  const response = await page.request.post(`${TEST_API}${path}`, data === undefined ? {} : { data });
+  const response = await page.request.post(
+    `${TEST_API}${path}`,
+    data === undefined ? {} : { data },
+  );
   expect(response.ok(), `POST ${path} failed with ${response.status()}`).toBeTruthy();
   const envelope = (await response.json()) as { ok: boolean; data: T };
   expect(envelope.ok, `POST ${path} returned an error envelope`).toBeTruthy();
@@ -95,7 +104,9 @@ export async function setInstallationState(
 // Browser context factory: clean storage (fresh IndexedDB) per test
 // ---------------------------------------------------------------------------
 
-export async function freshPage(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
+export async function freshPage(
+  browser: Browser,
+): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext();
   const page = await context.newPage();
   return { context, page };

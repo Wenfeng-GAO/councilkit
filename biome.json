@@ -13,7 +13,6 @@
       "dist-host",
       "coverage",
       "tests/fixtures",
-      "tests/e2e",
       "test-results",
       "playwright-report"
     ]

@@ -34,9 +34,9 @@
 import type { ServerResponse } from "node:http";
 import {
   DRIVER_IDS,
-  INSTALLATION_STATES,
   type DispatchState,
   type DriverId,
+  INSTALLATION_STATES,
   type InstallationState,
   type ToolState,
 } from "@shared/runtime/contracts";
@@ -91,7 +91,11 @@ export interface DriverBehavior {
   /** prewarm rejects with a DRIVER_SPAWN_FAILED error. */
   prewarmFails?: boolean;
   /** execute emits started + failed terminal with these facts. */
-  failWith?: { error: { code: string; message: string }; retryable: boolean; dispatchState: DispatchState };
+  failWith?: {
+    error: { code: string; message: string };
+    retryable: boolean;
+    dispatchState: DispatchState;
+  };
   /** execute holds after `started` until cancel() emits interrupted. */
   hangUntilCancel?: boolean;
   /** execute holds after emitting N events until /__test__/resume or 300ms. */
@@ -310,7 +314,10 @@ const fakeInstallationRegistry: InstallationRegistry = {
     installationId in FAKE_INSTALLATIONS ? installationDto(installationId) : undefined,
   revalidate: (installationId: string) => {
     if (!(installationId in FAKE_INSTALLATIONS)) {
-      throw installationFailure("INSTALLATION_NOT_FOUND", `Unknown installation "${installationId}".`);
+      throw installationFailure(
+        "INSTALLATION_NOT_FOUND",
+        `Unknown installation "${installationId}".`,
+      );
     }
     // Re-validation of a drifted fake succeeds and restores trust.
     installationStates.set(installationId, "trusted");
@@ -318,11 +325,17 @@ const fakeInstallationRegistry: InstallationRegistry = {
   },
   assertExecutable: (installationId: string): InstallationRecord => {
     if (!(installationId in FAKE_INSTALLATIONS)) {
-      throw installationFailure("INSTALLATION_NOT_FOUND", `Unknown installation "${installationId}".`);
+      throw installationFailure(
+        "INSTALLATION_NOT_FOUND",
+        `Unknown installation "${installationId}".`,
+      );
     }
     const dto = installationDto(installationId);
     if (dto.state === "not_found") {
-      throw installationFailure("INSTALLATION_NOT_FOUND", `Installation "${installationId}" is missing.`);
+      throw installationFailure(
+        "INSTALLATION_NOT_FOUND",
+        `Installation "${installationId}" is missing.`,
+      );
     }
     if (dto.state === "changed") {
       throw installationFailure(
@@ -374,7 +387,10 @@ function dropOpenEventStreams(): number {
   return targets.length;
 }
 
-function resetAll(scopeManager: { closeAll(reason: string): Promise<void> }, executions: { reset(): void }) {
+function resetAll(
+  scopeManager: { closeAll(reason: string): Promise<void> },
+  executions: { reset(): void },
+) {
   return async (): Promise<{ reset: true }> => {
     await scopeManager.closeAll("e2e-reset");
     executions.reset();
@@ -410,7 +426,10 @@ function testRoutes(
         behavior: z.record(z.string(), z.unknown()),
       }),
       handler: ({ body }) => {
-        const { participantId, behavior } = body as { participantId: string; behavior: DriverBehavior };
+        const { participantId, behavior } = body as {
+          participantId: string;
+          behavior: DriverBehavior;
+        };
         const rig = rigFor(participantId);
         rig.behavior = { ...rig.behavior, ...behavior };
         return { participantId, behavior: rig.behavior };

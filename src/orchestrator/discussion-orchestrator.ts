@@ -227,8 +227,15 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       }
     }
 
-    const scopeRequestId = ids.uuid();
-    const binding = await createRuntimeBindingTx(db, { roomId, scopeRequestId });
+    // Resume an interrupted create: a leftover creating binding's
+    // scopeRequestId is the idempotency key — the Host keys Scopes by it, so
+    // a retry never produces a second Scope (a reaped one is simply
+    // recreated under the same request id). Without this, a failed first
+    // startRound would poison the room with BINDING_ACTIVE_EXISTS until the
+    // startup audit converges the leftover row.
+    const reusable = existing && existing.state === "creating" ? existing : null;
+    const scopeRequestId = reusable ? reusable.scopeRequestId : ids.uuid();
+    const binding = reusable ?? (await createRuntimeBindingTx(db, { roomId, scopeRequestId }));
     const specs = await Promise.all(
       participants.map(async (participant) => {
         const profile = await db.executionProfiles.get(participant.executionProfileId);
@@ -293,101 +300,120 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
 
   async function startupAudit(): Promise<void> {
     const hostId = await hostInstanceId();
-
-    // creating/closing bindings never stay forever: the Host reaps
-    // unactivated creating scopes within 30s; converge the local record.
-    const staleBindings = await db.runtimeBindings
-      .filter((binding) => binding.state === "creating" || binding.state === "closing")
-      .toArray();
-    for (const binding of staleBindings) {
-      if (binding.hostInstanceId && binding.hostInstanceId !== hostId) {
+    /** Converge a Room's crash windows only while holding its Web Lock: an
+     * observing page must never fail the controlling page's in-flight
+     * execution (E2E control-suite finding). Without a LockProvider (tests),
+     * the audit is ungated. */
+    const auditLocks = new Map<string, LockHandle>();
+    async function auditLock(roomId: string): Promise<boolean> {
+      if (!deps.locks) return true;
+      if (heldLocks.has(roomId) || auditLocks.has(roomId)) return true;
+      const handle = await deps.locks.tryAcquire(`councilkit-room-${roomId}`);
+      if (!handle) return false;
+      auditLocks.set(roomId, handle);
+      return true;
+    }
+    try {
+      // creating/closing bindings never stay forever: the Host reaps
+      // unactivated creating scopes within 30s; converge the local record.
+      const staleBindings = await db.runtimeBindings
+        .filter((binding) => binding.state === "creating" || binding.state === "closing")
+        .toArray();
+      for (const binding of staleBindings) {
+        if (!(await auditLock(binding.roomId))) continue;
+        if (binding.hostInstanceId && binding.hostInstanceId !== hostId) {
+          await markBindingClosed(db, binding.id);
+          continue;
+        }
+        if (binding.state === "closing" && binding.executionScopeId && binding.controllerId) {
+          await client
+            .closeScope(binding.executionScopeId, {
+              controllerId: binding.controllerId,
+              leaseEpoch: binding.leaseEpoch ?? 1,
+            })
+            .catch(() => undefined);
+        }
+        // creating without Host facts: Host TTL reaps; nothing to compensate.
         await markBindingClosed(db, binding.id);
-        continue;
       }
-      if (binding.state === "closing" && binding.executionScopeId && binding.controllerId) {
-        await client
-          .closeScope(binding.executionScopeId, {
-            controllerId: binding.controllerId,
-            leaseEpoch: binding.leaseEpoch ?? 1,
-          })
-          .catch(() => undefined);
-      }
-      // creating without Host facts: Host TTL reaps; nothing to compensate.
-      await markBindingClosed(db, binding.id);
-    }
 
-    // Unfinished executions: no auto-resume, no cleanup fraud — classify
-    // into explainable paused states from persisted dispatch facts + Host query.
-    const unfinished = await db.modelExecutions
-      .filter((execution) =>
-        ["prepared", "running", "succeeded_uncommitted"].includes(execution.state),
-      )
-      .toArray();
-    for (const execution of unfinished) {
-      const token = await tokenForRoom(execution.roomId);
-      if (!token) continue; // no controller here; leave for the controlling page
-      const kind = execution.state === "prepared" ? "failed" : "interrupted";
-      let code = "SAFE_INTERRUPTION";
-      if (execution.hostInstanceId === hostId && execution.executionScopeId) {
+      // Unfinished executions: no auto-resume, no cleanup fraud — classify
+      // into explainable paused states from persisted dispatch facts + Host query.
+      const unfinished = await db.modelExecutions
+        .filter((execution) =>
+          ["prepared", "running", "succeeded_uncommitted"].includes(execution.state),
+        )
+        .toArray();
+      for (const execution of unfinished) {
+        if (!(await auditLock(execution.roomId))) continue;
+        const token = await tokenForRoom(execution.roomId);
+        if (!token) continue; // no controller here; leave for the controlling page
+        const kind = execution.state === "prepared" ? "failed" : "interrupted";
+        let code = "SAFE_INTERRUPTION";
+        if (execution.hostInstanceId === hostId && execution.executionScopeId) {
+          try {
+            await client.getExecution(execution.executionScopeId, execution.executionId);
+            code = "INTERRUPTED_UNKNOWN";
+          } catch (error) {
+            if (!(error instanceof RuntimeClientError && error.status === 404)) throw error;
+          }
+        }
+        await failExecution(db, {
+          executionId: execution.executionId,
+          token,
+          error: errorOf(
+            code,
+            code === "SAFE_INTERRUPTION"
+              ? "host restarted or terminal lost before commit"
+              : "execution still exists but its outcome is unknown after reload",
+          ),
+          kind,
+        });
+        notify(execution.roomId);
+      }
+
+      // Pending ACKs: resend against the same Host instance; converge to
+      // expired when the Host changed or the terminal is gone.
+      const pendingAcks = await db.modelExecutions
+        .filter(
+          (execution) =>
+            execution.ackState === "pending" &&
+            (execution.state === "committed" || execution.state === "discarded"),
+        )
+        .toArray();
+      for (const execution of pendingAcks) {
+        if (!(await auditLock(execution.roomId))) continue;
+        if (execution.hostInstanceId !== hostId || execution.finalEventSeq === null) {
+          await markAckExpired(db, execution.executionId);
+          continue;
+        }
+        const token = await tokenForRoom(execution.roomId);
+        if (!token) continue;
         try {
-          await client.getExecution(execution.executionScopeId, execution.executionId);
-          code = "INTERRUPTED_UNKNOWN";
+          const response = await client.ack(
+            execution.executionScopeId as string,
+            execution.executionId,
+            {
+              controllerId: token.controllerId,
+              leaseEpoch: token.leaseEpoch,
+              finalSeq: execution.finalEventSeq,
+              disposition: execution.state === "committed" ? "committed" : "discarded",
+            },
+          );
+          if (response.ackState === "acknowledged") {
+            await markAcknowledged(db, execution.executionId);
+          } else if (response.ackState === "expired") {
+            await markAckExpired(db, execution.executionId);
+          }
         } catch (error) {
-          if (!(error instanceof RuntimeClientError && error.status === 404)) throw error;
+          if (error instanceof RuntimeClientError && error.status === 404) {
+            await markAckExpired(db, execution.executionId);
+          }
+          // else: stays pending for the next scan; the model is never re-invoked.
         }
       }
-      await failExecution(db, {
-        executionId: execution.executionId,
-        token,
-        error: errorOf(
-          code,
-          code === "SAFE_INTERRUPTION"
-            ? "host restarted or terminal lost before commit"
-            : "execution still exists but its outcome is unknown after reload",
-        ),
-        kind,
-      });
-      notify(execution.roomId);
-    }
-
-    // Pending ACKs: resend against the same Host instance; converge to
-    // expired when the Host changed or the terminal is gone.
-    const pendingAcks = await db.modelExecutions
-      .filter(
-        (execution) =>
-          execution.ackState === "pending" &&
-          (execution.state === "committed" || execution.state === "discarded"),
-      )
-      .toArray();
-    for (const execution of pendingAcks) {
-      if (execution.hostInstanceId !== hostId || execution.finalEventSeq === null) {
-        await markAckExpired(db, execution.executionId);
-        continue;
-      }
-      const token = await tokenForRoom(execution.roomId);
-      if (!token) continue;
-      try {
-        const response = await client.ack(
-          execution.executionScopeId as string,
-          execution.executionId,
-          {
-            controllerId: token.controllerId,
-            leaseEpoch: token.leaseEpoch,
-            finalSeq: execution.finalEventSeq,
-            disposition: execution.state === "committed" ? "committed" : "discarded",
-          },
-        );
-        if (response.ackState === "acknowledged") {
-          await markAcknowledged(db, execution.executionId);
-        } else if (response.ackState === "expired") {
-          await markAckExpired(db, execution.executionId);
-        }
-      } catch (error) {
-        if (error instanceof RuntimeClientError && error.status === 404) {
-          await markAckExpired(db, execution.executionId);
-        }
-        // else: stays pending for the next scan; the model is never re-invoked.
-      }
+    } finally {
+      for (const handle of auditLocks.values()) handle.release();
     }
   }
 
