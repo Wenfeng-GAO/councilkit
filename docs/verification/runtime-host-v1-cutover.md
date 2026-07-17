@@ -1,24 +1,24 @@
 # Runtime Host V1 Cutover 验收记录
 
-日期：待填（执行验收时填写）
+日期：2026-07-18（Stage C 验收执行日；Stage A/U4/U5 记录均为 2026-07-17）
 计划：`docs/plans/2026-07-17-001-feat-runtime-host-dual-driver-v1-cutover-plan.md`（Stage gates、可机械判定的验收标准、真实环境 gate、§553 记录要求、§590 首次可用性验收）
-范围：Stage A–C 汇总 gate、自动 gate、真实冒烟矩阵、Stage C soak、首次可用性验收。Stage D（U7 删除 legacy 源码）完成后另起记录。
+范围：Stage A–C 汇总 gate、自动 gate、真实冒烟矩阵、Stage C soak、U7（Stage D）删除后 gate 复跑、首次可用性验收（人工项）。
 
-**结论：待填**
+**结论：自动 gate 与真实环境 gate 全部通过（真实冒烟矩阵见下）；首次可用性验收为人工执行项，本次未执行（checklist 已备）。**
 
 ## 环境
 
 | 项 | 值 |
 | --- | --- |
-| 验收日期 | 待填 |
+| 验收日期 | 2026-07-18 |
 | 机器 | macOS 15.6.1, arm64 (Apple Silicon) |
 | Node.js | v22.17.0 |
-| Chromium | 待填（`pnpm test:e2e` 实际使用版本） |
+| Chromium | Playwright 1.61.1 自带 Chromium（v1228） |
 | cld CLI | 2.1.211 (Claude Code wrapper) |
 | codex CLI | codex-cli 0.144.5 |
 | 受信 Installation | `cld-178240c6225e`（trusted，wrapper+claude-binary 双组件）、`codex-fdd3ce2d94ea`（trusted），每次 spawn 前 fingerprint 漂移检查 |
-| Driver capability | `claude-stream-json`：待填；`codex-app-server`：待填（checking/ready/auth_required/incompatible，以真实 handshake 为准） |
-| 候选版本 commit | 待填 |
+| Driver capability | `claude-stream-json`：ready；`codex-app-server`：ready（冒烟运行时实测，见矩阵行注） |
+| 候选版本 commit | `5e6e422`（U7 删除后 + e2e harness 修复；冒烟矩阵与 soak 均运行于该候选） |
 
 ## Stage gates
 

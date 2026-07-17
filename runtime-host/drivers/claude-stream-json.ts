@@ -22,7 +22,7 @@ import type {
  * (2026-07): control `initialize` handshakes without a model call and yields
  * the resolvedModel catalog; the canonical model is the catalog `default`,
  * unless the route declares its verified serving model (`servesModel`, e.g.
- * moonshot → Kimi-K2.5) — still closed-set against the catalog. `system/init`
+ * moonshot → Kimi-K3[1m]) — still closed-set against the catalog. `system/init`
  * (first turn) must show empty tools/MCP/skills/slash commands; user-message
  * replay confirms enqueue; `result.result` is the authoritative output;
  * usage/cost are cumulative and reported as per-turn diffs.
@@ -49,12 +49,15 @@ interface RouteDef {
 
 /**
  * Closed route set: model selection comes only from this explicit mapping.
- * moonshot's catalog default is claude-opus-4-8[1m], but the route verifiably
- * serves Kimi-K2.5 (confirmed the expected configuration, 2026-07-17).
+ * moonshot's catalog default is claude-opus-4-8[1m], but the route's serving
+ * model is provider-side and drifts: Kimi-K2.5 (verified 2026-07-17) was
+ * replaced by Kimi-K3[1m] (verified 2026-07-18 — the provider dropped
+ * Kimi-K2.5 from the handshake catalog; declaration updated per the plan's
+ * drift-remedy precedent).
  */
 const ROUTES: Record<ClaudeRoute, RouteDef> = {
   "ant-glm5.2": { argv: ["ant", "glm5.2"] },
-  moonshot: { argv: ["moonshot"], servesModel: "Kimi-K2.5" },
+  moonshot: { argv: ["moonshot"], servesModel: "Kimi-K3[1m]" },
   deepseek: { argv: ["deepseek"] },
 };
 
@@ -509,7 +512,12 @@ export function createClaudeStreamJsonDriver(
       if (serves && !resolved.includes(serves)) {
         throw Object.assign(
           new Error(`route serves ${serves} but the handshake catalog lacks it`),
-          { runtimeCode: "INCOMPATIBLE_DRIVER" },
+          {
+            runtimeCode: "INCOMPATIBLE_DRIVER",
+            // Diagnostics aid (provider-side drift): the set the route
+            // actually serves right now.
+            catalog: [...new Set(resolved)],
+          },
         );
       }
       if (serves && serves !== defaultModel) {

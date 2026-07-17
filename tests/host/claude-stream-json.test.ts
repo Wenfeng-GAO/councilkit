@@ -393,32 +393,32 @@ describe("claude-stream-json driver protocol", () => {
           credentialMode: "installation-managed",
           options: { route: "moonshot" },
         },
-        modelId: "Kimi-K2.5",
+        modelId: "Kimi-K3[1m]",
       },
       config: {
-        // The route serves Kimi-K2.5 while the catalog default is Opus —
-        // mirrors the live moonshot installation (2026-07-17).
-        initModel: "Kimi-K2.5",
+        // The route serves Kimi-K3[1m] while the catalog default is Opus —
+        // mirrors the live moonshot installation (drift-verified 2026-07-18).
+        initModel: "Kimi-K3[1m]",
         catalog: [
           { value: "default", resolvedModel: "claude-opus-4-8[1m]" },
           { value: "opus[1m]", resolvedModel: "claude-opus-4-8[1m]" },
-          { value: "Kimi-K2.5", resolvedModel: "Kimi-K2.5" },
+          { value: "Kimi-K3[1m]", resolvedModel: "Kimi-K3[1m]" },
         ],
       },
     });
     // Canonical is the route's declared serving model, not the catalog default.
-    expect(rig.prewarmResult.canonicalModelId).toBe("Kimi-K2.5");
+    expect(rig.prewarmResult.canonicalModelId).toBe("Kimi-K3[1m]");
     const run = executeCollecting(rig.driver, {
       executionId: "exec-1",
       prompt: "Hello.",
-      modelId: "Kimi-K2.5",
+      modelId: "Kimi-K3[1m]",
       coldStart: true,
     });
     await run.done;
     const terminal = terminalOf(run.events);
     expect(terminal.type).toBe("completed");
     if (terminal.type !== "completed") throw new Error("unreachable");
-    expect(terminal.effectiveModel).toBe("Kimi-K2.5");
+    expect(terminal.effectiveModel).toBe("Kimi-K3[1m]");
     expect(terminal.modelVerdict).toBe("match");
   });
 
@@ -433,7 +433,7 @@ describe("claude-stream-json driver protocol", () => {
             credentialMode: "installation-managed",
             options: { route: "moonshot" },
           },
-          modelId: "Kimi-K2.5",
+          modelId: "Kimi-K3[1m]",
         },
         config: {
           initModel: "claude-opus-4-8[1m]",

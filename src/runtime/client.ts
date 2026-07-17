@@ -2,6 +2,7 @@ import { CSRF_HEADER_NAME } from "@shared/runtime/contracts";
 import {
   type AckRequest,
   type AckResponse,
+  type ClaudeRoute,
   type CloseScopeResponse,
   type ControllerRequest,
   type CreateScopeRequest,
@@ -137,9 +138,15 @@ export class RuntimeClient {
   }
 
   /** Closed canonical model catalog of a Driver + trusted Installation
-   * (session-authenticated read; Settings is the only consumer). */
-  modelCatalog(driverId: string, installationId: string): Promise<ModelCatalogResponse> {
+   * (session-authenticated read; Settings is the only consumer). The claude
+   * catalog is route-specific — pass the profile's `route` there. */
+  modelCatalog(
+    driverId: string,
+    installationId: string,
+    options?: { route?: ClaudeRoute },
+  ): Promise<ModelCatalogResponse> {
     const params = new URLSearchParams({ driverId, installationId });
+    if (options?.route) params.set("route", options.route);
     return this.call("GET", `/api/v1/models/catalog?${params.toString()}`, {
       schema: modelCatalogResponseSchema,
       auth: "session",

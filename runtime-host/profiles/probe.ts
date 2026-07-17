@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DriverId } from "@shared/runtime/contracts";
 import type {
+  ClaudeRoute,
   ExecutionProfileDto,
   ModelCatalogResponse,
   ParticipantSpec,
@@ -38,11 +39,21 @@ export interface ProfileProbe {
   /**
    * Closed canonical model catalog of a trusted installation's driver. The
    * catalog is model-agnostic, so the probe prewarms with a placeholder
-   * modelId and returns `prewarm.catalog` verbatim. Throws `InstallationError`
-   * (unknown/changed/untrusted installation) or a driver handshake failure —
-   * the route maps those to HTTP errors; a catalog is never fabricated.
+   * modelId and returns `prewarm.catalog` verbatim. For claude-stream-json
+   * the catalog is route-specific — pass the profile's `route` (defaults to
+   * `ant-glm5.2`). A driver whose handshake validates the requested model
+   * (codex) rejects the placeholder with MODEL_UNAVAILABLE carrying the
+   * served catalog — the probe returns that catalog, which is exactly the
+   * data the choose-model repair path needs. Throws `InstallationError`
+   * (unknown/changed/untrusted installation) or an Error carrying
+   * `runtimeCode` for other handshake failures — the route maps those to
+   * HTTP errors; a catalog is never fabricated.
    */
-  catalog(driverId: DriverId, installationId: string): Promise<ModelCatalogResponse>;
+  catalog(
+    driverId: DriverId,
+    installationId: string,
+    route?: ClaudeRoute,
+  ): Promise<ModelCatalogResponse>;
 }
 
 const MAX_DETAIL = 256;
@@ -165,16 +176,17 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
   async function catalog(
     driverId: DriverId,
     installationId: string,
+    route?: ClaudeRoute,
   ): Promise<ModelCatalogResponse> {
-    // Catalog needs no real profile options; the schema-valid minimal DTO only
-    // carries the binding target (driver + trusted installation).
+    // Catalog needs no real profile options beyond the claude route; the
+    // schema-valid minimal DTO only carries the binding target.
     const profile: ExecutionProfileDto =
       driverId === "claude-stream-json"
         ? {
             driverId,
             installationId,
             credentialMode: "installation-managed",
-            options: { route: "ant-glm5.2" },
+            options: { route: route ?? "ant-glm5.2" },
           }
         : {
             driverId,
@@ -190,6 +202,18 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
         installation,
       });
       return { catalog: prewarm.catalog };
+    } catch (error) {
+      // A model-validating handshake (codex) rejects the placeholder but
+      // attaches the served catalog — that catalog IS the answer.
+      const served = (error as { catalog?: unknown }).catalog;
+      if (
+        (error as { runtimeCode?: string }).runtimeCode === "MODEL_UNAVAILABLE" &&
+        Array.isArray(served) &&
+        served.length > 0
+      ) {
+        return { catalog: served as string[] };
+      }
+      throw error;
     } finally {
       // Best effort: a probe must never leak a CLI process.
       await driver.close().catch(() => undefined);

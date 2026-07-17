@@ -113,6 +113,71 @@ function fakeRegistry(overrides: {
   };
 }
 
+const CLAUDE_DTO: InstallationDto = {
+  installationId: "claude-0123456789a",
+  driverId: "claude-stream-json",
+  state: "trusted",
+  executablePath: "/fake/cld",
+  fingerprint: "sha256:11",
+  components: [],
+  detail: null,
+};
+
+const CLAUDE_RECORD: InstallationRecord = {
+  installationId: CLAUDE_DTO.installationId,
+  driverId: "claude-stream-json",
+  name: "cld",
+  discoveredPath: "/fake/cld",
+  realpath: "/fake/cld",
+  fingerprint: "sha256:11",
+  state: "trusted",
+  components: [],
+  detail: null,
+};
+
+/** Driver whose prewarm rejects with the given (runtimeCode-carrying) error. */
+function createErroringDriver(participantId: string, error: Error): ParticipantDriver {
+  return {
+    participantId,
+    driverId: "codex-app-server",
+    sessionEpoch: 0,
+    prewarm: () => Promise.reject(error),
+    execute: () => Promise.reject(new Error("probe drivers never execute")),
+    cancel: () => Promise.reject(new Error("probe drivers never cancel")),
+    close: () => Promise.resolve(),
+    capabilityState: () => "ready",
+    contextWindowTokens: () => null,
+  };
+}
+
+interface ClaudeSpyDriver extends ParticipantDriver {
+  lastRoute: string | null;
+}
+
+function createClaudeDriver(participantId: string): ClaudeSpyDriver {
+  const spy: ClaudeSpyDriver = {
+    participantId,
+    driverId: "claude-stream-json",
+    sessionEpoch: 0,
+    lastRoute: null,
+    prewarm(input: PrewarmInput): Promise<PrewarmResult> {
+      spy.lastRoute = (input.spec.profile.options as { route?: string } | undefined)?.route ?? null;
+      return Promise.resolve({
+        canonicalModelId: "GLM-5.2[1m]",
+        modelAliases: [],
+        capability: { protocol: "fake" },
+        catalog: ["GLM-5.2[1m]"],
+      });
+    },
+    execute: () => Promise.reject(new Error("probe drivers never execute")),
+    cancel: () => Promise.reject(new Error("probe drivers never cancel")),
+    close: () => Promise.resolve(),
+    capabilityState: () => "ready",
+    contextWindowTokens: () => null,
+  };
+  return spy;
+}
+
 const nullLogger = {
   info: () => undefined,
   warn: () => undefined,
@@ -129,13 +194,16 @@ interface Rig {
   drivers: FakeDriver[];
 }
 
-async function createRig(registry: InstallationRegistry): Promise<Rig> {
+async function createRig(
+  registry: InstallationRegistry,
+  factories?: Record<string, (participantId: string) => ParticipantDriver>,
+): Promise<Rig> {
   const drivers: FakeDriver[] = [];
   // Same constructor main.ts uses: probe composed from installations + the
   // per-driver factories.
   const profileProbe = createProfileProbe({
     installations: registry,
-    driverFactories: {
+    driverFactories: factories ?? {
       "codex-app-server": (participantId: string) => {
         const driver = createFakeDriver(participantId);
         drivers.push(driver);
@@ -286,5 +354,89 @@ describe("GET /api/v1/models/catalog", () => {
     const envelope = (await res.json()) as { error: { code: string } };
     expect(envelope.error.code).toBe("UNAUTHENTICATED");
     expect(rig.drivers).toHaveLength(0);
+  });
+
+  it("a model-validating handshake rejects the placeholder but serves its catalog → 200 with it", async () => {
+    const served = ["gpt-5.6-sol", "gpt-5.6-sol-mini"];
+    const rig = await createRig(fakeRegistry({}), {
+      "codex-app-server": (participantId: string) =>
+        createErroringDriver(
+          participantId,
+          Object.assign(new Error("model __catalog__ not in codex catalog"), {
+            runtimeCode: "MODEL_UNAVAILABLE",
+            catalog: [...served],
+          }),
+        ),
+    });
+    host = rig.host;
+
+    const res = await getCatalog(
+      host,
+      `driverId=codex-app-server&installationId=${TRUSTED_DTO.installationId}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.data).toEqual({ catalog: served });
+  });
+
+  it("driver handshake failure without a catalog → mapped HTTP error (AUTH_REQUIRED → 403)", async () => {
+    const rig = await createRig(fakeRegistry({}), {
+      "codex-app-server": (participantId: string) =>
+        createErroringDriver(
+          participantId,
+          Object.assign(new Error("codex local login not available"), {
+            runtimeCode: "AUTH_REQUIRED",
+          }),
+        ),
+    });
+    host = rig.host;
+
+    const res = await getCatalog(
+      host,
+      `driverId=codex-app-server&installationId=${TRUSTED_DTO.installationId}`,
+    );
+    expect(res.status).toBe(403);
+    expect(res.errorCode).toBe("AUTH_REQUIRED");
+  });
+
+  it("claude catalog is route-specific: the query route reaches the prewarm spec", async () => {
+    const registry = fakeRegistry({
+      dtos: [CLAUDE_DTO],
+      assertExecutable: () => CLAUDE_RECORD,
+    });
+    const spyRef: { current: ClaudeSpyDriver | null } = { current: null };
+    const rig = await createRig(registry, {
+      "claude-stream-json": (participantId: string) => {
+        spyRef.current = createClaudeDriver(participantId);
+        return spyRef.current;
+      },
+    });
+    host = rig.host;
+
+    const res = await getCatalog(
+      host,
+      `driverId=claude-stream-json&installationId=${CLAUDE_DTO.installationId}&route=deepseek`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.data).toEqual({ catalog: ["GLM-5.2[1m]"] });
+    expect(spyRef.current?.lastRoute).toBe("deepseek");
+
+    const defaulted = await getCatalog(
+      host,
+      `driverId=claude-stream-json&installationId=${CLAUDE_DTO.installationId}`,
+    );
+    expect(defaulted.status).toBe(200);
+    expect(spyRef.current?.lastRoute).toBe("ant-glm5.2");
+  });
+
+  it("invalid route → 400 BAD_REQUEST", async () => {
+    const rig = await createRig(fakeRegistry({}));
+    host = rig.host;
+
+    const res = await getCatalog(
+      host,
+      `driverId=claude-stream-json&installationId=${CLAUDE_DTO.installationId}&route=nope`,
+    );
+    expect(res.status).toBe(400);
+    expect(res.errorCode).toBe("BAD_REQUEST");
   });
 });

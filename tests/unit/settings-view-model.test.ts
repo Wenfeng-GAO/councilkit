@@ -120,6 +120,14 @@ describe("settings view-model", () => {
       "model-catalog",
       "codex-app-server",
       "inst-1",
+      "",
+    ]);
+    expect(modelCatalogQueryKey("claude-stream-json", "inst-2", "moonshot")).toEqual([
+      "host",
+      "model-catalog",
+      "claude-stream-json",
+      "inst-2",
+      "moonshot",
     ]);
   });
 });

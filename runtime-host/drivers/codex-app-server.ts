@@ -506,6 +506,9 @@ export function createCodexAppServerDriver(
       if (!catalog.includes(modelId)) {
         throw Object.assign(new Error(`model ${modelId} not in codex catalog`), {
           runtimeCode: "MODEL_UNAVAILABLE",
+          // The handshake already paid for model/list: hand the served set to
+          // callers (catalog probe, choose-model repair) instead of losing it.
+          catalog: [...catalog],
         });
       }
       const selected = entries.find((m) => m.model === modelId);

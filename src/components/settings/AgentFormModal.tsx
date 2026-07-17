@@ -8,7 +8,7 @@ import type { ExecutionProfileRecord } from "@/models/execution-profile";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { isValidHexColor, modelCatalogQueryKey } from "./view-model";
+import { isValidHexColor, modelCatalogQueryKey, profileRouteOf } from "./view-model";
 
 /**
  * Agent create/edit form (U6). Agents are created HERE (Settings), not in New
@@ -70,12 +70,19 @@ export function AgentFormModal({
 
   const catalogQuery = useQuery({
     queryKey: chosenProfile
-      ? modelCatalogQueryKey(chosenProfile.driverId, chosenProfile.installationId)
+      ? modelCatalogQueryKey(
+          chosenProfile.driverId,
+          chosenProfile.installationId,
+          profileRouteOf(chosenProfile),
+        )
       : ["host", "model-catalog", "none"],
     queryFn: () =>
       client.modelCatalog(
         chosenProfile?.driverId as string,
         chosenProfile?.installationId as string,
+        {
+          route: chosenProfile ? profileRouteOf(chosenProfile) : undefined,
+        },
       ),
     enabled: open && hostOnline && !!chosenProfile,
     staleTime: 60_000,

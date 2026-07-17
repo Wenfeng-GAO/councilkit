@@ -1,3 +1,4 @@
+import type { ExecutionProfileRecord } from "@/models/execution-profile";
 import type { RepairAction, SettingsReadinessModel } from "@/runtime/readiness";
 import type {
   DriverCapabilityState,
@@ -5,6 +6,7 @@ import type {
   InstallationState,
   ProfileReadinessState,
 } from "@shared/runtime/contracts";
+import type { ClaudeRoute } from "@shared/runtime/schemas";
 
 /**
  * Pure Settings view-model helpers (U6): exact plan Readiness-table vocabulary
@@ -122,7 +124,15 @@ export function isValidHexColor(value: string): boolean {
 }
 
 /** Shared react-query key so the Agent form and the per-profile readiness
- * probes reuse one catalog cache entry for the same driver+installation. */
-export function modelCatalogQueryKey(driverId: string, installationId: string) {
-  return ["host", "model-catalog", driverId, installationId] as const;
+ * probes reuse one catalog cache entry for the same driver+installation+route
+ * (the claude catalog is route-specific). */
+export function modelCatalogQueryKey(driverId: string, installationId: string, route?: string) {
+  return ["host", "model-catalog", driverId, installationId, route ?? ""] as const;
+}
+
+/** The claude route of a stored Profile record (undefined for codex). */
+export function profileRouteOf(profile: ExecutionProfileRecord): ClaudeRoute | undefined {
+  return profile.driverId === "claude-stream-json"
+    ? (profile.options as { route?: ClaudeRoute }).route
+    : undefined;
 }

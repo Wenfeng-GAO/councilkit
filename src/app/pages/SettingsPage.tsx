@@ -4,7 +4,11 @@ import { HostSection } from "@/components/settings/HostSection";
 import { InstallationsSection } from "@/components/settings/InstallationsSection";
 import type { ProfileFormValues } from "@/components/settings/ProfileFormModal";
 import { ProfilesSection } from "@/components/settings/ProfilesSection";
-import { allSectionsReady, modelCatalogQueryKey } from "@/components/settings/view-model";
+import {
+  allSectionsReady,
+  modelCatalogQueryKey,
+  profileRouteOf,
+} from "@/components/settings/view-model";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { Modal } from "@/components/ui/Modal";
 import { runtimeDb } from "@/lib/runtime-db";
@@ -14,7 +18,7 @@ import { getAppRuntime } from "@/runtime/bootstrap";
 import { buildSettingsReadiness } from "@/runtime/readiness";
 import { runtimeKeys, useAgents, useExecutionProfiles } from "@/stores/runtime-queries";
 import { CREDENTIAL_MODE, type DriverId } from "@shared/runtime/contracts";
-import type { ProfileReadiness } from "@shared/runtime/schemas";
+import type { ClaudeRoute, ProfileReadiness } from "@shared/runtime/schemas";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -59,15 +63,17 @@ export function SettingsPage() {
   const agentsQuery = useAgents();
   const agents = useMemo(() => agentsQuery.data ?? [], [agentsQuery.data]);
 
-  // --- Closed model catalogs: one query per unique driver+installation ---
+  // --- Closed model catalogs: one query per unique driver+installation+route
+  // (the claude catalog is route-specific) ---
   const catalogPairs = useMemo(() => {
     const seen = new Set<string>();
-    const pairs: { driverId: DriverId; installationId: string }[] = [];
+    const pairs: { driverId: DriverId; installationId: string; route?: ClaudeRoute }[] = [];
     for (const profile of profiles) {
-      const key = `${profile.driverId}::${profile.installationId}`;
+      const route = profileRouteOf(profile);
+      const key = `${profile.driverId}::${profile.installationId}::${route ?? ""}`;
       if (!seen.has(key)) {
         seen.add(key);
-        pairs.push({ driverId: profile.driverId, installationId: profile.installationId });
+        pairs.push({ driverId: profile.driverId, installationId: profile.installationId, route });
       }
     }
     return pairs;
@@ -75,8 +81,8 @@ export function SettingsPage() {
 
   const catalogQueries = useQueries({
     queries: catalogPairs.map((pair) => ({
-      queryKey: modelCatalogQueryKey(pair.driverId, pair.installationId),
-      queryFn: () => client.modelCatalog(pair.driverId, pair.installationId),
+      queryKey: modelCatalogQueryKey(pair.driverId, pair.installationId, pair.route),
+      queryFn: () => client.modelCatalog(pair.driverId, pair.installationId, { route: pair.route }),
       enabled: hostOnline === true,
       staleTime: 60_000,
       retry: false,
@@ -86,7 +92,9 @@ export function SettingsPage() {
   const probeModelIdFor = (profile: ExecutionProfileRecord): string => {
     const index = catalogPairs.findIndex(
       (pair) =>
-        pair.driverId === profile.driverId && pair.installationId === profile.installationId,
+        pair.driverId === profile.driverId &&
+        pair.installationId === profile.installationId &&
+        pair.route === profileRouteOf(profile),
     );
     const firstCatalogEntry =
       index >= 0

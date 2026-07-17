@@ -132,7 +132,7 @@ type RouteId = (typeof ROUTE_IDS)[number];
  */
 const FALLBACK_MODEL_HINTS: Record<RouteId | "codex", string> = {
   "ant-glm5.2": "GLM-5.2[1m]",
-  moonshot: "Kimi-K2.5",
+  moonshot: "Kimi-K3[1m]",
   deepseek: "deepseek-v4-pro[1m]",
   codex: "gpt-5.6-sol",
 };
@@ -729,7 +729,11 @@ async function selectModel(
   let catalog: string[] = [];
   let catalogFailed = false;
   try {
-    catalog = (await client.modelCatalog(profile.driverId, profile.installationId)).catalog;
+    catalog = (
+      await client.modelCatalog(profile.driverId, profile.installationId, {
+        route: profile.driverId === "claude-stream-json" ? profile.options.route : undefined,
+      })
+    ).catalog;
   } catch (error) {
     catalogFailed = true;
     findings.push(
