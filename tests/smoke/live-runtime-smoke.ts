@@ -895,6 +895,9 @@ interface RowReport {
   soak: {
     roundsDone: number;
     elapsedMs: number;
+    /** needs_rebase rotations driven through the designed recovery path. */
+    rotations: number;
+    rotationDetails: string[];
     spawnStable: boolean;
     codexThreadStable: boolean;
     uniqueRoundOutputs: boolean;
@@ -938,6 +941,8 @@ function emptyRowReport(route: string, mode: "real" | "dry-run", soak: boolean):
       ? {
           roundsDone: 0,
           elapsedMs: 0,
+          rotations: 0,
+          rotationDetails: [],
           spawnStable: true,
           codexThreadStable: true,
           uniqueRoundOutputs: true,
@@ -1076,6 +1081,35 @@ async function runRow(
       const round = await withRoundTimeout(orchestrator.startRound(seed.roomId), roundsDone);
       if (!round || round.phase !== "completed") {
         const reason = round?.pauseReason;
+        // needs_rebase rotation (soak only): the reconciler's hard limits
+        // (session execution count / cumulative-input threshold) pause the
+        // round BY DESIGN. The designed recovery — abort the paused round,
+        // close the Scope, let ensureScope rebuild a cold one from the full
+        // snapshot — is itself part of what the soak proves: the discussion
+        // record survives Session loss and continues with unique outputs.
+        const rebaseRotation =
+          options.soak &&
+          round?.phase === "paused" &&
+          typeof reason?.detail === "string" &&
+          reason.detail.startsWith("session reconciliation:");
+        if (rebaseRotation && report.soak) {
+          report.soak.rotations += 1;
+          report.soak.rotationDetails.push(reason?.detail ?? "");
+          await orchestrator.abortPausedRound(seed.roomId);
+          const binding = await db.runtimeBindings
+            .where("roomId")
+            .equals(seed.roomId)
+            .filter((candidate) => candidate.state === "active")
+            .first();
+          if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
+            await client.closeScope(binding.executionScopeId, {
+              controllerId: binding.controllerId,
+              leaseEpoch: binding.leaseEpoch,
+            });
+          }
+          await options.onProgress();
+          continue;
+        }
         throw new Error(
           `round ${roundsDone} did not complete (phase=${round?.phase ?? "null"}${reason ? `, paused: ${reason.code}${reason.detail ? ` — ${reason.detail}` : ""}` : ""}). A requested/effective mismatch or unknown tool state pauses per product semantics; the row FAILS and is never papered over.`,
         );
@@ -1180,15 +1214,20 @@ async function runRow(
         report.soak.roundsDone = roundsDone;
         report.soak.elapsedMs = Date.now() - startedAt;
         if (roundsDone > 1) {
+          // Exactly one spawn per participant PER SCOPE: a designed
+          // needs_rebase rotation adds one new spawn per participant (the old
+          // driver closes with its scope); anything more is a leak.
+          const expectedSpawns = 1 + report.soak.rotations;
           const spawnStable =
-            rig.spawnCount(seed.claude.id) === 1 && rig.spawnCount(seed.codex.id) === 1;
+            rig.spawnCount(seed.claude.id) === expectedSpawns &&
+            rig.spawnCount(seed.codex.id) === expectedSpawns;
           const threadStable = codexRespawnCount(rig) === respawnsBefore;
           report.soak.spawnStable = report.soak.spawnStable && spawnStable;
           report.soak.codexThreadStable = report.soak.codexThreadStable && threadStable;
           if (!spawnStable) {
             throw new Error(
-              `soak: spawn count grew after round 1 (claude=${rig.spawnCount(seed.claude.id)}, ` +
-                `codex=${rig.spawnCount(seed.codex.id)})`,
+              `soak: spawn count grew beyond 1+rotations=${expectedSpawns} ` +
+                `(claude=${rig.spawnCount(seed.claude.id)}, codex=${rig.spawnCount(seed.codex.id)})`,
             );
           }
           if (!threadStable) throw new Error("soak: codex driver respawned (thread rebuilt)");
@@ -1197,7 +1236,7 @@ async function runRow(
       }
 
       const keepGoing = options.soak
-        ? roundsDone < SOAK_MIN_ROUNDS || Date.now() - startedAt < SOAK_MIN_MS
+        ? report.rounds.completed < SOAK_MIN_ROUNDS || Date.now() - startedAt < SOAK_MIN_MS
         : roundsDone < options.rounds;
       if (!keepGoing) break;
     }
@@ -1387,10 +1426,15 @@ function printHumanSummary(report: SmokeReport): void {
     );
     if (row.soak) {
       out.push(
-        `  soak: rounds=${row.soak.roundsDone} elapsed=${(row.soak.elapsedMs / 60000).toFixed(1)}min ` +
-          `spawnStable=${row.soak.spawnStable} codexThreadStable=${row.soak.codexThreadStable} ` +
+        `  soak: rounds=${row.soak.roundsDone} (completed=${row.rounds.completed}) ` +
+          `elapsed=${(row.soak.elapsedMs / 60000).toFixed(1)}min ` +
+          `rotations=${row.soak.rotations} spawnStable=${row.soak.spawnStable} ` +
+          `codexThreadStable=${row.soak.codexThreadStable} ` +
           `uniqueRoundOutputs=${row.soak.uniqueRoundOutputs}`,
       );
+      for (const detail of row.soak.rotationDetails) {
+        out.push(`  rotation: ${detail}`);
+      }
     }
     if (row.failure) out.push(`  failure: ${row.failure}`);
     for (const finding of row.findings) out.push(`  finding: ${finding}`);

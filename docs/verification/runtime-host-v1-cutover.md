@@ -60,13 +60,21 @@
 
 ## 真实冒烟矩阵
 
-命令：`pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all`（不得与 `pnpm test` 并发运行）。每行：对应 `cld` route + Codex 两个 Participant，完成两个连续 Round 与一次显式 Codex Summary。requested/effective model 任一不一致按产品语义暂停，不得人为标记通过（计划 §587）。
+命令：`TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all`（不得与 `pnpm test` 并发运行）。每行：对应 `cld` route + Codex 两个 Participant，完成两个连续 Round 与一次显式 Codex Summary。requested/effective model 任一不一致按产品语义暂停，不得人为标记通过（计划 §587）。
 
 | Route（+ Codex） | requested model | effective model | verdict | spawn 计数（cld / codex） | cold 首 delta (ms) | warm 首 delta (ms) | close 干净 | Codex approval 被拒绝 | cwd sentinel 不可写 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `cld ant glm5.2` + Codex | 待填 | 待填 | 待填 | 待填（期望各 1） | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
-| `cld moonshot` + Codex | 待填 | 待填 | 待填 | 待填（期望各 1） | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
-| `cld deepseek` + Codex | 待填 | 待填 | 待填 | 待填（期望各 1） | 待填 | 待填 | 待填 | 待填 | 待填 | 待填 |
+| `cld ant glm5.2` + Codex | `GLM-5.2[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 4318 / 2343 | 3964 / [2802, 1720, 1510] | ✅ | ✅（declined=0，never 策略） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary |
+| `cld moonshot` + Codex | `Kimi-K3[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 3061 / 6370 | 1801 / [4068, 1643, 1543] | ✅ | ✅（declined=0） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary（drift 修复后，见下） |
+| `cld deepseek` + Codex | `deepseek-v4-pro[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 2634 / 4915 | 2881 / [4027, 3260, 3067] | ✅ | ✅（declined=0） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary |
+
+补充事实：
+
+- **moonshot provider 漂移事件（计划风险表第一行的现实样本）**：2026-07-18 首轮矩阵中 moonshot 行失败——`Kimi-K2.5` 已不在 handshake catalog（route 实服务仅 `Kimi-K3[1m]`）。按预案流程处理：live 探测确认实际服务集合 → `ROUTES.moonshot.servesModel` 更新为 `Kimi-K3[1m]` → 该行重跑通过（上表）。暂停-定修-重跑全程按产品语义，无人为放行。
+- **catalog 探测链修复（同候选带入）**：codex catalog 探测曾因 placeholder modelId 被 model-validating 握手拒绝而 500；现已由 driver 将实服务 catalog 附于 MODEL_UNAVAILABLE 错误返回。claude catalog 全链路改为 route 感知（UI/冒烟的 moonshot、deepseek 目录此前错取 ant 目录）。
+- **窗口声明修复（同候选带入）**：claude driver 此前 `contextWindowTokens()=null` → reconciler 以 64k 默认窗口在 soak 第 4 轮误触发 needs_rebase 暂停；route 表现已声明 `[1m]` 窗口类（1M），soak 结果见下节。
+- warm 首 delta 样本全部 < 10s（计划 §695：每 route ≥4/5 warm turn ≤10s；实测 4/4）。
+- ACK 全程无 pending 泄漏（ackLeaks=0）；每 Participant spawn/init 各 1（长期复用成立）；scope close 后无驱动进程残留。
 
 剩余风险声明（计划 §588/§694）：Codex 路径使用 `read-only` sandbox、`never` approval 与专用 cwd；approval 被拒绝与 sentinel 不可写已逐行验证，但读取其他本地文件和网络能力仍可能受用户本机 Codex 配置影响，属已接受且文档化的剩余风险。
 

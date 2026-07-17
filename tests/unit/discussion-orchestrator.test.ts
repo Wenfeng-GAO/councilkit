@@ -1922,4 +1922,26 @@ describe("discussion orchestrator (U5)", () => {
     expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
   });
+
+  it("22. ensureScope rebuilds cold when the Host-side scope is closed (needs_rebase recovery)", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, client } = makeOrchestrator();
+    const first = await orchestrator.ensureScope(room.id, [p1, p2]);
+    expect(host.createScopeCalls).toHaveLength(1);
+    const firstScopeId = first.binding.executionScopeId as string;
+
+    // The Host closes the scope (e.g. a needs_rebase rotation or TTL sweep):
+    // the local binding still says active, but the scope must never be reused.
+    await client.closeScope(firstScopeId, first.token);
+    const rebuilt = await orchestrator.ensureScope(room.id, [p1, p2]);
+    expect(rebuilt.binding.id).not.toBe(first.binding.id);
+    expect(rebuilt.binding.state).toBe("active");
+    expect(rebuilt.binding.executionScopeId).not.toBe(firstScopeId);
+    expect(host.createScopeCalls).toHaveLength(2);
+    expect((await db.runtimeBindings.get(first.binding.id))?.state).toBe("closed");
+
+    // The rebuilt scope drives a full round from the full snapshot.
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+  });
 });

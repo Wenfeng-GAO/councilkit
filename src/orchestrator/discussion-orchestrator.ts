@@ -210,14 +210,20 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     const existing = await latestBinding(roomId);
     if (existing && existing.state === "active" && existing.executionScopeId) {
       try {
-        await client.getScopeStatus(existing.executionScopeId);
-        return {
-          binding: existing,
-          token: {
-            controllerId: existing.controllerId as string,
-            leaseEpoch: existing.leaseEpoch as number,
-          },
-        };
+        const status = await client.getScopeStatus(existing.executionScopeId);
+        if (status.state === "active") {
+          return {
+            binding: existing,
+            token: {
+              controllerId: existing.controllerId as string,
+              leaseEpoch: existing.leaseEpoch as number,
+            },
+          };
+        }
+        // The Host closed (or is closing) this Scope: converge locally and
+        // rebuild cold below — a closed Scope is never reused (this is the
+        // needs_rebase recovery path: new cold Scope from the full snapshot).
+        await markBindingClosed(db, existing.id);
       } catch (error) {
         if (error instanceof RuntimeClientError && error.status === 404) {
           await markBindingClosed(db, existing.id);
