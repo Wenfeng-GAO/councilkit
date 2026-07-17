@@ -898,6 +898,8 @@ interface RowReport {
     /** needs_rebase rotations driven through the designed recovery path. */
     rotations: number;
     rotationDetails: string[];
+    /** Provider-side transient pauses recovered like a user would (details). */
+    externalInterruptions: string[];
     spawnStable: boolean;
     codexThreadStable: boolean;
     uniqueRoundOutputs: boolean;
@@ -943,6 +945,7 @@ function emptyRowReport(route: string, mode: "real" | "dry-run", soak: boolean):
           elapsedMs: 0,
           rotations: 0,
           rotationDetails: [],
+          externalInterruptions: [],
           spawnStable: true,
           codexThreadStable: true,
           uniqueRoundOutputs: true,
@@ -1081,6 +1084,7 @@ async function runRow(
       const round = await withRoundTimeout(orchestrator.startRound(seed.roomId), roundsDone);
       if (!round || round.phase !== "completed") {
         const reason = round?.pauseReason;
+        const pauseDetail = typeof reason?.detail === "string" ? reason.detail : "";
         // needs_rebase rotation (soak only): the reconciler's hard limits
         // (session execution count / cumulative-input threshold) pause the
         // round BY DESIGN. The designed recovery — abort the paused round,
@@ -1090,22 +1094,42 @@ async function runRow(
         const rebaseRotation =
           options.soak &&
           round?.phase === "paused" &&
-          typeof reason?.detail === "string" &&
-          reason.detail.startsWith("session reconciliation:");
-        if (rebaseRotation && report.soak) {
-          report.soak.rotations += 1;
-          report.soak.rotationDetails.push(reason?.detail ?? "");
+          pauseDetail.startsWith("session reconciliation:");
+        // Provider-side transient (e.g. a codex server terminal error with
+        // willRetry unset): pausing an accepted dispatch is the CORRECT
+        // product behavior. Recover exactly like a user would — abort the
+        // paused round and continue on the SAME warm scope (the Session is
+        // healthy) — recorded as an external interruption, never counted as
+        // an invariant violation.
+        const externalTransient =
+          options.soak &&
+          round?.phase === "paused" &&
+          pauseDetail === "server reported a terminal error";
+        if ((rebaseRotation || externalTransient) && report.soak) {
+          if (rebaseRotation) {
+            report.soak.rotations += 1;
+            report.soak.rotationDetails.push(pauseDetail);
+          } else {
+            report.soak.externalInterruptions.push(pauseDetail);
+            if (report.soak.externalInterruptions.length > 3) {
+              throw new Error(
+                `soak: ${report.soak.externalInterruptions.length} provider-side transient pauses — marking the row externally blocked instead of looping recoveries (rerun in a stable window per plan §683)`,
+              );
+            }
+          }
           await orchestrator.abortPausedRound(seed.roomId);
-          const binding = await db.runtimeBindings
-            .where("roomId")
-            .equals(seed.roomId)
-            .filter((candidate) => candidate.state === "active")
-            .first();
-          if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
-            await client.closeScope(binding.executionScopeId, {
-              controllerId: binding.controllerId,
-              leaseEpoch: binding.leaseEpoch,
-            });
+          if (rebaseRotation) {
+            const binding = await db.runtimeBindings
+              .where("roomId")
+              .equals(seed.roomId)
+              .filter((candidate) => candidate.state === "active")
+              .first();
+            if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
+              await client.closeScope(binding.executionScopeId, {
+                controllerId: binding.controllerId,
+                leaseEpoch: binding.leaseEpoch,
+              });
+            }
           }
           await options.onProgress();
           continue;
@@ -1428,12 +1452,16 @@ function printHumanSummary(report: SmokeReport): void {
       out.push(
         `  soak: rounds=${row.soak.roundsDone} (completed=${row.rounds.completed}) ` +
           `elapsed=${(row.soak.elapsedMs / 60000).toFixed(1)}min ` +
-          `rotations=${row.soak.rotations} spawnStable=${row.soak.spawnStable} ` +
+          `rotations=${row.soak.rotations} externalInterruptions=${row.soak.externalInterruptions.length} ` +
+          `spawnStable=${row.soak.spawnStable} ` +
           `codexThreadStable=${row.soak.codexThreadStable} ` +
           `uniqueRoundOutputs=${row.soak.uniqueRoundOutputs}`,
       );
       for (const detail of row.soak.rotationDetails) {
         out.push(`  rotation: ${detail}`);
+      }
+      for (const detail of row.soak.externalInterruptions) {
+        out.push(`  externalInterruption: ${detail}`);
       }
     }
     if (row.failure) out.push(`  failure: ${row.failure}`);

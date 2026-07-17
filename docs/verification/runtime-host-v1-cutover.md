@@ -18,7 +18,7 @@
 | codex CLI | codex-cli 0.144.5 |
 | 受信 Installation | `cld-178240c6225e`（trusted，wrapper+claude-binary 双组件）、`codex-fdd3ce2d94ea`（trusted），每次 spawn 前 fingerprint 漂移检查 |
 | Driver capability | `claude-stream-json`：ready；`codex-app-server`：ready（冒烟运行时实测，见矩阵行注） |
-| 候选版本 commit | `c93e21f`（U7 删除后 + catalog 修复链 + moonshot 声明更新；冒烟矩阵与 soak 均运行于该候选） |
+| 候选版本 commit | `f4ae766`（U7 删除后 + catalog 修复链 + moonshot 声明 + 窗口声明 + 冷重建/轮转链路；最终矩阵与 soak 均运行于该候选） |
 
 ## Stage gates
 
@@ -73,6 +73,7 @@
 - **moonshot provider 漂移事件（计划风险表第一行的现实样本）**：2026-07-18 首轮矩阵中 moonshot 行失败——`Kimi-K2.5` 已不在 handshake catalog（route 实服务仅 `Kimi-K3[1m]`）。按预案流程处理：live 探测确认实际服务集合 → `ROUTES.moonshot.servesModel` 更新为 `Kimi-K3[1m]` → 该行重跑通过（上表）。暂停-定修-重跑全程按产品语义，无人为放行。
 - **catalog 探测链修复（同候选带入）**：codex catalog 探测曾因 placeholder modelId 被 model-validating 握手拒绝而 500；现已由 driver 将实服务 catalog 附于 MODEL_UNAVAILABLE 错误返回。claude catalog 全链路改为 route 感知（UI/冒烟的 moonshot、deepseek 目录此前错取 ant 目录）。
 - **窗口声明修复（同候选带入）**：claude driver 此前 `contextWindowTokens()=null` → reconciler 以 64k 默认窗口在 soak 第 4 轮误触发 needs_rebase 暂停；route 表现已声明 `[1m]` 窗口类（1M），soak 结果见下节。
+- **soak 的 needs_rebase 轮转（同候选带入）**：实测 codex 每 turn input 恒 ~20k（系统契约 + 线程重处理），50% × 258400 = 129.2k 的累计上限按计划在第 ~7 turn（第 3–4 轮）必然触发——这是硬上限履职，不是泄漏。同候选修复：`ensureScope` 存活检查此前接受 Host 200 "closed"（needs_rebase 恢复路径实际不可用，已修并加单测）；soak 现按设计驱动轮转（abort paused → closeScope → 冷 scope 全量快照续跑）并记录轮转次数/详情。
 - warm 首 delta 样本全部 < 10s（计划 §695：每 route ≥4/5 warm turn ≤10s；实测 4/4）。
 - ACK 全程无 pending 泄漏（ackLeaks=0）；每 Participant spawn/init 各 1（长期复用成立）；scope close 后无驱动进程残留。
 
