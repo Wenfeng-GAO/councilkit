@@ -387,6 +387,14 @@ function dropOpenEventStreams(): number {
   return targets.length;
 }
 
+// The REAL Host quota `scopeCreatesPerMinute = 10` is load-bearing in
+// production, but the full E2E suite shares ONE host and creates a scope per
+// room — 17 specs in ~90s would 429 the tail specs. The scope manager's
+// `now` is the official test injection point: reset moves the clock FORWARD
+// so every previously recorded create timestamp falls out of the 60s rate
+// window (now() is used only by that window).
+let quotaWindowOffsetMs = 0;
+
 function resetAll(
   scopeManager: { closeAll(reason: string): Promise<void> },
   executions: { reset(): void },
@@ -401,6 +409,7 @@ function resetAll(
     }
     rigs.clear();
     for (const id of Object.keys(FAKE_INSTALLATIONS)) installationStates.set(id, "trusted");
+    quotaWindowOffsetMs += 61_000;
     return { reset: true };
   };
 }
@@ -540,6 +549,7 @@ async function main(): Promise<void> {
     driverFactories,
     logger,
     hostInstanceId,
+    now: () => Date.now() + quotaWindowOffsetMs,
   });
   const profileProbe = createProfileProbe({
     installations: fakeInstallationRegistry,

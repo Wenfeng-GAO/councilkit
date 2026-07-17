@@ -260,6 +260,7 @@ test.describe("security gates", () => {
       page,
       dialog.getByRole("textbox", { name: "名称", exact: true }),
       "Alpha Profile 甲",
+      { expectEmptyFirst: true },
     );
     const installSelect = dialog.getByRole("combobox", {
       name: "Runtime Installation",
@@ -281,6 +282,7 @@ test.describe("security gates", () => {
       page,
       dialog.getByRole("textbox", { name: "名称", exact: true }),
       "Beta Profile 乙",
+      { expectEmptyFirst: true },
     );
     await keyboardSelect(
       page,
@@ -303,11 +305,13 @@ test.describe("security gates", () => {
       page,
       dialog.getByRole("textbox", { name: "名称", exact: true }),
       "Alpha蓝方",
+      { expectEmptyFirst: true },
     );
     await keyboardTypeInto(
       page,
       dialog.getByRole("textbox", { name: "人格设定（personaPrompt）", exact: true }),
       "键盘 persona 蓝方",
+      { expectEmptyFirst: true },
     );
     await keyboardSelect(
       page,
@@ -335,11 +339,13 @@ test.describe("security gates", () => {
       page,
       dialog.getByRole("textbox", { name: "名称", exact: true }),
       "Beta红方",
+      { expectEmptyFirst: true },
     );
     await keyboardTypeInto(
       page,
       dialog.getByRole("textbox", { name: "人格设定（personaPrompt）", exact: true }),
       "键盘 persona 红方",
+      { expectEmptyFirst: true },
     );
     await keyboardSelect(
       page,
@@ -371,6 +377,7 @@ test.describe("security gates", () => {
       page,
       page.getByRole("textbox", { name: "话题", exact: true }),
       "键盘可达性话题",
+      { expectEmptyFirst: true },
     );
     await expect(topicAlert).toBeHidden();
 

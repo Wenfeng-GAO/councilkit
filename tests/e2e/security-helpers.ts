@@ -406,7 +406,18 @@ export async function tabToFocus(page: Page, locator: Locator, maxTabs = 120): P
 }
 
 /** Type text via the keyboard into `locator` (Tab-focus first, then verify). */
-export async function keyboardTypeInto(page: Page, locator: Locator, text: string): Promise<void> {
+export async function keyboardTypeInto(
+  page: Page,
+  locator: Locator,
+  text: string,
+  options?: { expectEmptyFirst?: boolean },
+): Promise<void> {
+  if (options?.expectEmptyFirst) {
+    // Form dialogs reset their fields in an effect on open; under full-suite
+    // load the reset can land after the first keystroke — wait for it
+    // deterministically instead of typing into the stale value.
+    await expect(locator).toHaveValue("");
+  }
   await tabToFocus(page, locator);
   // insertText drives the input pipeline (IME-style) so CJK copy works; it is
   // still a keyboard-level action — no mouse, no DOM value assignment.
