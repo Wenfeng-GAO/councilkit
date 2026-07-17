@@ -1,0 +1,219 @@
+{
+  "tool": "live-runtime-smoke",
+  "generatedAt": "2026-07-17T19:57:11.534Z",
+  "mode": "real",
+  "soak": false,
+  "roundsRequested": 2,
+  "node": "v22.17.0",
+  "partial": false,
+  "ok": true,
+  "rows": [
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 2,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 3441,
+        "codex": 5014
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          2063
+        ],
+        "codex": [
+          1759,
+          1779,
+          1349
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "soak": null,
+      "findings": [],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    },
+    {
+      "route": "moonshot",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "Kimi-K3[1m]",
+          "effective": [
+            "Kimi-K3[1m]",
+            "Kimi-K3[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 2,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 2033,
+        "codex": 4347
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          1852
+        ],
+        "codex": [
+          1698,
+          2129,
+          1478
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "soak": null,
+      "findings": [],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    },
+    {
+      "route": "deepseek",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "deepseek-v4-pro[1m]",
+          "effective": [
+            "deepseek-v4-pro[1m]",
+            "deepseek-v4-pro[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 2,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 3236,
+        "codex": 4180
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          4023
+        ],
+        "codex": [
+          1436,
+          3948,
+          2120
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "soak": null,
+      "findings": [],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    }
+  ]
+}

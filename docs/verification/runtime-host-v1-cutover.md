@@ -18,7 +18,7 @@
 | codex CLI | codex-cli 0.144.5 |
 | 受信 Installation | `cld-178240c6225e`（trusted，wrapper+claude-binary 双组件）、`codex-fdd3ce2d94ea`（trusted），每次 spawn 前 fingerprint 漂移检查 |
 | Driver capability | `claude-stream-json`：ready；`codex-app-server`：ready（冒烟运行时实测，见矩阵行注） |
-| 候选版本 commit | `f4ae766`（U7 删除后 + catalog 修复链 + moonshot 声明 + 窗口声明 + 冷重建/轮转链路；最终矩阵与 soak 均运行于该候选） |
+| 候选版本 commit | 产品候选 `73a4b22`（最终矩阵与 soak 均运行于该候选的产品代码；其后仅本文档与机器报告入库） |
 
 ## Stage gates
 
@@ -39,7 +39,7 @@
 | --- | --- | --- | --- | --- |
 | typecheck（三程序） | `pnpm typecheck` | tsc（app）+ tsconfig.host.json + tsconfig.integration.json 全绿 | 三程序全绿 | ✅ |
 | lint（Biome） | `pnpm lint` | 全绿 | 全绿（131 文件） | ✅ |
-| Vitest 全量 | `pnpm test` | 全部通过 | **320/320**（U7 删除后基线；删除前 399，差值 83 恰为被删 legacy 测试） | ✅ |
+| Vitest 全量 | `pnpm test` | 全部通过 | **321/321**（U7 删除后基线 316；删除前 399，差值 83 恰为被删 legacy 测试；其后修复链增补 5） | ✅ |
 | Chromium E2E | `pnpm test:e2e` | 全部场景通过（设置→Agent→Room→双 Round→刷新保留；重连无重复；mismatch/toolState 暂停；双页 fencing；取消/终止；注入渲染安全；无 legacy DB/API Key 读取；无供应商浏览器请求） | **17/17**（runtime-host 7 + control 4 + security 5 + modal-focus 1，全套 37.8s） | ✅ |
 | 性能：execute→首个规范化输出事件 | `pnpm vitest run tests/integration/runtime-perf.test.ts` | 100 次样本 p95 < 50 ms | p50≈1.0ms，**p95≈2.4–2.6ms**，max≈8.0ms | ✅ |
 | 性能：事件连接重连 | 同上 | 断开到首个 replay 事件 < 1 s | p50≈0.35ms，**p95≈0.65ms**（10 样本） | ✅ |
@@ -64,9 +64,9 @@
 
 | Route（+ Codex） | requested model | effective model | verdict | spawn 计数（cld / codex） | cold 首 delta (ms) | warm 首 delta (ms) | close 干净 | Codex approval 被拒绝 | cwd sentinel 不可写 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `cld ant glm5.2` + Codex | `GLM-5.2[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 4318 / 2343 | 3964 / [2802, 1720, 1510] | ✅ | ✅（declined=0，never 策略） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary |
-| `cld moonshot` + Codex | `Kimi-K3[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 3061 / 6370 | 1801 / [4068, 1643, 1543] | ✅ | ✅（declined=0） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary（drift 修复后，见下） |
-| `cld deepseek` + Codex | `deepseek-v4-pro[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 2634 / 4915 | 2881 / [4027, 3260, 3067] | ✅ | ✅（declined=0） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary |
+| `cld ant glm5.2` + Codex | `GLM-5.2[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 3441 / 5014 | 2063 / [1759, 1779, 1349] | ✅ | ✅（declined=0，never 策略） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary |
+| `cld moonshot` + Codex | `Kimi-K3[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 2033 / 4347 | 1852 / [1698, 2129, 1478] | ✅ | ✅（declined=0） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary（drift 修复后，见下） |
+| `cld deepseek` + Codex | `deepseek-v4-pro[1m]` / `gpt-5.6-sol` | 同 requested ×2 / ×4 | match 全轮 | 1 / 1（probe 4） | 3236 / 4180 | 4023 / [1436, 3948, 2120] | ✅ | ✅（declined=0） | ✅（fileChange=0） | ✅ 2/2 Round + Codex Summary |
 
 补充事实：
 
@@ -83,7 +83,9 @@
 
 | 场景 | 要求 | 实测 | 状态 |
 | --- | --- | --- | --- |
-| GLM 5.2 + Codex 代表性 Room | 10 个连续 Round 或持续 ≥15 分钟（以较晚者为准）：进程/init 不增长、Codex thread 不重建、内存/事件缓存不越硬上限、无 ACK pending 泄漏、每轮 Message/Summary 唯一 | 待填（Round 数 / 时长 / 各不变量） | 待填 |
+| GLM 5.2 + Codex 代表性 Room | 10 个连续 Round 或持续 ≥15 分钟（以较晚者为准）：进程/init 不增长、Codex thread 不重建、内存/事件缓存不越硬上限、无 ACK pending 泄漏、每轮 Message/Summary 唯一 | **103 轮尝试 / 72 轮完成 / 15.1 min**；31 次 needs_rebase 轮转（全部 `context_window_threshold`，50%×258400 按计划履职）均经设计路径恢复（abort paused → closeScope → 冷 scope 全量快照续跑），0 次 provider 外部瞬时；spawn 恰为 1+轮转数/participant、codex driver 零 respawn、每轮 Message/Summary 锚点唯一、ackLeaks=0、closeClean | ✅ |
+
+关键结论：soak 同时证明了两件事——(1) 硬上限按设计触发且不越界（31 次 `context_window_threshold` 暂停，全部结构化为 needs_rebase 语义）；(2) **讨论记录跨 31 次 Session 轮转完整无损**：每次轮转后从 Dexie 全量快照冷启动新 Session，72 轮正文/摘要全程唯一、无 ACK 泄漏、无进程/thread 失控增长。机器报告：`docs/verification/2026-07-18-smoke-matrix.json`、`docs/verification/2026-07-18-smoke-soak.json`（含每轮 requested/effective 与延迟样本；无 prompt/token/正文）。
 
 ## 结果模板（每条真实路径 / 每次验收运行）
 
