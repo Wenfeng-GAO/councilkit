@@ -66,7 +66,7 @@ export class RuntimeClient {
   private readonly fetchFn: typeof fetch;
 
   constructor(private readonly config: RuntimeClientConfig) {
-    this.fetchFn = config.fetchFn ?? fetch;
+    this.fetchFn = config.fetchFn ?? ((input, init) => fetch(input, init));
   }
 
   private url(path: string): string {

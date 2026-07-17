@@ -1,10 +1,16 @@
 import { runtimeDb } from "@/lib/runtime-db";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 /**
  * Read-side query hooks over the runtime Dexie DB (U5). Committed page state
  * comes exclusively from Dexie — these hooks never trigger execution; the
  * Orchestrator drives all mutations and bumps the invalidation tick.
+ *
+ * Every tick-keyed hook uses keepPreviousData: a tick bump changes the query
+ * key, and without a placeholder the data would transiently go undefined —
+ * unmounting round sections mid-render and, worse, flipping RoomPage's
+ * roomExists guard so its Web-Lock effect releases/re-takes control in the
+ * middle of an in-flight Round (STALE_CONTROLLER).
  */
 
 export const runtimeKeys = {
@@ -25,6 +31,7 @@ export const runtimeKeys = {
 
 export function useRuntimeRooms(tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: [...runtimeKeys.rooms, tick],
     queryFn: () => runtimeDb.rooms.orderBy("lastActiveAt").reverse().toArray(),
   });
@@ -32,6 +39,7 @@ export function useRuntimeRooms(tick = 0) {
 
 export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: roomId ? [...runtimeKeys.room(roomId), tick] : ["rt", "room", "none"],
     enabled: !!roomId,
     queryFn: () => runtimeDb.rooms.get(roomId as string),
@@ -40,6 +48,7 @@ export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
 
 export function useRuntimeRounds(roomId: string | undefined, tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: roomId ? [...runtimeKeys.rounds(roomId), tick] : ["rt", "rounds", "none"],
     enabled: !!roomId,
     queryFn: async () => {
@@ -54,6 +63,7 @@ export function useRuntimeRounds(roomId: string | undefined, tick = 0) {
 
 export function useRoundMessages(roundId: string | undefined, tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: roundId ? [...runtimeKeys.messages(roundId), tick] : ["rt", "messages", "none"],
     enabled: !!roundId,
     queryFn: async () => {
@@ -68,6 +78,7 @@ export function useRoundMessages(roundId: string | undefined, tick = 0) {
 
 export function useRoundSummary(roundId: string | undefined, tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: roundId ? [...runtimeKeys.summary(roundId), tick] : ["rt", "summary", "none"],
     enabled: !!roundId,
     queryFn: () =>
@@ -80,6 +91,7 @@ export function useRoundSummary(roundId: string | undefined, tick = 0) {
 
 export function useParticipants(roomId: string | undefined, tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: roomId ? [...runtimeKeys.participants(roomId), tick] : ["rt", "participants", "none"],
     enabled: !!roomId,
     queryFn: async () => {
@@ -94,6 +106,7 @@ export function useParticipants(roomId: string | undefined, tick = 0) {
 
 export function useRoundExecutions(roundId: string | undefined, tick = 0) {
   return useQuery({
+    placeholderData: keepPreviousData,
     queryKey: roundId ? [...runtimeKeys.executions(roundId), tick] : ["rt", "executions", "none"],
     enabled: !!roundId,
     queryFn: () =>

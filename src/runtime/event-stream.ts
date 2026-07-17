@@ -41,7 +41,7 @@ class EventStreamError extends Error {
  * the terminal event, or the last seq when the connection closes first.
  */
 export async function followExecutionEvents(options: FollowEventsOptions): Promise<FollowOutcome> {
-  const fetchFn = options.fetchFn ?? fetch;
+  const fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
   const response = await fetchFn(options.fetchInput.url, {
     headers: options.fetchInput.headers,
     signal: options.signal ?? null,

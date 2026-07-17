@@ -95,6 +95,12 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   const ids = deps.ids ?? { uuid: () => crypto.randomUUID() };
   const display = deps.display ?? {};
   let cachedHostInstanceId: string | null = null;
+  /** Web Locks this orchestrator instance currently holds, keyed by roomId.
+   * Makes controlRoom re-entrant: a page already holding the room lock must
+   * never queue behind itself — the first-ever startRound (no binding yet)
+   * would otherwise deadlock against the page's own lock and flip the page
+   * to observing. */
+  const heldLocks = new Map<string, LockHandle>();
 
   async function hostInstanceId(): Promise<string> {
     if (!cachedHostInstanceId) {
@@ -115,6 +121,11 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
    * fresh, higher leaseEpoch. While waiting the page is an observer; the
    * lock dropping later flips it to controller automatically. */
   async function controlRoom(roomId: string, signal?: AbortSignal): Promise<LockHandle | null> {
+    const held = heldLocks.get(roomId);
+    if (held) {
+      display.onControlState?.(roomId, "controlling");
+      return held;
+    }
     display.onControlState?.(roomId, "acquiring");
     let handle: LockHandle | null = null;
     if (deps.locks) {
@@ -133,6 +144,14 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       display.onControlState?.(roomId, "observing");
       return null;
     }
+    const rawHandle: LockHandle = handle;
+    const tracked: LockHandle = {
+      release: () => {
+        heldLocks.delete(roomId);
+        rawHandle.release();
+      },
+    };
+    heldLocks.set(roomId, tracked);
     const binding = await latestBinding(roomId);
     if (binding && binding.state === "active" && binding.executionScopeId) {
       try {
@@ -157,7 +176,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       }
     }
     display.onControlState?.(roomId, "controlling");
-    return handle;
+    return tracked;
   }
 
   async function currentToken(roomId: string): Promise<ControllerToken> {
@@ -423,8 +442,16 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     // Ensure controller before any mutation (CAS in transactions re-checks).
     let token = await tokenForRoom(roomId);
     if (!token) {
-      await controlRoom(roomId);
-      token = await currentToken(roomId);
+      const handle = await controlRoom(roomId);
+      if (!handle) {
+        // Observing page: surfaces "no active controller" like currentToken.
+        token = await currentToken(roomId);
+      } else {
+        // A fresh Room has no runtime binding yet: create + activate the
+        // Scope now so the Round's mutations have a controller token (the
+        // ensureScope below then returns the same binding unchanged).
+        token = (await ensureScope(roomId, participants)).token;
+      }
     }
 
     const round = await createRound(db, {

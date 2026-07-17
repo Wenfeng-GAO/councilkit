@@ -21,7 +21,10 @@
     }
   },
   "include": ["runtime-host", "shared", "tests/host", "tests/integration", "tests/fixtures", "tests/smoke"],
-  // discussion-runtime.test.ts spans src (@/) + host (@host); it is
-  // typechecked by tsconfig.integration.json instead.
-  "exclude": ["tests/integration/discussion-runtime.test.ts"]
+  // discussion-runtime.test.ts and live-runtime-smoke.ts span src (@/) + host
+  // (@host); they are typechecked by tsconfig.integration.json instead.
+  "exclude": [
+    "tests/integration/discussion-runtime.test.ts",
+    "tests/smoke/live-runtime-smoke.ts"
+  ]
 }

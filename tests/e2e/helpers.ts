@@ -1,0 +1,343 @@
+/**
+ * Playwright E2E helpers (U6): browser-visible flows only — page.goto, form
+ * fills and clicks against the Chinese UI copy. IndexedDB reads via
+ * page.evaluate are ASSERTION-ONLY; no helper ever writes the DB directly.
+ * Host driver state is scripted exclusively through the E2E Host's test-only
+ * /api/v1/__test__ control namespace (see tests/e2e/host-entry.mts).
+ */
+import { type Browser, type BrowserContext, type Locator, type Page, expect } from "@playwright/test";
+
+// ---------------------------------------------------------------------------
+// Test-only Host control API (session cookie rides with the page context)
+// ---------------------------------------------------------------------------
+
+export interface DriverBehaviorInput {
+  catalog?: string[];
+  aliases?: string[];
+  reply?: string;
+  effectiveModel?: string | null;
+  modelVerdict?: "match" | "mismatch" | "unknown";
+  toolState?: "none" | "active" | "completed" | "unknown";
+  prewarmFails?: boolean;
+  failWith?: {
+    error: { code: string; message: string };
+    retryable: boolean;
+    dispatchState: "not_dispatched" | "accepted" | "unknown";
+  };
+  hangUntilCancel?: boolean;
+  pauseAfterEvents?: number;
+}
+
+export interface DriverCounters {
+  prewarmCount: number;
+  executeCount: number;
+  closeCount: number;
+  cancelCount: number;
+}
+
+const TEST_API = "/api/v1/__test__";
+
+async function controlPost<T>(page: Page, path: string, data?: unknown): Promise<T> {
+  const response = await page.request.post(`${TEST_API}${path}`, data === undefined ? {} : { data });
+  expect(response.ok(), `POST ${path} failed with ${response.status()}`).toBeTruthy();
+  const envelope = (await response.json()) as { ok: boolean; data: T };
+  expect(envelope.ok, `POST ${path} returned an error envelope`).toBeTruthy();
+  return envelope.data;
+}
+
+/** Close all scopes, clear executions, restore driver/installation defaults. */
+export async function resetDriverState(page: Page): Promise<void> {
+  await controlPost(page, "/reset");
+}
+
+/** Merge behavior overrides for one Participant's driver (read lazily per
+ * driver call, so setting it any time before the round starts is enough). */
+export async function setDriverBehavior(
+  page: Page,
+  participantId: string,
+  behavior: DriverBehaviorInput,
+): Promise<void> {
+  await controlPost(page, "/driver", { participantId, behavior });
+}
+
+/** Per-participant driver counters keyed by participantId. */
+export async function driverCounters(page: Page): Promise<Record<string, DriverCounters>> {
+  const response = await page.request.get(`${TEST_API}/counters`);
+  expect(response.ok(), "GET /counters failed").toBeTruthy();
+  const envelope = (await response.json()) as {
+    ok: boolean;
+    data: { counters: Record<string, DriverCounters> };
+  };
+  return envelope.data.counters;
+}
+
+/** Cleanly end all open SSE event streams; the app reconnects via afterSeq. */
+export async function dropEventStreams(page: Page): Promise<number> {
+  const { dropped } = await controlPost<{ dropped: number }>(page, "/drop-events");
+  return dropped;
+}
+
+/** Release all held fake drivers (pauseAfterEvents holds). */
+export async function resumeDrivers(page: Page): Promise<void> {
+  await controlPost(page, "/resume");
+}
+
+/** Flip a fake installation's trust state (e.g. "changed" after an upgrade). */
+export async function setInstallationState(
+  page: Page,
+  installationId: string,
+  state: "discovering" | "discovered" | "trusted" | "changed" | "not_found" | "invalid",
+): Promise<void> {
+  await controlPost(page, "/installation", { installationId, state });
+}
+
+// ---------------------------------------------------------------------------
+// Browser context factory: clean storage (fresh IndexedDB) per test
+// ---------------------------------------------------------------------------
+
+export async function freshPage(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  return { context, page };
+}
+
+// ---------------------------------------------------------------------------
+// Settings UI flows
+// ---------------------------------------------------------------------------
+
+export interface CreateProfileInput {
+  name: string;
+  driverId: "claude-stream-json" | "codex-app-server";
+  /** installationId value, e.g. "claude-e2e-fake01". */
+  installationId: string;
+  /** claude-stream-json route; defaults to the form's ant-glm5.2. */
+  route?: "ant-glm5.2" | "moonshot" | "deepseek";
+}
+
+export async function createProfile(page: Page, input: CreateProfileInput): Promise<void> {
+  await page.getByRole("button", { name: "+ 新建 Profile" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox", { name: "名称", exact: true }).fill(input.name);
+  if (input.driverId !== "claude-stream-json") {
+    await dialog
+      .getByRole("combobox", { name: "Runtime Driver（内置闭集）", exact: true })
+      .selectOption(input.driverId);
+  }
+  // The Installation select renders only once trusted installations loaded.
+  await dialog
+    .getByRole("combobox", { name: "Runtime Installation", exact: true })
+    .selectOption(input.installationId);
+  if (input.route) {
+    await dialog
+      .getByRole("combobox", { name: "Route（claude-stream-json 选项）", exact: true })
+      .selectOption(input.route);
+  }
+  await dialog.getByRole("button", { name: "创建 Profile" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText(input.name, { exact: true })).toBeVisible();
+}
+
+export interface CreateAgentInput {
+  name: string;
+  persona: string;
+  /** Profile display name to bind. */
+  profileName: string;
+  /** canonical modelId from the Driver catalog, e.g. "e2e-claude-model". */
+  modelId: string;
+  color: string;
+}
+
+export async function createAgent(page: Page, input: CreateAgentInput): Promise<void> {
+  await page.getByRole("button", { name: "+ 新建 Agent" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox", { name: "名称", exact: true }).fill(input.name);
+  await dialog
+    .getByRole("textbox", { name: "人格设定（personaPrompt）", exact: true })
+    .fill(input.persona);
+  await dialog
+    .getByRole("combobox", { name: "Execution Profile", exact: true })
+    .selectOption({ label: input.profileName });
+  // The modelId select replaces a loading hint once the Driver catalog arrives.
+  const modelSelect = dialog.getByRole("combobox", {
+    name: "modelId（Driver 闭集 canonical 目录）",
+    exact: true,
+  });
+  await modelSelect.selectOption(input.modelId);
+  await dialog.getByRole("textbox", { name: "颜色（#rrggbb）", exact: true }).fill(input.color);
+  await dialog.getByRole("button", { name: "创建 Agent" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText(input.name, { exact: true }).first()).toBeVisible();
+}
+
+// ---------------------------------------------------------------------------
+// New Room UI flow (checkbox order = speaking order)
+// ---------------------------------------------------------------------------
+
+export interface CreateRoomInput {
+  topic: string;
+  agentNames: string[];
+  facilitatorName?: string;
+}
+
+/** Creates the room and lands on its page; returns the roomId from the URL. */
+export async function createRoom(page: Page, input: CreateRoomInput): Promise<string> {
+  await page.goto("/rooms/new");
+  await page.getByRole("textbox", { name: "话题", exact: true }).fill(input.topic);
+  for (const name of input.agentNames) {
+    await page.locator("label", { hasText: name }).getByRole("checkbox").click();
+  }
+  if (input.facilitatorName) {
+    await page
+      .getByRole("combobox", { name: "Facilitator（负责生成每轮总结）", exact: true })
+      .selectOption({ label: input.facilitatorName });
+  }
+  await page.getByRole("button", { name: "创建并进入" }).click();
+  await page.waitForURL(/\/rooms\/[0-9a-fA-F-]+/);
+  await expect(page.getByRole("heading", { name: input.topic })).toBeVisible();
+  return page.url().split("/rooms/")[1] as string;
+}
+
+// ---------------------------------------------------------------------------
+// Room page locators and flows
+// ---------------------------------------------------------------------------
+
+/** First round CTA is 发起讨论; later rounds use 开始新一轮. */
+export async function startRound(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /^(发起讨论|开始新一轮)$/ }).click();
+}
+
+export function roundSection(page: Page, roundNumber: number): Locator {
+  return page.getByTestId(`round-section-${roundNumber}`);
+}
+
+export function roundPhaseLocator(page: Page, roundNumber: number): Locator {
+  return roundSection(page, roundNumber).locator("summary");
+}
+
+/** Historical rounds default collapsed; expand one via its summary header. */
+export async function expandRound(page: Page, roundNumber: number): Promise<void> {
+  const section = roundSection(page, roundNumber);
+  if ((await section.getAttribute("open")) === null) {
+    await section.locator("summary").click();
+  }
+}
+
+export function activePreview(page: Page): Locator {
+  return page.getByTestId("active-preview");
+}
+
+export function pausedPanel(page: Page): Locator {
+  return page.getByTestId("paused-panel");
+}
+
+/** Expand the committed Round Summary block and return its content locator. */
+export async function summaryContent(page: Page, roundNumber: number): Promise<Locator> {
+  const region = roundSection(page, roundNumber).getByRole("region", { name: "本轮总结" });
+  await expect(region).toBeVisible();
+  await region.getByRole("button", { name: /展开本轮总结/ }).click();
+  return region;
+}
+
+/** End a paused Round: 终止本轮（不生成总结）behind its confirm modal. */
+export async function abortPausedRound(page: Page): Promise<void> {
+  await pausedPanel(page).getByRole("button", { name: "终止本轮（不生成总结）" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "确认终止" }).click();
+}
+
+// ---------------------------------------------------------------------------
+// IndexedDB assertion-only reads (raw IDB; the app connection stays open)
+// ---------------------------------------------------------------------------
+
+export interface ParticipantRow {
+  id: string;
+  roomId: string;
+  agentId: string;
+  modelId: string;
+  state: "active" | "ended";
+}
+
+export interface MessageRow {
+  id: string;
+  roomId: string;
+  roundId: string;
+  role: "user" | "participant";
+  participantId: string | null;
+  content: string;
+  sourceExecutionId: string | null;
+  createdAt: string;
+}
+
+export interface SummaryRow {
+  id: string;
+  roomId: string;
+  roundId: string;
+  content: string;
+  sourceExecutionId: string;
+}
+
+export interface RoundRow {
+  id: string;
+  roomId: string;
+  roundNumber: number;
+  phase: string;
+  pauseReason: { code: string; participantId?: string } | null;
+}
+
+export interface ExecutionRow {
+  executionId: string;
+  roomId: string;
+  roundId: string;
+  participantId: string;
+  resultKind: "message" | "summary";
+  state: string;
+  runtimeOutcome: string | null;
+}
+
+export async function readStore<T>(page: Page, store: string): Promise<T[]> {
+  return page.evaluate(async (storeName) => {
+    const DB_NAME = "councilkit-runtime-v1";
+    const existing = await indexedDB.databases();
+    if (!existing.some((db) => db.name === DB_NAME)) return [];
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("indexedDB open blocked"));
+    });
+    try {
+      return await new Promise<unknown[]>((resolve, reject) => {
+        const tx = db.transaction(storeName, "readonly");
+        const request = tx.objectStore(storeName).getAll();
+        request.onsuccess = () => resolve(request.result as unknown[]);
+        request.onerror = () => reject(request.error);
+      });
+    } finally {
+      db.close();
+    }
+  }, store) as Promise<T[]>;
+}
+
+export async function roomParticipants(page: Page, roomId: string): Promise<ParticipantRow[]> {
+  const rows = await readStore<ParticipantRow>(page, "participants");
+  return rows.filter((row) => row.roomId === roomId && row.state === "active");
+}
+
+export async function roomMessages(page: Page, roomId: string): Promise<MessageRow[]> {
+  const rows = await readStore<MessageRow>(page, "messages");
+  return rows.filter((row) => row.roomId === roomId);
+}
+
+export async function roomSummaries(page: Page, roomId: string): Promise<SummaryRow[]> {
+  const rows = await readStore<SummaryRow>(page, "summaries");
+  return rows.filter((row) => row.roomId === roomId);
+}
+
+export async function roomRounds(page: Page, roomId: string): Promise<RoundRow[]> {
+  const rows = await readStore<RoundRow>(page, "rounds");
+  return rows.filter((row) => row.roomId === roomId);
+}
+
+export async function roomExecutions(page: Page, roomId: string): Promise<ExecutionRow[]> {
+  const rows = await readStore<ExecutionRow>(page, "modelExecutions");
+  return rows.filter((row) => row.roomId === roomId);
+}
