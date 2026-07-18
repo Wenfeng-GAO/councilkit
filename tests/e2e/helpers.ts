@@ -191,6 +191,8 @@ export interface CreateRoomInput {
   topic: string;
   agentNames: string[];
   facilitatorName?: string;
+  /** S4: optional 最大轮次 textbox (留空=不限). */
+  maxRounds?: number;
 }
 
 /** Creates the room and lands on its page; returns the roomId from the URL. */
@@ -204,6 +206,11 @@ export async function createRoom(page: Page, input: CreateRoomInput): Promise<st
     await page
       .getByRole("combobox", { name: "Facilitator（负责生成每轮总结）", exact: true })
       .selectOption({ label: input.facilitatorName });
+  }
+  if (input.maxRounds !== undefined) {
+    await page
+      .getByRole("textbox", { name: "最大轮次（可选，留空=不限）", exact: true })
+      .fill(String(input.maxRounds));
   }
   await page.getByRole("button", { name: "创建并进入" }).click();
   await page.waitForURL(/\/rooms\/[0-9a-fA-F-]+/);
@@ -330,12 +337,34 @@ export interface ExecutionRow {
   roomId: string;
   roundId: string;
   participantId: string;
-  resultKind: "message" | "summary";
+  resultKind: "message" | "summary" | "focus" | "report";
   state: string;
   runtimeOutcome: string | null;
   /** S3: the fresh execution links back to the terminal one it replaced. */
   retryOfExecutionId: string | null;
   error: { code: string; message: string } | null;
+}
+
+/** S4: one committed row in the reports store. */
+export interface ReportRow {
+  id: string;
+  roomId: string;
+  content: string;
+  sourceExecutionId: string;
+  createdAt: string;
+}
+
+/** S4: the committed report-view card (data-testid="report-view"). */
+export function reportView(page: Page): Locator {
+  return page.getByTestId("report-view");
+}
+
+/** S4: click 总结并结束 then confirm via the modal's 确认总结 button. Requires
+ * a completed round and controller; the concludeRoom intent dispatches the
+ * facilitator report on the same persist→ACK pipeline. */
+export async function concludeRoomViaButton(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "总结并结束" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "确认总结" }).click();
 }
 
 export async function readStore<T>(page: Page, store: string): Promise<T[]> {
@@ -384,5 +413,11 @@ export async function roomRounds(page: Page, roomId: string): Promise<RoundRow[]
 
 export async function roomExecutions(page: Page, roomId: string): Promise<ExecutionRow[]> {
   const rows = await readStore<ExecutionRow>(page, "modelExecutions");
+  return rows.filter((row) => row.roomId === roomId);
+}
+
+/** S4: committed decision reports for a room ( Dexie `reports` store). */
+export async function roomReports(page: Page, roomId: string): Promise<ReportRow[]> {
+  const rows = await readStore<ReportRow>(page, "reports");
   return rows.filter((row) => row.roomId === roomId);
 }

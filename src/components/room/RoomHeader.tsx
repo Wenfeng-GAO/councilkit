@@ -4,7 +4,12 @@ import {
   roomRunStateTone,
 } from "@/components/room/round-timeline";
 import { StatusPill } from "@/components/shared/StatusPill";
-import type { DiscussionAgent, DiscussionRoom, Participant } from "@/models/discussion/entities";
+import type {
+  DiscussionAgent,
+  DiscussionMode,
+  DiscussionRoom,
+  Participant,
+} from "@/models/discussion/entities";
 
 interface RoomHeaderProps {
   room: DiscussionRoom;
@@ -13,8 +18,21 @@ interface RoomHeaderProps {
   agents: DiscussionAgent[];
 }
 
-/** Room header (U6): topic, runState pill (text label, not color-only) and
- * the active Participant strip. */
+/** The display label for a discussion mode (S4 badge). Local constant,
+ * mirroring the RoomListItem RUN_STATE_PILL precedent. */
+export const ROOM_MODE_PILL: Record<DiscussionMode, string> = {
+  brainstorm: "头脑风暴",
+  planning: "规划",
+  review: "评审",
+};
+
+/** Pure label for a discussion mode (unit-tested). */
+export function roomModeLabel(mode: DiscussionMode): string {
+  return ROOM_MODE_PILL[mode];
+}
+
+/** Room header (U6): topic, runState + mode + status pills (text labels, not
+ * color-only) and the active Participant strip. */
 export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
   const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
   const participantsById = new Map(
@@ -26,10 +44,12 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
     <header className="border-b border-edge px-6 py-4">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="break-words text-lg font-semibold text-fg">{room.topic}</h1>
+        <StatusPill tone="muted" text={ROOM_MODE_PILL[room.mode]} />
         <StatusPill
           tone={roomRunStateTone(room.runState)}
           text={roomRunStateLabel(room.runState)}
         />
+        {room.status === "concluded" ? <StatusPill tone="success" text="已结束" /> : null}
       </div>
       {active.length > 0 ? (
         <ul className="mt-2 flex flex-wrap gap-2" aria-label="参与者">

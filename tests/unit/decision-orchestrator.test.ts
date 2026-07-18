@@ -951,6 +951,27 @@ describe("instruction templates & convergence parsing", () => {
     expect(instructionText("brainstorm", "message", "ignored")).not.toContain("目标输出");
   });
 
+  it("report template 要求九段（product.md §5.5），三模式全集一致", () => {
+    const nineSectionTitles = [
+      "Background（背景）",
+      "Discussion goal（讨论目标）",
+      "Participating agents（参与角色）",
+      "Discussion summary（讨论摘要）",
+      "Key consensus（关键共识）",
+      "Remaining disagreements（未决分歧）",
+      "Recommendation（推荐）",
+      "Risks and objections（风险与异议）",
+      "Next actions（下一步行动）",
+    ];
+    for (const mode of modes) {
+      const text = instructionText(mode, "report");
+      expect(text).toContain("决策报告");
+      for (const title of nineSectionTitles) {
+        expect(text).toContain(title);
+      }
+    }
+  });
+
   it("wireKindOf：focus→message、report→summary、message/summary 恒等", () => {
     expect(wireKindOf("focus")).toBe("message");
     expect(wireKindOf("report")).toBe("summary");

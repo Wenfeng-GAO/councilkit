@@ -8,6 +8,11 @@ import { useState } from "react";
 interface UserInputBarProps {
   controlState: ControlState | undefined;
   hasActiveRound: boolean;
+  /** True while the room is concluding (a report is in flight or the conclude
+   * mutation is pending) — user input is locked out until the report lands or
+   * fails, mirroring the same lockout the operation row applies to the
+   * "start round" button. */
+  concluding: boolean;
   sendUserMessage: UseMutationResult<DiscussionMessage, Error, string, unknown>;
 }
 
@@ -18,7 +23,12 @@ interface UserInputBarProps {
  * context; an in-flight result would then discard as stale_context — by
  * design, no special-casing here).
  */
-export function UserInputBar({ controlState, hasActiveRound, sendUserMessage }: UserInputBarProps) {
+export function UserInputBar({
+  controlState,
+  hasActiveRound,
+  concluding,
+  sendUserMessage,
+}: UserInputBarProps) {
   const [text, setText] = useState("");
 
   const controlling = controlState === "controlling";
@@ -26,11 +36,13 @@ export function UserInputBar({ controlState, hasActiveRound, sendUserMessage }: 
     ? controlState === "observing"
       ? "只读观察中，无法发言（另一页面正在控制）"
       : "当前页面没有控制权，无法发言"
-    : !hasActiveRound
-      ? "两轮之间不能发言，请先开始新一轮"
-      : sendUserMessage.isPending
-        ? "发送中…"
-        : null;
+    : concluding
+      ? "报告生成中，无法发言"
+      : !hasActiveRound
+        ? "两轮之间不能发言，请先开始新一轮"
+        : sendUserMessage.isPending
+          ? "发送中…"
+          : null;
   const disabled = disabledReason !== null;
   const errorMessage = sendUserMessage.error?.message ?? null;
   const help = disabledReason ?? errorMessage;

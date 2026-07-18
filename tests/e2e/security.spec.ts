@@ -11,6 +11,7 @@ import {
   activePreview,
   freshPage,
   pausedPanel,
+  reportView,
   resumeDrivers,
   roomParticipants,
   roundSection,
@@ -502,6 +503,63 @@ test.describe("security gates", () => {
     }
 
     // §582: the whole keyboard flow never left the canonical origin.
+    expectTripwiresClean(tripwires);
+  });
+
+  test("§580 report-view: untrusted report body renders inert (same SafeMarkdown renderer)", async () => {
+    test.slow();
+    await bootSettings(page);
+    const { claudePid } = await setupRoom(page, "安全 报告注入");
+    // The facilitator reply carries the full untrusted payload AND ends with
+    // 收敛建议：是 so one round auto-concludes into a report whose body is this
+    // same reply (the report execution lazily re-reads the facilitator
+    // behavior). codex keeps its default reply — only the facilitator output
+    // shapes the synthesized report.
+    await setDriverBehavior(page, claudePid, {
+      reply: `${UNTRUSTED_PAYLOAD}\n收敛建议：是`,
+    });
+
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    // concluding transient then the committed report lands.
+    await expect(reportView(page)).toBeVisible({ timeout: 20_000 });
+
+    // No marker ever executed — no script/svg/handler/protocol ran.
+    expect(await windowMarkers(page, XSS_MARKERS)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+
+    const view = reportView(page);
+    // DOM holds no injected elements and no dangerous-protocol anchors.
+    await expect(view.locator(DANGEROUS_SELECTOR)).toHaveCount(0);
+    await expect(view.locator(BAD_ANCHOR_SELECTOR)).toHaveCount(0);
+
+    // The safe https link survives inside the report body with isolation attrs.
+    const safeLinks = view.locator('a[href="https://example.com"]');
+    expect(await safeLinks.count()).toBe(1);
+    const link = safeLinks.first();
+    expect(await link.getAttribute("target")).toBe("_blank");
+    const rel = (await link.getAttribute("rel")) ?? "";
+    expect(rel).toContain("noopener");
+    expect(rel).toContain("ugc");
+
+    // javascript:/data: labels render as plain text spans (no href anywhere).
+    const clickLabel = view.getByText("click", { exact: true }).first();
+    await expect(clickLabel).toBeVisible();
+    expect(await clickLabel.evaluate((el) => el.tagName)).toBe("SPAN");
+
+    // ANSI escapes are gone but the markers stay readable as text; the
+    // sanitized payload is still visible AS TEXT (sanitized ≠ deleted).
+    expect(await view.evaluate((el) => el.textContent?.includes("\u001b") ?? false)).toBe(false);
+    await expect(view.getByText("RED").first()).toBeVisible();
+    await expect(view.getByText("window.__xss1=1").first()).toBeVisible();
+    await expect(view.getByText("window.__xss4=1").first()).toBeVisible();
+    await expect(view.getByText("**unclosed").first()).toBeVisible();
+
+    // §582: the whole conclude flow never left the canonical origin; no dialog.
     expectTripwiresClean(tripwires);
   });
 });
