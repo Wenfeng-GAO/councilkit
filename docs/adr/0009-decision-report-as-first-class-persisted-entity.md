@@ -1,0 +1,5 @@
+# 0009: Decision Report is a first-class persisted entity, one per Room
+
+When a Room converges, its Decision Report is produced by a dedicated facilitator Model Execution and committed through the same idempotent persist→ACK pipeline as Messages and Summaries, into its own `reports` table (`&sourceExecutionId` unique). Alternatives considered: deriving the report as a view over rounds/summaries (rejected — it would demote a real model execution to a recomputable display and bypass the persist→ACK discipline) and reusing the `summaries` table with a kind column (rejected — uniqueness constraints differ: summaries are unique per Round, reports per Room).
+
+A concluded Room is a terminal state in V1: no new Rounds. Continuing the discussion means duplicating the Room (configuration carried over, history fresh), mirroring the established "fixes happen on a new Round" philosophy — fixes happen in a new Room. Re-opening a concluded Room is deferred to a later version if real demand appears (additive, non-breaking).
