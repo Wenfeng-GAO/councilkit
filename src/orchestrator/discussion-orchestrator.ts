@@ -25,11 +25,7 @@ import type {
   Participant,
 } from "@/models/discussion/entities";
 import { createModelExecution, createParticipant } from "@/models/discussion/factories";
-import type {
-  ModelExecution,
-  ModelExecutionError,
-  ResultKind,
-} from "@/models/discussion/model-execution";
+import type { ModelExecution, ModelExecutionError } from "@/models/discussion/model-execution";
 import type { RuntimeBinding } from "@/models/discussion/runtime-binding";
 import { handleCompletedExecution } from "@/orchestrator/commit-execution";
 import {
@@ -563,7 +559,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     room: DiscussionRoom,
     round: DiscussionRound,
     participantId: string,
-    resultKind: ResultKind,
+    resultKind: "message" | "summary",
     retryOfExecutionId: string | null = null,
   ): Promise<boolean> {
     const token = await currentToken(room.id);
@@ -741,11 +737,13 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       // The retry drives the SAME turn with a fresh executionId; its result
       // decides whether the loop continues (returning false here would stop
       // the loop on a still-running round).
+      // This execution was created by dispatchTurn, so its resultKind is one of
+      // the two turn kinds; "focus"/"report" executions (S2) never reach here.
       return dispatchTurn(
         room,
         retried,
         execution.participantId,
-        execution.resultKind,
+        execution.resultKind as "message" | "summary",
         execution.executionId,
       );
     }

@@ -25,7 +25,11 @@ export type ModelExecutionState =
 export type DispatchState = "not_dispatched" | "unknown" | "accepted";
 export type ToolState = "none" | "active" | "completed" | "unknown";
 export type AckState = "pending" | "acknowledged" | "expired";
-export type ResultKind = "message" | "summary";
+export type ResultKind = "message" | "summary" | "focus" | "report";
+
+/** Entity kinds a commit can materialize. A focus execution commits a plain
+ * Message, so "focus" is NOT a committedEntityType. */
+export type CommittedEntityType = "message" | "summary" | "report";
 
 /** Structured runtime outcome kept for discarded executions. */
 export type RuntimeOutcome =
@@ -76,7 +80,7 @@ export interface ModelExecution {
 
   /** Set at commit/discard. */
   contentDigest: string | null;
-  committedEntityType: ResultKind | null;
+  committedEntityType: CommittedEntityType | null;
   committedEntityId: string | null;
   runtimeOutcome: RuntimeOutcome | null;
 

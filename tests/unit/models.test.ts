@@ -1,5 +1,6 @@
 import {
   TransactionError,
+  createDecisionReport,
   createDiscussionAgent,
   createDiscussionRoom,
   createModelExecution,
@@ -67,10 +68,11 @@ function makeExecutionInput(over: Partial<ExecutionInput> = {}): ExecutionInput 
 }
 
 describe("createDiscussionAgent", () => {
-  it("stamps a uuid id, revision 1 and equal ISO createdAt/updatedAt", () => {
+  it("stamps a uuid id, revision 1, enabled true and equal ISO createdAt/updatedAt", () => {
     const agent = makeAgent();
     expect(agent.id).toMatch(UUID_SHAPE);
     expect(agent.revision).toBe(1);
+    expect(agent.enabled).toBe(true);
     expectIsoTimestamp(agent.createdAt);
     expectIsoTimestamp(agent.updatedAt);
     expect(agent.updatedAt).toBe(agent.createdAt);
@@ -179,8 +181,26 @@ describe("createDiscussionRoom", () => {
     expect(room.contextRevision).toBe(0);
     expect(room.contextDigest).toBe("");
     expect(room.background).toBe("");
+    expect(room.mode).toBe("brainstorm");
+    expect(room.targetOutput).toBe("");
+    expect(room.maxRounds).toBeNull();
+    expect(room.status).toBe("open");
     expectIsoTimestamp(room.createdAt);
     expect(room.lastActiveAt).toBe(room.createdAt);
+  });
+
+  it("keeps explicit mode / targetOutput / maxRounds overrides", () => {
+    const room = createDiscussionRoom({
+      topic: "T",
+      facilitatorParticipantId: "p-1",
+      mode: "review",
+      targetOutput: "ADR",
+      maxRounds: 3,
+    });
+    expect(room.mode).toBe("review");
+    expect(room.targetOutput).toBe("ADR");
+    expect(room.maxRounds).toBe(3);
+    expect(room.status).toBe("open");
   });
 
   it("keeps an explicit background", () => {
@@ -225,6 +245,33 @@ describe("createRuntimeBinding", () => {
     expect(binding.updatedAt).toBe(binding.createdAt);
 
     expectInvalid(() => createRuntimeBinding({ roomId: "r-1", scopeRequestId: "" }));
+  });
+});
+
+describe("createDecisionReport", () => {
+  it("stamps a uuid id and ISO createdAt, echoes roomId/content/sourceExecutionId", () => {
+    const report = createDecisionReport({
+      roomId: "r-1",
+      content: "Decision: ship it.",
+      sourceExecutionId: "e-1",
+    });
+    expect(report.id).toMatch(UUID_SHAPE);
+    expectIsoTimestamp(report.createdAt);
+    expect(report.roomId).toBe("r-1");
+    expect(report.content).toBe("Decision: ship it.");
+    expect(report.sourceExecutionId).toBe("e-1");
+  });
+
+  it("rejects empty roomId, blank content or empty sourceExecutionId", () => {
+    expectInvalid(() =>
+      createDecisionReport({ roomId: "", content: "c", sourceExecutionId: "e-1" }),
+    );
+    expectInvalid(() =>
+      createDecisionReport({ roomId: "r-1", content: "   ", sourceExecutionId: "e-1" }),
+    );
+    expectInvalid(() =>
+      createDecisionReport({ roomId: "r-1", content: "c", sourceExecutionId: "" }),
+    );
   });
 });
 

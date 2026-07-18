@@ -21,6 +21,8 @@ export interface DiscussionAgent {
   color: string;
   /** Incremented on every edit; Participants snapshot it at join time. */
   revision: number;
+  /** Disabled Agents are hidden from new-room pickers (S7); joined Participants keep their snapshots. */
+  enabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,6 +59,12 @@ export interface Participant {
 
 export type RoomRunState = "idle" | "running" | "paused";
 
+/** Discussion mode; carried solely by instruction template families (ADR-0010), zero orchestration branches. */
+export type DiscussionMode = "brainstorm" | "planning" | "review";
+
+/** Persisted lifecycle only; "concluding" is an orchestration transient and is never stored. */
+export type RoomStatus = "open" | "concluded";
+
 export interface DiscussionRoom {
   id: string;
   topic: string;
@@ -70,6 +78,13 @@ export interface DiscussionRoom {
   contextRevision: number;
   /** Deterministic digest of the normalized shared discussion projection. */
   contextDigest: string;
+  /** Backfilled to "brainstorm" by the Dexie v2 upgrade. */
+  mode: DiscussionMode;
+  /** Free-text desired output; "" = unspecified. */
+  targetOutput: string;
+  /** Hard round cap; null = unlimited. */
+  maxRounds: number | null;
+  status: RoomStatus;
   createdAt: string;
   lastActiveAt: string;
 }
@@ -156,4 +171,20 @@ export interface DiscussionSummary {
   /** Always non-null: summaries only exist as committed model output. */
   sourceExecutionId: string;
   generatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// DecisionReport (ADR-0009): one committed decision report per Room, produced
+// by a dedicated facilitator Model Execution via the same idempotent
+// persist→ACK pipeline. Same discipline as Summary: only ever created by a
+// commit; sourceExecutionId is unique.
+// ---------------------------------------------------------------------------
+
+export interface DecisionReport {
+  id: string;
+  roomId: string;
+  content: string;
+  /** Always non-null and unique: reports only exist as committed model output. */
+  sourceExecutionId: string;
+  createdAt: string;
 }

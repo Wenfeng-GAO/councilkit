@@ -12,7 +12,7 @@ import {
   markExecutionDispatched,
   transitionRound,
 } from "@/lib/discussion-transactions";
-import { CouncilKitRuntimeDB } from "@/lib/runtime-db";
+import { CouncilKitRuntimeDB, applyAgentV2Defaults, applyRoomV2Defaults } from "@/lib/runtime-db";
 import type {
   DiscussionMessage,
   DiscussionRound,
@@ -20,6 +20,7 @@ import type {
 } from "@/models/discussion/entities";
 import {
   TransactionError,
+  createDecisionReport,
   createDiscussionAgent,
   createDiscussionRoom,
   createModelExecution,
@@ -30,6 +31,7 @@ import {
 import type { ExecutionProfileRecord } from "@/models/execution-profile";
 import { computeInstructionDigest, initializeRoomDigest } from "@/orchestrator/context-snapshot";
 import { CREDENTIAL_MODE } from "@shared/runtime/contracts";
+import Dexie from "dexie";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 /**
@@ -71,7 +73,7 @@ function makeAgent(name: string) {
 }
 
 describe("fresh runtime DB schema", () => {
-  it("opens with all nine tables, each writable and readable", async () => {
+  it("opens with all ten tables, each writable and readable", async () => {
     await db.open();
     const tableNames = db.tables.map((table) => table.name);
     expect(tableNames).toEqual([
@@ -84,6 +86,7 @@ describe("fresh runtime DB schema", () => {
       "modelExecutions",
       "runtimeBindings",
       "executionProfiles",
+      "reports",
     ]);
 
     const agent = makeAgent("A1");
@@ -155,6 +158,12 @@ describe("fresh runtime DB schema", () => {
       updatedAt: new Date().toISOString(),
     };
     await db.executionProfiles.add(profile);
+    const report = createDecisionReport({
+      roomId: room.id,
+      content: "ADR",
+      sourceExecutionId: "e-report",
+    });
+    await db.reports.add(report);
 
     for (const [table, id] of [
       [db.agents, agent.id],
@@ -166,9 +175,13 @@ describe("fresh runtime DB schema", () => {
       [db.modelExecutions, execution.executionId],
       [db.runtimeBindings, binding.id],
       [db.executionProfiles, profile.id],
+      [db.reports, report.id],
     ] as const) {
       expect(await table.get(id)).toBeTruthy();
     }
+
+    // reports.sourceExecutionId is a unique index (brief schema assertion).
+    expect(db.reports.schema.indexes.map((i) => i.keyPath)).toContain("sourceExecutionId");
   });
 });
 
@@ -225,6 +238,32 @@ describe("unique constraints", () => {
       db.runtimeBindings.add(createRuntimeBinding({ roomId: "r-2", scopeRequestId: "req-1" })),
     ).rejects.toMatchObject({ name: "ConstraintError" });
     expect(await db.runtimeBindings.count()).toBe(1);
+  });
+
+  it("reports.sourceExecutionId is unique", async () => {
+    const base = { roomId: "room-1", content: "decision" };
+    await db.reports.add({
+      ...base,
+      id: "r-1",
+      sourceExecutionId: "e-1",
+      createdAt: "2026-07-18T00:00:00.000Z",
+    });
+    await expect(
+      db.reports.add({
+        ...base,
+        id: "r-2",
+        sourceExecutionId: "e-1",
+        createdAt: "2026-07-18T00:00:00.000Z",
+      }),
+    ).rejects.toMatchObject({ name: "ConstraintError" });
+    // A different execution id may carry its own report.
+    await db.reports.add({
+      ...base,
+      id: "r-3",
+      sourceExecutionId: "e-2",
+      createdAt: "2026-07-18T00:00:00.000Z",
+    });
+    expect(await db.reports.count()).toBe(2);
   });
 });
 
@@ -425,5 +464,343 @@ describe("createModelExecution defaults", () => {
     expect(execution.retryOfExecutionId).toBeNull();
     expect(execution.committedEntityId).toBeNull();
     expect(execution.runtimeOutcome).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dexie v1 → v2 migration (ADR-0009 + handoff §S1).
+// The v1 schema is frozen here to model a real legacy DB; opening the same DB
+// name with CouncilKitRuntimeDB triggers the v2 upgrade.
+// ---------------------------------------------------------------------------
+
+/** A frozen v1 schema definition identical to the original pre-v2 runtime-db. */
+const V1_STORES = {
+  agents: "id, executionProfileId",
+  participants: "id, roomId, agentId, state, [roomId+state]",
+  rooms: "id, runState, lastActiveAt, activeRoundId",
+  rounds: "id, roomId, roundNumber, phase, [roomId+phase]",
+  messages: "id, roomId, roundId, &sourceExecutionId",
+  summaries: "id, roomId, &roundId, &sourceExecutionId",
+  modelExecutions:
+    "executionId, roomId, roundId, participantId, state, ackState, retryOfExecutionId",
+  runtimeBindings: "id, roomId, &scopeRequestId, state",
+  executionProfiles: "id, driverId, installationId",
+} as const;
+
+/** Legacy v1 Room row: predates the four v2 fields. */
+type V1Room = {
+  id: string;
+  topic: string;
+  background: string;
+  facilitatorParticipantId: string;
+  runState: string;
+  activeRoundId: string | null;
+  contextRevision: number;
+  contextDigest: string;
+  createdAt: string;
+  lastActiveAt: string;
+};
+
+/** Legacy v1 Agent row: predates `enabled`. */
+type V1Agent = {
+  id: string;
+  name: string;
+  personaPrompt: string;
+  executionProfileId: string;
+  modelId: string;
+  color: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+describe("Dexie v1 → v2 migration", () => {
+  it("backfills Room and Agent defaults and leaves every pre-existing row byte-identical", async () => {
+    const dbName = `mig-${crypto.randomUUID()}`;
+
+    // 1. Build a v1 legacy DB and write one row per table (v1-shaped Room/Agent
+    //    deliberately OMIT the four/e one new fields).
+    class V1DB extends Dexie {
+      constructor(name: string) {
+        super(name);
+        this.version(1).stores({ ...V1_STORES });
+      }
+    }
+    const v1 = new V1DB(dbName);
+    await v1.open();
+
+    const seededRoom: V1Room = {
+      id: "room-1",
+      topic: "Topic",
+      background: "ctx",
+      facilitatorParticipantId: "fac-1",
+      runState: "idle",
+      activeRoundId: null,
+      contextRevision: 0,
+      contextDigest: "digest",
+      createdAt: "2026-07-17T00:00:00.000Z",
+      lastActiveAt: "2026-07-17T00:00:00.000Z",
+    };
+    await v1.table("rooms").add(seededRoom);
+
+    const seededAgent: V1Agent = {
+      id: "agent-1",
+      name: "Reviewer",
+      personaPrompt: "persona",
+      executionProfileId: "prof-1",
+      modelId: "model-a",
+      color: "#a1b2c3",
+      revision: 1,
+      createdAt: "2026-07-17T00:00:00.000Z",
+      updatedAt: "2026-07-17T00:00:00.000Z",
+    };
+    await v1.table("agents").add(seededAgent);
+
+    const seededRound: DiscussionRound = {
+      id: "round-1",
+      roomId: seededRoom.id,
+      roundNumber: 1,
+      participantOrder: ["p-1"],
+      phase: "completed",
+      pausedFrom: null,
+      pauseReason: null,
+      nextParticipantIndex: 1,
+      activeExecutionId: null,
+      createdAt: "2026-07-17T00:00:00.000Z",
+      completedAt: "2026-07-17T00:01:00.000Z",
+    };
+    await v1.table("rounds").add(seededRound);
+
+    const seededUserMessage: DiscussionMessage = {
+      id: "m-1",
+      roomId: seededRoom.id,
+      roundId: seededRound.id,
+      role: "user",
+      participantId: null,
+      content: "hi",
+      sourceExecutionId: null,
+      createdAt: "2026-07-17T00:00:00.000Z",
+    };
+    await v1.table("messages").add(seededUserMessage);
+
+    const seededParticipantMessage: DiscussionMessage = {
+      id: "m-2",
+      roomId: seededRoom.id,
+      roundId: seededRound.id,
+      role: "participant",
+      participantId: "p-1",
+      content: "hello",
+      sourceExecutionId: "e-1",
+      createdAt: "2026-07-17T00:00:30.000Z",
+    };
+    await v1.table("messages").add(seededParticipantMessage);
+
+    const seededSummary: DiscussionSummary = {
+      id: "s-1",
+      roomId: seededRoom.id,
+      roundId: seededRound.id,
+      content: "summary",
+      sourceExecutionId: "e-1",
+      generatedAt: "2026-07-17T00:00:45.000Z",
+    };
+    await v1.table("summaries").add(seededSummary);
+
+    const seededExecution = createModelExecution({
+      executionId: "e-1",
+      roomId: seededRoom.id,
+      roundId: seededRound.id,
+      participantId: "p-1",
+      resultKind: "message",
+      requestedModel: "model-a",
+      contextRevision: seededRoom.contextRevision,
+      expectedRoomDigest: seededRoom.contextDigest,
+      participantSnapshotDigest: "pd",
+      instructionDigest: computeInstructionDigest({ kind: "message", text: "go" }),
+    });
+    await v1.table("modelExecutions").add(seededExecution);
+
+    const seededBinding = createRuntimeBinding({ roomId: seededRoom.id, scopeRequestId: "req-1" });
+    await v1.table("runtimeBindings").add(seededBinding);
+
+    const seededProfile: ExecutionProfileRecord = {
+      id: "prof-1",
+      name: "Profile",
+      driverId: "claude-stream-json",
+      installationId: "inst-1",
+      credentialMode: CREDENTIAL_MODE,
+      options: { route: "moonshot" },
+      revision: 1,
+      createdAt: "2026-07-17T00:00:00.000Z",
+      updatedAt: "2026-07-17T00:00:00.000Z",
+    };
+    await v1.table("executionProfiles").add(seededProfile);
+
+    const seededParticipant = {
+      id: "p-1",
+      roomId: seededRoom.id,
+      agentId: seededAgent.id,
+      personaPrompt: seededAgent.personaPrompt,
+      executionProfileId: seededAgent.executionProfileId,
+      profileRevision: 1,
+      profileDigest: "pd",
+      modelId: seededAgent.modelId,
+      participantSnapshotDigest: "snap",
+      state: "active",
+      createdAt: "2026-07-17T00:00:00.000Z",
+      endedAt: null,
+    };
+    await v1.table("participants").add(seededParticipant);
+
+    v1.close();
+
+    // 2. Re-open under the v2 schema and let the upgrade run.
+    const db2 = new CouncilKitRuntimeDB(dbName);
+    await db2.open();
+    expect(db2.verno).toBe(2);
+
+    // Room: four new fields backfilled; every pre-existing key byte-identical.
+    const migratedRoom = await db2.rooms.get(seededRoom.id);
+    expect(migratedRoom).not.toBeNull();
+    expect(migratedRoom?.mode).toBe("brainstorm");
+    expect(migratedRoom?.targetOutput).toBe("");
+    expect(migratedRoom?.maxRounds).toBeNull();
+    expect(migratedRoom?.status).toBe("open");
+    // Strip the four v2 fields and confirm the v1 shape is untouched.
+    expect({ ...migratedRoom }).toMatchObject(seededRoom);
+    expect(Object.keys(migratedRoom as object).sort()).toEqual(
+      [...Object.keys(seededRoom), "mode", "targetOutput", "maxRounds", "status"].sort(),
+    );
+
+    // Agent: enabled backfilled; everything else byte-identical.
+    const migratedAgent = await db2.agents.get(seededAgent.id);
+    expect(migratedAgent?.enabled).toBe(true);
+    expect({ ...migratedAgent }).toMatchObject(seededAgent);
+    expect(Object.keys(migratedAgent as object).sort()).toEqual(
+      [...Object.keys(seededAgent), "enabled"].sort(),
+    );
+
+    // Every other table row unchanged.
+    expect(await db2.rounds.get(seededRound.id)).toEqual(seededRound);
+    expect(await db2.messages.get(seededUserMessage.id)).toEqual(seededUserMessage);
+    expect(await db2.messages.get(seededParticipantMessage.id)).toEqual(seededParticipantMessage);
+    expect(await db2.summaries.get(seededSummary.id)).toEqual(seededSummary);
+    expect(await db2.modelExecutions.get(seededExecution.executionId)).toEqual(seededExecution);
+    expect(await db2.runtimeBindings.get(seededBinding.id)).toEqual(seededBinding);
+    expect(await db2.executionProfiles.get(seededProfile.id)).toEqual(seededProfile);
+    expect(await db2.participants.get(seededParticipant.id)).toEqual(seededParticipant);
+
+    // The reports table is brand-new and empty.
+    expect(await db2.reports.count()).toBe(0);
+
+    await db2.delete();
+  });
+
+  it("re-opening an already-migrated v2 database is a no-op", async () => {
+    const dbName = `mig-${crypto.randomUUID()}`;
+
+    class V1DB extends Dexie {
+      constructor(name: string) {
+        super(name);
+        this.version(1).stores({ ...V1_STORES });
+      }
+    }
+    const v1 = new V1DB(dbName);
+    await v1.open();
+    await v1.table("rooms").add({
+      id: "room-1",
+      topic: "Topic",
+      background: "",
+      facilitatorParticipantId: "fac-1",
+      runState: "idle",
+      activeRoundId: null,
+      contextRevision: 0,
+      contextDigest: "",
+      createdAt: "2026-07-17T00:00:00.000Z",
+      lastActiveAt: "2026-07-17T00:00:00.000Z",
+      mode: "review", // explicit value; the upgrade must NOT overwrite it.
+      targetOutput: "ADR",
+      maxRounds: 3,
+      status: "concluded",
+    });
+    await v1.table("agents").add({
+      id: "agent-1",
+      name: "A",
+      personaPrompt: "p",
+      executionProfileId: "prof-1",
+      modelId: "model-a",
+      color: "#a1b2c3",
+      revision: 1,
+      enabled: false,
+      createdAt: "2026-07-17T00:00:00.000Z",
+      updatedAt: "2026-07-17T00:00:00.000Z",
+    });
+    v1.close();
+
+    // First open: runs the upgrade.
+    {
+      const first = new CouncilKitRuntimeDB(dbName);
+      await first.open();
+      expect(first.verno).toBe(2);
+      const room = await first.rooms.get("room-1");
+      expect(room?.mode).toBe("review");
+      expect(room?.status).toBe("concluded");
+      expect((await first.agents.get("agent-1"))?.enabled).toBe(false);
+      first.close();
+    }
+
+    // Second open: upgrade does not re-run; values are stable.
+    {
+      const second = new CouncilKitRuntimeDB(dbName);
+      await second.open();
+      expect(second.verno).toBe(2);
+      const room = await second.rooms.get("room-1");
+      expect(room?.mode).toBe("review");
+      expect(room?.targetOutput).toBe("ADR");
+      expect(room?.maxRounds).toBe(3);
+      expect(room?.status).toBe("concluded");
+      expect((await second.agents.get("agent-1"))?.enabled).toBe(false);
+      expect(await second.rooms.count()).toBe(1);
+      expect(await second.agents.count()).toBe(1);
+      await second.delete();
+    }
+  });
+});
+
+describe("migration backfill pure functions", () => {
+  it("applyRoomV2Defaults fills missing fields with v2 defaults and preserves everything else", () => {
+    const empty: Record<string, unknown> = {};
+    applyRoomV2Defaults(empty);
+    expect(empty).toEqual({
+      mode: "brainstorm",
+      targetOutput: "",
+      maxRounds: null,
+      status: "open",
+    });
+
+    const partial: Record<string, unknown> = {
+      mode: "review",
+      targetOutput: "x",
+      custom: 1,
+    };
+    applyRoomV2Defaults(partial);
+    // Explicit values are NOT overwritten; unknown keys are preserved; absent
+    // keys still get defaults.
+    expect(partial).toEqual({
+      mode: "review",
+      targetOutput: "x",
+      custom: 1,
+      maxRounds: null,
+      status: "open",
+    });
+  });
+
+  it("applyAgentV2Defaults fills enabled only when absent", () => {
+    const empty: Record<string, unknown> = {};
+    applyAgentV2Defaults(empty);
+    expect(empty).toEqual({ enabled: true });
+
+    const disabled: Record<string, unknown> = { enabled: false, name: "A" };
+    applyAgentV2Defaults(disabled);
+    expect(disabled).toEqual({ enabled: false, name: "A" });
   });
 });
