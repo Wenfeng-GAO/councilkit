@@ -15,7 +15,9 @@ import {
   markBindingClosed,
   markExecutionDispatched,
   pauseRound,
+  resumeRound,
   setRoomRunState,
+  skipParticipant,
   takeoverRuntimeBinding,
   transitionRound,
 } from "@/lib/discussion-transactions";
@@ -24,6 +26,7 @@ import type {
   DiscussionMessage,
   DiscussionRoom,
   DiscussionRound,
+  DiscussionSummary,
   Participant,
   RoundPhase,
 } from "@/models/discussion/entities";
@@ -53,6 +56,7 @@ import { type RuntimeClient, RuntimeClientError } from "@/runtime/client";
 import { followExecutionEvents } from "@/runtime/event-stream";
 import type { RuntimeEvent } from "@shared/runtime/events";
 import { type ExecutionProfileDto, executionProfileSchema } from "@shared/runtime/schemas";
+import type { SnapshotItem } from "@shared/runtime/schemas";
 
 /**
  * Persistent Discussion Orchestrator (U5): replaces the in-page runRound()
@@ -639,7 +643,38 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
 
     const messages = await db.messages.where("roomId").equals(room.id).toArray();
     const summaries = await db.summaries.where("roomId").equals(room.id).toArray();
-    const items = projectSharedContext(room, messages, summaries).items;
+    const projectionItems = projectSharedContext(room, messages, summaries).items;
+    // S3 skip annotations: weave a 【调度记录】 user-role item per order slot the
+    // cursor passed WITH a terminal failure (a user-skipped Participant) into the
+    // execution snapshot. DESIGN INTENT — contextDigest is intentionally NOT
+    // recomputed over these annotations: annotations are per-execution
+    // scheduling information (like `instruction`), NOT part of the durable
+    // shared projection. The digest still equals the persisted projection, so a
+    // skip never bumps the Room revision and never produces a stale_context
+    // self-harm. Weaving is stable across every session: an annotation's `at` is
+    // its failed execution's createdAt (always after the last already-committed
+    // item when it first appears, then chronologically interposed), so no
+    // session's history prefix is ever rewritten — the reconciler's prefix math
+    // stays in_sync. Do NOT "align" items with digest here; that would reintroduce
+    // revision churn and a silent stale_context loop (plan-a §5-1 / ruling).
+    const roomExecutions = await db.modelExecutions.where("roomId").equals(room.id).toArray();
+    let items: SnapshotItem[] = projectionItems;
+    if (
+      roomExecutions.some(
+        (execution) =>
+          execution.state === "failed" ||
+          execution.state === "discarded" ||
+          execution.state === "interrupted",
+      )
+    ) {
+      const rounds = await db.rounds.where("roomId").equals(room.id).toArray();
+      const roomParticipants = await db.participants.where("roomId").equals(room.id).toArray();
+      items = weaveSkipAnnotations(
+        projectionItems,
+        timestampById(messages, summaries),
+        deriveSkipAnnotations(rounds, roomExecutions, roomParticipants),
+      );
+    }
     const wireKind = wireKindOf(resultKind);
     const instruction = {
       kind: wireKind,
@@ -974,6 +1009,113 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     notify(roomId);
   }
 
+  /** Manual retry of the paused-at failure (S3): resume the paused round, then
+   * re-dispatch the SAME turn under a FRESH executionId linked by
+   * retryOfExecutionId. Unlimited for the user — the auto once-per-chain rule
+   * lives in handleTerminal and is untouched; the failed execution is never
+   * re-dispatched (a new executionId is created, the old one stays terminal).
+   * The room scheduling gate must be open: dispatchTurn never consults
+   * room.runState, so this intent rejects a paused Room here. The facilitator
+   * is NOT guarded (a manual retry ≠ a silent substitution; the auto path also
+   * retries the facilitator summary). */
+  async function retryFailedParticipant(roomId: string): Promise<void> {
+    const token = await currentToken(roomId);
+    const room = await db.rooms.get(roomId);
+    if (!room) throw new Error(`unknown room ${roomId}`);
+    if (room.runState === "paused") {
+      throw new Error("room scheduling is paused; resume first");
+    }
+    const round = room.activeRoundId ? await db.rounds.get(room.activeRoundId) : null;
+    if (!round || round.phase !== "paused") {
+      throw new Error("only a paused round can be retried");
+    }
+    const reason = round.pauseReason;
+    if (!reason?.executionId) {
+      throw new Error("pause has no failed execution to retry");
+    }
+    const failed = await db.modelExecutions.get(reason.executionId);
+    if (
+      !failed ||
+      (failed.state !== "failed" && failed.state !== "discarded" && failed.state !== "interrupted")
+    ) {
+      throw new Error("pause reason does not point at a terminal failure");
+    }
+    await resumeRound(db, { roomId, roundId: round.id, token });
+    const freshRound = (await db.rounds.get(round.id)) as DiscussionRound;
+    const freshRoom = (await db.rooms.get(roomId)) as DiscussionRoom;
+    notify(roomId);
+    const proceed = await dispatchTurn(
+      freshRoom,
+      freshRound,
+      failed.participantId,
+      failed.resultKind,
+      failed.executionId,
+    );
+    // A retried message that commits re-arms the run loop; focus/report/summary
+    // are terminal for this round (the loop re-reads state itself).
+    if (proceed) {
+      await runLoop(roomId);
+    }
+  }
+
+  /** Manual skip of the paused-at Participant (S3): advance the cursor over
+   * the failure, then drive the loop to the next speaker / summarizing. The
+   * real facilitator guard lives in skipParticipant; this intent only gates the
+   * room scheduling state (must be open) and the paused phase. */
+  async function skipFailedParticipant(roomId: string): Promise<void> {
+    const token = await currentToken(roomId);
+    const room = await db.rooms.get(roomId);
+    if (!room) throw new Error(`unknown room ${roomId}`);
+    if (room.runState === "paused") {
+      throw new Error("room scheduling is paused; resume first");
+    }
+    const round = room.activeRoundId ? await db.rounds.get(room.activeRoundId) : null;
+    if (!round || round.phase !== "paused") {
+      throw new Error("only a paused round can skip a participant");
+    }
+    await skipParticipant(db, { roomId, roundId: round.id, token });
+    notify(roomId);
+    await runLoop(roomId);
+  }
+
+  /** One-click needs_rebase rotation (S3): abort the paused round (the token is
+   * still valid on the active binding) → close the Host scope (best-effort; a
+   * 404 / network failure still converges locally — the alternative is a dead
+   * end with an un-rotatable aborted round) → markBindingClosed → startRound,
+   * whose ensureScope cold-builds from the full snapshot (the f4ae766 path).
+   * Every step failure leaves an explainable state; never automatic. The room
+   * scheduling gate must be open. */
+  async function rotateScope(roomId: string): Promise<void> {
+    const room = await db.rooms.get(roomId);
+    if (!room) throw new Error(`unknown room ${roomId}`);
+    if (room.runState === "paused") {
+      throw new Error("room scheduling is paused; resume first");
+    }
+    const round = room.activeRoundId ? await db.rounds.get(room.activeRoundId) : null;
+    if (!round || round.phase !== "paused") {
+      throw new Error("rotateScope: no paused round");
+    }
+    const reason = round.pauseReason;
+    const isRebase =
+      reason?.code === "needs_rebase" || (reason?.detail ?? "").includes("session reconciliation:");
+    if (!isRebase) {
+      throw new Error("rotateScope: pause is not a needs_rebase rotation");
+    }
+    await abortPausedRound(roomId);
+    const binding = await latestBinding(roomId);
+    if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
+      await client
+        .closeScope(binding.executionScopeId, {
+          controllerId: binding.controllerId,
+          leaseEpoch: binding.leaseEpoch,
+        })
+        .catch(() => undefined);
+      await markBindingClosed(db, binding.id);
+    }
+    notify(roomId);
+    await startRound(roomId);
+  }
+
   /** Manual conclusion (S2): the user proactively ends the room with a decision
    * report — the SAME chain as automatic convergence. Requires the controlling
    * page and no running execution. Idempotent on an already-concluded room.
@@ -1026,9 +1168,146 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     resumeRoom,
     cancelActiveExecution,
     abortPausedRound,
+    retryFailedParticipant,
+    skipFailedParticipant,
+    rotateScope,
     sendUserMessage,
     activeParticipants,
   };
 }
 
 export type DiscussionOrchestrator = ReturnType<typeof createDiscussionOrchestrator>;
+
+// ---------------------------------------------------------------------------
+// S3 skip annotations — pure functions (exported for unit testing). They
+// weave one 【调度记录】 user-role SnapshotItem per order slot the cursor passed
+// WITHOUT a committed message and WITH a terminal failure record. Content uses
+// ONLY stable snapshot facts (roundNumber, Participant.modelId): never a
+// mutable Agent name (a rename would rewrite history and force needs_rebase).
+// See the dispatchTurn comment for why the digest is intentionally left alone.
+// ---------------------------------------------------------------------------
+
+export interface TimedSkipAnnotation {
+  at: string;
+  item: SnapshotItem;
+}
+
+function terminalExecutionStates(execution: ModelExecution): boolean {
+  return (
+    execution.state === "failed" ||
+    execution.state === "discarded" ||
+    execution.state === "interrupted"
+  );
+}
+
+/** One annotation per (round, order-slot) the cursor passed WITHOUT a committed
+ * message and WITH a terminal failure record — i.e. the user-skipped slots.
+ * `at` is the failed execution's createdAt (always later than the last
+ * already-committed item when it first appears, so the weave never rewrites a
+ * history prefix).
+ *
+ * R1 — 跳过事实必须永久：permanence is independent of `round.phase`, INCLUDING
+ * aborted. Scenario this guards: P2 is skipped → the annotation was woven into
+ * P3's dispatch snapshot (the P3 session saw it) → P3 fails → the user aborts
+ * the round → the next round's snapshot dropped the annotation (because an
+ * aborted round was filtered here) → the P3 session's history prefix was
+ * rewritten → a spurious needs_rebase. Once a skip fact is woven into ANY
+ * session's snapshot it MUST keep deriving forever; otherwise the reconciler's
+ * prefix math desyncs. Same demand drives the timeline 「· 已跳过」 marker in
+ * round-timeline.ts `isSkippedFailure`, which is kept in lock-step here. */
+export function deriveSkipAnnotations(
+  rounds: readonly DiscussionRound[],
+  executions: readonly ModelExecution[],
+  participants: readonly Participant[],
+): TimedSkipAnnotation[] {
+  const annotations: TimedSkipAnnotation[] = [];
+  const participantsById = new Map(
+    participants.map((participant) => [participant.id, participant]),
+  );
+  for (const round of rounds) {
+    const cursor = round.nextParticipantIndex;
+    for (let index = 0; index < round.participantOrder.length; index += 1) {
+      if (index >= cursor) continue; // the cursor has not yet passed this slot
+      const participantId = round.participantOrder[index] as string;
+      // Focus occupies no order slot; only message executions matter.
+      const slotExecutions = executions.filter(
+        (execution) =>
+          execution.roundId === round.id &&
+          execution.participantId === participantId &&
+          execution.resultKind === "message",
+      );
+      const hasCommitted = slotExecutions.some((execution) => execution.state === "committed");
+      if (hasCommitted) continue; // the participant did speak here
+      const terminals = slotExecutions.filter(terminalExecutionStates);
+      if (terminals.length === 0) continue; // no failure record to annotate
+      const last = terminals.reduce((latest, execution) =>
+        execution.createdAt > latest.createdAt ? execution : latest,
+      );
+      const participant = participantsById.get(participantId);
+      const modelId = participant?.modelId ?? "unknown";
+      const id = `skip-${round.id}-${participantId}`;
+      const content = `【调度记录】第 ${round.roundNumber} 轮中 Participant（${modelId}）的发言执行失败，已被跳过；该轮没有其发言。`;
+      annotations.push({
+        at: last.createdAt,
+        item: { id, role: "user", content },
+      });
+    }
+  }
+  return annotations;
+}
+
+/** Build a createdAt lookup keyed by a message/summary id, for sorting projection
+ * items whose own `item` does not carry its timestamp. */
+export function timestampById(
+  messages: readonly DiscussionMessage[],
+  summaries: readonly DiscussionSummary[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const message of messages) map.set(message.id, message.createdAt);
+  for (const summary of summaries) map.set(summary.id, summary.generatedAt);
+  return map;
+}
+
+/** Stable two-pointer weave: projection items are already (at,id)-sorted by
+ * projectSharedContext; annotations are (at,id)-sorted by their failed
+ * execution's createdAt. On an exact `at` tie the projection item comes first
+ * (its committed entity existed before the failure). */
+export function weaveSkipAnnotations(
+  projectionItems: readonly SnapshotItem[],
+  atById: ReadonlyMap<string, string>,
+  notes: readonly TimedSkipAnnotation[],
+): SnapshotItem[] {
+  const sortedNotes = [...notes].sort((a, b) =>
+    a.at === b.at ? (a.item.id < b.item.id ? -1 : 1) : a.at < b.at ? -1 : 1,
+  );
+  const withAt = projectionItems.map((item) => ({
+    item,
+    at: atById.get(item.id) ?? "",
+  }));
+  const merged: SnapshotItem[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < withAt.length && j < sortedNotes.length) {
+    const projection = withAt[i] as { item: SnapshotItem; at: string };
+    const note = sortedNotes[j] as TimedSkipAnnotation;
+    if (
+      projection.at < note.at ||
+      (projection.at === note.at && projection.item.id <= note.item.id)
+    ) {
+      merged.push(projection.item);
+      i += 1;
+    } else {
+      merged.push(note.item);
+      j += 1;
+    }
+  }
+  while (i < withAt.length) {
+    merged.push((withAt[i] as { item: SnapshotItem; at: string }).item);
+    i += 1;
+  }
+  while (j < sortedNotes.length) {
+    merged.push((sortedNotes[j] as TimedSkipAnnotation).item);
+    j += 1;
+  }
+  return merged;
+}

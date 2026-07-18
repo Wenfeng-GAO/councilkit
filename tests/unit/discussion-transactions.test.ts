@@ -23,6 +23,7 @@ import {
   markExecutionDispatched,
   pauseRound,
   resumeRound,
+  skipParticipant,
   takeoverRuntimeBinding,
   transitionRound,
   updateRoomSharedConfig,
@@ -1385,5 +1386,173 @@ describe("focus / report transactions", () => {
     expect(anchored.resultKind).toBe("report");
     expect(anchored.roundId).toBe(seed.anchorRound.id);
     expect(anchored.state).toBe("prepared");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// skip (S3)
+// ---------------------------------------------------------------------------
+
+async function seedPausedAtP2(): Promise<Seed> {
+  const seed = await seedRunning();
+  // Commit p1 (facilitator) at cursor 0 so the cursor advances to p2.
+  const p1Exec = await beginMessageExecution(seed, seed.p1);
+  await dispatch(p1Exec.executionId);
+  await commitModelMessage(db, commitInput(p1Exec.executionId, seed.token, "p1 speaks"));
+  // Fail p2 at cursor 1; pausedFrom running, pauseReason participantId=p2.
+  const p2Exec = await beginMessageExecution(seed, seed.p2);
+  await dispatch(p2Exec.executionId);
+  await failExecution(db, {
+    executionId: p2Exec.executionId,
+    token: seed.token,
+    error: { code: "CLI_CRASH", phase: "stream", message: "died", retryable: false },
+    kind: "failed",
+  });
+  return seed;
+}
+
+describe("skipParticipant (S3)", () => {
+  it("skip 非末位：cursor +1，phase 回 running，暂停清理；revision/digest 不变", async () => {
+    // Build a 3-participant order [p1, p2, p3] so p2 is a MIDDLE slot: skipping
+    // p2 advances the cursor to p3 and keeps the round running.
+    const base = await seedRunning();
+    const agent3 = createDiscussionAgent({
+      name: "A3",
+      personaPrompt: "p3 persona",
+      executionProfileId: "prof-1",
+      modelId: "model-c",
+      color: "#c3d4e5",
+    });
+    await db.agents.add(agent3);
+    const p3 = createParticipant({ roomId: base.room.id, agent: agent3, profileDigest: "pd3" });
+    p3.createdAt = "2026-07-17T00:00:00.002Z";
+    await db.participants.add(p3);
+    // Re-create the round with the 3-participant order.
+    const token = base.token;
+    await abortRound(db, { roomId: base.room.id, roundId: base.round.id, token });
+    const round = await createRound(db, {
+      roomId: base.room.id,
+      token,
+      participantOrder: [base.p1.id, base.p2.id, p3.id],
+    });
+    await transitionRound(db, { roomId: base.room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: base.room.id, roundId: round.id, token, to: "running" });
+    await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
+    const seed: Seed = { room: base.room, p1: base.p1, p2: base.p2, token, round };
+
+    // Commit p1 (cursor 0 → 1); fail p2 (cursor 1, middle slot) → paused.
+    const p1Exec = await beginMessageExecution(seed, seed.p1);
+    await dispatch(p1Exec.executionId);
+    await commitModelMessage(db, commitInput(p1Exec.executionId, token, "p1 speaks"));
+    const p2Exec = await beginMessageExecution(seed, seed.p2);
+    await dispatch(p2Exec.executionId);
+    await failExecution(db, {
+      executionId: p2Exec.executionId,
+      token,
+      error: { code: "CLI_CRASH", phase: "stream", message: "died", retryable: false },
+      kind: "failed",
+    });
+    const roomBefore = await getRoom(seed.room.id);
+    const revisionBefore = roomBefore.contextRevision;
+    const digestBefore = roomBefore.contextDigest;
+
+    const result = await skipParticipant(db, {
+      roomId: seed.room.id,
+      roundId: round.id,
+      token,
+    });
+
+    expect(result.skippedParticipantId).toBe(seed.p2.id);
+    expect(result.roundPhase).toBe("running");
+    const stored = await getRound(round.id);
+    expect(stored.nextParticipantIndex).toBe(2);
+    expect(stored.phase).toBe("running");
+    expect(stored.pausedFrom).toBeNull();
+    expect(stored.pauseReason).toBeNull();
+    expect(stored.activeExecutionId).toBeNull();
+    const room = await getRoom(seed.room.id);
+    expect(room.contextRevision).toBe(revisionBefore);
+    expect(room.contextDigest).toBe(digestBefore);
+  });
+
+  it("skip 末位 Participant：cursor 越界翻 summarizing；pausedFrom/pauseReason 清空", async () => {
+    const seed = await seedPausedAtP2();
+    const roundBefore = await getRound(seed.round.id);
+    expect(roundBefore.nextParticipantIndex).toBe(1); // last slot of order [p1,p2]
+
+    const result = await skipParticipant(db, {
+      roomId: seed.room.id,
+      roundId: seed.round.id,
+      token: seed.token,
+    });
+
+    expect(result.roundPhase).toBe("summarizing");
+    const round = await getRound(seed.round.id);
+    expect(round.nextParticipantIndex).toBe(2);
+    expect(round.phase).toBe("summarizing");
+    expect(round.pausedFrom).toBeNull();
+    expect(round.pauseReason).toBeNull();
+    expect(round.activeExecutionId).toBeNull();
+  });
+
+  it("FACILITATOR_NOT_SKIPPABLE：cursor 在 facilitator 时事务拒绝，round 仍 paused", async () => {
+    const seed = await seedRunning();
+    // Fail p1 (facilitator) at cursor 0.
+    const p1Exec = await beginMessageExecution(seed, seed.p1);
+    await dispatch(p1Exec.executionId);
+    await failExecution(db, {
+      executionId: p1Exec.executionId,
+      token: seed.token,
+      error: { code: "CLI_CRASH", phase: "stream", message: "died", retryable: false },
+      kind: "failed",
+    });
+    const roundBefore = await getRound(seed.round.id);
+    expect(roundBefore.pauseReason?.participantId).toBe(seed.p1.id);
+
+    await expect(
+      skipParticipant(db, { roomId: seed.room.id, roundId: seed.round.id, token: seed.token }),
+    ).rejects.toMatchObject({ code: "FACILITATOR_NOT_SKIPPABLE" });
+    const round = await getRound(seed.round.id);
+    expect(round.phase).toBe("paused");
+    expect(round.nextParticipantIndex).toBe(0);
+  });
+
+  it("ROUND_PHASE：running（非 paused）round 直接 skip 拒绝", async () => {
+    const seed = await seedRunning();
+    await expect(
+      skipParticipant(db, { roomId: seed.room.id, roundId: seed.round.id, token: seed.token }),
+    ).rejects.toMatchObject({ code: "ROUND_PHASE" });
+  });
+
+  it("STALE_CONTROLLER：错误 token 拒绝", async () => {
+    const seed = await seedPausedAtP2();
+    await expect(
+      skipParticipant(db, {
+        roomId: seed.room.id,
+        roundId: seed.round.id,
+        token: { controllerId: "wrong", leaseEpoch: 99 },
+      }),
+    ).rejects.toMatchObject({ code: "STALE_CONTROLLER" });
+  });
+
+  it("STALE_EXECUTION：pause reason 不指向 cursor 时拒绝", async () => {
+    const seed = await seedPausedAtP2();
+    // Tamper: move the cursor past the paused participant.
+    await db.rounds.update(seed.round.id, { nextParticipantIndex: 2 });
+    await expect(
+      skipParticipant(db, { roomId: seed.room.id, roundId: seed.round.id, token: seed.token }),
+    ).rejects.toMatchObject({ code: "STALE_EXECUTION" });
+  });
+
+  it("SKIP_NOT_APPLICABLE：prewarm 暂停（pauseReason 无 participantId）不可跳过", async () => {
+    const seed = await seedRunning();
+    await db.rounds.update(seed.round.id, {
+      phase: "paused",
+      pausedFrom: "prewarming",
+      pauseReason: { code: "prewarm_failed" },
+    });
+    await expect(
+      skipParticipant(db, { roomId: seed.room.id, roundId: seed.round.id, token: seed.token }),
+    ).rejects.toMatchObject({ code: "SKIP_NOT_APPLICABLE" });
   });
 });
