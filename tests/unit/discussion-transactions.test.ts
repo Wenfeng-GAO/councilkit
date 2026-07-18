@@ -1387,6 +1387,84 @@ describe("focus / report transactions", () => {
     expect(anchored.roundId).toBe(seed.anchorRound.id);
     expect(anchored.state).toBe("prepared");
   });
+
+  // F1b mutual-exclusion (concluding ⇄ startRound): a Room with a live report
+  // execution (any of prepared/running/succeeded_uncommitted) must reject
+  // createRound. beginReportExecution has already cleared activeRoundId for the
+  // concluding transient, so the ROUND_ACTIVE_EXISTS guard can't see it — the
+  // dedicated REPORT_IN_PROGRESS guard closes the race in the other direction.
+  it("createRound：live report execution 存在 → REPORT_IN_PROGRESS（activeRoundId 已为 null，CAS 看不到）", async () => {
+    const seed = await seedCompletedRoom();
+    // A report execution already in flight (beginReportExecution clears the
+    // room's activeRoundId as part of anchoring).
+    await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    expect((await getRoom(seed.room.id)).activeRoundId).toBeNull();
+
+    await expect(
+      createRound(db, {
+        roomId: seed.room.id,
+        token: seed.token,
+        participantOrder: [seed.p1.id, seed.p2.id],
+      }),
+    ).rejects.toMatchObject({ code: "REPORT_IN_PROGRESS" });
+    // The guard is read-only: no new round was created.
+    expect(await db.rounds.where("roomId").equals(seed.room.id).count()).toBe(1);
+  });
+
+  it("createRound：succeeded_uncommitted live report 同样拒绝；committed report → concluded 拒 ROOM_CONCLUDED", async () => {
+    const seed = await seedCompletedRoom();
+    const execution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    // Drive it to succeeded_uncommitted directly (bypass the Host dispatch path)
+    // so the guard sees the third live state, not just prepared.
+    await db.modelExecutions.update(execution.executionId, { state: "succeeded_uncommitted" });
+    await expect(
+      createRound(db, {
+        roomId: seed.room.id,
+        token: seed.token,
+        participantOrder: [seed.p1.id, seed.p2.id],
+      }),
+    ).rejects.toMatchObject({ code: "REPORT_IN_PROGRESS" });
+
+    // Once the report commits, the room is concluded — createRound is now
+    // rejected by ROOM_CONCLUDED (the live-report guard sees no live execution;
+    // the concluded guard fires on room.status). Either way it is refused.
+    await commitReport(db, commitInput(execution.executionId, seed.token, "决策报告正文", 9));
+    expect((await getRoom(seed.room.id)).status).toBe("concluded");
+    await expect(
+      createRound(db, {
+        roomId: seed.room.id,
+        token: seed.token,
+        participantOrder: [seed.p1.id, seed.p2.id],
+      }),
+    ).rejects.toMatchObject({ code: "ROOM_CONCLUDED" });
+  });
+
+  it("createRound：report 终态失败（failed）后放行，可新开 round", async () => {
+    const seed = await seedCompletedRoom();
+    const execution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    // The report fails outright (a report execution never owns
+    // round.activeExecutionId, so failExecution only persists the terminal and
+    // skips the round-pause branch — the completed anchor stays intact).
+    await failExecution(db, {
+      executionId: execution.executionId,
+      token: seed.token,
+      error: { code: "CLI_CRASH", phase: "stream", message: "died", retryable: false },
+      kind: "failed",
+    });
+    const persisted = await getExecution(execution.executionId);
+    expect(persisted.state).toBe("failed");
+    // The anchor round is untouched; the room is still open with no live report.
+    expect((await getRound(seed.anchorRound.id)).phase).toBe("completed");
+    expect((await getRoom(seed.room.id)).status).toBe("open");
+
+    const next = await createRound(db, {
+      roomId: seed.room.id,
+      token: seed.token,
+      participantOrder: [seed.p1.id, seed.p2.id],
+    });
+    expect(next.phase).toBe("pending");
+    expect(next.roundNumber).toBe(2);
+  });
 });
 
 // ---------------------------------------------------------------------------

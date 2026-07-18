@@ -192,46 +192,74 @@ export async function createRound(
   db: CouncilKitRuntimeDB,
   input: { roomId: string; token: ControllerToken; participantOrder: string[] },
 ): Promise<DiscussionRound> {
-  return db.transaction("rw", [db.rooms, db.rounds, db.runtimeBindings], async () => {
-    const room = await requireRoom(db, input.roomId);
-    await requireController(db, input.roomId, input.token);
-    if (room.runState === "paused") {
-      throw new TransactionError("ROOM_PAUSED", "room is paused by the user");
-    }
-    if (room.status === "concluded") {
-      throw new TransactionError(
-        "ROOM_CONCLUDED",
-        "room is concluded; duplicate the room to continue",
-      );
-    }
-    if (room.activeRoundId !== null) {
-      throw new TransactionError("ROUND_ACTIVE_EXISTS", "room already has an unfinalized round");
-    }
-    const existing = await db.rounds.where("roomId").equals(input.roomId).toArray();
-    const roundNumber = existing.reduce((max, round) => Math.max(max, round.roundNumber), 0) + 1;
-    const round: DiscussionRound = {
-      id: uuid(),
-      roomId: input.roomId,
-      roundNumber,
-      participantOrder: [...input.participantOrder],
-      phase: "pending",
-      pausedFrom: null,
-      pauseReason: null,
-      nextParticipantIndex: 0,
-      activeExecutionId: null,
-      // Post-S2 Rounds await their facilitator focus (null); pre-S2 rows that
-      // predate this field read back as undefined and are never retro-focussed.
-      focusMessageId: null,
-      createdAt: ts(),
-      completedAt: null,
-    };
-    await db.rounds.add(round);
-    room.activeRoundId = round.id;
-    room.runState = "running";
-    room.lastActiveAt = ts();
-    await db.rooms.put(room);
-    return round;
-  });
+  return db.transaction(
+    "rw",
+    [db.rooms, db.rounds, db.modelExecutions, db.runtimeBindings],
+    async () => {
+      const room = await requireRoom(db, input.roomId);
+      await requireController(db, input.roomId, input.token);
+      if (room.runState === "paused") {
+        throw new TransactionError("ROOM_PAUSED", "room is paused by the user");
+      }
+      if (room.status === "concluded") {
+        throw new TransactionError(
+          "ROOM_CONCLUDED",
+          "room is concluded; duplicate the room to continue",
+        );
+      }
+      if (room.activeRoundId !== null) {
+        throw new TransactionError("ROUND_ACTIVE_EXISTS", "room already has an unfinalized round");
+      }
+      // S4 mutual-exclusion (mirror of beginReportExecution's liveReport guard):
+      // a Room with a live report execution (resultKind="report" in one of the
+      // three live states beginReportExecution treats as live) must NOT open a
+      // new Round — beginReportExecution has already cleared activeRoundId for
+      // the concluding transient, so the CAS above can't see it. This closes the
+      // concluding ⇄ startRound race the other direction (activeRound ⇒ no
+      // beginReport was already enforced in S2; liveReport ⇒ no createRound here).
+      const liveReport = await db.modelExecutions
+        .where("roomId")
+        .equals(room.id)
+        .filter(
+          (candidate) =>
+            candidate.resultKind === "report" &&
+            (candidate.state === "prepared" ||
+              candidate.state === "running" ||
+              candidate.state === "succeeded_uncommitted"),
+        )
+        .first();
+      if (liveReport) {
+        throw new TransactionError(
+          "REPORT_IN_PROGRESS",
+          "a report execution is in flight; cannot start a new round",
+        );
+      }
+      const existing = await db.rounds.where("roomId").equals(input.roomId).toArray();
+      const roundNumber = existing.reduce((max, round) => Math.max(max, round.roundNumber), 0) + 1;
+      const round: DiscussionRound = {
+        id: uuid(),
+        roomId: input.roomId,
+        roundNumber,
+        participantOrder: [...input.participantOrder],
+        phase: "pending",
+        pausedFrom: null,
+        pauseReason: null,
+        nextParticipantIndex: 0,
+        activeExecutionId: null,
+        // Post-S2 Rounds await their facilitator focus (null); pre-S2 rows that
+        // predate this field read back as undefined and are never retro-focussed.
+        focusMessageId: null,
+        createdAt: ts(),
+        completedAt: null,
+      };
+      await db.rounds.add(round);
+      room.activeRoundId = round.id;
+      room.runState = "running";
+      room.lastActiveAt = ts();
+      await db.rooms.put(room);
+      return round;
+    },
+  );
 }
 
 export async function transitionRound(

@@ -1,5 +1,5 @@
 import { runtimeDb } from "@/lib/runtime-db";
-import type { DiscussionRound } from "@/models/discussion/entities";
+import type { DecisionReport, DiscussionRound } from "@/models/discussion/entities";
 import type { ModelExecution } from "@/models/discussion/model-execution";
 import type { RuntimeBinding } from "@/models/discussion/runtime-binding";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -135,6 +135,12 @@ export function useRoomReport(roomId: string | undefined, tick = 0) {
         .where("roomId")
         .equals(roomId as string)
         .first(),
+    // F3 cross-room guard runs in `select` so it also applies to the
+    // keepPreviousData placeholder. Without it, navigating room A → room B
+    // keeps serving A's report to B's ReportView (paired with B's topic for
+    // copy/download) until B's query resolves. Mismatch → undefined → ReportView
+    // renders "loading" rather than A's body under B's key.
+    select: (report) => guardRoomScopedReport(report, roomId),
   });
 }
 
@@ -162,7 +168,51 @@ export function useRoomRecoveryFacts(roomId: string | undefined, tick = 0) {
       ]);
       return { executions, bindings, rounds } satisfies RoomRecoveryFacts;
     },
+    // F3 cross-room guard in `select` (covers the keepPreviousData placeholder):
+    // a room switch mid-flight would otherwise let room A's executions / bindings/
+    // rounds render under room B until B's query resolves — including A's failed-
+    // report banner. A stale placeholder's arrays filter to empty → the UI falls
+    // back to a transient "no live report" read; a same-room facts object passes
+    // through untouched.
+    select: (facts) => filterRoomScopedFacts(facts, roomId),
   });
+}
+
+/** F3 pure guard: return the report only when it belongs to the queried room.
+ * Exported so the cross-room invariant is unit-testable without standing up a
+ * QueryClient + fake-indexeddb hook harness (the parseMaxRoundsInput precedent). */
+export function guardRoomScopedReport(
+  report: DecisionReport | undefined,
+  roomId: string | undefined,
+): DecisionReport | undefined {
+  if (!report) return undefined;
+  if (roomId === undefined || report.roomId !== roomId) return undefined;
+  return report;
+}
+
+/** F3 pure guard: zero out every recovery array unless all entries belong to
+ * the queried room. Same export rationale as guardRoomScopedReport. */
+export function filterRoomScopedFacts(
+  facts: RoomRecoveryFacts,
+  roomId: string | undefined,
+): RoomRecoveryFacts {
+  if (roomId === undefined) {
+    return { executions: [], bindings: [], rounds: [] };
+  }
+  const isRoom = (id: string): boolean => id === roomId;
+  const executions = facts.executions.filter((execution) => isRoom(execution.roomId));
+  const bindings = facts.bindings.filter((binding) => isRoom(binding.roomId));
+  const rounds = facts.rounds.filter((round) => isRoom(round.roomId));
+  // Only a stale (cross-room) placeholder gets filtered to empty; a same-room
+  // facts object passes through intact.
+  if (
+    executions.length === facts.executions.length &&
+    bindings.length === facts.bindings.length &&
+    rounds.length === facts.rounds.length
+  ) {
+    return facts;
+  }
+  return { executions, bindings, rounds };
 }
 
 export function useAgents() {
