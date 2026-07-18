@@ -108,6 +108,7 @@ async function main(): Promise<void> {
     driverFactories,
     logger,
     hostInstanceId,
+    idleScopeTtlMs: config.idleScopeTtlMs,
   });
 
   // Dynamic Profile readiness: same factories/handshake as execution.

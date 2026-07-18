@@ -81,8 +81,12 @@ export type InstallationsResponse = z.infer<typeof installationsResponseSchema>;
 // ---------------------------------------------------------------------------
 
 /** Closed canonical model catalog reported by a live Driver handshake. The
- * catalog is model-agnostic: it never carries accounts, paths or secrets. */
-export const modelCatalogResponseSchema = z.object({ catalog: z.array(z.string()) }).strict();
+ * catalog is model-agnostic: it never carries accounts, paths or secrets.
+ * `cachedAt` is the ISO timestamp the entry was cached at (every response
+ * carries it — fresh or cache hit — so the UI needs no branch). */
+export const modelCatalogResponseSchema = z
+  .object({ catalog: z.array(z.string()), cachedAt: z.string().min(1) })
+  .strict();
 export type ModelCatalogResponse = z.infer<typeof modelCatalogResponseSchema>;
 
 // ---------------------------------------------------------------------------
@@ -162,6 +166,15 @@ export const resolveProfileResponseSchema = z
   .object({
     readiness: profileReadinessSchema,
     binding: resolvedBindingSchema.nullable(),
+    /** ISO timestamp the cached entry was stamped at; present on every
+     * response (fresh handshake = the moment, cache hit = the original cache
+     * time), so the UI can render "checked Xs ago" without a branch. */
+    cachedAt: z.string().min(1),
+    /** Present on failure results: ms remaining until the backoff window ends.
+     * A fresh failure carries the full window length (2s/10s/30s by consecutive
+     * failure count); a cache hit inside the window carries the remaining ms.
+     * Absent on successes. */
+    retryAfterMs: z.number().int().nonnegative().optional(),
   })
   .strict();
 export type ResolveProfileResponse = z.infer<typeof resolveProfileResponseSchema>;

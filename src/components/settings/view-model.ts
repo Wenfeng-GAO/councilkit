@@ -136,3 +136,16 @@ export function profileRouteOf(profile: ExecutionProfileRecord): ClaudeRoute | u
     ? (profile.options as { route?: ClaudeRoute }).route
     : undefined;
 }
+
+/** S5: relative "X 秒前" label for a probe's cachedAt timestamp. Pure so it is
+ * unit-testable (the parseMaxRoundsInput precedent). `nowMs` lets the test pin
+ * the clock; <5s "刚刚", <60s "N 秒前", otherwise "N 分钟前". Falls back to
+ * an empty string on a non-finite/invalid input. */
+export function formatCheckedAgo(cachedAtIso: string, nowMs: number): string {
+  const cachedAt = Date.parse(cachedAtIso);
+  if (!Number.isFinite(cachedAt)) return "";
+  const deltaMs = Math.max(0, nowMs - cachedAt);
+  if (deltaMs < 5_000) return "刚刚";
+  if (deltaMs < 60_000) return `${Math.floor(deltaMs / 1000)} 秒前`;
+  return `${Math.floor(deltaMs / 60_000)} 分钟前`;
+}

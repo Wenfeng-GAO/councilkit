@@ -7,7 +7,7 @@ import type { ProfileSectionItem } from "@/runtime/readiness";
 import type { InstallationDto } from "@shared/runtime/schemas";
 import { useState } from "react";
 import { ProfileFormModal, type ProfileFormValues } from "./ProfileFormModal";
-import { driverDisplayName, profileReadinessView } from "./view-model";
+import { driverDisplayName, formatCheckedAgo, profileReadinessView } from "./view-model";
 
 /**
  * Settings section 3 — Execution Profiles (U6). CRUD over the runtime Dexie
@@ -42,6 +42,8 @@ export function ProfilesSection({
 
   const readinessOf = (profileId: string): ProfileSectionItem | undefined =>
     items.find((item) => item.profileId === profileId);
+
+  const nowMs = Date.now();
 
   const openCreate = () => {
     setEditing(undefined);
@@ -103,6 +105,17 @@ export function ProfilesSection({
                   <p className="text-xs text-muted">本地执行服务不可用，无法探测 readiness。</p>
                 ) : readiness?.detail ? (
                   <p className="break-words text-xs text-muted">{readiness.detail}</p>
+                ) : null}
+                {hostOnline && readiness?.checkedAt ? (
+                  <p className="text-xs text-muted">
+                    上次检查：{formatCheckedAgo(readiness.checkedAt, nowMs)}
+                  </p>
+                ) : null}
+                {hostOnline && readiness?.retryAfterMs !== undefined ? (
+                  <p className="text-xs text-muted">
+                    握手失败退避中，约 {Math.ceil(readiness.retryAfterMs / 1000)}{" "}
+                    秒后可重新握手；点击页面右上角「重新检查」可立即强制刷新。
+                  </p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
                   {readiness?.action === "edit-binding" ? (

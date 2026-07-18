@@ -3,6 +3,7 @@ import "fake-indexeddb/auto";
 import {
   type ControllerToken,
   createRound,
+  markBindingClosed,
   skipParticipant,
   transitionRound,
 } from "@/lib/discussion-transactions";
@@ -190,6 +191,11 @@ class FakeHost {
   ackBehavior: "ok" | "fail-network" | "drop-response" = "ok";
   ackStateProbe: ((executionId: string) => Promise<string | null>) | null = null;
   onCreateScope: (() => Promise<void>) | null = null;
+  /** R1 releaseRuntime order probe: invoked inside handleClose to read the
+   * binding's PERSISTED state at the instant closeScope fires. If the closure
+   * ran inside the guard transaction (and the HTTP runs only after commit),
+   * this reads "closed" — proving atomicity + post-commit HTTP ordering. */
+  closeProbe: ((scopeId: string) => Promise<string | null>) | null = null;
 
   executeCalls: ExecuteCall[] = [];
   instructionRecords: InstructionRecord[] = [];
@@ -198,6 +204,9 @@ class FakeHost {
   ackCalls: AckCall[] = [];
   cancelCalls: string[] = [];
   closeCalls: { scopeId: string; controllerId: string; leaseEpoch: number }[] = [];
+  /** Parallel to closeCalls: the closeProbe binding-state reading captured in
+   * each handleClose (null when the scope was already gone / no probe set). */
+  closeStates: (string | null)[] = [];
   takeoverCalls: { scopeId: string; controllerId: string; leaseEpoch: number }[] = [];
   getExecutionCalls: string[] = [];
   createScopeCalls: { scopeId: string; controllerId: string }[] = [];
@@ -234,6 +243,7 @@ class FakeHost {
     this.ackCalls = [];
     this.cancelCalls = [];
     this.closeCalls = [];
+    this.closeStates = [];
     this.takeoverCalls = [];
     this.getExecutionCalls = [];
     this.createScopeCalls = [];
@@ -241,6 +251,7 @@ class FakeHost {
     this.ackTombstones = 0;
     this.ackBehavior = "ok";
     this.onCreateScope = null;
+    this.closeProbe = null;
   }
 
   seedScope(input: {
@@ -736,17 +747,26 @@ class FakeHost {
     return jsonResponse({ executionId, state: "cancelling" });
   }
 
-  private handleClose(scopeId: string, body: Record<string, unknown> | null): Response {
+  private async handleClose(
+    scopeId: string,
+    body: Record<string, unknown> | null,
+  ): Promise<Response> {
     const scopeOrError = this.requireScope(scopeId);
     if (scopeOrError instanceof Response) return scopeOrError;
     const stale = this.fenced(scopeOrError, body);
     if (stale) return stale;
+    // R1: snapshot the persisted binding state at the instant closeScope fires,
+    // BEFORE marking the Host scope closed. The test asserts this reads
+    // "closed" — i.e. the releaseRuntime tx already committed the closure
+    // before issuing the HTTP close (atomic guard→close + post-commit HTTP).
+    const stateAtClose = this.closeProbe ? await this.closeProbe(scopeId) : null;
     scopeOrError.state = "closed";
     this.closeCalls.push({
       scopeId,
       controllerId: String(body?.controllerId ?? ""),
       leaseEpoch: Number(body?.leaseEpoch ?? 0),
     });
+    this.closeStates.push(stateAtClose);
     return jsonResponse({ scopeId, state: "closed" });
   }
 }
@@ -1592,5 +1612,274 @@ describe("recovery orchestration: rotateScope", () => {
       .filter((b) => b.state === "active")
       .first()) as { executionScopeId: string } | undefined;
     expect(activeBinding).toBeDefined();
+  });
+});
+
+describe("recovery orchestration: releaseRuntime (S5)", () => {
+  it("17. 释放 warm scope：closeScope 调用 + binding closed + 下一轮冷建（createScopeCalls=2）", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+    const round1 = await orchestrator.startRound(room.id);
+    expect(round1?.phase).toBe("completed");
+
+    const closeCallsBefore = host.closeCalls.length;
+    const createScopeCallsBefore = host.createScopeCalls.length;
+    const warmBinding = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { id: string; executionScopeId: string } | undefined;
+    expect(warmBinding).toBeDefined();
+
+    await orchestrator.releaseRuntime(room.id);
+
+    // The warm scope was closed (best-effort, single call); the binding is now closed.
+    expect(host.closeCalls.length).toBe(closeCallsBefore + 1);
+    expect(host.closeCalls.at(-1)?.scopeId).toBe(warmBinding?.executionScopeId);
+    const warmBindingAfter = await db.runtimeBindings.get(warmBinding?.id ?? "");
+    expect(warmBindingAfter?.state).toBe("closed");
+    const activeBindingAfter = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first();
+    expect(activeBindingAfter).toBeUndefined();
+
+    // The next round cold-builds a fresh scope (ensureScope rebuilds because the
+    // latest non-closed binding is gone / closed).
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+    const round2 = await orchestrator.startRound(room.id);
+    expect(round2?.phase).toBe("completed");
+    expect(host.createScopeCalls.length).toBe(createScopeCallsBefore + 1);
+    const warmAgain = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { executionScopeId: string } | undefined;
+    expect(warmAgain?.executionScopeId).not.toBe(warmBinding?.executionScopeId);
+  });
+
+  it("18. 有 live execution 拒绝：hang plan 起轮 → releaseRuntime rejects；complete() 收尾", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, previews } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    // Hang the focus so the round is running with a live execution.
+    host.plan(p1.id, { kind: "hang" });
+    host.plan(p2.id, { kind: "complete" });
+    const roundPromise = orchestrator.startRound(room.id);
+    // Wait for the focus execution to dispatch (it is now "running" / live).
+    await vi.waitFor(() => {
+      expect(previews.some((event) => event.type === "started")).toBe(true);
+    });
+
+    const closeCallsBefore = host.closeCalls.length;
+    await expect(orchestrator.releaseRuntime(room.id)).rejects.toThrow(/execution is running/);
+    expect(host.closeCalls.length).toBe(closeCallsBefore);
+    // R1 atomicity: a rejected guard never reaches the closure, so no closeScope
+    // HTTP fires (closeStates empty) and the binding stays active.
+    expect(host.closeStates).toHaveLength(0);
+    // The binding stayed active.
+    const active = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { executionScopeId: string; state: string } | undefined;
+    expect(active).toBeDefined();
+    expect(active?.state).toBe("active");
+
+    // Reap the hanging focus so the round promise drains and the test tears
+    // down cleanly (p1 message + p2 message + summary all default-complete).
+    const liveExecutionId = host.executeCalls[0]?.executionId as string;
+    expect(liveExecutionId).toBeTruthy();
+    host.complete(liveExecutionId, "focus");
+    const completed = await roundPromise;
+    expect(completed?.phase).toBe("completed");
+  });
+
+  it("19. in-flight round（prewarming）拒绝：手动转 prewarming 阶段无执行 → releaseRuntime rejects", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    // Seed a round halted at the prewarming phase with NO live execution — this
+    // isolates the in-flight-round guard (liveExecutions === 0 here).
+    const token = await currentTokenFor(db, room.id);
+    const idleRound = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, {
+      roomId: room.id,
+      roundId: idleRound.id,
+      token,
+      to: "prewarming",
+    });
+
+    const closeCallsBefore = host.closeCalls.length;
+    await expect(orchestrator.releaseRuntime(room.id)).rejects.toThrow(/round is in flight/);
+    expect(host.closeCalls.length).toBe(closeCallsBefore);
+    // R1 atomicity: the in-flight-round guard rejects inside the tx; no closure
+    // side-effect (closeStates empty) and the binding stays active.
+    expect(host.closeStates).toHaveLength(0);
+    const active = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { state: string } | undefined;
+    expect(active?.state).toBe("active");
+  });
+
+  it("19b. V1 paused 活动轮拒绝释放：pause 后 releaseRuntime rejects（恢复路径不能丢 binding）", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    // focus complete, p1 message complete, p2 non-retryable fail → paused round.
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "fail", retryable: false, dispatchState: "not_dispatched" });
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+
+    const closeCallsBefore = host.closeCalls.length;
+    // V1: a paused round is NOT terminal; releasing would strand the recovery
+    // intents (retry/abort/rotate need currentToken → active binding).
+    await expect(orchestrator.releaseRuntime(room.id)).rejects.toThrow(/unresolved round remains/);
+    expect(host.closeCalls.length).toBe(closeCallsBefore);
+    expect(host.closeStates).toHaveLength(0);
+    const active = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { state: string } | undefined;
+    expect(active?.state).toBe("active");
+  });
+
+  it("19c. V1 pending 活动轮拒绝释放：刚 createRound 未推进 → releaseRuntime rejects", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    // Seed a round left at the pending phase (created, never transitioned).
+    const token = await currentTokenFor(db, room.id);
+    const pendingRound = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    const stored = (await db.rounds.get(pendingRound.id)) as DiscussionRound;
+    expect(stored.phase).toBe("pending");
+
+    const closeCallsBefore = host.closeCalls.length;
+    await expect(orchestrator.releaseRuntime(room.id)).rejects.toThrow(/unresolved round remains/);
+    expect(host.closeCalls.length).toBe(closeCallsBefore);
+    expect(host.closeStates).toHaveLength(0);
+    const active = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { state: string } | undefined;
+    expect(active?.state).toBe("active");
+  });
+
+  it("19d. V1 completed 活动轮放行释放：activeRoundId 指向 completed round → 守卫放行 → releaseRuntime resolves（终态可释放）", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+    // 正常完成会清空 activeRoundId(summary commit tx 这么做)。这里把它重新指回
+    // 已完成的 round,逼真地经过 releaseRuntime 的 "completed 放行" 分支:守卫看到
+    // activeRoundId 非空 → 取 round → phase 终态(completed) → 不拒绝 → 放行闭 scope。
+    // (旧版只靠 activeRoundId=null 直接跳过守卫,并未真正走到该分支。aborted 路径对称。)
+    await db.rooms.update(room.id, { activeRoundId: round?.id ?? null });
+    const freshRoom = await db.rooms.get(room.id);
+    expect(freshRoom?.activeRoundId).toBe(round?.id);
+    expect(round?.phase).toBe("completed");
+
+    const closeCallsBefore = host.closeCalls.length;
+    await expect(orchestrator.releaseRuntime(room.id)).resolves.toBeUndefined();
+    expect(host.closeCalls.length).toBe(closeCallsBefore + 1);
+  });
+
+  it("20. 已冷幂等 no-op：无 active binding → resolve，closeCalls 空", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    // Close the binding manually to simulate an already-cold room (no active binding).
+    const initial = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { id: string } | undefined;
+    expect(initial).toBeDefined();
+    if (!initial) throw new Error("expected an initial active binding");
+    await markBindingClosed(db, initial.id);
+
+    const closeCallsBefore = host.closeCalls.length;
+    await expect(orchestrator.releaseRuntime(room.id)).resolves.toBeUndefined();
+    expect(host.closeCalls.length).toBe(closeCallsBefore);
+  });
+
+  it("21. Host 已死（close 404）仍本地收敛：binding 指向未知 scopeId → releaseRuntime resolve + binding closed", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const warmBinding = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { id: string; executionScopeId: string } | undefined;
+    expect(warmBinding).toBeDefined();
+    // Restart the Host: the known scopeId is gone, so closeScope will 404.
+    host.restart("host-ghost");
+
+    await expect(orchestrator.releaseRuntime(room.id)).resolves.toBeUndefined();
+    const after = await db.runtimeBindings.get(warmBinding?.id ?? "");
+    expect(after?.state).toBe("closed");
+  });
+
+  it("22. R1 顺序/原子性：binding 在守卫事务内置闭，closeScope 在事务提交后才调用（触发时 binding 已 closed）", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+    const round1 = await orchestrator.startRound(room.id);
+    expect(round1?.phase).toBe("completed");
+    const warmBinding = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { id: string; executionScopeId: string } | undefined;
+    expect(warmBinding).toBeDefined();
+
+    // Probe: read the binding's PERSISTED state at the instant closeScope fires.
+    // If the closure ran inside the guard tx and the HTTP runs only after commit,
+    // this MUST read "closed" — the atomicity + post-commit-order proof. Pre-fix
+    // (close-before-markBindingClosed) this read "active": the HTTP closed the
+    // Host scope while the local binding was still active, leaving the TOCTOU
+    // window where a concurrent startRound could lose its terminal.
+    host.closeProbe = async (scopeId) => {
+      const binding = await db.runtimeBindings
+        .where("roomId")
+        .equals(room.id)
+        .filter((b) => b.executionScopeId === scopeId)
+        .first();
+      return binding?.state ?? null;
+    };
+
+    await orchestrator.releaseRuntime(room.id);
+
+    // Exactly one close; at the instant it fired the binding was already closed.
+    expect(host.closeCalls).toHaveLength(1);
+    expect(host.closeCalls[0]?.scopeId).toBe(warmBinding?.executionScopeId);
+    expect(host.closeStates).toHaveLength(1);
+    expect(host.closeStates[0]).toBe("closed");
+    const after = await db.runtimeBindings.get(warmBinding?.id ?? "");
+    expect(after?.state).toBe("closed");
   });
 });

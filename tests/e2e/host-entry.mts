@@ -398,10 +398,16 @@ let quotaWindowOffsetMs = 0;
 function resetAll(
   scopeManager: { closeAll(reason: string): Promise<void> },
   executions: { reset(): void },
+  profileProbe: { clearCache(): void },
 ) {
   return async (): Promise<{ reset: true }> => {
     await scopeManager.closeAll("e2e-reset");
     executions.reset();
+    // S5: the probe cache (60s readiness/catalog + failure backoff) is real in
+    // the E2E host and outlives a single spec. Without clearing it, a same-DTO
+    // readiness/catalog key left by a prior case would mask the next case's
+    // fresh handshake — a new cross-case flake source. /reset must drop it.
+    profileProbe.clearCache();
     dropOpenEventStreams();
     for (const rig of rigs.values()) {
       releaseHolds(rig);
@@ -417,8 +423,9 @@ function resetAll(
 function testRoutes(
   scopeManager: { closeAll(reason: string): Promise<void> },
   executions: { reset(): void },
+  profileProbe: { clearCache(): void },
 ): Route[] {
-  const doReset = resetAll(scopeManager, executions);
+  const doReset = resetAll(scopeManager, executions, profileProbe);
   return [
     {
       method: "POST",
@@ -576,7 +583,7 @@ async function main(): Promise<void> {
     ...installationRoutes(services),
     ...modelRoutes(services),
     ...withEventStreamTracking(scopeRoutes(services)),
-    ...testRoutes(scopeManager, executions),
+    ...testRoutes(scopeManager, executions, profileProbe),
   ];
 
   const runtime = createRuntimeServer({ services, routes });

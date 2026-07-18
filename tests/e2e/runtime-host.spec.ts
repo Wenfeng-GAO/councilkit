@@ -19,6 +19,7 @@ import {
   freshPage,
   pausedPanel,
   readStore,
+  releaseRuntimeViaButton,
   reportView,
   resetDriverState,
   resumeDrivers,
@@ -692,5 +693,79 @@ test.describe("runtime host cutover", () => {
     expect(reportExecutions.some((execution) => execution.state === "committed")).toBe(true);
     const roomRows = (await readStore<unknown>(page, "rooms")) as { id: string; status: string }[];
     expect(roomRows.find((row) => row.id === roomId)?.status).toBe("concluded");
+  });
+
+  test("release runtime: 释放运行时 closes warm scope, cold-builds on the next round; warm/cold indicator + quota update", async () => {
+    test.slow();
+    const { roomId, claudePid, codexPid } = await setupRoom(page, "E2E 释放运行时");
+
+    // --- round 1: warm-create (prewarm=1/participant) and complete ---
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    await expect(roundSection(page, 1).getByText(`reply-${claudePid}-1`)).toBeVisible();
+    await expect(roundSection(page, 1).getByText(`reply-${codexPid}-1`)).toBeVisible();
+
+    // S2 focus 后 facilitator 口径 (照 :166-172): claude 3 execs/round
+    // (focus + message + summary), codex 1 exec/round. prewarm=1/人.
+    let counters = await driverCounters(page);
+    expect(counters[claudePid]?.prewarmCount).toBe(1);
+    expect(counters[codexPid]?.prewarmCount).toBe(1);
+    expect(counters[claudePid]?.executeCount).toBe(3);
+    expect(counters[codexPid]?.executeCount).toBe(1);
+    expect(counters[claudePid]?.closeCount).toBe(0);
+    expect(counters[codexPid]?.closeCount).toBe(0);
+
+    // warm indicator + quota 1/4 while the round's scope is active.
+    await expect(page.locator("header").getByText("运行时已预热", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("scope-quota")).toContainText("运行时 1/4");
+
+    // --- release the warm runtime via the header button (no modal) ---
+    await releaseRuntimeViaButton(page);
+    // cold indicator visible means markBindingClosed + notify flushed (the Host
+    // closeScope awaited driver.close before its response returned), so the
+    // per-participant close counters are settled by now.
+    await expect(page.locator("header").getByText("运行时未预热", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "释放运行时" })).toHaveCount(0);
+
+    // closeScope closes every driver in that scope: 1 close per participant.
+    counters = await driverCounters(page);
+    expect(counters[claudePid]?.closeCount).toBe(1);
+    expect(counters[codexPid]?.closeCount).toBe(1);
+    // execute counts unchanged — release only closes the scope.
+    expect(counters[claudePid]?.executeCount).toBe(3);
+    expect(counters[codexPid]?.executeCount).toBe(1);
+
+    // --- round 2: cold-build a fresh scope (prewarm=2/人), complete again ---
+    await startRound(page);
+    await waitRoundPhase(page, 2, "已完成");
+    await expect(roundSection(page, 2).getByText(`reply-${claudePid}-4`)).toBeVisible();
+    await expect(roundSection(page, 2).getByText(`reply-${codexPid}-2`)).toBeVisible();
+
+    // warm recreated; quota back to 1/4 for THIS room's active binding.
+    await expect(page.locator("header").getByText("运行时已预热", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("scope-quota")).toContainText("运行时 1/4");
+
+    // prewarm+1/人 (cold rebuild), execute claude+3 (6 total) / codex+1 (2 total).
+    counters = await driverCounters(page);
+    expect(counters[claudePid]?.prewarmCount).toBe(2);
+    expect(counters[codexPid]?.prewarmCount).toBe(2);
+    expect(counters[claudePid]?.executeCount).toBe(6);
+    expect(counters[codexPid]?.executeCount).toBe(2);
+    // the round-2 scope is still warm (not released) -> no extra close.
+    expect(counters[claudePid]?.closeCount).toBe(1);
+    expect(counters[codexPid]?.closeCount).toBe(1);
+
+    // Dexie: two bindings for the room — the released one closed, the round-2
+    // one active.
+    const bindings = (await readStore<unknown>(page, "runtimeBindings")) as {
+      id: string;
+      roomId: string;
+      state: string;
+      executionScopeId: string | null;
+    }[];
+    const roomBindings = bindings.filter((binding) => binding.roomId === roomId);
+    expect(roomBindings).toHaveLength(2);
+    expect(roomBindings.filter((binding) => binding.state === "closed")).toHaveLength(1);
+    expect(roomBindings.filter((binding) => binding.state === "active")).toHaveLength(1);
   });
 });

@@ -5,6 +5,7 @@ import {
   SUPPORTED_NODE_MAJOR,
 } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
+import { DEFAULT_IDLE_SCOPE_TTL_MS } from "./scopes/scope-manager";
 
 export type HostMode = "development" | "production";
 
@@ -38,6 +39,10 @@ export interface HostConfig {
    * Created on demand, never shared between Participants.
    */
   driverWorkRoot: string;
+  /** Idle scope reaper deadline (ms since the last execution terminal).
+   * Optional: the scope manager falls back to its own 30min default, so
+   * existing literal HostConfig constructions keep compiling. */
+  idleScopeTtlMs?: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): HostConfig {
@@ -56,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HostConfig {
     distDir,
     watchdogProgram,
     driverWorkRoot,
+    idleScopeTtlMs: DEFAULT_IDLE_SCOPE_TTL_MS,
   };
 }
 
