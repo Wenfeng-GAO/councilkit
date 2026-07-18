@@ -1,6 +1,6 @@
 # feat: CouncilKit 决策内核与可靠性体验（下一阶段实施计划）
 
-- 状态：待评审（grill-with-docs 细节敲定中）
+- 状态：**已定稿**（grill-with-docs 敲定：Q1 范围、Q2 状态词法、Q3 Report 实体与硬锁定、Q4 focus 事务与模式承载经用户确认；Q5–Q10 按推荐默认值锁定，见各节「已定」注记；ADR 0008/0009/0010 已落）
 - 日期：2026-07-18
 - 输入：`docs/brainstorms/2026-07-18-next-iteration-directions.md`（方向评审）、`docs/product.md`（MVP 原始承诺）、`docs/plans/2026-07-17-001-feat-runtime-host-dual-driver-v1-cutover-plan.md`（执行基座）、`docs/verification/runtime-host-v1-cutover.md`（已验收基线）
 - 前置：V1 Runtime Host 切流全部验收通过（commit `c45e68e`），工作区干净
@@ -89,8 +89,9 @@
 **实现要点**
 
 - **模式 instruction**：三种模式各一套 message/summary/focus/report 的 instruction 文案模板（集中常量在 context-snapshot 或新模块；instructionDigest 体系不变——不同模式=不同 instruction=不同 digest，快照语义自洽）。
-- **Round focus**：`startRound` 在 prewarm 后、第一位 Participant 发言前，先做一次 facilitator 的 focus ModelExecution（resultKind `"focus"`，committedEntityType `"message"`，落 messages 表，Round.focusMessageId 关联）；失败按既有失败语义处理（不重试超过 retry-once 规则）。review 模式下 focus 必含评审维度；brainstorm 必含本轮方向；planning 必含约束确认。
-- **收敛信号**：summary instruction 追加结构化末行要求（`收敛建议：是|否`）；orchestrator 提交 Summary 后解析该行（解析失败=否，不阻塞提交）。判定收敛 `(建议=是 && roundsCompleted ≥ 1) || (maxRounds !== null && roundsCompleted ≥ maxRounds)` → 进入 concluding。
+- **Round focus**：`startRound` 在 prewarm 后、第一位 Participant 发言前，先做一次 facilitator 的 focus ModelExecution（resultKind `"focus"`，committedEntityType `"message"`，落 messages 表）。**focus 事务语义（已定，Q4）**：专用 begin/commit 变体——participantId 必须是 facilitator、**不推进 cursor**、写 `round.focusMessageId`、revision 照常 +1；失败沿用现有失败分类与 retry-once 规则。focus 是 Round 解剖的第 0 环（focus → 依序发言 → summary），每轮必有、三模式共用同一事务，仅 instruction 模板不同（review 必含评审维度；brainstorm 必含本轮方向；planning 必含约束确认）。
+- **模式承载（已定，Q4 + ADR-0010）**：三种模式**仅由 instruction 模板族承载，编排零分支**。product.md §4.3 的盲评（评审者互不可见）语义**有意推迟**：V1 评审在共享上下文下存在结构性锚定，接受该风险并记录于 ADR-0010；真正的 per-participant 快照过滤盲评列为后续增强（非破坏性）。
+- **收敛信号（已定）**：summary instruction 追加结构化末行要求（`收敛建议：是|否` 文本标记）；orchestrator 提交 Summary 后解析该行（解析失败=否，不阻塞提交）。判定收敛 `(建议=是 && roundsCompleted ≥ 1) || (maxRounds !== null && roundsCompleted ≥ maxRounds)` → 进入 concluding。
 - **concluding → report**：收敛判定后自动发起一次 facilitator report ModelExecution（resultKind `"report"`，committedEntityType `"report"`，快照含全部 Round Summary 与 targetOutput/mode；走同一 persist→ACK 管线）→ `commitReport` 事务落 `reports` 表并把 Room.status 置 `concluded`（同事务）。concluded Room 拒绝 startRound（ROOM_CONCLUDED），UI 只读展示时间线与报告。用户手动「总结并结束」走同一 concluding 路径（新增 intent `concludeRoom`，要求 controlling + 当前无运行中 execution）。
 - **startRoundWithUserMessage(roomId, content)**：建 Round → `appendUserMessage` → 正常 prewarm/runLoop（追问落 shared context 后再开轮，消除"两轮之间不能发言"断点）；运行中发送的 UI 文案改为「将中断当前生成（stale_context）」并需确认。
 - **迁移兼容**：S1 的默认 mode 适用于全部存量房间；focus 为可选环节——focus 失败的 Round 按失败语义暂停，不阻塞"focus 完成前无人发言"的不变量（focus 是 Round 的第 0 个 execution，纳入 cursor 语义：participantOrder 不变，focus 不占 cursor）。
@@ -119,8 +120,8 @@
 
 **实现要点**
 
-- **三件套语义**（对齐 product.md §143）：`execution_failed`/`model_mismatch`/`tool_state_unknown`/`empty_output`/`stale_context` 暂停时——「重试该 Participant」（同 cursor 全新 executionId，retryOfExecutionId 链接，仍受 retry-once 上限约束：只允许原失败非 retryable 用尽后的**用户显式**重试，用户重试次数不设自动上限但 UI 记录次数）、「跳过并继续」（cursor+1 持久化 + 失败记录保留在折叠区；跳过 summary/facilitator 不允许——facilitator 失败仍只有修复/终止）、「终止本轮」（既有）。
-- **轮转 intent** `rotateScope(roomId)`：对 needs_rebase 系暂停（detail 含 `session reconciliation:`）——`abortPausedRound` → `client.closeScope` → `markBindingClosed`（经 ensureScope 冷重建路径，已有）→ `startRound`。全链编排在一个 intent 内，任一步失败保持可解释 paused。
+- **三件套语义**（对齐 product.md §143，retry/skip 细则已定）：`execution_failed`/`model_mismatch`/`tool_state_unknown`/`empty_output`/`stale_context` 暂停时——「重试该 Participant」（同 cursor 全新 executionId，`retryOfExecutionId` 链接；**自动重试仍严格 once，用户显式手动重试不设次数上限但 UI 记录次数**）、「跳过并继续」（cursor+1 持久化 + 失败记录保留在折叠区并**进入后续 Summary 快照**（facilitator 知道谁缺席）；**跳过仅限非 facilitator**——facilitator 失败仍只有修复/终止，不静默换 facilitator）、「终止本轮」（既有）。
+- **轮转 intent** `rotateScope(roomId)`：对 needs_rebase 系暂停（detail 含 `session reconciliation:`）——`abortPausedRound` → `client.closeScope` → `markBindingClosed`（经 ensureScope 冷重建路径，已有）→ `startRound`。全链编排在一个 intent 内，任一步失败保持可解释 paused。**轮转只经用户一键触发，不做自动轮转（已定）**——每次重建都在时间线可见。
 - **时间线轮转记录**：轮转在时间线留下结构化条目（"执行环境已重建（needs_rebase · 第 N 次）"），绑定变更事实来自 Dexie（bindings 历史）+ rounds 失败记录，不新造表。
 - paused 面板动作按 code 分流：needs_rebase → 主行动轮转；其余可恢复失败 → 三件套；facilitator 失败 → 修复入口 + 终止。
 
@@ -180,8 +181,8 @@
 
 **实现要点**
 
-- **缓存口径**：readiness 以 `profileDigest + modelId` 为键缓存 60s，catalog 以 `driverId + installationId + route` 为键缓存 60s；握手失败按 2s/10s/30s 退避且缓存失败结果（同样可手动刷新）；任何 Profile/Installation 写操作（revalidate、Profile 编辑落库后的下次请求带 refresh=1）使对应键失效；响应带 `cachedAt` 字段供 UI 显示"X 秒前检查"。缓存只在 Host 内存，不落盘、不影响既有 200/4xx 语义。
-- **idle TTL**：scope 自最后一次执行结束起超过 `idleScopeTtlMs`（默认 30min，HostConfig 可配）→ closeScopeInternal("idle-ttl")；计时器沿用 creating TTL 同款模式；close 后 binding 由浏览器侧 ensureScope 冷重建（已验收路径）。
+- **缓存口径（已定）**：readiness 以 `profileDigest + modelId` 为键缓存 **60s**，catalog 以 `driverId + installationId + route` 为键缓存 **60s**；握手失败按 **2s / 10s / 30s** 退避且缓存失败结果（同样可手动刷新）；任何 Profile 编辑或 Installation revalidate 使对应键**立即失效**；`refresh=1` 查询参数强制绕过缓存；响应带 `cachedAt` 字段供 UI 显示"X 秒前检查"。缓存只在 Host 内存，不落盘、不影响既有 200/4xx 语义。
+- **idle TTL（已定）**：scope 自**最后一次执行结束**起超过 `idleScopeTtlMs`（默认 **30min**，HostConfig 可配）→ closeScopeInternal("idle-ttl")；计时器沿用 creating TTL 同款模式；close 后 binding 由浏览器侧 ensureScope 冷重建（已验收路径）。
 - **释放运行时**：`releaseRuntime`（要求 room 无活动 round/执行）→ closeScope + markBindingClosed + 下一轮自动冷建；RoomHeader 显示 warm/cold 与配额占用（`GET /api/v1/scopes` 状态可得），接近 maxActiveScopes 时提示先释放。
 - Settings：全局「重新检查」按钮（refresh=1 全量）、每行 `cachedAt`、退避中禁用提交并说明。
 
@@ -210,7 +211,7 @@
 
 **实现要点**
 
-- **诊断包**（强 sanitize）：health、installations（state/detail，无路径以外的敏感信息——路径属本机信息，保留 realpath？决定：**保留**，本机自诊需要；文档注明）、scope/execution 计数与状态、最近 N 条 warn/error 日志（已 sanitize 的结构化行）、config 非敏感项（mode/port/Node 版本）；**绝不包含** prompt/正文/token/Cookie/密钥/ env。下载为单个 JSON。
+- **诊断包**（强 sanitize）：health、installations（state/detail；**realpath 保留**（已定）——本机自诊必需，属同机用户信息边界，文档注明）、scope/execution 计数与状态、最近 N 条 warn/error 日志（已 sanitize 的结构化行）、config 非敏感项（mode/port/Node 版本）；**绝不包含** prompt/正文/token/Cookie/密钥/ env。下载为单个 JSON。
 - **launchd**：plist 指向 `node <repo>/dist-host/main.mjs`，KeepAlive=true、ThrottleInterval=10、StandardOut/Err 到 `~/Library/Logs/CouncilKit/`；脚本只写文件并打印 `launchctl` 指引（不自动 load，由用户确认）；README 给出卸载与日志位置。手动验证，不纳入自动门。
 
 **测试与验证**
@@ -331,11 +332,12 @@
 
 ## 候选 ADR（grill 后按需落）
 
-1. Decision Report 作为新的一等持久化产出物（而非 Summary 的衍生视图）。
-2. 讨论模式仅由 instruction 模板承载（不引入编排分支）。
-3. 收敛判定采用" facilitator 建议或 maxRounds"的机械规则（不做质量评分）。
-4. 探针结果 Host 内存短缓存（换取 Settings 可用性，放弃实时性）。
-5. needs_rebase 轮转可见化（时间线一等记录而非静默恢复）。
+1. ~~Decision Report 作为新的一等持久化产出物~~ → **已落 `docs/adr/0009`**（含 Room 硬锁定与复制逃生口）。
+2. ~~讨论模式仅由 instruction 模板承载~~ → **已落 `docs/adr/0010`**（含盲评有意推迟）。
+3. 双轴状态模型替代 product.md 六态单轴 → **已落 `docs/adr/0008`**。
+4. 收敛判定采用"facilitator 建议或 maxRounds"的机械规则（不做质量评分）→ 实施 S2 时如无争议可不立。
+5. 探针结果 Host 内存短缓存（换取 Settings 可用性，放弃实时性）→ 实施 S5 时如无争议可不立。
+6. needs_rebase 轮转可见化 + **手动一键触发（不做自动轮转，已定）** → 实施 S3 时如无争议可不立。
 
 ## 文档交付
 
