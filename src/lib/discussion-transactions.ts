@@ -1,15 +1,22 @@
 import type {
+  DecisionReport,
   DiscussionMessage,
   DiscussionRoom,
   DiscussionRound,
   DiscussionSummary,
   RoundPauseReason,
 } from "@/models/discussion/entities";
-import { TransactionError, createRuntimeBinding, digestOf } from "@/models/discussion/factories";
+import {
+  TransactionError,
+  createDecisionReport,
+  createRuntimeBinding,
+  digestOf,
+} from "@/models/discussion/factories";
 import type {
   ModelExecution,
   ModelExecutionError,
   ModelExecutionUsage,
+  ResultKind,
   RuntimeOutcome,
 } from "@/models/discussion/model-execution";
 import type { RuntimeBinding } from "@/models/discussion/runtime-binding";
@@ -191,6 +198,12 @@ export async function createRound(
     if (room.runState === "paused") {
       throw new TransactionError("ROOM_PAUSED", "room is paused by the user");
     }
+    if (room.status === "concluded") {
+      throw new TransactionError(
+        "ROOM_CONCLUDED",
+        "room is concluded; duplicate the room to continue",
+      );
+    }
     if (room.activeRoundId !== null) {
       throw new TransactionError("ROUND_ACTIVE_EXISTS", "room already has an unfinalized round");
     }
@@ -206,6 +219,9 @@ export async function createRound(
       pauseReason: null,
       nextParticipantIndex: 0,
       activeExecutionId: null,
+      // Post-S2 Rounds await their facilitator focus (null); pre-S2 rows that
+      // predate this field read back as undefined and are never retro-focussed.
+      focusMessageId: null,
       createdAt: ts(),
       completedAt: null,
     };
@@ -391,6 +407,19 @@ export async function beginExecution(
         } else if (round.participantOrder[round.nextParticipantIndex] !== execution.participantId) {
           throw new TransactionError("STALE_EXECUTION", "participant is not at the round cursor");
         }
+        // Transaction-level invariant «no one speaks before the focus lands»:
+        // a post-S2 Round (focusMessageId === null) rejects message/summary
+        // executions until the focus commits. Pre-S2 rows (undefined) pass —
+        // they are never retro-focussed (orchestrator rollout semantics).
+        if (
+          (execution.resultKind === "message" || execution.resultKind === "summary") &&
+          round.focusMessageId === null
+        ) {
+          throw new TransactionError(
+            "FOCUS_REQUIRED",
+            "round awaits its facilitator focus before any participant may speak",
+          );
+        }
         await db.modelExecutions.add(execution);
         round.activeExecutionId = execution.executionId;
         await db.rounds.put(round);
@@ -502,7 +531,7 @@ async function loadCommitContext(
 
 function replayOrThrow(
   execution: ModelExecution,
-  expectedKind: "message" | "summary",
+  expectedKind: ResultKind,
   content: string,
   finalEventSeq: number,
 ): { outcome: "replayed"; entityId: string } {
@@ -522,7 +551,7 @@ function replayOrThrow(
   return { outcome: "replayed", entityId: execution.committedEntityId as string };
 }
 
-function assertCommittable(execution: ModelExecution, expectedKind: "message" | "summary"): void {
+function assertCommittable(execution: ModelExecution, expectedKind: ResultKind): void {
   if (execution.resultKind !== expectedKind) {
     throw new TransactionError(
       "IDEMPOTENCY_CONFLICT",
@@ -598,6 +627,12 @@ export async function commitModelMessage(
           return replayOrThrow(execution, "message", input.content, input.finalEventSeq);
         }
         assertCommittable(execution, "message");
+        // Defensive twin of the beginExecution guard: a message may never
+        // commit onto a post-S2 Round whose focus has not landed (undefined
+        // rows are exempt — legacy Rounds are never retro-focussed).
+        if (round.focusMessageId === null) {
+          throw new TransactionError("FOCUS_REQUIRED", "round has no committed focus yet");
+        }
         if (room.activeRoundId !== round.id || round.phase !== "running") {
           throw new TransactionError("STALE_EXECUTION", "round is not actively running");
         }
@@ -739,6 +774,351 @@ export async function commitSummary(
         room.lastActiveAt = ts();
         await db.rooms.put(room);
         return { outcome: "committed", entityId: summary.id, roundPhase: round.phase };
+      },
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Focus execution (S2): Round 0 ring — facilitator framing message that does
+// NOT advance the cursor and stays in phase "running". Shares the persist→ACK
+// pipeline via a focus-dedicated begin/commit pair (wire kind "message").
+// ---------------------------------------------------------------------------
+
+/** Reserve the active-execution slot for the facilitator focus. Mirrors
+ * beginExecution's CAS + participant checks but adds the facilitator and
+ * «no focus yet» guards, and is invariant to the cursor (focus never
+ * occupies a participantOrder slot). */
+export async function beginFocusExecution(
+  db: CouncilKitRuntimeDB,
+  input: { execution: ModelExecution; token: ControllerToken },
+): Promise<ModelExecution> {
+  return withConflictTranslation(() =>
+    db.transaction(
+      "rw",
+      [db.rounds, db.rooms, db.participants, db.modelExecutions, db.runtimeBindings],
+      async () => {
+        const { execution } = input;
+        const round = await db.rounds.get(execution.roundId);
+        if (!round) throw new TransactionError("ROUND_NOT_FOUND", "unknown round");
+        const room = await requireRoom(db, round.roomId);
+        await requireController(db, round.roomId, input.token);
+        if (room.activeRoundId !== round.id) {
+          throw new TransactionError("STALE_EXECUTION", "round is not the room's active round");
+        }
+        if (round.phase !== "running") {
+          throw new TransactionError(
+            "ROUND_PHASE",
+            `cannot start a focus execution in phase ${round.phase}`,
+          );
+        }
+        if (round.activeExecutionId !== null) {
+          throw new TransactionError("EXECUTION_ACTIVE", "round already has an active execution");
+        }
+        const participant = await db.participants.get(execution.participantId);
+        if (!participant || participant.state !== "active") {
+          throw new TransactionError("PARTICIPANT_INACTIVE", "participant is not active");
+        }
+        if (execution.participantId !== room.facilitatorParticipantId) {
+          throw new TransactionError(
+            "FACILITATOR_MISMATCH",
+            "focus execution must belong to the room facilitator",
+          );
+        }
+        // Strict three-state: focusMessageId must be exactly null. A legacy
+        // `undefined` is rejected rather than silently treated as unset.
+        if (round.focusMessageId !== null) {
+          throw new TransactionError("STALE_EXECUTION", "round already has a committed focus");
+        }
+        await db.modelExecutions.add(execution);
+        round.activeExecutionId = execution.executionId;
+        await db.rounds.put(round);
+        return execution;
+      },
+    ),
+  );
+}
+
+/** Commit the facilitator focus message: writes a participant-role Message
+ * (role participant, participantId=facilitator), leaves the cursor untouched,
+ * keeps the round in phase "running", records round.focusMessageId and bumps
+ * the Room revision once. Idempotent replay by resultKind/finalEventSeq/digest. */
+export async function commitFocusMessage(
+  db: CouncilKitRuntimeDB,
+  input: CommitInput,
+): Promise<CommitOutcome> {
+  return withConflictTranslation(() =>
+    db.transaction(
+      "rw",
+      [
+        db.modelExecutions,
+        db.rounds,
+        db.rooms,
+        db.messages,
+        db.summaries,
+        db.participants,
+        db.runtimeBindings,
+      ],
+      async () => {
+        const { execution, round, room, participant } = await loadCommitContext(
+          db,
+          input.executionId,
+          input.token,
+        );
+        if (execution.state === "committed") {
+          return replayOrThrow(execution, "focus", input.content, input.finalEventSeq);
+        }
+        assertCommittable(execution, "focus");
+        if (execution.participantId !== room.facilitatorParticipantId) {
+          throw new TransactionError(
+            "FACILITATOR_MISMATCH",
+            "focus execution must belong to the room facilitator",
+          );
+        }
+        if (room.activeRoundId !== round.id || round.phase !== "running") {
+          throw new TransactionError("STALE_EXECUTION", "round is not actively running");
+        }
+        if (round.activeExecutionId !== execution.executionId) {
+          throw new TransactionError("STALE_EXECUTION", "execution is not the round's active one");
+        }
+        // Strict three-state guard mirroring beginFocusExecution: focusMessageId
+        // must be exactly null. A legacy `undefined` or a duplicate focus commit
+        // is rejected rather than silently overwriting the slot.
+        if (round.focusMessageId !== null) {
+          throw new TransactionError("STALE_EXECUTION", "round already has a committed focus");
+        }
+        if (
+          execution.expectedRoomDigest !== room.contextDigest ||
+          execution.contextRevision !== room.contextRevision ||
+          execution.participantSnapshotDigest !== participant.participantSnapshotDigest
+        ) {
+          return discardLockedExecution(
+            db,
+            execution,
+            round,
+            "stale_context",
+            input.finalEventSeq,
+            null,
+          );
+        }
+        const message: DiscussionMessage = {
+          id: uuid(),
+          roomId: room.id,
+          roundId: round.id,
+          role: "participant",
+          participantId: participant.id,
+          content: input.content,
+          sourceExecutionId: execution.executionId,
+          createdAt: ts(),
+        };
+        await db.messages.add(message);
+        execution.state = "committed";
+        execution.contentDigest = contentDigestOf(input.content);
+        execution.committedEntityType = "message";
+        execution.committedEntityId = message.id;
+        execution.effectiveModel = input.effectiveModel;
+        execution.usage = input.usage;
+        execution.finalEventSeq = input.finalEventSeq;
+        execution.dispatchState = input.dispatchState;
+        execution.toolState = input.toolState;
+        execution.ackState = "pending";
+        execution.updatedAt = ts();
+        await db.modelExecutions.put(execution);
+        await bumpRoomContext(db, room);
+        // Focus consumes neither the cursor nor the phase: the round stays
+        // running and nextParticipantIndex is untouched.
+        round.activeExecutionId = null;
+        round.focusMessageId = message.id;
+        await db.rounds.put(round);
+        return { outcome: "committed", entityId: message.id, roundPhase: round.phase };
+      },
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Report execution (S2): the facilitator decision report — one committed
+// report per Room, concluding it. Shares the persist→ACK pipeline (wire kind
+// "summary"); does not touch the completed Round nor bump the Room revision.
+// ---------------------------------------------------------------------------
+
+/** Begin a report execution. The completed anchor Round is never mutated
+ * (invariant «completed ⇒ no activeExecutionId» holds). MANUAL PATH ATOMIC
+ * ABORT (Orchestrator ruling §3): if the room still has an unfinalized
+ * active round, abort it IN THIS SAME transaction — but only when it has no
+ * live execution (the caller checks first; this is the transaction-level
+ * safety net that closes the crash window between a separate abort and the
+ * anchor write). A round mid-execution (activeExecutionId !== null) is
+ * rejected with ROUND_ACTIVE_EXISTS. Verifies the room is open and has no
+ * separate live report execution. The automatic path (post summary-commit)
+ * reaches here with activeRoundId already null, so the abort branch is a
+ * no-op. */
+export async function beginReportExecution(
+  db: CouncilKitRuntimeDB,
+  input: { execution: ModelExecution; token: ControllerToken },
+): Promise<ModelExecution> {
+  return withConflictTranslation(() =>
+    db.transaction(
+      "rw",
+      [db.rooms, db.rounds, db.participants, db.modelExecutions, db.runtimeBindings],
+      async () => {
+        const { execution } = input;
+        if (execution.resultKind !== "report") {
+          throw new TransactionError("INVALID", "expected a report execution");
+        }
+        const room = await requireRoom(db, execution.roomId);
+        await requireController(db, execution.roomId, input.token);
+        if (room.status === "concluded") {
+          throw new TransactionError("ROOM_CONCLUDED", "room is already concluded");
+        }
+        if (room.activeRoundId !== null) {
+          const activeRound = await db.rounds.get(room.activeRoundId);
+          if (activeRound && activeRound.activeExecutionId !== null) {
+            throw new TransactionError(
+              "ROUND_ACTIVE_EXISTS",
+              "cannot conclude while an execution is running",
+            );
+          }
+          // Atomic abort of the unfinalized round (no live execution to
+          // interrupt) — closes the crash window a separate abortRound would
+          // leave between abort and the report anchor.
+          if (activeRound && activeRound.phase !== "completed" && activeRound.phase !== "aborted") {
+            activeRound.phase = "aborted";
+            activeRound.pausedFrom = null;
+            activeRound.pauseReason = null;
+            activeRound.activeExecutionId = null;
+            activeRound.completedAt = ts();
+            await db.rounds.put(activeRound);
+          }
+          room.activeRoundId = null;
+          room.runState = "idle";
+        }
+        const anchorRound = await db.rounds.get(execution.roundId);
+        if (!anchorRound || anchorRound.roomId !== room.id) {
+          throw new TransactionError("ROUND_NOT_FOUND", "unknown anchor round for this room");
+        }
+        if (anchorRound.phase !== "completed") {
+          throw new TransactionError("ROUND_PHASE", "report must anchor on a completed round");
+        }
+        if (execution.participantId !== room.facilitatorParticipantId) {
+          throw new TransactionError(
+            "FACILITATOR_MISMATCH",
+            "report execution must belong to the room facilitator",
+          );
+        }
+        const participant = await db.participants.get(execution.participantId);
+        if (!participant || participant.state !== "active") {
+          throw new TransactionError("PARTICIPANT_INACTIVE", "facilitator is not active");
+        }
+        // At most one live report execution per room (the schema's
+        // &sourceExecutionId index only catches duplicate commits, not
+        // duplicate dispatches).
+        const liveReport = await db.modelExecutions
+          .where("roomId")
+          .equals(room.id)
+          .filter(
+            (candidate) =>
+              candidate.resultKind === "report" &&
+              (candidate.state === "prepared" ||
+                candidate.state === "running" ||
+                candidate.state === "succeeded_uncommitted"),
+          )
+          .first();
+        if (liveReport) {
+          throw new TransactionError("EXECUTION_ACTIVE", "a report execution is already in flight");
+        }
+        room.lastActiveAt = ts();
+        await db.rooms.put(room);
+        await db.modelExecutions.add(execution);
+        return execution;
+      },
+    ),
+  );
+}
+
+/** Commit the decision report: persists one report row, marks the Room
+ * concluded (status=concluded, runState=idle) in the SAME transaction, and
+ * sets the report anchor on the execution. The Room revision does NOT bump
+ * (the report is not part of the shared discussion projection). Idempotent:
+ * a second commit of the same execution replays; a duplicate report for the
+ * room (different execution) yields IDEMPOTENCY_CONFLICT — both the
+ * application-layer check and the &sourceExecutionId unique index back it. */
+export async function commitReport(
+  db: CouncilKitRuntimeDB,
+  input: CommitInput,
+): Promise<CommitOutcome> {
+  return withConflictTranslation(() =>
+    db.transaction(
+      "rw",
+      [db.modelExecutions, db.rounds, db.rooms, db.reports, db.participants, db.runtimeBindings],
+      async () => {
+        const execution = await db.modelExecutions.get(input.executionId);
+        if (!execution) throw new TransactionError("EXECUTION_NOT_FOUND", "unknown execution");
+        const room = await requireRoom(db, execution.roomId);
+        await requireController(db, execution.roomId, input.token);
+        const participant = await db.participants.get(execution.participantId);
+        if (!participant)
+          throw new TransactionError("PARTICIPANT_NOT_FOUND", "unknown participant");
+
+        if (execution.state === "committed") {
+          return replayOrThrow(execution, "report", input.content, input.finalEventSeq);
+        }
+        assertCommittable(execution, "report");
+        // Application-layer idempotency: schema only guarantees sourceExecutionId
+        // uniqueness, not roomId uniqueness — a second report for the same room
+        // (via a divergent execution) is rejected before touching the table.
+        // This check precedes ROOM_CONCLUDED so that a replay under a concluded
+        // room surfaces the duplicate-report conflict rather than swallowing it.
+        const existing = await db.reports.where("roomId").equals(room.id).first();
+        if (existing) {
+          throw new TransactionError(
+            "IDEMPOTENCY_CONFLICT",
+            "a report already exists for this room",
+          );
+        }
+        if (room.status === "concluded") {
+          throw new TransactionError("ROOM_CONCLUDED", "room is already concluded");
+        }
+        if (
+          execution.expectedRoomDigest !== room.contextDigest ||
+          execution.contextRevision !== room.contextRevision ||
+          execution.participantSnapshotDigest !== participant.participantSnapshotDigest
+        ) {
+          // The report execution recorded no round.activeExecutionId, so the
+          // completed round keeps its phase; mark this execution discarded.
+          execution.state = "discarded";
+          execution.runtimeOutcome = "stale_context";
+          execution.finalEventSeq = input.finalEventSeq;
+          execution.ackState = "pending";
+          execution.updatedAt = ts();
+          await db.modelExecutions.put(execution);
+          return { outcome: "discarded", runtimeOutcome: "stale_context" };
+        }
+        const report: DecisionReport = createDecisionReport({
+          roomId: room.id,
+          content: input.content,
+          sourceExecutionId: execution.executionId,
+        });
+        await db.reports.add(report);
+        execution.state = "committed";
+        execution.contentDigest = contentDigestOf(input.content);
+        execution.committedEntityType = "report";
+        execution.committedEntityId = report.id;
+        execution.effectiveModel = input.effectiveModel;
+        execution.usage = input.usage;
+        execution.finalEventSeq = input.finalEventSeq;
+        execution.dispatchState = input.dispatchState;
+        execution.toolState = input.toolState;
+        execution.ackState = "pending";
+        execution.updatedAt = ts();
+        await db.modelExecutions.put(execution);
+        // Conclude the room in the same transaction. The report never enters
+        // the shared projection, so no bumpRoomContext.
+        room.status = "concluded";
+        room.runState = "idle";
+        room.lastActiveAt = ts();
+        await db.rooms.put(room);
+        return { outcome: "committed", entityId: report.id, roundPhase: "completed" };
       },
     ),
   );

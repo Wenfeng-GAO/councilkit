@@ -382,10 +382,12 @@ describe("discussion runtime integration (U5)", () => {
     const round2 = await orchestrator.startRound(room.id);
     expect(round2?.phase).toBe("completed");
 
-    // Per round: p1 message → p2 message → p1 (facilitator) summary.
+    // Per round (S2): p1 focus → p1 message → p2 message → p1 (facilitator) summary.
     expect(rig.callLog.map((call) => call.participantId)).toEqual([
       p1.id,
+      p1.id,
       p2.id,
+      p1.id,
       p1.id,
       p1.id,
       p2.id,
@@ -394,11 +396,11 @@ describe("discussion runtime integration (U5)", () => {
     expect(rig.drivers.get(p1.id)?.prewarmCount).toBe(1);
     expect(rig.drivers.get(p2.id)?.prewarmCount).toBe(1);
 
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(4);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(6);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(2);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(6);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(8);
     const executions = await db.modelExecutions.where("roomId").equals(room.id).toArray();
-    expect(executions).toHaveLength(6);
+    expect(executions).toHaveLength(8);
     for (const execution of executions) {
       expect(execution.state).toBe("committed");
       expect(execution.ackState).toBe("acknowledged");
@@ -431,7 +433,7 @@ describe("discussion runtime integration (U5)", () => {
     });
     expect(conflict.status).toBe(409);
     expect(conflict.data.code).toBe("EXECUTION_CONFLICT");
-    expect(rig.callLog).toHaveLength(6);
+    expect(rig.callLog).toHaveLength(8);
   });
 
   it("2. resumes the event stream with afterSeq: strictly-greater replay, never re-dispatched", async () => {
@@ -566,6 +568,8 @@ describe("discussion runtime integration (U5)", () => {
     });
     await transitionRound(db, { roomId: room.id, roundId: round2.id, token, to: "prewarming" });
     await transitionRound(db, { roomId: room.id, roundId: round2.id, token, to: "running" });
+    // Pretend the focus landed so the seeded message begin clears FOCUS_REQUIRED.
+    await db.rounds.update(round2.id, { focusMessageId: "seeded-focus" });
     const roomRow = await db.rooms.get(room.id);
     const pendingExecution = createModelExecution({
       executionId: "exec-restart-unfinished",
@@ -606,9 +610,10 @@ describe("discussion runtime integration (U5)", () => {
     expect(storedRound2?.pauseReason?.code).toBe("execution_failed");
 
     // Committed round 1 untouched; the model was never re-invoked anywhere.
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
+    // S2 round 1 committed focus + 2 messages + 1 summary → 3 messages, revision 4.
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(3);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(4);
     expect(rig2.callLog).toHaveLength(0);
   });
 });

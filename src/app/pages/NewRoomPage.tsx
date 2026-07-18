@@ -4,7 +4,7 @@ import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
 import { Textarea } from "@/components/ui/Textarea";
 import { runtimeDb } from "@/lib/runtime-db";
-import type { DiscussionAgent, Participant } from "@/models/discussion/entities";
+import type { DiscussionAgent, DiscussionMode, Participant } from "@/models/discussion/entities";
 import { createDiscussionRoom } from "@/models/discussion/factories";
 import { profileDigestOf } from "@/models/execution-profile";
 import { initializeRoomDigest } from "@/orchestrator/context-snapshot";
@@ -24,6 +24,28 @@ interface GateProps {
   hint: string;
   ctaLabel: string;
   onCta: () => void;
+}
+
+/**
+ * Parse the maxRounds input text. Extracted as a pure function so the
+ * validation contract is unit-testable in isolation (the page only renders it).
+ * Contract:
+ * - empty/whitespace → `null`  (no limit)
+ * - a valid positive integer → that number
+ * - anything else (`"2.5"`, `"3abc"`, `"0"`, `"-1"`) → `undefined` (illegal)
+ *
+ * The page's submit handler reads the three states as: null = unlimited,
+ * undefined = render the "需为正整数" error and block, number = use it.
+ */
+export function parseMaxRoundsInput(text: string): number | null | undefined {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+  // Strict validation: reject silent truncation like "2.5"→2 or "3abc"→3 by
+  // requiring an all-digit string before converting.
+  if (!/^\d+$/.test(trimmed)) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
+  return parsed;
 }
 
 function Gate({ title, hint, ctaLabel, onCta }: GateProps) {
@@ -47,9 +69,12 @@ export function NewRoomPage() {
 
   const [topic, setTopic] = useState("");
   const [background, setBackground] = useState("");
+  const [mode, setMode] = useState<DiscussionMode>("brainstorm");
+  const [targetOutput, setTargetOutput] = useState("");
+  const [maxRoundsText, setMaxRoundsText] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [facilitatorId, setFacilitatorId] = useState<string | null>(null);
-  const [errors, setErrors] = useState<{ topic?: string; agents?: string }>({});
+  const [errors, setErrors] = useState<{ topic?: string; agents?: string; maxRounds?: string }>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -80,11 +105,18 @@ export function NewRoomPage() {
   };
 
   const submit = async () => {
-    const nextErrors: { topic?: string; agents?: string } = {};
+    const nextErrors: { topic?: string; agents?: string; maxRounds?: string } = {};
     if (topic.trim().length === 0) nextErrors.topic = "请输入话题";
     if (orderedSelected.length < 2) nextErrors.agents = "请至少选择 2 个 Agent";
+    const parsedMaxRounds = parseMaxRoundsInput(maxRoundsText);
+    let maxRounds: number | null = null;
+    if (parsedMaxRounds === undefined) {
+      nextErrors.maxRounds = "最大轮次需为正整数";
+    } else if (parsedMaxRounds !== null) {
+      maxRounds = parsedMaxRounds;
+    }
     setErrors(nextErrors);
-    if (nextErrors.topic || nextErrors.agents) return;
+    if (nextErrors.topic || nextErrors.agents || nextErrors.maxRounds) return;
     setPending(true);
     setSubmitError(null);
     try {
@@ -93,6 +125,9 @@ export function NewRoomPage() {
           topic: topic.trim(),
           background: background.trim(),
           facilitatorParticipantId: "pending",
+          mode,
+          targetOutput: targetOutput.trim(),
+          maxRounds,
         }),
       );
       await runtimeDb.rooms.add(room);
@@ -195,6 +230,37 @@ export function NewRoomPage() {
           value={background}
           onChange={(e) => setBackground(e.target.value)}
         />
+        <Select
+          label="讨论模式"
+          value={mode}
+          onChange={(e) => setMode(e.target.value as DiscussionMode)}
+          options={[
+            { value: "brainstorm", label: "头脑风暴（发散探索）" },
+            { value: "planning", label: "规划（目标与步骤）" },
+            { value: "review", label: "评审（逐维审查）" },
+          ]}
+        />
+        <Textarea
+          label="目标输出（可选，仅影响决策报告）"
+          rows={2}
+          value={targetOutput}
+          onChange={(e) => setTargetOutput(e.target.value)}
+          placeholder="例: 一份可执行的上线计划"
+        />
+        <TextInput
+          label="最大轮次（可选，留空=不限）"
+          value={maxRoundsText}
+          onChange={(e) => {
+            setMaxRoundsText(e.target.value);
+            setErrors((prev) => ({ ...prev, maxRounds: undefined }));
+          }}
+          placeholder="留空=不限"
+        />
+        {errors.maxRounds ? (
+          <p role="alert" className="text-xs text-error">
+            {errors.maxRounds}
+          </p>
+        ) : null}
         <div>
           <span className="text-sm text-muted">参与 Agent（至少 2 个）</span>
           <p className="mt-1 text-xs text-muted">

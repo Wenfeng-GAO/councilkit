@@ -4,6 +4,8 @@ import {
   activateRuntimeBinding,
   appendUserMessage,
   beginExecution,
+  beginFocusExecution,
+  beginReportExecution,
   createRound,
   createRuntimeBindingTx,
   discardExecution,
@@ -23,9 +25,18 @@ import type {
   DiscussionRoom,
   DiscussionRound,
   Participant,
+  RoundPhase,
 } from "@/models/discussion/entities";
-import { createModelExecution, createParticipant } from "@/models/discussion/factories";
-import type { ModelExecution, ModelExecutionError } from "@/models/discussion/model-execution";
+import {
+  TransactionError,
+  createModelExecution,
+  createParticipant,
+} from "@/models/discussion/factories";
+import type {
+  ModelExecution,
+  ModelExecutionError,
+  ResultKind,
+} from "@/models/discussion/model-execution";
 import type { RuntimeBinding } from "@/models/discussion/runtime-binding";
 import { handleCompletedExecution } from "@/orchestrator/commit-execution";
 import {
@@ -33,6 +44,11 @@ import {
   computeInstructionDigest,
   projectSharedContext,
 } from "@/orchestrator/context-snapshot";
+import {
+  instructionText,
+  parseConvergenceSuggestion,
+  wireKindOf,
+} from "@/orchestrator/discussion-instructions";
 import { type RuntimeClient, RuntimeClientError } from "@/runtime/client";
 import { followExecutionEvents } from "@/runtime/event-stream";
 import type { RuntimeEvent } from "@shared/runtime/events";
@@ -77,10 +93,6 @@ export interface OrchestratorDeps {
   locks?: LockProvider;
   ids?: { uuid(): string };
 }
-
-const MESSAGE_INSTRUCTION =
-  "请阅读以上讨论上下文，以你的角色立场给出本轮发言；只输出你的发言正文。";
-const SUMMARY_INSTRUCTION = "请总结本轮讨论：提炼共识、分歧、风险与下一步问题；只输出总结正文。";
 
 function errorOf(code: string, message: string, retryable = false): ModelExecutionError {
   return { code, phase: "stream", message, retryable };
@@ -460,10 +472,44 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
 
   /** Start a new Round: snapshot the participant order, gate on prewarm
    * (any participant failure pauses atomically before the first speech),
-   * then drive the loop to completion or pause. */
+   * then drive the loop to completion or pause. Thin shell over
+   * startRoundPrepared (S2): no behavior drift. */
   async function startRound(roomId: string): Promise<DiscussionRound | null> {
+    return startRoundPrepared(roomId);
+  }
+
+  /** Start a new Round, optionally seeding it with a user follow-up message
+   * that lands in the shared context BEFORE the round opens (S2). The seed
+   * goes into its own transaction after createRound but before prewarming, so
+   * the round's first focus snapshot already contains it. content is validated
+   * UP FRONT so an INVALID never leaves a pending round behind. */
+  async function startRoundWithUserMessage(
+    roomId: string,
+    content: string,
+  ): Promise<DiscussionRound | null> {
+    if (content.trim().length === 0) {
+      throw new Error("startRoundWithUserMessage: content must be non-empty");
+    }
+    return startRoundPrepared(roomId, content);
+  }
+
+  /** Shared startRound body (S2). seedContent, when provided, is appended to
+   * the new round as a user message between createRound and prewarming. */
+  async function startRoundPrepared(
+    roomId: string,
+    seedContent?: string,
+  ): Promise<DiscussionRound | null> {
     const room = await db.rooms.get(roomId);
     if (!room) throw new Error(`unknown room ${roomId}`);
+    // Fast-fail a concluded room BEFORE touching controlRoom/ensureScope so we
+    // don't allocate a Scope or runtime binding for a room that can never
+    // accept a round. createRound re-checks inside its transaction as a backstop.
+    if (room.status === "concluded") {
+      throw new TransactionError(
+        "ROOM_CONCLUDED",
+        "room is concluded; duplicate the room to continue",
+      );
+    }
     const participants = await activeParticipants(roomId);
     if (participants.length === 0) throw new Error("room has no active participants");
 
@@ -488,6 +534,14 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       participantOrder: participants.map((participant) => participant.id),
     });
     notify(roomId);
+
+    if (seedContent !== undefined) {
+      // Seed as its own transaction (tx2): bumps the Room revision 0→1 so the
+      // round's first focus snapshot already includes the user follow-up.
+      await appendUserMessage(db, { roomId, roundId: round.id, token, content: seedContent });
+      notify(roomId);
+    }
+
     await transitionRound(db, { roomId, roundId: round.id, token, to: "prewarming" });
     notify(roomId);
 
@@ -532,7 +586,10 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   }
 
   /** The recoverable loop: read the durable Round state, dispatch exactly
-   * the next thing, persist before every step. */
+   * the next thing, persist before every step. S2: the Round 0 ring is the
+   * facilitator focus — dispatched first in phase "running" when the round
+   * is awaiting it (focusMessageId === null), BEFORE any participant speaks.
+   * Pre-S2 legacy rows (focusMessageId === undefined) skip focus entirely. */
   async function runLoop(roomId: string): Promise<void> {
     for (;;) {
       const room = await db.rooms.get(roomId);
@@ -540,6 +597,14 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       const round = await db.rounds.get(room.activeRoundId);
       if (!round) return;
       if (round.phase === "running") {
+        // Strict `=== null`: only a post-S2 Round awaiting its focus triggers
+        // the focus dispatch. undefined (legacy) and string (committed) fall
+        // through to the cursor branch — legacy Rounds are never retro-focussed.
+        if (round.focusMessageId === null) {
+          const proceed = await dispatchTurn(room, round, room.facilitatorParticipantId, "focus");
+          if (!proceed) return;
+          continue;
+        }
         const participantId = round.participantOrder[round.nextParticipantIndex] as string;
         const proceed = await dispatchTurn(room, round, participantId, "message");
         if (!proceed) return;
@@ -554,12 +619,15 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   }
 
   /** Dispatch one turn and drive it to its terminal. Returns false when the
-   * round left `running` (paused/aborted) and the loop must stop. */
+   * round left `running` (paused/aborted) and the loop must stop, OR when the
+   * room is concluding (a report dispatch ends the room). resultKind is
+   * generalized to the four ResultKinds (S2); begin dispatches via the
+   * matching begin* function. The wire instruction.kind stays message/summary. */
   async function dispatchTurn(
     room: DiscussionRoom,
     round: DiscussionRound,
     participantId: string,
-    resultKind: "message" | "summary",
+    resultKind: ResultKind,
     retryOfExecutionId: string | null = null,
   ): Promise<boolean> {
     const token = await currentToken(room.id);
@@ -572,9 +640,10 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     const messages = await db.messages.where("roomId").equals(room.id).toArray();
     const summaries = await db.summaries.where("roomId").equals(room.id).toArray();
     const items = projectSharedContext(room, messages, summaries).items;
+    const wireKind = wireKindOf(resultKind);
     const instruction = {
-      kind: resultKind,
-      text: resultKind === "summary" ? SUMMARY_INSTRUCTION : MESSAGE_INSTRUCTION,
+      kind: wireKind,
+      text: instructionText(room.mode, resultKind, room.targetOutput),
     } as const;
     const snapshot = buildContextSnapshot({ room, participant, instruction, items });
     const execution = createModelExecution({
@@ -591,8 +660,15 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       retryOfExecutionId,
     });
     // Persist the anchor BEFORE any Host call: retries reconnect, never
-    // re-dispatch.
-    await beginExecution(db, { execution, token });
+    // re-dispatch. Three-way begin dispatch (S2): focus and report have
+    // dedicated entry points; message/summary share beginExecution.
+    if (resultKind === "focus") {
+      await beginFocusExecution(db, { execution, token });
+    } else if (resultKind === "report") {
+      await beginReportExecution(db, { execution, token });
+    } else {
+      await beginExecution(db, { execution, token });
+    }
     notify(room.id);
 
     try {
@@ -695,8 +771,21 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       );
       notify(room.id);
       if (result.kind === "discarded") return false;
-      // Continue the loop for messages; summaries end the round via commitSummary.
-      return current.resultKind === "message";
+      // report/focus are never driven by the message/summary loop continuation
+      // logic below. A report commit ends the room; focus just lets the loop
+      // re-read the round to advance to the first participant.
+      if (current.resultKind === "report") return false;
+      if (current.resultKind === "focus") return true;
+      // A committed summary may trigger concluding (S2): parse the summary's
+      // last-line convergence vote and, if the room should conclude, dispatch
+      // the facilitator report in this same synchronous path. Convergence
+      // parsing NEVER blocks the summary commit (the commit already landed).
+      if (current.resultKind === "summary") {
+        await maybeStartConcluding(room.id, round.id, event);
+        return false; // summaries end the round; concluding (if any) drives the report
+      }
+      // Continue the loop for messages.
+      return true;
     }
 
     // failed / interrupted: user cancel is an intentional drop; retryable
@@ -732,18 +821,26 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         kind: event.type === "failed" ? "failed" : "interrupted",
         pause: false,
       });
+      // The retry phase depends on resultKind: report retries from "completed"
+      // (the round is already done); summary retries from "summarizing";
+      // message/focus retry from "running". Focus re-dispatches into
+      // beginFocusExecution on the retry.
+      const expectedPhase: RoundPhase =
+        execution.resultKind === "report"
+          ? "completed"
+          : execution.resultKind === "summary"
+            ? "summarizing"
+            : "running";
       const retried = await db.rounds.get(round.id);
-      if (!retried || retried.phase !== "running") return false;
+      if (!retried || retried.phase !== expectedPhase) return false;
       // The retry drives the SAME turn with a fresh executionId; its result
       // decides whether the loop continues (returning false here would stop
       // the loop on a still-running round).
-      // This execution was created by dispatchTurn, so its resultKind is one of
-      // the two turn kinds; "focus"/"report" executions (S2) never reach here.
       return dispatchTurn(
         room,
         retried,
         execution.participantId,
-        execution.resultKind as "message" | "summary",
+        execution.resultKind,
         execution.executionId,
       );
     }
@@ -763,6 +860,41 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     });
     notify(room.id);
     return false;
+  }
+
+  /** S2 convergence: after a summary commits, decide whether the room should
+   * conclude. Concludes iff (suggestion=是 AND ≥1 completed round) OR
+   * (maxRounds !== null AND completed rounds ≥ maxRounds). Concluding is a
+   * pure synchronous transient — never stored — it dispatches a facilitator
+   * report on the same persist→ACK pipeline. The room is re-fetched fresh
+   * because the summary commit just bumped its revision/digest; dispatching
+   * the report against a stale digest would self-harm with stale_context.
+   * Parse failures read as 否 and never block the summary that already landed.
+   * Derived口径 (for S4 UI): concluding ⟺ ∃ a resultKind="report" execution
+   * in state prepared/running/succeeded_uncommitted, derivable from queries. */
+  async function maybeStartConcluding(
+    roomId: string,
+    roundId: string,
+    event: RuntimeEvent,
+  ): Promise<void> {
+    if (event.type !== "completed") return;
+    const freshRoom = await db.rooms.get(roomId);
+    if (!freshRoom || freshRoom.status === "concluded") return;
+    const anchorRound = await db.rounds.get(roundId);
+    if (!anchorRound || anchorRound.phase !== "completed") return;
+    const suggestion = parseConvergenceSuggestion(event.output);
+    const completedRounds = await db.rounds
+      .where("roomId")
+      .equals(roomId)
+      .filter((candidate) => candidate.phase === "completed")
+      .count();
+    const maxRounds = freshRoom.maxRounds;
+    const shouldConclude =
+      completedRounds >= 1 &&
+      ((suggestion && completedRounds >= 1) ||
+        (maxRounds !== null && completedRounds >= maxRounds));
+    if (!shouldConclude) return;
+    await dispatchTurn(freshRoom, anchorRound, freshRoom.facilitatorParticipantId, "report");
   }
 
   // -------------------------------------------------------------------------
@@ -842,12 +974,53 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     notify(roomId);
   }
 
+  /** Manual conclusion (S2): the user proactively ends the room with a decision
+   * report — the SAME chain as automatic convergence. Requires the controlling
+   * page and no running execution. Idempotent on an already-concluded room.
+   * An unfinalized active round with no live execution is atomically aborted
+   * inside beginReportExecution (ruling §3). The report anchors on the
+   * roundNumber-largest completed round. */
+  async function concludeRoom(roomId: string): Promise<void> {
+    const room = await db.rooms.get(roomId);
+    if (!room) throw new Error(`unknown room ${roomId}`);
+    if (room.status === "concluded") return; // idempotent
+    // currentToken asserts the controlling page (throws if not); the value is
+    // not used further because dispatchTalk re-derives its own token.
+    await currentToken(roomId);
+    if (room.activeRoundId) {
+      const activeRound = await db.rounds.get(room.activeRoundId);
+      if (activeRound?.activeExecutionId) {
+        throw new Error("cannot conclude while an execution is running");
+      }
+    }
+    // The anchor: the latest completed round (no live report exists yet, else
+    // the room would already be concluded or a report would be in flight).
+    const completedRounds = await db.rounds
+      .where("roomId")
+      .equals(roomId)
+      .filter((candidate) => candidate.phase === "completed")
+      .toArray();
+    if (completedRounds.length === 0) {
+      throw new Error("no completed round to summarize");
+    }
+    completedRounds.sort((a, b) => b.roundNumber - a.roundNumber);
+    const anchor = completedRounds[0] as DiscussionRound;
+    // Re-fetch a fresh room: intervening state must not hand the report a
+    // stale digest (the atomic abort in beginReportExecution settles the room
+    // inside its own transaction, but the dispatch snapshot is built here).
+    const freshRoom = (await db.rooms.get(roomId)) as DiscussionRoom;
+    await dispatchTurn(freshRoom, anchor, freshRoom.facilitatorParticipantId, "report");
+    notify(roomId);
+  }
+
   return {
     controlRoom,
     startupAudit,
     ensureScope,
     joinAgent,
     startRound,
+    startRoundWithUserMessage,
+    concludeRoom,
     runLoop,
     pauseRoom,
     resumeRoom,

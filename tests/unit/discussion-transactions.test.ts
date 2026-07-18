@@ -6,7 +6,11 @@ import {
   activateRuntimeBinding,
   appendUserMessage,
   beginExecution,
+  beginFocusExecution,
+  beginReportExecution,
+  commitFocusMessage,
   commitModelMessage,
+  commitReport,
   commitSummary,
   createRound,
   createRuntimeBindingTx,
@@ -108,7 +112,12 @@ async function seedBinding(roomId: string): Promise<ControllerToken> {
 }
 
 /** agent×2 → participant×2（p1 facilitator）→ room（digest 已初始化）→ active
- * binding+token → createRound([p1,p2]) → prewarming → running。 */
+ * binding+token → createRound([p1,p2]) → prewarming → running。
+ * S2: a seeded non-empty focusMessageId is written so the FOCUS_REQUIRED
+ * begin/commit guards accept the participant message/summary flows tested
+ * here. The seed does NOT add a focus message nor bump the revision — the
+ * existing assertions count messages and revisions and must stay lean. The
+ * dedicated focus/report transactions describe block builds its own rounds. */
 async function seedRunning(): Promise<Seed> {
   const { room, p1, p2 } = await seedBase();
   const token = await seedBinding(room.id);
@@ -119,7 +128,16 @@ async function seedRunning(): Promise<Seed> {
   });
   await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
   await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+  await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
   return { room, p1, p2, token, round };
+}
+
+/** Set a seeded non-null focusMessageId on a round built outside
+ * seedRunning (e.g. the single-participant room-context-revision test) so the
+ * FOCUS_REQUIRED guards accept the message/summary flow. Lean like seedRunning:
+ * no message, no revision bump. */
+async function markFocusCommitted(roundId: string): Promise<void> {
+  await db.rounds.update(roundId, { focusMessageId: "seeded-focus" });
 }
 
 async function beginMessageExecution(
@@ -646,6 +664,7 @@ describe("room context revision", () => {
     });
     await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
     await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    await markFocusCommitted(round.id);
     const seed: Seed = { room, p1, p2: p1, token, round };
 
     const digests = new Set<string>();
@@ -848,5 +867,523 @@ describe("discard / fail terminals", () => {
       commitModelMessage(db, commitInput(execution.executionId, seed.token, "too late")),
     ).rejects.toMatchObject({ code: "EXECUTION_NOT_COMMITTABLE" });
     expect(await db.messages.count()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// focus / report transactions (S2)
+// ---------------------------------------------------------------------------
+//
+// The dedicated focus/report transactions describe block builds its own rounds
+// (it never relies on seedRunning's seeded focusMessageId placeholder): focus
+// flows operate on a post-S2 Round still awaiting its focus (focusMessageId
+// === null), while report flows anchor on a genuinely completed Round.
+
+describe("focus / report transactions", () => {
+  /** A running Round with focusMessageId === null (post-S2, awaiting focus),
+   * unlike seedRunning which pre-seeds focusMessageId for the message/summary
+   * suites. No message, no revision bump — lean for the focus assertions. */
+  async function seedRunningNoFocus(): Promise<Seed> {
+    const { room, p1, p2 } = await seedBase();
+    const token = await seedBinding(room.id);
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    return { room, p1, p2, token, round };
+  }
+
+  async function beginFocusExec(seed: Seed, participant: Participant): Promise<ModelExecution> {
+    const freshRoom = await getRoom(seed.room.id);
+    const execution = createModelExecution({
+      executionId: crypto.randomUUID(),
+      roomId: seed.room.id,
+      roundId: seed.round.id,
+      participantId: participant.id,
+      resultKind: "focus",
+      requestedModel: "model-a",
+      contextRevision: freshRoom.contextRevision,
+      expectedRoomDigest: freshRoom.contextDigest,
+      participantSnapshotDigest: participant.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "message", text: "focus" }),
+    });
+    await beginFocusExecution(db, { execution, token: seed.token });
+    return execution;
+  }
+
+  /** Seed a genuinely completed Round (focus → both messages → summary) and
+   * leave the Room open+idle, ready for report transactions. */
+  async function seedCompletedRoom(): Promise<Seed & { anchorRound: DiscussionRound }> {
+    const seed = await seedRunning();
+    await speakAll(seed);
+    const summaryExecution = await beginSummaryExecution(seed);
+    await dispatch(summaryExecution.executionId);
+    await commitSummary(
+      db,
+      commitInput(summaryExecution.executionId, seed.token, "round summary", 3),
+    );
+    const anchorRound = await getRound(seed.round.id);
+    return { ...seed, anchorRound };
+  }
+
+  async function beginReportExec(
+    seed: Seed,
+    anchorRoundId: string,
+    participant: Participant,
+  ): Promise<ModelExecution> {
+    const freshRoom = await getRoom(seed.room.id);
+    const execution = createModelExecution({
+      executionId: crypto.randomUUID(),
+      roomId: seed.room.id,
+      roundId: anchorRoundId,
+      participantId: participant.id,
+      resultKind: "report",
+      requestedModel: "model-a",
+      contextRevision: freshRoom.contextRevision,
+      expectedRoomDigest: freshRoom.contextDigest,
+      participantSnapshotDigest: participant.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "summary", text: "report" }),
+    });
+    await beginReportExecution(db, { execution, token: seed.token });
+    return execution;
+  }
+
+  // ----- beginFocusExecution guards -----
+
+  it("beginFocusExecution 非 facilitator → FACILITATOR_MISMATCH", async () => {
+    const seed = await seedRunningNoFocus();
+    await expect(beginFocusExec(seed, seed.p2)).rejects.toMatchObject({
+      code: "FACILITATOR_MISMATCH",
+    });
+    const round = await getRound(seed.round.id);
+    expect(round.activeExecutionId).toBeNull();
+    expect(round.focusMessageId).toBeNull();
+  });
+
+  it("beginFocusExecution phase 非 running → ROUND_PHASE", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const token = await seedBinding(room.id);
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    const seed: Seed = { room, p1, p2, token, round };
+    await expect(beginFocusExec(seed, p1)).rejects.toMatchObject({ code: "ROUND_PHASE" });
+  });
+
+  it("beginFocusExecution focusMessageId 已存在 → STALE_EXECUTION", async () => {
+    const seed = await seedRunningNoFocus();
+    await markFocusCommitted(seed.round.id);
+    await expect(beginFocusExec(seed, seed.p1)).rejects.toMatchObject({
+      code: "STALE_EXECUTION",
+    });
+  });
+
+  // ----- commitFocusMessage -----
+
+  it("commitFocusMessage：写 focusMessageId、cursor 不动、phase 保持 running、revision +1、replay 同事实返回 replayed", async () => {
+    const seed = await seedRunningNoFocus();
+    const execution = await beginFocusExec(seed, seed.p1);
+    await dispatch(execution.executionId);
+    const revisionBefore = (await getRoom(seed.room.id)).contextRevision;
+    expect(revisionBefore).toBe(0);
+
+    const outcome = await commitFocusMessage(
+      db,
+      commitInput(execution.executionId, seed.token, "本轮方向：探索 X", 5),
+    );
+    expect(outcome.outcome).toBe("committed");
+    if (outcome.outcome !== "committed") return;
+
+    const round = await getRound(seed.round.id);
+    expect(round.phase).toBe("running");
+    expect(round.nextParticipantIndex).toBe(0); // focus does not occupy a slot
+    expect(round.activeExecutionId).toBeNull();
+    expect(round.focusMessageId).toBe(outcome.entityId);
+    expect((await getRoom(seed.room.id)).contextRevision).toBe(1);
+
+    const messages = await db.messages.where("roundId").equals(seed.round.id).toArray();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.role).toBe("participant");
+    expect(messages[0]?.participantId).toBe(seed.p1.id);
+    expect(messages[0]?.sourceExecutionId).toBe(execution.executionId);
+
+    const replay = await commitFocusMessage(
+      db,
+      commitInput(execution.executionId, seed.token, "本轮方向：探索 X", 5),
+    );
+    expect(replay).toEqual({ outcome: "replayed", entityId: outcome.entityId });
+    expect(await db.messages.count()).toBe(1);
+    expect((await getRoom(seed.room.id)).contextRevision).toBe(1);
+  });
+
+  it("commitFocusMessage 漂移 → stale_context discard + round paused(running)", async () => {
+    const seed = await seedRunningNoFocus();
+    const execution = await beginFocusExec(seed, seed.p1);
+    await dispatch(execution.executionId);
+    // Shared-context write bumps the revision/digest before the focus commits.
+    await appendUserMessage(db, {
+      roomId: seed.room.id,
+      roundId: seed.round.id,
+      token: seed.token,
+      content: "user interjects before focus lands",
+    });
+    const revisionBefore = (await getRoom(seed.room.id)).contextRevision;
+    expect(revisionBefore).toBe(1);
+
+    const outcome = await commitFocusMessage(
+      db,
+      commitInput(execution.executionId, seed.token, "late focus"),
+    );
+    expect(outcome).toEqual({ outcome: "discarded", runtimeOutcome: "stale_context" });
+
+    const round = await getRound(seed.round.id);
+    expect(round.phase).toBe("paused");
+    expect(round.pausedFrom).toBe("running");
+    expect(round.pauseReason?.code).toBe("stale_context");
+    expect(round.activeExecutionId).toBeNull();
+    expect(round.focusMessageId).toBeNull(); // focus never landed
+    expect(await db.messages.filter((m) => m.role === "participant").count()).toBe(0);
+    expect((await getRoom(seed.room.id)).contextRevision).toBe(revisionBefore);
+
+    const persisted = await getExecution(execution.executionId);
+    expect(persisted.state).toBe("discarded");
+    expect(persisted.runtimeOutcome).toBe("stale_context");
+    expect(persisted.ackState).toBe("pending");
+  });
+
+  it("commitFocusMessage：resultKind 不匹配（message execution 走 commitFocusMessage）→ IDEMPOTENCY_CONFLICT", async () => {
+    const seed = await seedRunning(); // seeded focus lets a message begin
+    const execution = await beginMessageExecution(seed, seed.p1);
+    await dispatch(execution.executionId);
+    await expect(
+      commitFocusMessage(db, commitInput(execution.executionId, seed.token, "not a focus")),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    expect(await db.messages.count()).toBe(0);
+  });
+
+  // ----- beginReportExecution guards -----
+
+  it("beginReportExecution：room concluded → ROOM_CONCLUDED", async () => {
+    const seed = await seedCompletedRoom();
+    await db.rooms.update(seed.room.id, { status: "concluded" });
+    await expect(beginReportExec(seed, seed.anchorRound.id, seed.p1)).rejects.toMatchObject({
+      code: "ROOM_CONCLUDED",
+    });
+  });
+
+  it("beginReportExecution：有活动 execution 的未完 round → ROUND_ACTIVE_EXISTS", async () => {
+    const seed = await seedCompletedRoom();
+    // Open a fresh running round that holds a live (begun) execution.
+    const round2 = await createRound(db, {
+      roomId: seed.room.id,
+      token: seed.token,
+      participantOrder: [seed.p1.id, seed.p2.id],
+    });
+    await transitionRound(db, {
+      roomId: seed.room.id,
+      roundId: round2.id,
+      token: seed.token,
+      to: "prewarming",
+    });
+    await transitionRound(db, {
+      roomId: seed.room.id,
+      roundId: round2.id,
+      token: seed.token,
+      to: "running",
+    });
+    await markFocusCommitted(round2.id);
+    await beginMessageExecution({ ...seed, round: round2 }, seed.p1); // sets activeExecutionId
+    await expect(beginReportExec(seed, seed.anchorRound.id, seed.p1)).rejects.toMatchObject({
+      code: "ROUND_ACTIVE_EXISTS",
+    });
+  });
+
+  it("beginReportExecution：anchor round 非 completed → ROUND_PHASE", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const token = await seedBinding(room.id);
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    // Detach the running round from the room so the active-round guard is a
+    // no-op and the anchor-completed guard is reached in isolation.
+    await db.rooms.update(room.id, { activeRoundId: null });
+    const seed: Seed = { room, p1, p2, token, round };
+    await expect(beginReportExec(seed, round.id, p1)).rejects.toMatchObject({
+      code: "ROUND_PHASE",
+    });
+  });
+
+  it("beginReportExecution：非 facilitator → FACILITATOR_MISMATCH", async () => {
+    const seed = await seedCompletedRoom();
+    await expect(beginReportExec(seed, seed.anchorRound.id, seed.p2)).rejects.toMatchObject({
+      code: "FACILITATOR_MISMATCH",
+    });
+  });
+
+  it("beginReportExecution：并发第二个 live report → EXECUTION_ACTIVE", async () => {
+    const seed = await seedCompletedRoom();
+    // A report execution already in flight (prepared) blocks a second begin.
+    await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    await expect(beginReportExec(seed, seed.anchorRound.id, seed.p1)).rejects.toMatchObject({
+      code: "EXECUTION_ACTIVE",
+    });
+  });
+
+  // ----- commitReport -----
+
+  it("commitReport：同事务 reports 一行 + status concluded + runState idle；revision 不增长；sourceExecutionId 锚点", async () => {
+    const seed = await seedCompletedRoom();
+    const execution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    await dispatch(execution.executionId);
+    const revisionBefore = (await getRoom(seed.room.id)).contextRevision;
+
+    const outcome = await commitReport(
+      db,
+      commitInput(execution.executionId, seed.token, "决策报告正文", 9),
+    );
+    expect(outcome.outcome).toBe("committed");
+    if (outcome.outcome !== "committed") return;
+
+    const reports = await db.reports.where("roomId").equals(seed.room.id).toArray();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]?.content).toBe("决策报告正文");
+    expect(reports[0]?.sourceExecutionId).toBe(execution.executionId);
+
+    const room = await getRoom(seed.room.id);
+    expect(room.status).toBe("concluded");
+    expect(room.runState).toBe("idle");
+    expect(room.contextRevision).toBe(revisionBefore); // report never bumps revision
+
+    const persisted = await getExecution(execution.executionId);
+    expect(persisted.state).toBe("committed");
+    expect(persisted.committedEntityType).toBe("report");
+    expect(persisted.committedEntityId).toBe(reports[0]?.id);
+    expect(persisted.ackState).toBe("pending");
+  });
+
+  it("commitReport 并发双提交（同 execution 不同 finalEventSeq）→ 一成一 IDEMPOTENCY_CONFLICT，reports 一行；同事实 replay → replayed", async () => {
+    const seed = await seedCompletedRoom();
+    const execution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    await dispatch(execution.executionId);
+
+    const results = await Promise.allSettled([
+      commitReport(db, commitInput(execution.executionId, seed.token, "report A", 1)),
+      commitReport(db, commitInput(execution.executionId, seed.token, "report B", 2)),
+    ]);
+    const committed = results.filter(
+      (r) => r.status === "fulfilled" && r.value.outcome === "committed",
+    );
+    const conflicted = results.filter(
+      (r) =>
+        r.status === "rejected" && (r.reason as { code?: string }).code === "IDEMPOTENCY_CONFLICT",
+    );
+    expect(committed).toHaveLength(1);
+    expect(conflicted).toHaveLength(1);
+    expect(await db.reports.where("roomId").equals(seed.room.id).count()).toBe(1);
+
+    const first = committed[0] as PromiseFulfilledResult<{
+      outcome: "committed";
+      entityId: string;
+    }>;
+    const replay = await commitReport(
+      db,
+      commitInput(execution.executionId, seed.token, "report A", 1),
+    );
+    expect(replay).toEqual({ outcome: "replayed", entityId: first.value.entityId });
+    expect(await db.reports.where("roomId").equals(seed.room.id).count()).toBe(1);
+  });
+
+  // F3 regression: once a room has a committed report, a SECOND report commit
+  // from a different execution must surface IDEMPOTENCY_CONFLICT — including
+  // when the room is already concluded. The duplicate-report query precedes
+  // the ROOM_CONCLUDED check so a post-conclusion second commit does not leak
+  // past it as a confusing ROOM_CONCLUDED.
+  it("commitReport：concluded 后另一 execution 提交第二份 report → IDEMPOTENCY_CONFLICT", async () => {
+    const seed = await seedCompletedRoom();
+    const firstExecution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    await dispatch(firstExecution.executionId);
+
+    // A divergent report execution already in flight (state running) — added
+    // directly to bypass beginReportExecution's live-report guard, simulating a
+    // pre-existing second execution that outlives the first commit.
+    const freshRoom = await getRoom(seed.room.id);
+    const secondExecution = createModelExecution({
+      executionId: crypto.randomUUID(),
+      roomId: seed.room.id,
+      roundId: seed.anchorRound.id,
+      participantId: seed.p1.id,
+      resultKind: "report",
+      requestedModel: "model-a",
+      contextRevision: freshRoom.contextRevision,
+      expectedRoomDigest: freshRoom.contextDigest,
+      participantSnapshotDigest: seed.p1.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "summary", text: "report2" }),
+    });
+    await db.modelExecutions.add({ ...secondExecution, state: "running" });
+
+    const first = await commitReport(
+      db,
+      commitInput(firstExecution.executionId, seed.token, "决策报告正文", 9),
+    );
+    expect(first.outcome).toBe("committed");
+    const room = await getRoom(seed.room.id);
+    expect(room.status).toBe("concluded");
+
+    await expect(
+      commitReport(db, commitInput(secondExecution.executionId, seed.token, "另一份报告", 10)),
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_CONFLICT" });
+    // Only the first report row persists.
+    expect(await db.reports.where("roomId").equals(seed.room.id).count()).toBe(1);
+  });
+
+  // F6/G4 regression (commit-time stale_context on the FIRST report): if the
+  // shared projection drifted after the report execution began (e.g. a
+  // concurrent user message bumped the Room digest), commitReport must discard
+  // with stale_context — the report body never lands, the executing is left
+  // discarded with ackState pending, the Room stays open, and NOT a single
+  // report row exists. The room is NOT concluded (the report is the only path
+  // to conclusion), so a retry on a later report can still anchor on the digest.
+  it("commitReport：expectedRoomDigest 漂移 → stale_context discard（execution discarded、ackState pending、room open、reports 0）", async () => {
+    const seed = await seedCompletedRoom();
+    const execution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+    await dispatch(execution.executionId);
+    const revisionBefore = (await getRoom(seed.room.id)).contextRevision;
+    // Shared-context drift between begin and commit: a user follow-up bumps the
+    // Room revision/digest so the report's anchored expectedRoomDigest no longer
+    // matches. There is no active round anymore (the anchor completed), so write
+    // the user message onto the completed anchor round's id (appendUserMessage
+    // only needs a valid roundId; it bumps the shared projection regardless).
+    await appendUserMessage(db, {
+      roomId: seed.room.id,
+      roundId: seed.anchorRound.id,
+      token: seed.token,
+      content: "late interjection",
+    });
+    expect((await getRoom(seed.room.id)).contextRevision).toBe(revisionBefore + 1);
+
+    const outcome = await commitReport(
+      db,
+      commitInput(execution.executionId, seed.token, "决策报告正文", 9),
+    );
+    expect(outcome).toEqual({ outcome: "discarded", runtimeOutcome: "stale_context" });
+
+    const persisted = await getExecution(execution.executionId);
+    expect(persisted.state).toBe("discarded");
+    expect(persisted.runtimeOutcome).toBe("stale_context");
+    expect(persisted.ackState).toBe("pending");
+    // The room is still open — the report never concluded it.
+    const room = await getRoom(seed.room.id);
+    expect(room.status).toBe("open");
+    expect(room.runState).toBe("idle");
+    // No report row, and the revision the report would-not-bump is unchanged by
+    // the commit itself (still revisionBefore + 1 from the interjection only).
+    expect(await db.reports.where("roomId").equals(seed.room.id).count()).toBe(0);
+    expect(room.contextRevision).toBe(revisionBefore + 1);
+  });
+
+  // F4 regression: a legacy Round whose focusMessageId is the `undefined` sentinel
+  // (rather than the strict null we now require) is rejected at beginFocusExecution
+  // instead of silently passing the loose guard.
+  it("beginFocusExecution：legacy undefined focusMessageId → STALE_EXECUTION（严格三态）", async () => {
+    const seed = await seedRunningNoFocus();
+    // Force the legacy undefined sentinel into storage (bypasses the type's
+    // string|null by writing through the raw store).
+    await db.rounds.put({ ...(await getRound(seed.round.id)), focusMessageId: undefined });
+    await expect(beginFocusExec(seed, seed.p1)).rejects.toMatchObject({
+      code: "STALE_EXECUTION",
+    });
+    const round = await getRound(seed.round.id);
+    expect(round.activeExecutionId).toBeNull();
+  });
+
+  // F4 (commit-side guard): a duplicate focus commit (focusMessageId already
+  // set) is rejected at commitFocusMessage, mirroring the begin guard.
+  it("commitFocusMessage：round 已有 focusMessageId → STALE_EXECUTION（commit 侧严格三态）", async () => {
+    const seed = await seedRunningNoFocus();
+    const execution = await beginFocusExec(seed, seed.p1);
+    await dispatch(execution.executionId);
+    // Simulate a concurrent/duplicate focus already landed on the round.
+    await markFocusCommitted(seed.round.id);
+    await expect(
+      commitFocusMessage(db, commitInput(execution.executionId, seed.token, "late focus", 5)),
+    ).rejects.toMatchObject({ code: "STALE_EXECUTION" });
+  });
+
+  // F4 (commit-side guard, legacy undefined): symmetric to the begin-side
+  // legacy-undefined case above. A legacy Round whose focusMessageId is the
+  // `undefined` sentinel (pre-S2 row) must NOT silently pass commitFocusMessage
+  // as if it were awaiting focus. The commit-side guard uses strict
+  // `!== null`, so an `undefined` (loose `!= null` would treat it as equal) is
+  // rejected with STALE_EXECUTION — the focus never commits onto a legacy row.
+  // Goes red the moment the guard is loosened to `!= null`.
+  it("commitFocusMessage：legacy undefined focusMessageId → STALE_EXECUTION（commit 侧严格三态，与 begin 对称）", async () => {
+    const seed = await seedRunningNoFocus();
+    const execution = await beginFocusExec(seed, seed.p1);
+    await dispatch(execution.executionId);
+    // Force the legacy undefined sentinel into storage (bypasses the type's
+    // string|null by writing through the raw store).
+    await db.rounds.put({ ...(await getRound(seed.round.id)), focusMessageId: undefined });
+    await expect(
+      commitFocusMessage(db, commitInput(execution.executionId, seed.token, "late focus", 5)),
+    ).rejects.toMatchObject({ code: "STALE_EXECUTION" });
+    // The focus never landed: no message, no focusMessageId set, revision 0.
+    expect(await db.messages.count()).toBe(0);
+    expect((await getRound(seed.round.id)).focusMessageId).toBeUndefined();
+    expect((await getRoom(seed.room.id)).contextRevision).toBe(0);
+  });
+
+  // V-gap: a room that still has an unfinalized active round (with NO live
+  // execution) must have beginReportExecution atomically abort that round AND
+  // clear activeRoundId AND anchor the report execution, all in one tx.
+  it("beginReportExecution：room 有未完 round 且无活动 execution → 同事务 abort round + 清 activeRoundId + 锚定 report", async () => {
+    const seed = await seedCompletedRoom();
+    // Open a fresh running round (no live execution → activeExecutionId null).
+    const round2 = await createRound(db, {
+      roomId: seed.room.id,
+      token: seed.token,
+      participantOrder: [seed.p1.id, seed.p2.id],
+    });
+    await transitionRound(db, {
+      roomId: seed.room.id,
+      roundId: round2.id,
+      token: seed.token,
+      to: "prewarming",
+    });
+    await transitionRound(db, {
+      roomId: seed.room.id,
+      roundId: round2.id,
+      token: seed.token,
+      to: "running",
+    });
+    await markFocusCommitted(round2.id);
+    // No beginMessageExecution: activeExecutionId stays null.
+    const roomBefore = await getRoom(seed.room.id);
+    expect(roomBefore.activeRoundId).toBe(round2.id);
+
+    const execution = await beginReportExec(seed, seed.anchorRound.id, seed.p1);
+
+    // The unfinalized active round is aborted and the room released.
+    const abortedRound = await getRound(round2.id);
+    expect(abortedRound.phase).toBe("aborted");
+    expect(abortedRound.activeExecutionId).toBeNull();
+    const roomAfter = await getRoom(seed.room.id);
+    expect(roomAfter.activeRoundId).toBeNull();
+    expect(roomAfter.runState).toBe("idle");
+
+    // The report execution is anchored on the completed round.
+    const anchored = await getExecution(execution.executionId);
+    expect(anchored.resultKind).toBe("report");
+    expect(anchored.roundId).toBe(seed.anchorRound.id);
+    expect(anchored.state).toBe("prepared");
   });
 });
