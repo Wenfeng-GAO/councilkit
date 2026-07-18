@@ -25,11 +25,14 @@ export interface DriverBehaviorInput {
   modelVerdict?: "match" | "mismatch" | "unknown";
   toolState?: "none" | "active" | "completed" | "unknown";
   prewarmFails?: boolean;
+  /** Inject a failed terminal, or clear a previously injected one. The Host's
+   * /driver control route shallow-merges behavior, so `failWith: null` clears
+   * the injection (the driver reads its behavior lazily per execute call). */
   failWith?: {
     error: { code: string; message: string };
     retryable: boolean;
     dispatchState: "not_dispatched" | "accepted" | "unknown";
-  };
+  } | null;
   hangUntilCancel?: boolean;
   pauseAfterEvents?: number;
 }
@@ -256,6 +259,34 @@ export async function abortPausedRound(page: Page): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// S3 recovery actions (PausedPanel branches): retry / skip / rotate. Each
+// drives the Chinese UI affordance exactly as a user would; the recovery
+// intents are self-wired in PausedPanel, so these are pure button clicks.
+// ---------------------------------------------------------------------------
+
+/** Retry the paused-at Participant: 重试该 Participant (label carries the
+ * already-retried count once > 0). No confirmation modal. */
+export async function retryPausedParticipant(page: Page): Promise<void> {
+  await pausedPanel(page)
+    .getByRole("button", { name: /^重试该 Participant/ })
+    .click();
+}
+
+/** Skip the paused-at Participant: 跳过并继续 → confirm modal → 确认跳过. */
+export async function skipPausedParticipant(page: Page): Promise<void> {
+  await pausedPanel(page).getByRole("button", { name: "跳过并继续" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "确认跳过" }).click();
+}
+
+/** Rebuild the execution environment (rotation): 重建执行环境（轮转）, the
+ * needs_rebase branch's primary action. No confirmation modal. */
+export async function rotatePausedScope(page: Page): Promise<void> {
+  await pausedPanel(page)
+    .getByRole("button", { name: /^重建执行环境（轮转）/ })
+    .click();
+}
+
+// ---------------------------------------------------------------------------
 // IndexedDB assertion-only reads (raw IDB; the app connection stays open)
 // ---------------------------------------------------------------------------
 
@@ -302,6 +333,9 @@ export interface ExecutionRow {
   resultKind: "message" | "summary";
   state: string;
   runtimeOutcome: string | null;
+  /** S3: the fresh execution links back to the terminal one it replaced. */
+  retryOfExecutionId: string | null;
+  error: { code: string; message: string } | null;
 }
 
 export async function readStore<T>(page: Page, store: string): Promise<T[]> {

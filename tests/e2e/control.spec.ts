@@ -136,14 +136,16 @@ test.describe("scope controller and observer pages", () => {
 
     await resumeDrivers(pageA);
     await waitRoundPhase(pageA, 1, "已完成");
-    await expect(await summaryContent(pageA, 1)).toContainText(`reply-${claudePid}-2`);
+    // S2 focus 后口径: round 1 summary 是 facilitator 第 3 次执行（focus-1, message-2, summary-3）。
+    await expect(await summaryContent(pageA, 1)).toContainText(`reply-${claudePid}-3`);
 
     // Refresh-free on the observer: re-activating the tab pulls the committed
     // message + summary (a tab activation, never a reload).
     await simulateTabFocus(pageB);
     await waitRoundPhase(pageB, 1, "已完成");
     await expect(roundSection(pageB, 1).getByText(reply)).toBeVisible();
-    await expect(await summaryContent(pageB, 1)).toContainText(`reply-${claudePid}-2`);
+    // S2 focus 后口径: 同上，observer 读到的 summary 也是 reply-claude-3。
+    await expect(await summaryContent(pageB, 1)).toContainText(`reply-${claudePid}-3`);
 
     // Request audit: the observer page issued no mutation — GETs only — and
     // it did open the read-only event stream for the live preview.

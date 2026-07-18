@@ -92,9 +92,11 @@ test.describe("security gates", () => {
     await expect(round1.locator(DANGEROUS_SELECTOR)).toHaveCount(0);
     await expect(round1.locator(BAD_ANCHOR_SELECTOR)).toHaveCount(0);
 
-    // The safe https link survives — with isolation attributes (both messages).
+    // The safe https link survives — with isolation attributes (every committed
+    // message). S2 focus 后口径: focus 消息也携带该 payload，故 round 1 有 3 条 commit
+    // 消息（focus + 2 个 message turn），3 个安全链接（非渲染回归，渲染仍全部净化）。
     const safeLinks = round1.locator('a[href="https://example.com"]');
-    expect(await safeLinks.count()).toBe(2);
+    expect(await safeLinks.count()).toBe(3);
     for (const link of await safeLinks.all()) {
       expect(await link.getAttribute("target")).toBe("_blank");
       const rel = (await link.getAttribute("rel")) ?? "";

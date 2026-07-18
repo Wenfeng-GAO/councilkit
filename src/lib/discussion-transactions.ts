@@ -361,6 +361,79 @@ export async function abortRound(
 }
 
 // ---------------------------------------------------------------------------
+// Skip (S3): the cursor advances over a paused-at Participant whose terminal
+// failure the user chose not to retry. NOT FACILITATOR-SKIPPABLE.
+// ---------------------------------------------------------------------------
+
+/** Skip the Participant sitting at the paused cursor: cursor +1 persisted,
+ * pause cleared, phase resumes ("running", or "summarizing" at the end of the
+ * order). NO Room revision bump — a skip is a scheduling decision, not a
+ * shared-projection commit; the structured failure record (the terminal
+ * ModelExecution) is the durable absence proof that later Summary snapshots
+ * surface as a skip annotation (orchestrator-side). The facilitator can never
+ * be skipped (修复/终止 only, never a silent substitution) — this guard also
+ * covers a summarizing-phase summary failure, whose pauseReason.participantId
+ * is the facilitator. */
+export async function skipParticipant(
+  db: CouncilKitRuntimeDB,
+  input: { roomId: string; roundId: string; token: ControllerToken },
+): Promise<{ skippedParticipantId: string; roundPhase: DiscussionRound["phase"] }> {
+  return db.transaction(
+    "rw",
+    [db.rooms, db.rounds, db.participants, db.modelExecutions, db.runtimeBindings],
+    async () => {
+      const room = await requireRoom(db, input.roomId);
+      await requireController(db, input.roomId, input.token);
+      const round = await db.rounds.get(input.roundId);
+      if (!round || round.roomId !== input.roomId) {
+        throw new TransactionError("ROUND_NOT_FOUND", "unknown round for this room");
+      }
+      if (room.activeRoundId !== round.id) {
+        throw new TransactionError("STALE_EXECUTION", "round is not the room's active round");
+      }
+      if (round.phase !== "paused") {
+        throw new TransactionError("ROUND_PHASE", `cannot skip from phase ${round.phase}`);
+      }
+      const reason = round.pauseReason;
+      const skipParticipantId = reason?.participantId;
+      if (!skipParticipantId) {
+        throw new TransactionError(
+          "SKIP_NOT_APPLICABLE",
+          "pause has no participant at the cursor (e.g. prewarm)",
+        );
+      }
+      if (skipParticipantId === room.facilitatorParticipantId) {
+        throw new TransactionError(
+          "FACILITATOR_NOT_SKIPPABLE",
+          "the facilitator cannot be skipped; repair or terminate instead",
+        );
+      }
+      if (round.pausedFrom !== "running") {
+        throw new TransactionError("ROUND_PHASE", "only a speaker cursor can be skipped");
+      }
+      if (round.participantOrder[round.nextParticipantIndex] !== skipParticipantId) {
+        throw new TransactionError(
+          "STALE_EXECUTION",
+          "the pause reason does not point at the round cursor",
+        );
+      }
+      round.nextParticipantIndex += 1;
+      round.activeExecutionId = null;
+      round.pausedFrom = null;
+      round.pauseReason = null;
+      round.phase =
+        round.nextParticipantIndex >= round.participantOrder.length ? "summarizing" : "running";
+      await db.rounds.put(round);
+      // No bumpRoomContext: a skip commits no new entity into the shared
+      // projection. The terminal failure record already persists the absence.
+      room.lastActiveAt = ts();
+      await db.rooms.put(room);
+      return { skippedParticipantId: skipParticipantId, roundPhase: round.phase };
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Execution persistence (dispatch boundary)
 // ---------------------------------------------------------------------------
 

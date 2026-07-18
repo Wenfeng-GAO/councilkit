@@ -37,6 +37,18 @@ export function useRoomIntents(roomId: string) {
     mutationFn: () => getAppRuntime().orchestrator.abortPausedRound(roomId),
     onSettled,
   });
+  const retryFailedParticipant = useMutation({
+    mutationFn: () => getAppRuntime().orchestrator.retryFailedParticipant(roomId),
+    onSettled,
+  });
+  const skipFailedParticipant = useMutation({
+    mutationFn: () => getAppRuntime().orchestrator.skipFailedParticipant(roomId),
+    onSettled,
+  });
+  const rotateScope = useMutation({
+    mutationFn: () => getAppRuntime().orchestrator.rotateScope(roomId),
+    onSettled,
+  });
   const sendUserMessage = useMutation({
     mutationFn: (content: string) => getAppRuntime().orchestrator.sendUserMessage(roomId, content),
     onSettled,
@@ -48,6 +60,9 @@ export function useRoomIntents(roomId: string) {
     resumeRoom,
     cancelActiveExecution,
     abortPausedRound,
+    retryFailedParticipant,
+    skipFailedParticipant,
+    rotateScope,
     sendUserMessage,
   };
 }

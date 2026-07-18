@@ -1,4 +1,7 @@
 import { runtimeDb } from "@/lib/runtime-db";
+import type { DiscussionRound } from "@/models/discussion/entities";
+import type { ModelExecution } from "@/models/discussion/model-execution";
+import type { RuntimeBinding } from "@/models/discussion/runtime-binding";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 /**
@@ -26,6 +29,7 @@ export const runtimeKeys = {
   participants: (roomId: string) => ["rt", "participants", roomId] as const,
   executions: (roundId: string) => ["rt", "executions", roundId] as const,
   report: (roomId: string) => ["rt", "report", roomId] as const,
+  recovery: (roomId: string) => ["rt", "recovery", roomId] as const,
   agents: ["rt", "agents"] as const,
   profiles: ["rt", "profiles"] as const,
 };
@@ -131,6 +135,33 @@ export function useRoomReport(roomId: string | undefined, tick = 0) {
         .where("roomId")
         .equals(roomId as string)
         .first(),
+  });
+}
+
+/** Room-level recovery facts (S3): the terminal executions + bindings history +
+ * rounds that the rotation-entry display, the skip badge, and the retry count
+ * derive from. A read-only hook mirroring useRoomReport — the Orchestrator owns
+ * every write and bumps the invalidation tick. */
+export interface RoomRecoveryFacts {
+  executions: ModelExecution[];
+  bindings: RuntimeBinding[];
+  rounds: DiscussionRound[];
+}
+
+export function useRoomRecoveryFacts(roomId: string | undefined, tick = 0) {
+  return useQuery({
+    placeholderData: keepPreviousData,
+    queryKey: roomId ? [...runtimeKeys.recovery(roomId), tick] : ["rt", "recovery", "none"],
+    enabled: !!roomId,
+    queryFn: async () => {
+      const id = roomId as string;
+      const [executions, bindings, rounds] = await Promise.all([
+        runtimeDb.modelExecutions.where("roomId").equals(id).toArray(),
+        runtimeDb.runtimeBindings.where("roomId").equals(id).toArray(),
+        runtimeDb.rounds.where("roomId").equals(id).toArray(),
+      ]);
+      return { executions, bindings, rounds } satisfies RoomRecoveryFacts;
+    },
   });
 }
 
