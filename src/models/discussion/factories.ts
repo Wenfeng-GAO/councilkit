@@ -1,6 +1,12 @@
 import { canonicalJson } from "@shared/runtime/digest";
 import CryptoJS from "crypto-js";
-import type { DiscussionAgent, DiscussionRoom, Participant } from "./entities";
+import type {
+  DecisionReport,
+  DiscussionAgent,
+  DiscussionMode,
+  DiscussionRoom,
+  Participant,
+} from "./entities";
 import type { ModelExecution, ResultKind } from "./model-execution";
 import type { RuntimeBinding } from "./runtime-binding";
 
@@ -58,6 +64,7 @@ export function createDiscussionAgent(input: {
     modelId: input.modelId,
     color: input.color,
     revision: 1,
+    enabled: true,
     createdAt: ts,
     updatedAt: ts,
   };
@@ -102,6 +109,9 @@ export function createDiscussionRoom(input: {
   topic: string;
   background?: string;
   facilitatorParticipantId: string;
+  mode?: DiscussionMode;
+  targetOutput?: string;
+  maxRounds?: number | null;
 }): DiscussionRoom {
   if (input.topic.trim().length === 0) throw new TransactionError("INVALID", "topic required");
   if (input.facilitatorParticipantId.length === 0) {
@@ -117,6 +127,10 @@ export function createDiscussionRoom(input: {
     activeRoundId: null,
     contextRevision: 0,
     contextDigest: "",
+    mode: input.mode ?? "brainstorm",
+    targetOutput: input.targetOutput ?? "",
+    maxRounds: input.maxRounds ?? null,
+    status: "open",
     createdAt: ts,
     lastActiveAt: ts,
   };
@@ -186,5 +200,26 @@ export function createRuntimeBinding(input: {
     leaseEpoch: null,
     createdAt: ts,
     updatedAt: ts,
+  };
+}
+
+export function createDecisionReport(input: {
+  roomId: string;
+  content: string;
+  sourceExecutionId: string;
+}): DecisionReport {
+  if (input.roomId.length === 0) throw new TransactionError("INVALID", "roomId required");
+  if (input.content.trim().length === 0) {
+    throw new TransactionError("INVALID", "content is required");
+  }
+  if (input.sourceExecutionId.length === 0) {
+    throw new TransactionError("INVALID", "sourceExecutionId required");
+  }
+  return {
+    id: uuid(),
+    roomId: input.roomId,
+    content: input.content,
+    sourceExecutionId: input.sourceExecutionId,
+    createdAt: now(),
   };
 }

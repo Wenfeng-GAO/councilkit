@@ -1,4 +1,5 @@
 import type {
+  DecisionReport,
   DiscussionAgent,
   DiscussionMessage,
   DiscussionRoom,
@@ -29,6 +30,7 @@ export class CouncilKitRuntimeDB extends Dexie {
   modelExecutions!: Table<ModelExecution, string>;
   runtimeBindings!: Table<RuntimeBinding, string>;
   executionProfiles!: Table<ExecutionProfileRecord, string>;
+  reports!: Table<DecisionReport, string>;
 
   constructor(name = "councilkit-runtime-v1") {
     super(name);
@@ -47,7 +49,36 @@ export class CouncilKitRuntimeDB extends Dexie {
       runtimeBindings: "id, roomId, &scopeRequestId, state",
       executionProfiles: "id, driverId, installationId",
     });
+    this.version(2)
+      .stores({
+        // v2 diff only: the nine v1 tables are inherited unchanged.
+        reports: "id, roomId, &sourceExecutionId, createdAt",
+      })
+      .upgrade(async (tx) => {
+        await tx.table("rooms").toCollection().modify(applyRoomV2Defaults);
+        await tx.table("agents").toCollection().modify(applyAgentV2Defaults);
+      });
   }
+}
+
+export const ROOM_V2_DEFAULTS = {
+  mode: "brainstorm",
+  targetOutput: "",
+  maxRounds: null,
+  status: "open",
+} as const;
+
+/** v2 backfill: fills ONLY the four new Room fields; never touches any other key. */
+export function applyRoomV2Defaults(room: Record<string, unknown>): void {
+  room.mode ??= ROOM_V2_DEFAULTS.mode;
+  room.targetOutput ??= ROOM_V2_DEFAULTS.targetOutput;
+  room.maxRounds ??= ROOM_V2_DEFAULTS.maxRounds;
+  room.status ??= ROOM_V2_DEFAULTS.status;
+}
+
+/** v2 backfill: fills ONLY Agent.enabled. */
+export function applyAgentV2Defaults(agent: Record<string, unknown>): void {
+  agent.enabled ??= true;
 }
 
 export const runtimeDb = new CouncilKitRuntimeDB();

@@ -44,6 +44,7 @@ function agent(over: Partial<DiscussionAgent> = {}): DiscussionAgent {
     modelId: "model-x",
     color: "#22c55e",
     revision: 1,
+    enabled: true,
     createdAt: "2026-07-17T00:00:00.000Z",
     updatedAt: "2026-07-17T00:00:00.000Z",
     ...over,
