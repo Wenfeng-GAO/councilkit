@@ -60,6 +60,26 @@ _Avoid_: Agent、Runtime、process
 Room 显式指定、负责生成 Round Summary 的 **Participant**。Summary 是独立 Model Execution，但复用该 Participant 的长期 Driver 进程和 Session；Facilitator 不可用时不得静默切换其他 Participant。
 _Avoid_: Discussion Orchestrator、first successful Agent、fallback model
 
+**Discussion Mode**:
+Room 的讨论范式（brainstorm / planning / review），只决定 Facilitator 的引导方式与 Summary、Decision Report 的章节侧重，不改变执行与持久化规则。
+_Avoid_: workflow、template（Room 模板是后续独立概念）
+
+**Convergence**:
+讨论的收敛判定：Facilitator 在 Round Summary 中给出收敛建议，或达到 Room 设定的 maxRounds；触发 Decision Report 的生成。
+_Avoid_: completion、finish
+
+**Decision Report**:
+Room 收敛后由 Facilitator 的一次独立 Model Execution 产出的结构化 Markdown 决策报告；与 Message/Summary 一样是幂等提交的持久化事实，一个 Room 至多一份。
+_Avoid_: summary、transcript、chat log
+
+**Concluded**:
+Room 的生命周期终态：Decision Report 已提交。Concluded Room 的讨论事实保持只读，不再开启新 Round；报告生成过程（concluding）是编排瞬态，不是持久状态。
+_Avoid_: closed、finished、archived
+
+**RunState / Round Phase**:
+两个独立维度：Room 的用户调度门（idle / running / paused，UI 称「已暂停调度」）与 Round 的状态机（UI 称「本轮已暂停」）。暂停调度不改写 Round 的 phase，暂停 Round 不改变 Room 的门。
+_Avoid_: 用「暂停」同时指代两者
+
 ## Example dialogue
 
 > **开发者**：房间需要直接连接 Codex 吗？
@@ -141,3 +161,11 @@ _Avoid_: Discussion Orchestrator、first successful Agent、fallback model
 > **开发者**：导入 Profile 时，可以顺便信任并执行它指定的程序吗？
 >
 > **领域专家**：不可以。导入 Profile 只能进入待绑定状态，必须绑定本机已发现或由用户明确批准的 Runtime Installation。
+>
+> **开发者**：「本轮已暂停」和「已暂停调度」是一回事吗？
+>
+> **领域专家**：不是。「本轮已暂停」是 Round 状态机在等待处理；「已暂停调度」是用户关闭了 Room 的发言调度门，Round 的 phase 不受影响。
+>
+> **开发者**：讨论怎么算结束？
+>
+> **领域专家**：Facilitator 在 Summary 里建议收敛、或轮数达到 maxRounds，就触发生成 Decision Report；报告提交后 Room 进入 Concluded，内容保持只读。
