@@ -50,7 +50,12 @@ interface Scope {
   createdAt: string;
   activatedAt: string | null;
   creatingTimer: NodeJS.Timeout | null;
+  idleTimer: NodeJS.Timeout | null;
 }
+
+/** Default idle scope reaper deadline (ms since the last execution terminal).
+ * Exported for config.ts to reference as the production-visible default. */
+export const DEFAULT_IDLE_SCOPE_TTL_MS = 30 * 60_000;
 
 export interface ScopeManagerDeps {
   installations: InstallationRegistry;
@@ -62,6 +67,10 @@ export interface ScopeManagerDeps {
   hostInstanceId: string;
   /** Injectable for tests; defaults to TIMEOUTS.creatingScopeTtlMs. */
   creatingScopeTtlMs?: number;
+  /** Idle scope reaper deadline (ms since the last execution terminal).
+   * Optional: falls back to DEFAULT_IDLE_SCOPE_TTL_MS so existing literal
+   * HostConfig constructions keep compiling. */
+  idleScopeTtlMs?: number;
   now?: () => number;
 }
 
@@ -163,6 +172,56 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     scope.creatingTimer.unref?.();
   }
 
+  /** Idle reaper: a scope whose last execution went terminal more than
+   * `idleScopeTtlMs` ago reaps itself. The timer is (re)armed on scope
+   * activation and on every terminal execution event via `emitAndSweep`;
+   * a terminal in progress (busy execution) re-arms instead of reaping.
+   *
+   * V3: arm only while the scope is still active. Pre-fix this only checked
+   * `state !== "active"` inside the fire callback — so during `closeScopeInternal`
+   * (state="closing", awaiting driver.close()), a late terminal routed through
+   * `emitAndSweep` re-armed a residual 30min timer after close had already
+   * cleared it. Hoisting the state check to arm-time closes that window: a
+   * closing/closed scope never (re)arms. */
+  function scheduleIdleSweep(scope: Scope) {
+    if (scope.state !== "active") return;
+    if (scope.idleTimer) clearTimeout(scope.idleTimer);
+    const ttl = deps.idleScopeTtlMs ?? DEFAULT_IDLE_SCOPE_TTL_MS;
+    scope.idleTimer = setTimeout(() => {
+      scope.idleTimer = null;
+      if (scope.state !== "active") return;
+      for (const entry of scope.participants.values()) {
+        if (entry.busyExecutionId || entry.runtime === "busy") {
+          // False-positive guard: an in-flight execution must not be reaped;
+          // re-arm so the deadline restarts once it goes terminal.
+          scheduleIdleSweep(scope);
+          return;
+        }
+      }
+      logger.info("scope.idle_ttl_expired", { scopeId: scope.scopeId });
+      void closeScopeInternal(scope, "idle-ttl");
+    }, ttl);
+    scope.idleTimer.unref?.();
+  }
+
+  /** Emit a driver/registry proto, then (re)arm the idle reaper iff the
+   * resulting event is terminal. Keeps the "last execution terminal" timing
+   * origin precise and uniform across all four emit points in `execute`. */
+  function emitAndSweep(
+    scope: Scope,
+    executionId: string,
+    proto: Parameters<ExecutionRegistry["emit"]>[1],
+  ) {
+    const event = executions.emit(executionId, proto);
+    if (
+      event &&
+      (event.type === "completed" || event.type === "failed" || event.type === "interrupted")
+    ) {
+      scheduleIdleSweep(scope);
+    }
+    return event;
+  }
+
   async function prewarmParticipant(scope: Scope, entry: ParticipantEntry): Promise<void> {
     entry.runtime = "prewarming";
     const spec = entry.spec;
@@ -243,6 +302,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
       createdAt: new Date().toISOString(),
       activatedAt: null,
       creatingTimer: null,
+      idleTimer: null,
     };
     for (const spec of request.participants) {
       const factory = deps.driverFactories[spec.profile.driverId];
@@ -288,6 +348,9 @@ export function createScopeManager(deps: ScopeManagerDeps) {
       scope.activatedAt = new Date().toISOString();
       if (scope.creatingTimer) clearTimeout(scope.creatingTimer);
       scope.creatingTimer = null;
+      // Activation makes the scope live: arm the idle reaper so a scope that
+      // is created-and-activated but never executes still reaps.
+      scheduleIdleSweep(scope);
     }
     return toStatus(scope);
   }
@@ -350,7 +413,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
 
     const binding = entry.binding;
     if (!binding) {
-      executions.emit(request.executionId, {
+      emitAndSweep(scope, request.executionId, {
         type: "failed",
         error: makeError("PROFILE_INVALID", "prewarm", "participant has no resolved binding"),
         dispatchState: "not_dispatched",
@@ -367,11 +430,11 @@ export function createScopeManager(deps: ScopeManagerDeps) {
       entry.driver.contextWindowTokens(),
     );
     if (outcome.kind === "needs_rebase") {
-      executions.emit(request.executionId, {
+      emitAndSweep(scope, request.executionId, {
         type: "started",
         requestedModel: binding.requestedModel,
       });
-      executions.emit(request.executionId, {
+      emitAndSweep(scope, request.executionId, {
         type: "failed",
         error: makeError("NEEDS_REBASE", "dispatch", `session reconciliation: ${outcome.reason}`, {
           executionId: request.executionId,
@@ -393,7 +456,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     entry.busyExecutionId = request.executionId;
     entry.runtime = "busy";
     const emit = (proto: Parameters<ExecutionRegistry["emit"]>[1]) => {
-      const event = executions.emit(request.executionId, proto);
+      const event = emitAndSweep(scope, request.executionId, proto);
       if (event && event.type === "completed") {
         reconciler.recordApplied(
           request.participantId,
@@ -418,7 +481,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
         emit,
       )
       .catch((error: unknown) => {
-        executions.emit(request.executionId, {
+        emitAndSweep(scope, request.executionId, {
           type: "failed",
           error: makeError(
             "INTERNAL",
@@ -475,6 +538,8 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     scope.state = "closing";
     logger.info("scope.closing", { scopeId: scope.scopeId, reason });
     if (scope.creatingTimer) clearTimeout(scope.creatingTimer);
+    if (scope.idleTimer) clearTimeout(scope.idleTimer);
+    scope.idleTimer = null;
     await Promise.all(
       [...scope.participants.values()].map(async (entry) => {
         try {

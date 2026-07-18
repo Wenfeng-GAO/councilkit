@@ -129,9 +129,16 @@ export class RuntimeClient {
     });
   }
 
-  profileReadiness(profile: ExecutionProfileDto, modelId: string): Promise<ResolveProfileResponse> {
+  profileReadiness(
+    profile: ExecutionProfileDto,
+    modelId: string,
+    options?: { refresh?: boolean },
+  ): Promise<ResolveProfileResponse> {
     const body: ResolveProfileRequest = { profile, modelId };
-    return this.call("POST", "/api/v1/profiles/readiness", {
+    const path = options?.refresh
+      ? "/api/v1/profiles/readiness?refresh=1"
+      : "/api/v1/profiles/readiness";
+    return this.call("POST", path, {
       body,
       schema: resolveProfileResponseSchema,
     });
@@ -139,14 +146,16 @@ export class RuntimeClient {
 
   /** Closed canonical model catalog of a Driver + trusted Installation
    * (session-authenticated read; Settings is the only consumer). The claude
-   * catalog is route-specific — pass the profile's `route` there. */
+   * catalog is route-specific — pass the profile's `route` there. `refresh`
+   * bypasses the Host probe cache (S5). */
   modelCatalog(
     driverId: string,
     installationId: string,
-    options?: { route?: ClaudeRoute },
+    options?: { route?: ClaudeRoute; refresh?: boolean },
   ): Promise<ModelCatalogResponse> {
     const params = new URLSearchParams({ driverId, installationId });
     if (options?.route) params.set("route", options.route);
+    if (options?.refresh) params.set("refresh", "1");
     return this.call("GET", `/api/v1/models/catalog?${params.toString()}`, {
       schema: modelCatalogResponseSchema,
       auth: "session",

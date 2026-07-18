@@ -227,6 +227,13 @@ export async function startRound(page: Page): Promise<void> {
   await page.getByRole("button", { name: /^(发起讨论|开始新一轮)$/ }).click();
 }
 
+/** S5 release-runtime: the RoomHeader self-wired 释放运行时 button (visible
+ * only while the room is warm). No confirmation modal — the next startRound
+ * cold-builds via the accepted ensureScope path. */
+export async function releaseRuntimeViaButton(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "释放运行时" }).click();
+}
+
 export function roundSection(page: Page, roundNumber: number): Locator {
   return page.getByTestId(`round-section-${roundNumber}`);
 }

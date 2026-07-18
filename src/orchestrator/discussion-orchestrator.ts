@@ -1116,6 +1116,103 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     await startRound(roomId);
   }
 
+  /** Release the Room's warm runtime (S5): allowed only with no live execution
+   * and no in-flight round. closeScope is best-effort (a dead Host / 404 still
+   * converges locally — the rotateScope precedent); the binding flip to closed
+   * makes the next startRound cold-build via the accepted ensureScope path.
+   * Idempotent on an already-cold room. Unlike rotateScope it neither aborts a
+   * round nor starts a new one — it only drops the warm scope.
+   *
+   * R1 (TOCTOU): the live-execution + in-flight-round guards and the binding
+   * closure must take effect atomically inside ONE Dexie transaction. Pre-fix
+   * the guard reads and the close were separate steps, so a concurrent
+   * startRound on the same scope could begin executing between them — its
+   * execution anchor would then lose its terminal when closeScope deleted the
+   * Host scope's execution record + listeners. Now the guard re-reads every
+   * fact inside the tx and refuses if a live execution / in-flight round
+   * landed; only then does it flip the binding to closed IN THE SAME tx. A
+   * startRound's createRound/beginExecution tx cannot interleave its anchor
+   * write into the middle of this tx — once the anchor is written this tx sees
+   * it and refuses (丢终态 eliminated). client.closeScope (HTTP) runs
+   * best-effort AFTER the tx commits; a dead Host / 404 still converges locally
+   * because the binding is already closed. Residual window: a concurrent
+   * startRound that already ensureScope'd onto this still-live binding can have
+   * its prewarm interrupted by the subsequent Host close → it lands in
+   * prewarm_failed (an explainable paused state that self-heals on retry). */
+  async function releaseRuntime(roomId: string): Promise<void> {
+    const room = await db.rooms.get(roomId);
+    if (!room) throw new Error(`unknown room ${roomId}`);
+    const scopeClose = await db.transaction(
+      "rw",
+      [db.rooms, db.rounds, db.modelExecutions, db.runtimeBindings],
+      async (): Promise<{
+        scopeId: string;
+        controllerId: string;
+        leaseEpoch: number;
+      } | null> => {
+        const liveExecutions = await db.modelExecutions
+          .where("roomId")
+          .equals(roomId)
+          .filter((execution) =>
+            ["prepared", "running", "succeeded_uncommitted"].includes(execution.state),
+          )
+          .count();
+        if (liveExecutions > 0) {
+          throw new Error("cannot release while an execution is running");
+        }
+        // V1: an active round is only releasable once it has reached a terminal
+        // phase (completed/aborted). Pre-fix the guard only rejected
+        // prewarming/running/summarizing and let pending/paused through — but a
+        // paused or pending round is still a live round whose recovery intents
+        // (retry/abort/rotate) all route through currentToken, which needs an
+        // active binding. Releasing the binding under a paused round would close
+        // the only recovery path (ensureScope cold-build does not apply to the
+        // recovery intents, which must operate on the existing round). So any
+        // active round not yet terminal is refused, with distinct messaging for
+        // "a round is executing" vs "an unresolved round remains — recover or
+        // end it first".
+        const freshRoom = await db.rooms.get(roomId);
+        if (freshRoom?.activeRoundId) {
+          const round = await db.rounds.get(freshRoom.activeRoundId);
+          if (round && !["completed", "aborted"].includes(round.phase)) {
+            throw new Error(
+              ["prewarming", "running", "summarizing"].includes(round.phase)
+                ? "cannot release while a round is in flight"
+                : "cannot release: an unresolved round remains — recover or end it first",
+            );
+          }
+        }
+        const binding = await latestBinding(roomId);
+        if (!binding || binding.state !== "active" || !binding.executionScopeId) {
+          return null; // already cold — idempotent no-op
+        }
+        // Inline the closure inside this tx so the guard + close are atomic.
+        // Do NOT call markBindingClosed here: it opens its own transaction and
+        // would break the atomic guard→close contract this function relies on.
+        const close = {
+          scopeId: binding.executionScopeId,
+          controllerId: binding.controllerId as string,
+          leaseEpoch: binding.leaseEpoch ?? 1,
+        };
+        binding.state = "closed";
+        binding.updatedAt = new Date().toISOString();
+        await db.runtimeBindings.put(binding);
+        return close;
+      },
+    );
+    if (!scopeClose) return; // already cold — idempotent no-op
+    // Host close AFTER the tx commits: best-effort. A dead Host / 404 still
+    // converges locally — the binding is already closed, so the next startRound
+    // cold-builds via ensureScope (the rotateScope precedent).
+    await client
+      .closeScope(scopeClose.scopeId, {
+        controllerId: scopeClose.controllerId,
+        leaseEpoch: scopeClose.leaseEpoch,
+      })
+      .catch(() => undefined);
+    notify(roomId);
+  }
+
   /** Manual conclusion (S2): the user proactively ends the room with a decision
    * report — the SAME chain as automatic convergence. Requires the controlling
    * page and no running execution. Idempotent on an already-concluded room.
@@ -1171,6 +1268,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     retryFailedParticipant,
     skipFailedParticipant,
     rotateScope,
+    releaseRuntime,
     sendUserMessage,
     activeParticipants,
   };

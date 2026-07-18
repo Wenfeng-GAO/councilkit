@@ -101,7 +101,11 @@ describe("RuntimeClient installations / profile readiness (U6)", () => {
 
   it("profileReadiness: POST mutation with CSRF header and { profile, modelId } body", async () => {
     const { fetchFn, calls } = stubFetch(
-      okResponse({ readiness: { state: "ready", detail: null }, binding: null }),
+      okResponse({
+        readiness: { state: "ready", detail: null },
+        binding: null,
+        cachedAt: "2026-07-19T00:00:00.000Z",
+      }),
     );
     const client = makeClient(fetchFn);
 
@@ -136,7 +140,9 @@ describe("RuntimeClient installations / profile readiness (U6)", () => {
   });
 
   it("modelCatalog: GET session call with driverId + installationId query params", async () => {
-    const { fetchFn, calls } = stubFetch(okResponse({ catalog: ["gpt-5.6-sol"] }));
+    const { fetchFn, calls } = stubFetch(
+      okResponse({ catalog: ["gpt-5.6-sol"], cachedAt: "2026-07-19T00:00:00.000Z" }),
+    );
     const client = makeClient(fetchFn);
 
     const result = await client.modelCatalog("codex-app-server", "inst-1");
@@ -150,5 +156,39 @@ describe("RuntimeClient installations / profile readiness (U6)", () => {
     expect(calls[0]?.headers[CSRF_HEADER_NAME]).toBeUndefined();
     expect(calls[0]?.headers["Content-Type"]).toBeUndefined();
     expect(result.catalog).toEqual(["gpt-5.6-sol"]);
+  });
+
+  it("profileReadiness: refresh=1 appends ?refresh=1 to the readiness URL", async () => {
+    const { fetchFn, calls } = stubFetch(
+      okResponse({
+        readiness: { state: "ready", detail: null },
+        binding: null,
+        cachedAt: "2026-07-19T00:00:00.000Z",
+      }),
+    );
+    const client = makeClient(fetchFn);
+
+    await client.profileReadiness(PROFILE, "gpt-5-codex", { refresh: true });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("/api/v1/profiles/readiness?refresh=1");
+    expect(calls[0]?.method).toBe("POST");
+    // The refresh flag is a query param only; the body is unchanged.
+    expect(calls[0]?.body).toEqual({ profile: PROFILE, modelId: "gpt-5-codex" });
+  });
+
+  it("modelCatalog: refresh=1 appends refresh=1 alongside driverId/installationId", async () => {
+    const { fetchFn, calls } = stubFetch(
+      okResponse({ catalog: ["gpt-5.6-sol"], cachedAt: "2026-07-19T00:00:00.000Z" }),
+    );
+    const client = makeClient(fetchFn);
+
+    await client.modelCatalog("codex-app-server", "inst-1", { route: undefined, refresh: true });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(
+      "/api/v1/models/catalog?driverId=codex-app-server&installationId=inst-1&refresh=1",
+    );
+    expect(calls[0]?.method).toBe("GET");
   });
 });

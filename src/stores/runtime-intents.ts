@@ -49,6 +49,10 @@ export function useRoomIntents(roomId: string) {
     mutationFn: () => getAppRuntime().orchestrator.rotateScope(roomId),
     onSettled,
   });
+  const releaseRuntime = useMutation({
+    mutationFn: () => getAppRuntime().orchestrator.releaseRuntime(roomId),
+    onSettled,
+  });
   const sendUserMessage = useMutation({
     mutationFn: (content: string) => getAppRuntime().orchestrator.sendUserMessage(roomId, content),
     onSettled,
@@ -67,6 +71,7 @@ export function useRoomIntents(roomId: string) {
     retryFailedParticipant,
     skipFailedParticipant,
     rotateScope,
+    releaseRuntime,
     sendUserMessage,
     concludeRoom,
   };

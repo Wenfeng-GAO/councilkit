@@ -228,3 +228,16 @@ export function useExecutionProfiles() {
     queryFn: () => runtimeDb.executionProfiles.toArray(),
   });
 }
+
+/** Active warm runtime bindings across all rooms (S5): the RoomHeader quota
+ * indicator counts these against QUOTAS.maxActiveScopes. A read-only mirror of
+ * the recovery facts hook — the Orchestrator owns every write and bumps the
+ * invalidation tick, which re-keys this via runtimeKeys.all. */
+export function useActiveRuntimeBindings(tick = 0) {
+  return useQuery({
+    placeholderData: keepPreviousData,
+    queryKey: [...["rt", "active-bindings"], tick] as const,
+    queryFn: () =>
+      runtimeDb.runtimeBindings.filter((binding) => binding.state === "active").toArray(),
+  });
+}

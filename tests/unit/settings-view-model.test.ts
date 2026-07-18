@@ -2,6 +2,7 @@ import {
   allSectionsReady,
   driverCapabilityView,
   driverDisplayName,
+  formatCheckedAgo,
   installationStateView,
   isValidHexColor,
   modelCatalogQueryKey,
@@ -129,5 +130,34 @@ describe("settings view-model", () => {
       "inst-2",
       "moonshot",
     ]);
+  });
+});
+
+describe("settings view-model: formatCheckedAgo (S5)", () => {
+  // Anchor the cachedAt epoch; nowMs is expressed as cachedAt + an explicit
+  // delta so the boundary math is unambiguous regardless of the base date.
+  const CACHED_AT = "2026-07-19T00:00:00.000Z";
+  const CACHED_MS = Date.parse(CACHED_AT);
+  const ago = (deltaMs: number) => CACHED_MS + deltaMs;
+
+  it("<5s -> 刚刚", () => {
+    expect(formatCheckedAgo(CACHED_AT, ago(4_000))).toBe("刚刚");
+    expect(formatCheckedAgo(CACHED_AT, ago(0))).toBe("刚刚");
+  });
+
+  it("<60s -> N 秒前", () => {
+    expect(formatCheckedAgo(CACHED_AT, ago(30_000))).toBe("30 秒前");
+    expect(formatCheckedAgo(CACHED_AT, ago(5_000))).toBe("5 秒前");
+    expect(formatCheckedAgo(CACHED_AT, ago(59_999))).toBe("59 秒前");
+  });
+
+  it(">=60s -> N 分钟前", () => {
+    expect(formatCheckedAgo(CACHED_AT, ago(60_000))).toBe("1 分钟前");
+    expect(formatCheckedAgo(CACHED_AT, ago(150_000))).toBe("2 分钟前");
+    expect(formatCheckedAgo(CACHED_AT, ago(1_800_000))).toBe("30 分钟前");
+  });
+
+  it("non-finite / invalid -> empty string", () => {
+    expect(formatCheckedAgo("not-a-date", ago(60_000))).toBe("");
   });
 });

@@ -50,6 +50,10 @@ export interface ProfileSectionItem {
   status: ProfileReadinessState;
   detail: string | null;
   action: RepairAction | null;
+  /** S5: ISO timestamp the probe result was cached at (for "X 秒前"). */
+  checkedAt?: string;
+  /** S5: ms remaining in the failure backoff window (only on failure results). */
+  retryAfterMs?: number;
 }
 
 export interface SettingsReadinessModel {
@@ -67,6 +71,11 @@ export interface SettingsReadinessInput {
   profiles: ExecutionProfileRecord[];
   /** Per-profile readiness keyed by profile id (missing = not established). */
   profileReadiness: Readonly<Record<string, ProfileReadiness | undefined>>;
+  /** S5: per-profile probe metadata (cachedAt for "X 秒前"; retryAfterMs on
+   * failure-backoff). Optional: callers without probe caching omit it. */
+  profileProbeMeta?: Readonly<
+    Record<string, { cachedAt?: string; retryAfterMs?: number } | undefined>
+  >;
 }
 
 function installationAction(state: InstallationState): RepairAction | null {
@@ -128,6 +137,7 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
   }));
   const profiles = input.profiles.map((profile) => {
     const readiness = input.profileReadiness[profile.id];
+    const meta = input.profileProbeMeta?.[profile.id];
     if (!readiness) {
       return {
         profileId: profile.id,
@@ -135,6 +145,8 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
         status: "runtime_unavailable" as const,
         detail: "Readiness has not been established (Host unavailable or not refreshed).",
         action: "edit-binding" as const,
+        ...(meta?.cachedAt !== undefined ? { checkedAt: meta.cachedAt } : {}),
+        ...(meta?.retryAfterMs !== undefined ? { retryAfterMs: meta.retryAfterMs } : {}),
       };
     }
     return {
@@ -143,6 +155,8 @@ export function buildSettingsReadiness(input: SettingsReadinessInput): SettingsR
       status: readiness.state,
       detail: readiness.detail,
       action: profileAction(readiness.state),
+      ...(meta?.cachedAt !== undefined ? { checkedAt: meta.cachedAt } : {}),
+      ...(meta?.retryAfterMs !== undefined ? { retryAfterMs: meta.retryAfterMs } : {}),
     };
   });
   return { host, installations, drivers, profiles };

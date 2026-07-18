@@ -10,6 +10,7 @@ import {
   profileRouteOf,
 } from "@/components/settings/view-model";
 import { StatusPill } from "@/components/shared/StatusPill";
+import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { runtimeDb } from "@/lib/runtime-db";
 import { createDiscussionAgent } from "@/models/discussion/factories";
@@ -34,6 +35,12 @@ import { Link } from "react-router-dom";
 export function SettingsPage() {
   const { client } = getAppRuntime();
   const queryClient = useQueryClient();
+
+  // S5 (R2): a manual "重新检查" forces refresh=1 (bypass the Host probe cache
+  // + failure backoff) for both readiness and catalog. The button is disabled
+  // while a recheck is in flight (recheckInFlight) so a second click cannot
+  // stack a second wave of forced handshakes.
+  const [recheckInFlight, setRecheckInFlight] = useState(false);
 
   // --- Host health (polled; the page blocks new execution when it drops) ---
   const healthQuery = useQuery({
@@ -82,7 +89,15 @@ export function SettingsPage() {
   const catalogQueries = useQueries({
     queries: catalogPairs.map((pair) => ({
       queryKey: modelCatalogQueryKey(pair.driverId, pair.installationId, pair.route),
-      queryFn: () => client.modelCatalog(pair.driverId, pair.installationId, { route: pair.route }),
+      queryFn: () =>
+        // S5 (R2): the catalog queryFn never forces refresh — it reads the Host
+        // probe cache. The manual "重新检查" button bypasses the cache by calling
+        // the client directly with refresh:true and setQueryData (see
+        // handleRecheckAll), so invalidate-then-refetch cannot be downgraded by a
+        // same-key observer whose queryFn ignores the refresh flag.
+        client.modelCatalog(pair.driverId, pair.installationId, {
+          route: pair.route,
+        }),
       enabled: hostOnline === true,
       staleTime: 60_000,
       retry: false,
@@ -116,7 +131,12 @@ export function SettingsPage() {
       const probeModelId = probeModelIdFor(profile);
       return {
         queryKey: ["host", "profile-readiness", profile.id, profile.revision, probeModelId],
-        queryFn: () => client.profileReadiness(toDto(profile), probeModelId),
+        queryFn: () =>
+          // S5 (R2): same as catalog — the queryFn never forces refresh; the
+          // "重新检查" button calls the client directly with refresh:true and
+          // setQueryData so the forced handshake is never downgraded by a
+          // same-key observer (AgentFormModal registers one for catalog).
+          client.profileReadiness(toDto(profile), probeModelId),
         enabled: hostOnline === true,
         staleTime: 30_000,
         retry: false,
@@ -132,18 +152,99 @@ export function SettingsPage() {
     return map;
   }, [profiles, readinessQueries]);
 
+  // S5: per-profile probe metadata (cachedAt -> "X 秒前"; retryAfterMs on
+  // failure-backoff) projected into the readiness row model.
+  const profileProbeMeta = useMemo(() => {
+    const map: Record<string, { cachedAt?: string; retryAfterMs?: number } | undefined> = {};
+    profiles.forEach((profile, index) => {
+      const data = readinessQueries[index]?.data;
+      if (!data) return;
+      const meta: { cachedAt?: string; retryAfterMs?: number } = {};
+      if (data.cachedAt) meta.cachedAt = data.cachedAt;
+      if (data.retryAfterMs !== undefined) meta.retryAfterMs = data.retryAfterMs;
+      map[profile.id] = Object.keys(meta).length > 0 ? meta : undefined;
+    });
+    return map;
+  }, [profiles, readinessQueries]);
+
   const readinessModel = buildSettingsReadiness({
     hostOnline,
     installations,
     driverCapabilities: healthQuery.data?.drivers ?? [],
     profiles,
     profileReadiness: profileReadinessMap,
+    profileProbeMeta,
   });
+
+  // S5 (R2): the manual "重新检查" forces a true refresh=1 handshake for every
+  // profile readiness and every catalog pair, bypassing the Host probe cache +
+  // failure backoff. It calls the client DIRECTLY with { refresh: true } and
+  // writes each result into its exact query key via setQueryData — NOT ref +
+  // invalidate. The previous ref+invalidate scheme relied on the shared queryFn
+  // reading the ref, but AgentFormModal registers a same-key catalog observer
+  // (enabled:false until opened) whose own queryFn ignores the ref, so a
+  // refetch could be served by that observer's queryFn and drop refresh=1
+  // (TanStack Query 5.101.0 behavior). Direct call + setQueryData makes refresh
+  // deterministic regardless of which queryFn owns the key. A non-ready 200 body
+  // (readiness state !== "ready") is a successful HTTP response and is written
+  // back too, so the rendered row matches the fresh handshake; transport errors
+  // (4xx/5xx) leave the cached value intact rather than blanking the row.
+  const handleRecheckAll = async () => {
+    setRecheckInFlight(true);
+    try {
+      const readinessCalls = profiles.map(async (profile) => {
+        const probeModelId = probeModelIdFor(profile);
+        try {
+          const data = await client.profileReadiness(toDto(profile), probeModelId, {
+            refresh: true,
+          });
+          queryClient.setQueryData(
+            ["host", "profile-readiness", profile.id, profile.revision, probeModelId],
+            data,
+          );
+        } catch {
+          // Transport/4xx/5xx: leave the cached readiness intact.
+        }
+      });
+      const catalogCalls = catalogPairs.map(async (pair) => {
+        try {
+          const data = await client.modelCatalog(pair.driverId, pair.installationId, {
+            route: pair.route,
+            refresh: true,
+          });
+          queryClient.setQueryData(
+            modelCatalogQueryKey(pair.driverId, pair.installationId, pair.route),
+            data,
+          );
+        } catch {
+          // Transport/4xx/5xx: leave the cached catalog intact.
+        }
+      });
+      await Promise.all([...readinessCalls, ...catalogCalls]);
+    } finally {
+      setRecheckInFlight(false);
+    }
+  };
+
+  // S5: the global "重新检查" button is disabled while the Host is down, while
+  // a recheck is in flight (recheckInFlight), or while any readiness/catalog
+  // query is fetching (per ruling #2: a recheck in flight is the only thing
+  // that blocks the recheck; Profile/Agent form submits are never gated).
+  const anyProbeFetching =
+    readinessQueries.some((query) => query.isFetching) ||
+    catalogQueries.some((query) => query.isFetching);
+  const rechecking = recheckInFlight || anyProbeFetching;
 
   // --- Repair actions ---
   const revalidateMut = useMutation({
     mutationFn: (installationId: string) => client.revalidateInstallation(installationId),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["host", "installations"] }),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["host", "installations"] });
+      // S5: the Host route already invalidated the probe cache; refetch the
+      // readiness + catalog so the page immediately shows fresh handshakes.
+      queryClient.invalidateQueries({ queryKey: ["host", "profile-readiness"] });
+      queryClient.invalidateQueries({ queryKey: ["host", "model-catalog"] });
+    },
   });
 
   type InfoModal = "restart" | "requirements" | "diagnostics" | null;
@@ -272,10 +373,24 @@ export function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-8">
-      <h1 className="text-xl font-semibold">设置</h1>
-      <p className="mt-1 text-sm text-muted">
-        V1 唯一配置入口：自上而下完成四段配置后，即可创建 Agent 与讨论。
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">设置</h1>
+          <p className="mt-1 text-sm text-muted">
+            V1 唯一配置入口：自上而下完成四段配置后，即可创建 Agent 与讨论。
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <Button
+            variant="ghost"
+            onClick={handleRecheckAll}
+            disabled={hostOnline !== true || rechecking}
+          >
+            {rechecking ? "正在重新检查…" : "重新检查"}
+          </Button>
+          <p className="text-xs text-muted">强制重新握手（refresh=1），绕过 60 秒缓存与失败退避</p>
+        </div>
+      </div>
 
       <div className="mt-6 flex flex-col gap-8">
         <HostSection

@@ -68,7 +68,13 @@ export function installationRoutes(services: HostServices): Route[] {
       responseSchema: installationDtoSchema,
       handler: (ctx): InstallationDto => {
         try {
-          return registry().revalidate(ctx.params.installationId ?? "");
+          const dto = registry().revalidate(ctx.params.installationId ?? "");
+          // Probe cache keys referencing this installation go stale at once;
+          // soft-skip when no probe is assembled (installation-only rigs).
+          (services.profileProbe as ProfileProbe | undefined)?.invalidateInstallation?.(
+            dto.installationId,
+          );
+          return dto;
         } catch (error) {
           asHttpError(error);
         }
@@ -84,7 +90,9 @@ export function installationRoutes(services: HostServices): Route[] {
         // bodySchema already rejected executable/argv/shell/env/token
         // injection with 400 BAD_REQUEST; only the typed DTO reaches here.
         const { profile, modelId } = ctx.body as ResolveProfileRequest;
-        return probe().readiness(profile, modelId);
+        return probe().readiness(profile, modelId, {
+          refresh: ctx.query.get("refresh") === "1",
+        });
       },
     },
   ];

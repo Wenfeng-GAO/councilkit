@@ -86,6 +86,7 @@ export function modelRoutes(services: HostServices): Route[] {
             driverId as DriverId,
             installationId,
             routeParsed?.success ? routeParsed.data : undefined,
+            { refresh: ctx.query.get("refresh") === "1" },
           );
         } catch (error) {
           asHttpError(error);
