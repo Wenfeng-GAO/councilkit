@@ -1,6 +1,8 @@
 import type { ControllerToken } from "@/lib/discussion-transactions";
 import {
+  commitFocusMessage,
   commitModelMessage,
+  commitReport,
   commitSummary,
   discardExecution,
   markAckExpired,
@@ -169,10 +171,18 @@ export async function handleCompletedExecution(
     dispatchState: event.dispatchState,
     toolState: event.toolState,
   };
+  // Four-way commit dispatch (S2): focus commits a Message, report commits a
+  // DecisionReport — both flow through the same persist→ACK pipeline. The wire
+  // instruction.kind stays "message"/"summary"; mode/category live in the
+  // instruction text (ADR-0010), so no shared-schema change is needed here.
   const result =
     execution.resultKind === "summary"
       ? await commitSummary(deps.db, commitInput)
-      : await commitModelMessage(deps.db, commitInput);
+      : execution.resultKind === "focus"
+        ? await commitFocusMessage(deps.db, commitInput)
+        : execution.resultKind === "report"
+          ? await commitReport(deps.db, commitInput)
+          : await commitModelMessage(deps.db, commitInput);
 
   if (result.outcome === "discarded") {
     // Commit-time staleness was persisted as stale_context + paused inside

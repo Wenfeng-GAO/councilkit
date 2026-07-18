@@ -354,6 +354,12 @@ describe("legacy DB isolation", () => {
         const round = await createRound(db, { roomId: room.id, token, participantOrder });
         await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
         await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+        // S2: a participant message may not begin until the facilitator focus
+        // has landed. This round is driven by raw transactions (no orchestrator
+        // focus path), so mark a placeholder focus to clear the FOCUS_REQUIRED
+        // guard — mirroring seedRunning. No focus message is added, so the
+        // legacy-DB-isolation assertions (messages=4, summaries=2) stay intact.
+        await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
         for (const participant of [p1, p2]) {
           const freshRoom = await db.rooms.get(room.id);
           const execution = createModelExecution({

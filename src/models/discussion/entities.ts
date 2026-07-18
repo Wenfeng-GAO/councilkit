@@ -134,6 +134,11 @@ export interface DiscussionRound {
   nextParticipantIndex: number;
   /** Persisted BEFORE dispatching to the Host; cleared atomically on commit. */
   activeExecutionId: string | null;
+  /** Facilitator focus message of this Round (S2). Three-state: `null` = a
+   * post-S2 Round awaiting its focus, `string` = focus committed, `undefined` =
+   * a pre-S2 legacy Round that is NEVER retro-focussed. createRound writes
+   * `null`; legacy rows read back as `undefined` and are left as-is. */
+  focusMessageId?: string | null;
   createdAt: string;
   completedAt: string | null;
 }

@@ -25,6 +25,7 @@ export const runtimeKeys = {
   summary: (roundId: string) => ["rt", "summary", roundId] as const,
   participants: (roomId: string) => ["rt", "participants", roomId] as const,
   executions: (roundId: string) => ["rt", "executions", roundId] as const,
+  report: (roomId: string) => ["rt", "report", roomId] as const,
   agents: ["rt", "agents"] as const,
   profiles: ["rt", "profiles"] as const,
 };
@@ -114,6 +115,22 @@ export function useRoundExecutions(roundId: string | undefined, tick = 0) {
         .where("roundId")
         .equals(roundId as string)
         .toArray(),
+  });
+}
+
+/** The Room's committed decision report (S2, one per room). Undefined while no
+ * report has landed yet; the read never triggers execution — the Orchestrator
+ * commits the report and bumps the invalidation tick. */
+export function useRoomReport(roomId: string | undefined, tick = 0) {
+  return useQuery({
+    placeholderData: keepPreviousData,
+    queryKey: roomId ? [...runtimeKeys.report(roomId), tick] : ["rt", "report", "none"],
+    enabled: !!roomId,
+    queryFn: () =>
+      runtimeDb.reports
+        .where("roomId")
+        .equals(roomId as string)
+        .first(),
   });
 }
 

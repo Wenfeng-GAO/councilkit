@@ -904,8 +904,15 @@ describe("discussion orchestrator (U5)", () => {
 
     const round1 = await orchestrator.startRound(room.id);
     expect(round1?.phase).toBe("completed");
-    expect(host.executeCalls.map((call) => call.participantId)).toEqual([p1.id, p2.id, p1.id]);
+    // S2: focus is Round 0 — facilitator p1 focus → p1 → p2 → summary.
+    expect(host.executeCalls.map((call) => call.participantId)).toEqual([
+      p1.id,
+      p1.id,
+      p2.id,
+      p1.id,
+    ]);
     expect(host.executeCalls.map((call) => call.instructionKind)).toEqual([
+      "message",
       "message",
       "message",
       "summary",
@@ -913,19 +920,20 @@ describe("discussion orchestrator (U5)", () => {
     const storedRound1 = (await db.rounds.get(round1?.id ?? "")) as DiscussionRound;
     expect(storedRound1.nextParticipantIndex).toBe(2);
     expect(storedRound1.phase).toBe("completed");
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(3);
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
+    expect(storedRound1.focusMessageId).not.toBeNull();
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(4);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
 
     // Persist precedes every ACK; every execution terminally acknowledged.
-    expect(host.ackCalls).toHaveLength(3);
+    expect(host.ackCalls).toHaveLength(4);
     for (const call of host.ackCalls) {
       expect(call.disposition).toBe("committed");
       expect(call.result).toBe("acknowledged");
       expect(call.stateAtAck).toBe("committed");
     }
     const executions1 = await db.modelExecutions.where("roundId").equals(storedRound1.id).toArray();
-    expect(executions1).toHaveLength(3);
+    expect(executions1).toHaveLength(4);
     for (const execution of executions1) {
       expect(execution.state).toBe("committed");
       expect(execution.ackState).toBe("acknowledged");
@@ -936,17 +944,19 @@ describe("discussion orchestrator (U5)", () => {
     expect(round2?.roundNumber).toBe(2);
     expect(host.executeCalls.map((call) => call.participantId)).toEqual([
       p1.id,
+      p1.id,
       p2.id,
+      p1.id,
       p1.id,
       p1.id,
       p2.id,
       p1.id,
     ]);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(6);
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(4);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(8);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(6);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(2);
     const all = await db.modelExecutions.where("roomId").equals(room.id).toArray();
-    expect(all).toHaveLength(6);
+    expect(all).toHaveLength(8);
     for (const execution of all) {
       expect(execution.ackState).toBe("acknowledged");
     }
@@ -982,6 +992,9 @@ describe("discussion orchestrator (U5)", () => {
       participantSnapshotDigest: p1.participantSnapshotDigest,
       instructionDigest: computeInstructionDigest({ kind: "message", text: "answer" }),
     });
+    // The focus is a Round-0 precondition; pretend it landed so the message
+    // begin passes the FOCUS_REQUIRED guard (this case isolates replay).
+    await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
     await beginExecution(db, { execution, token });
     await markExecutionDispatched(db, {
       executionId: execution.executionId,
@@ -1036,7 +1049,7 @@ describe("discussion orchestrator (U5)", () => {
     const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("completed");
     const pending = await db.modelExecutions.where("roomId").equals(room.id).toArray();
-    expect(pending).toHaveLength(3);
+    expect(pending).toHaveLength(4);
     for (const execution of pending) {
       expect(execution.state).toBe("committed");
       expect(execution.ackState).toBe("pending");
@@ -1049,7 +1062,7 @@ describe("discussion orchestrator (U5)", () => {
     await auditor.startupAudit();
 
     expect(host.executeCalls).toHaveLength(executeCallsBefore); // never re-invoked
-    expect(host.ackCalls).toHaveLength(3);
+    expect(host.ackCalls).toHaveLength(4);
     for (const call of host.ackCalls) {
       expect(call.disposition).toBe("committed");
       expect(call.result).toBe("acknowledged");
@@ -1058,8 +1071,8 @@ describe("discussion orchestrator (U5)", () => {
     for (const execution of after) {
       expect(execution.ackState).toBe("acknowledged");
     }
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(3);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(4);
   });
 
   it("2c. an ACK processed but lost in flight converges via tombstone without re-committing", async () => {
@@ -1069,7 +1082,7 @@ describe("discussion orchestrator (U5)", () => {
     host.ackBehavior = "drop-response"; // Host processes, response never arrives
     const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("completed");
-    expect(host.ackTombstones).toBe(3);
+    expect(host.ackTombstones).toBe(4);
     const pending = await db.modelExecutions.where("roomId").equals(room.id).toArray();
     for (const execution of pending) {
       expect(execution.ackState).toBe("pending");
@@ -1081,14 +1094,14 @@ describe("discussion orchestrator (U5)", () => {
     await auditor.startupAudit();
 
     expect(host.executeCalls).toHaveLength(executeCallsBefore);
-    expect(host.ackTombstones).toBe(3); // tombstone replay, no re-processing
-    expect(host.ackCalls).toHaveLength(6); // 3 lost + 3 resent
+    expect(host.ackTombstones).toBe(4); // tombstone replay, no re-processing
+    expect(host.ackCalls).toHaveLength(8); // 4 lost + 4 resent
     const after = await db.modelExecutions.where("roomId").equals(room.id).toArray();
     for (const execution of after) {
       expect(execution.ackState).toBe("acknowledged");
     }
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(3);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(4);
   });
 
   it("3. expires pending ACKs after a Host restart; committed bodies survive untouched", async () => {
@@ -1104,14 +1117,14 @@ describe("discussion orchestrator (U5)", () => {
     await auditor.startupAudit();
 
     const after = await db.modelExecutions.where("roomId").equals(room.id).toArray();
-    expect(after).toHaveLength(3);
+    expect(after).toHaveLength(4);
     for (const execution of after) {
       expect(execution.state).toBe("committed");
       expect(execution.ackState).toBe("expired");
     }
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(3);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(4);
     expect((await db.rounds.get(round?.id ?? ""))?.phase).toBe("completed");
     expect(host.executeCalls).toHaveLength(0);
     expect(host.ackCalls).toHaveLength(0); // no HTTP attempt against the new Host
@@ -1301,6 +1314,9 @@ describe("discussion orchestrator (U5)", () => {
       });
       await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
       await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+      // The seeded message begin must clear the FOCUS_REQUIRED guard (S2):
+      // pretend the facilitator focus already landed.
+      await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
       const execution = createModelExecution({
         executionId: `exec-audit-${index}-01`,
         roomId: room.id,
@@ -1540,12 +1556,12 @@ describe("discussion orchestrator (U5)", () => {
     const { orchestrator: auditor } = makeOrchestrator();
     await auditor.startupAudit();
 
-    expect(host.executeCalls).toHaveLength(3);
-    expect(host.ackCalls).toHaveLength(3);
+    expect(host.executeCalls).toHaveLength(4);
+    expect(host.ackCalls).toHaveLength(4);
     expect(host.getExecutionCalls).toHaveLength(0);
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
-    expect((await db.rooms.get(room.id))?.contextRevision).toBe(3);
+    expect((await db.rooms.get(room.id))?.contextRevision).toBe(4);
     expect((await db.rounds.get(round?.id ?? ""))?.phase).toBe("completed");
   });
 
@@ -1621,15 +1637,19 @@ describe("discussion orchestrator (U5)", () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
     await orchestrator.ensureScope(room.id, [p1, p2]);
+    // S2 focus consumes p1's first plan slot; prepend a complete so the retry
+    // failure lands on a MESSAGE turn (keep the original retry semantics).
     host.plan(
       p1.id,
+      { kind: "complete" },
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
       { kind: "complete" },
     );
     const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("completed");
-    // p1 twice (original + retry), then p2, then the facilitator summary.
+    // focus → message p1 (fail, retry) → message p1 retry (complete) → p2 → summary.
     expect(host.executeCalls.map((call) => call.participantId)).toEqual([
+      p1.id,
       p1.id,
       p1.id,
       p2.id,
@@ -1639,9 +1659,11 @@ describe("discussion orchestrator (U5)", () => {
       "message",
       "message",
       "message",
+      "message",
       "summary",
     ]);
-    expect(host.executeCalls[0]?.executionId).not.toBe(host.executeCalls[1]?.executionId);
+    // original message attempt and its retry use distinct executionIds.
+    expect(host.executeCalls[1]?.executionId).not.toBe(host.executeCalls[2]?.executionId);
     const attempts = (await db.modelExecutions.where("roomId").equals(room.id).toArray())
       .filter(
         (execution) => execution.participantId === p1.id && execution.resultKind === "message",
@@ -1656,15 +1678,18 @@ describe("discussion orchestrator (U5)", () => {
     const seed2 = await seedBase();
     const { orchestrator: orchestrator2 } = makeOrchestrator();
     await orchestrator2.ensureScope(seed2.room.id, [seed2.p1, seed2.p2]);
+    // Focus completes; the message original + its failing retry pause.
     host.plan(
       seed2.p1.id,
+      { kind: "complete" },
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
       { kind: "fail", retryable: false, dispatchState: "not_dispatched" },
     );
     const round2 = await orchestrator2.startRound(seed2.room.id);
     expect(round2?.phase).toBe("paused");
     expect(round2?.pauseReason?.code).toBe("execution_failed");
-    expect(host.executeCalls.filter((call) => call.participantId === seed2.p1.id)).toHaveLength(2);
+    // focus + message(original) + message(retry) = 3 p1 dispatches; no fourth.
+    expect(host.executeCalls.filter((call) => call.participantId === seed2.p1.id)).toHaveLength(3);
   });
 
   // Regression guards for U5-review bugs fixed in the U6 pre-pass (previously
@@ -1681,8 +1706,11 @@ describe("discussion orchestrator (U5)", () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
     await orchestrator.ensureScope(room.id, [p1, p2]);
+    // S2: focus consumes p1's first plan slot; prepend a complete so the
+    // retry FAILURE lands on a message turn (filter below keys on "message").
     host.plan(
       p1.id,
+      { kind: "complete" },
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
       { kind: "complete" },
     );
@@ -1702,6 +1730,7 @@ describe("discussion orchestrator (U5)", () => {
     await orchestrator.ensureScope(room.id, [p1, p2]);
     host.plan(
       p1.id,
+      { kind: "complete" },
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
       { kind: "complete" },
     );
@@ -1715,15 +1744,18 @@ describe("discussion orchestrator (U5)", () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
     await orchestrator.ensureScope(room.id, [p1, p2]);
+    // Focus completes; the message original + its failing retry pause.
     host.plan(
       p1.id,
+      { kind: "complete" },
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
       { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
     );
     const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("paused");
     expect(round?.pauseReason?.code).toBe("execution_failed");
-    expect(host.executeCalls.filter((call) => call.participantId === p1.id)).toHaveLength(2);
+    // focus + message(original) + message(retry) = 3 p1 dispatches; no fourth.
+    expect(host.executeCalls.filter((call) => call.participantId === p1.id)).toHaveLength(3);
   });
 
   it("16. sendUserMessage appends to the active round and bumps the Room revision", async () => {
@@ -1826,6 +1858,8 @@ describe("discussion orchestrator (U5)", () => {
     });
     await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
     await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    // Pretend the focus landed so the message begin clears FOCUS_REQUIRED.
+    await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
     const execution = createModelExecution({
       executionId: "exec-audit-lock-01",
       roomId: room.id,
@@ -1919,7 +1953,8 @@ describe("discussion orchestrator (U5)", () => {
       .first();
     expect(binding?.executionScopeId).toBe(host.createScopeCalls[0]?.scopeId);
     expect(host.activateCalls).toHaveLength(1);
-    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(2);
+    // S2: focus → p1 message → p2 message → summary = 3 messages (focus + 2).
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(3);
     expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
   });
 
@@ -1943,5 +1978,77 @@ describe("discussion orchestrator (U5)", () => {
     // The rebuilt scope drives a full round from the full snapshot.
     const round = await orchestrator.startRound(room.id);
     expect(round?.phase).toBe("completed");
+  });
+
+  // F1 regression: a summary execution whose pre-dispatch failure is retryable
+  // (not_dispatched) must auto-retry once. Pre-fix the retry guard expected the
+  // "running" phase for every non-report kind, but a summary executes in
+  // "summarizing" — so the retry never fired. The original failure and its
+  // auto-retry use distinct executionIds and are linked by retryOfExecutionId.
+  it("auto-retries a not_dispatched summary failure once and links the retry", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    // p1 plan slots: focus(complete) → message(complete) → summary(fail,
+    // retryable, not_dispatched) → summary retry(complete). The default output
+    // carries no convergence-是 line, so no concluding report is dispatched.
+    host.plan(
+      p1.id,
+      { kind: "complete" },
+      { kind: "complete" },
+      { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
+      { kind: "complete" },
+    );
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+    // focus → message → summary(fail) → summary(retry) = 4 p1 dispatches.
+    const p1Calls = host.executeCalls.filter((call) => call.participantId === p1.id);
+    expect(p1Calls.map((call) => call.instructionKind)).toEqual([
+      "message",
+      "message",
+      "summary",
+      "summary",
+    ]);
+    // Two distinct summary executionIds; the original failed, the retry committed.
+    const summaryAttempts = (await db.modelExecutions.where("roomId").equals(room.id).toArray())
+      .filter((execution) => execution.resultKind === "summary")
+      .sort((x, y) => (x.executionId < y.executionId ? -1 : 1));
+    expect(summaryAttempts).toHaveLength(2);
+    expect(summaryAttempts[0]?.state).toBe("failed");
+    expect(summaryAttempts[0]?.error?.retryable).toBe(true);
+    expect(summaryAttempts[1]?.state).toBe("committed");
+    expect(summaryAttempts[1]?.retryOfExecutionId).toBe(summaryAttempts[0]?.executionId);
+    // The summary actually landed.
+    expect(await db.summaries.where("roomId").equals(room.id).count()).toBe(1);
+  });
+
+  // F5 regression: starting a round on a concluded room must reject with
+  // ROOM_CONCLUDED BEFORE the orchestrator reaches controlRoom/ensureScope, so
+  // no Host createScope call is recorded and no runtime binding row is
+  // allocated. The room is set up with NO active binding: this is the only
+  // shape where the startRoundPrepared pre-check is load-bearing — if it were
+  // deleted, tokenForRoom would return null, controlRoom→ensureScope would
+  // call client.createScope and persist a creating binding BEFORE createRound's
+  // backstop finally rejected the concluded room. So this test goes red the
+  // moment the pre-check is removed (a leaked scope+binding would appear).
+  it("startRound on a concluded room rejects ROOM_CONCLUDED without creating a scope", async () => {
+    const { room } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    // Force-conclude the room directly in storage — and crucially do NOT
+    // ensureScope first, so the room has no active runtime binding (the state
+    // in which the pre-check is the only thing preventing a scope leak).
+    const stored = (await db.rooms.get(room.id)) as DiscussionRoom;
+    stored.status = "concluded";
+    stored.runState = "idle";
+    await db.rooms.put(stored);
+    expect(await db.runtimeBindings.where("roomId").equals(room.id).count()).toBe(0);
+
+    await expect(orchestrator.startRound(room.id)).rejects.toMatchObject({
+      code: "ROOM_CONCLUDED",
+    });
+    // No Host createScope call was made for the rejected start.
+    expect(host.createScopeCalls).toHaveLength(0);
+    // No runtime binding row was allocated (no leaked creating/active binding).
+    expect(await db.runtimeBindings.where("roomId").equals(room.id).count()).toBe(0);
   });
 });
