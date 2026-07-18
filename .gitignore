@@ -19,3 +19,7 @@ playwright-report/
 test-results/
 .claude/worktrees/
 .kimi-code/
+
+# Squad mode artifacts
+.squad/
+.worktrees/
