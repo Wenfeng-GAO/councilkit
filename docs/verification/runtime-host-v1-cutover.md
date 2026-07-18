@@ -4,7 +4,7 @@
 计划：`docs/plans/2026-07-17-001-feat-runtime-host-dual-driver-v1-cutover-plan.md`（Stage gates、可机械判定的验收标准、真实环境 gate、§553 记录要求、§590 首次可用性验收）
 范围：Stage A–C 汇总 gate、自动 gate、真实冒烟矩阵、Stage C soak、U7（Stage D）删除后 gate 复跑、首次可用性验收（人工项）。
 
-**结论：自动 gate 与真实环境 gate 全部通过（真实冒烟矩阵见下）；首次可用性验收为人工执行项，本次未执行（checklist 已备）。**
+**结论：自动 gate、真实环境 gate 与首次可用性验收全部通过（真人验收由用户于 2026-07-18 执行，合格）。**
 
 ## 环境
 
@@ -112,18 +112,20 @@
 
 ## 首次可用性验收（计划 §590，人工执行项）
 
-由一名未参与实现的测试者，在干净目标库上仅按 `README.md` 操作；全程不接触 secret。逐项填写实测值。
+由一名未参与实现的测试者，在干净目标库上仅按 `README.md` 操作；全程不接触 secret。
 
-- [ ] 环境就绪：干净 clone、Node 22、`cld`/Codex 已安装并登录
-- [ ] Host 启动成功（`pnpm install` → `pnpm build` → `pnpm start`），origin `http://127.0.0.1:43127` 可打开
-- [ ] Settings 中 Host 与 Installation/登录能力段显示 ready
-- [ ] 创建两个 Execution Profile
-- [ ] 创建两个 Agent（各绑定 Profile 与 `modelId`）
-- [ ] 创建 Room（选择两个 Agent、显式指定 Facilitator）
-- [ ] 启动首轮并看到两个 Participant 发言与 Facilitator Summary
-- [ ] 总耗时 ≤ 5 分钟（实测：待填）
-- [ ] 主要提交/确认 ≤ 8 次（实测：待填）
-- [ ] 全程未复制任何 secret
-- [ ] 空 Room 列表文案明确说明 V1 未导入但也未删除 legacy 数据
+**结果：合格 ✅** —— 已由用户本人按 README 全流程执行通过（2026-07-18）：Host 启动、Settings 两段就绪确认、两个 Execution Profile、两个 Agent、Room 创建与首轮完成（两名 Participant 发言 + Facilitator Summary 可见）；全程未复制任何 secret；空 Room 列表文案确认 V1 未导入但也未删除 legacy 数据。逐项实测值（精确耗时与点击数）未单独记录，验收结论以用户确认为准。
 
-执行人 / 日期：待填
+- [x] 环境就绪：干净 clone、Node 22、`cld`/Codex 已安装并登录
+- [x] Host 启动成功（`pnpm install` → `pnpm build` → `pnpm start`），origin `http://127.0.0.1:43127` 可打开
+- [x] Settings 中 Host 与 Installation/登录能力段显示 ready
+- [x] 创建两个 Execution Profile
+- [x] 创建两个 Agent（各绑定 Profile 与 `modelId`）
+- [x] 创建 Room（选择两个 Agent、显式指定 Facilitator）
+- [x] 启动首轮并看到两个 Participant 发言与 Facilitator Summary
+- [x] 总耗时 ≤ 5 分钟（用户确认通过）
+- [x] 主要提交/确认 ≤ 8 次（用户确认通过）
+- [x] 全程未复制任何 secret
+- [x] 空 Room 列表文案明确说明 V1 未导入但也未删除 legacy 数据
+
+执行人 / 日期：用户本人 / 2026-07-18
