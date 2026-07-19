@@ -48,6 +48,15 @@ export function parseMaxRoundsInput(text: string): number | null | undefined {
   return parsed;
 }
 
+/**
+ * S7：enabled=false 的 Agent 在新建房间选择器中隐藏；已加入房间的 Participant
+ * 保留加入时快照，不受影响。纯函数导出供单测（parseMaxRoundsInput 先例）；
+ * 下方 agents useMemo 经它过滤，各档 Gate 自然变为「可用 Agent」口径。
+ */
+export function pickEnabledAgents(agents: readonly DiscussionAgent[]): DiscussionAgent[] {
+  return agents.filter((agent) => agent.enabled);
+}
+
 function Gate({ title, hint, ctaLabel, onCta }: GateProps) {
   return (
     <div className="mx-auto max-w-2xl px-6 py-8">
@@ -64,7 +73,7 @@ export function NewRoomPage() {
   const navigate = useNavigate();
   const agentsQuery = useAgents();
   const profilesQuery = useExecutionProfiles();
-  const agents = useMemo(() => agentsQuery.data ?? [], [agentsQuery.data]);
+  const agents = useMemo(() => pickEnabledAgents(agentsQuery.data ?? []), [agentsQuery.data]);
   const profiles = useMemo(() => profilesQuery.data ?? [], [profilesQuery.data]);
 
   const [topic, setTopic] = useState("");

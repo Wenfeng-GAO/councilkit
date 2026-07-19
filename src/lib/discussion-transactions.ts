@@ -1368,12 +1368,18 @@ export async function markAckExpired(db: CouncilKitRuntimeDB, executionId: strin
 // ---------------------------------------------------------------------------
 
 /** CAS write of a creating binding; the same scopeRequestId retry returns the
- * existing one — the Host never sees a duplicate create. */
+ * existing one — the Host never sees a duplicate create. Transaction-level
+ * invariant «死房不得有 binding» (S7 R1): the room must exist inside THIS
+ * transaction, closing the releaseRuntime→delete window where a concurrent
+ * startRound could otherwise bind a dead room. A rejected create can leave a
+ * Host scope already created (createScope raced the delete commit) — that
+ * residual is bounded by the Host idle TTL. */
 export async function createRuntimeBindingTx(
   db: CouncilKitRuntimeDB,
   input: { roomId: string; scopeRequestId: string },
 ): Promise<RuntimeBinding> {
-  return db.transaction("rw", [db.runtimeBindings], async () => {
+  return db.transaction("rw", [db.runtimeBindings, db.rooms], async () => {
+    await requireRoom(db, input.roomId);
     const existing = await db.runtimeBindings
       .where("scopeRequestId")
       .equals(input.scopeRequestId)
@@ -1405,7 +1411,9 @@ export async function createRuntimeBindingTx(
 }
 
 /** creating -> active with the Host's scope/controller facts. A failed CAS
- * must be compensated by closing the returned Host scope (caller duty). */
+ * must be compensated by closing the returned Host scope (caller duty).
+ * Same «死房不得有 binding» recheck as createRuntimeBindingTx (S7 R1): the
+ * binding's room must still exist inside THIS transaction. */
 export async function activateRuntimeBinding(
   db: CouncilKitRuntimeDB,
   input: {
@@ -1416,9 +1424,10 @@ export async function activateRuntimeBinding(
     leaseEpoch: number;
   },
 ): Promise<RuntimeBinding> {
-  return db.transaction("rw", [db.runtimeBindings], async () => {
+  return db.transaction("rw", [db.runtimeBindings, db.rooms], async () => {
     const binding = await db.runtimeBindings.get(input.id);
     if (!binding) throw new TransactionError("BINDING_NOT_FOUND", "unknown binding");
+    await requireRoom(db, binding.roomId);
     if (binding.state !== "creating") {
       throw new TransactionError(
         "BINDING_STALE",
