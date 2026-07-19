@@ -12,8 +12,10 @@ import {
 import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
-import { runtimeDb } from "@/lib/runtime-db";
-import { createDiscussionAgent } from "@/models/discussion/factories";
+import { importAgents } from "@/lib/agent-io";
+import { type CouncilKitRuntimeDB, runtimeDb } from "@/lib/runtime-db";
+import type { DiscussionAgent } from "@/models/discussion/entities";
+import { TransactionError, createDiscussionAgent } from "@/models/discussion/factories";
 import { type ExecutionProfileRecord, toDto, validateProfileDto } from "@/models/execution-profile";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { buildSettingsReadiness } from "@/runtime/readiness";
@@ -23,6 +25,96 @@ import type { ClaudeRoute, ProfileReadiness } from "@shared/runtime/schemas";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+
+/**
+ * S7（S1 登记雷修复）：Agent 编辑合并。`createDiscussionAgent` 工厂恒产
+ * `enabled: true`，直接 spread 后 put 会把存量的 `enabled: false` 静默重置——
+ * 这里显式保留既有 id/enabled/createdAt，revision 照旧 +1。工厂校验
+ * （INVALID on bad name/color…）原样生效。纯函数导出供单测
+ * （parseMaxRoundsInput 先例）。
+ */
+export function mergeAgentEdit(
+  existing: DiscussionAgent,
+  values: AgentFormValues,
+): DiscussionAgent {
+  const validated = createDiscussionAgent({
+    name: values.name.trim(),
+    personaPrompt: values.personaPrompt,
+    executionProfileId: values.executionProfileId,
+    modelId: values.modelId,
+    color: values.color,
+  });
+  return {
+    ...validated,
+    id: existing.id,
+    enabled: existing.enabled,
+    revision: existing.revision + 1,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * S7 R3：启停原子读改写。`Table.update` 只写指定字段（无整行回写），并发
+ * 启停/编辑不再静默互相覆盖（S1 类覆盖的修复）。返回是否命中（false 即
+ * Agent 已不存在）。导出供单测（mergeAgentEdit 先例）。
+ */
+export async function setAgentEnabled(
+  db: CouncilKitRuntimeDB,
+  id: string,
+  enabled: boolean,
+): Promise<boolean> {
+  const changed = await db.agents.update(id, { enabled, updatedAt: new Date().toISOString() });
+  return changed > 0;
+}
+
+/**
+ * S7 R3：编辑乐观锁。事务内重读 fresh 行，revision 与「进入时」不一致则抛
+ * CONCURRENT_MODIFICATION（可解释的编辑冲突）；否则基于 fresh 行合并 put，
+ * 合并在同一事务内提交，窗口被压进单事务。导出供单测（mergeAgentEdit 先例）。
+ */
+export async function updateAgentWithRevisionCheck(
+  db: CouncilKitRuntimeDB,
+  id: string,
+  enteredRevision: number,
+  values: AgentFormValues,
+): Promise<void> {
+  await db.transaction("rw", [db.agents], async () => {
+    const fresh = await db.agents.get(id);
+    if (!fresh) throw new TransactionError("AGENT_NOT_FOUND", `unknown agent ${id}`);
+    if (fresh.revision !== enteredRevision) {
+      throw new TransactionError(
+        "CONCURRENT_MODIFICATION",
+        "该 Agent 在编辑期间被其他页面修改，请刷新后重试。",
+      );
+    }
+    await db.agents.put(mergeAgentEdit(fresh, values));
+  });
+}
+
+/**
+ * S7 fix-2 #3：编辑提交链（handleUpdateAgent 的纯函数核，导出供单测——
+ * mergeAgentEdit 先例）。期望值 enteredRevision 由调用方在「打开编辑框时」
+ * 捕获（AgentsSection 的 editing 状态持有打开时刻的行）；绝不提交时重读现值
+ * 当期望——并发另一方保存后，重读到的是对方的新 revision，乐观锁失效仍覆盖。
+ * AGENT_NOT_FOUND 映射为与「进入时缺失」相同的提示文案。
+ */
+export async function submitAgentEdit(
+  db: CouncilKitRuntimeDB,
+  id: string,
+  enteredRevision: number,
+  values: AgentFormValues,
+): Promise<string | null> {
+  try {
+    await updateAgentWithRevisionCheck(db, id, enteredRevision, values);
+  } catch (error) {
+    if (error instanceof TransactionError && error.code === "AGENT_NOT_FOUND") {
+      return "该 Agent 已不存在。";
+    }
+    return error instanceof Error ? error.message : "保存 Agent 失败。";
+  }
+  return null;
+}
 
 /**
  * Settings (U6): the ONLY configuration entry of V1 — four top-down sections
@@ -369,21 +461,16 @@ export function SettingsPage() {
     return null;
   };
 
-  const handleUpdateAgent = async (id: string, values: AgentFormValues): Promise<string | null> => {
-    const existing = await runtimeDb.agents.get(id);
-    if (!existing) return "该 Agent 已不存在。";
-    try {
-      const validated = createDiscussionAgent(agentFactoryInput(values));
-      await runtimeDb.agents.put({
-        ...validated,
-        id: existing.id,
-        revision: existing.revision + 1,
-        createdAt: existing.createdAt,
-        updatedAt: new Date().toISOString(),
-      });
-    } catch (error) {
-      return error instanceof Error ? error.message : "保存 Agent 失败。";
-    }
+  // S7 fix-2 #3：enteredRevision 来自 AgentsSection 打开编辑框时捕获的行，
+  // 不再提交时重读现值当期望（并发另一方保存后重读到的是对方的新 revision，
+  // 乐观锁会形同虚设）。
+  const handleUpdateAgent = async (
+    id: string,
+    enteredRevision: number,
+    values: AgentFormValues,
+  ): Promise<string | null> => {
+    const failure = await submitAgentEdit(runtimeDb, id, enteredRevision, values);
+    if (failure !== null) return failure;
     await refreshRuntimeQueries();
     return null;
   };
@@ -396,6 +483,53 @@ export function SettingsPage() {
     await runtimeDb.agents.delete(id);
     await refreshRuntimeQueries();
     return null;
+  };
+
+  // --- S7 Agent 资产化（启停 / 复制 / 导入；导出与测试调用在 AgentsSection 自接线） ---
+
+  const handleToggleAgentEnabled = async (id: string, enabled: boolean): Promise<string | null> => {
+    if (!(await setAgentEnabled(runtimeDb, id, enabled))) return "该 Agent 已不存在。";
+    await refreshRuntimeQueries();
+    return null;
+  };
+
+  const handleDuplicateAgent = async (id: string): Promise<string | null> => {
+    const existing = await runtimeDb.agents.get(id);
+    if (!existing) return "该 Agent 已不存在。";
+    try {
+      await runtimeDb.agents.add(
+        createDiscussionAgent({
+          name: `${existing.name}（副本）`,
+          personaPrompt: existing.personaPrompt,
+          executionProfileId: existing.executionProfileId,
+          modelId: existing.modelId,
+          color: existing.color,
+        }),
+      );
+    } catch (error) {
+      return error instanceof Error ? error.message : "复制 Agent 失败。";
+    }
+    await refreshRuntimeQueries();
+    return null;
+  };
+
+  const handleImportAgents = async (file: File): Promise<string> => {
+    let json: string;
+    try {
+      json = await file.text();
+    } catch {
+      return "导入失败：无法读取文件。";
+    }
+    const result = await importAgents(runtimeDb, json);
+    if (!result.ok) return `导入失败：${result.error}`;
+    await refreshRuntimeQueries();
+    const unboundNote =
+      result.unbound.length > 0
+        ? `；其中 ${result.unbound.length} 个待绑定 Profile（编辑重新绑定后可用）：${result.unbound
+            .map((agent) => agent.name)
+            .join("、")}`
+        : "";
+    return `已导入 ${result.imported.length} 个 Agent${unboundNote}。`;
   };
 
   const everythingReady = allSectionsReady(readinessModel);
@@ -464,6 +598,9 @@ export function SettingsPage() {
             onCreate={handleCreateAgent}
             onUpdate={handleUpdateAgent}
             onDelete={handleDeleteAgent}
+            onToggleEnabled={handleToggleAgentEnabled}
+            onDuplicate={handleDuplicateAgent}
+            onImport={handleImportAgents}
           />
         </div>
 

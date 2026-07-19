@@ -1,3 +1,4 @@
+import { UsageBadge, aggregateUsage } from "@/components/room/UsageBadge";
 import {
   resolveSpeaker,
   roomRunStateLabel,
@@ -230,6 +231,8 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
   const roomExecutions = (recovery?.executions ?? []).filter(
     (execution) => execution.roomId === room.id,
   );
+  // S7: 房间头部累计用量（裁决 #6 口径含 discarded/failed；全 null 时组件不渲染）。
+  const roomUsageTotals = aggregateUsage(roomExecutions);
   const hasLiveExecution = roomExecutions.some((execution) =>
     LIVE_EXECUTION_STATES.has(execution.state),
   );
@@ -271,6 +274,7 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
         <span data-testid="scope-quota" className="text-xs text-muted">
           运行时 {activeScopeCount}/{maxActiveScopes}
         </span>
+        <UsageBadge totals={roomUsageTotals} />
         {nearQuota ? <StatusPill tone="warn" text="接近运行时上限，建议先释放不用的房间" /> : null}
         {warm ? (
           <Button

@@ -1,6 +1,7 @@
 import { MessageBubble } from "@/components/message/MessageBubble";
 import { ExecutionFailureRecord } from "@/components/room/ExecutionFailureRecord";
 import { SummaryBlock } from "@/components/room/SummaryBlock";
+import { UsageBadge, type UsageTotals, aggregateUsageByRound } from "@/components/room/UsageBadge";
 import {
   USER_SPEAKER,
   isFailedExecution,
@@ -12,8 +13,13 @@ import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
 import type { DiscussionAgent, DiscussionRound, Participant } from "@/models/discussion/entities";
 import { useRuntimeDiscussionStore } from "@/stores/runtime-discussion";
-import { useRoundExecutions, useRoundMessages, useRoundSummary } from "@/stores/runtime-queries";
-import { useState } from "react";
+import {
+  useRoomRecoveryFacts,
+  useRoundExecutions,
+  useRoundMessages,
+  useRoundSummary,
+} from "@/stores/runtime-queries";
+import { useMemo, useState } from "react";
 
 /**
  * Round-grouped timeline (U6): one ascending list of Rounds. Each Round
@@ -41,6 +47,11 @@ export function DiscussionStream({
   activeRoundId,
   tick,
 }: DiscussionStreamProps) {
+  // S7: 每轮用量徽标。自接线 useRoomRecoveryFacts——与 RoomHeader 同 key 共享
+  // 缓存，零新 hook（hooks 必须先于下方的早退 return）。
+  const { data: recovery } = useRoomRecoveryFacts(roomId, tick);
+  const usageByRound = useMemo(() => aggregateUsageByRound(recovery?.executions ?? []), [recovery]);
+
   if (rounds.length === 0) {
     return (
       <div className="mx-auto w-full max-w-3xl px-6 py-4">
@@ -66,6 +77,7 @@ export function DiscussionStream({
           participantsById={participantsById}
           agentsById={agentsById}
           tick={tick}
+          usageTotals={usageByRound.get(round.id)}
         />
       ))}
     </div>
@@ -80,6 +92,8 @@ interface RoundSectionProps {
   participantsById: ReadonlyMap<string, Participant>;
   agentsById: ReadonlyMap<string, DiscussionAgent>;
   tick: number;
+  /** S7: 该轮的累计用量（含 discarded/failed，裁决 #6）；undefined/全 null 不渲染。 */
+  usageTotals?: UsageTotals;
 }
 
 function RoundSection({
@@ -90,6 +104,7 @@ function RoundSection({
   participantsById,
   agentsById,
   tick,
+  usageTotals,
 }: RoundSectionProps) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -103,6 +118,8 @@ function RoundSection({
         <span className="text-sm font-semibold text-fg">第 {round.roundNumber} 轮</span>
         <StatusPill tone={roundPhaseTone(round.phase)} text={roundPhaseLabel(round.phase)} />
         {isCurrent ? <span className="text-xs text-muted">（当前轮）</span> : null}
+        {/* 挂在 summary 行：折叠态也可见（放 Body 里折叠就看不见了）。 */}
+        {usageTotals ? <UsageBadge totals={usageTotals} /> : null}
       </summary>
       {open ? (
         <RoundSectionBody
