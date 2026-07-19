@@ -31,10 +31,23 @@ pnpm start
 1. 打开 **Settings**，按「Host → Installations/登录能力 → Execution Profiles → Agents」四段检查：Host 可用，且至少一个 Runtime Installation 处于 trusted、对应 Driver 显示 ready。
 2. 在 **Execution Profiles** 段创建两个 Profile（例如一个基于 `claude-stream-json`，一个基于 `codex-app-server`）。
 3. 在 **Agents** 段创建两个 Agent，各自绑定一个 Profile 并从该 Driver 的闭集目录选择 `modelId`。
-4. 进入 **New Room**，选择这两个 Agent、确认发言顺序并显式指定 Facilitator，创建 Room。
-5. 在 Room 页面点击 **开始新一轮**：两个 Participant 依次发言，Facilitator 生成 Round Summary。
+4. 进入 **New Room**，选择这两个 Agent、确认发言顺序并显式指定 Facilitator；可选填写「目标输出（targetOutput）」与「最大轮次（maxRounds，留空=不限）」，并选择讨论模式（brainstorm / planning / review，只影响引导方式与报告侧重，不改执行规则）。创建 Room。
+5. 在 Room 页面点击 **开始新一轮**（首次为「发起讨论」）：Facilitator 先给本轮焦点方向，两个 Participant 依次发言，Facilitator 生成 Round Summary。
+6. 收敛后查看并导出 **决策报告**（详见下节）。
 
 全程不需要复制任何 secret。
+
+## 决策报告流程
+
+新 Room 可选三种 **讨论模式**（brainstorm / planning / review）与「目标输出」「最大轮次」。每轮的结构固定（不改执行规则，只改 Facilitator 引导与报告章节侧重）：
+
+1. **Facilitator focus**（第 0 环）：Facilitator 先给出本轮探索方向 / 规划目标 / 评审维度。
+2. **依次发言**：各 Participant 按确认顺序独立发言、可相互挑战与补充。
+3. **Round Summary**：Facilitator 生成本轮总结，末行投出收敛投票（`收敛建议：是` / `收敛建议：否`）。
+
+**收敛与报告**：当 Facilitator 投「是」且已至少完成一轮，或已达 `maxRounds`，房间自动生成九段 **决策报告**（背景 / 讨论目标 / 参与者 / 讨论摘要 / 关键共识 / 剩余分歧 / 建议 / 风险与异议 / 后续行动），房间进入 **concluded** 只读态。报告支持查看、复制 Markdown、下载 `<topic>-report.md`。concluded 后若想继续讨论，走「复制房间」——配置携带，历史不带。手动路径同样存在：在 Room 页面点击「总结并结束」可立即触发报告生成。
+
+**轮间追问**：两轮之间可直接发送用户消息（先入上下文，再开新一轮）；运行中发送会弹确认（中断当前生成）。
 
 ### 端口被占用
 
@@ -99,12 +112,18 @@ pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
 ## 架构
 
 - 调用链：RoomPage → 持久化 Discussion Orchestrator → Runtime Client → Runtime Host → Participant Driver 进程。UI 不拥有 Round 生命周期；Host 不理解 Room/Round 语义。
-- Dexie `councilkit-runtime-v1` 是讨论的唯一事实源（Room/Round/Message/Summary/ModelExecution）；CLI thread/process 只是可丢弃的 Execution Session 缓存。
+- Dexie `councilkit-runtime-v1` 是讨论的唯一事实源（Room/Round/Message/Summary/ModelExecution/DecisionReport）；CLI thread/process 只是可丢弃的 Execution Session 缓存。
 - Message/Summary 使用 persist → ACK 幂等提交：先 Dexie 事务成功，再 ACK Host；同一 `executionId` 的完成事件重放不会重复落库。
 - Web Lock + `leaseEpoch` fencing 保证一个 Execution Scope 同时只有一个 Scope Controller 可以执行 Host mutation 与 Dexie 提交；其他标签页只读观察。
 - 每个活跃 Participant 保持一个长期 Driver 进程和隔离的 Execution Session；纯追加轮次只向健康 Session 下发增量 Context Snapshot。
 - 页面刷新使用同一 Scope 与 `executionId` 重连事件流，从最后收到的 `eventSeq` 继续，不重新调用模型。
 - V1 只有两个内置 Runtime Driver：`claude-stream-json` 与 `codex-app-server`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
+
+## 管理面
+
+- **房间管理**：Room 列表项支持删除 / 重命名 / 复制（「（副本）」房间携带原配置，不带历史消息，可直接跑完一轮）。
+- **Agent 资产**：Agent 支持启用/停用、JSON 导入导出，以及在不进入房间的情况下用所选 Profile + modelId 跑一次「仅验证执行环境」的就绪握手（行内 ready pill，不发实质消息）。
+- **用量可见性**：每轮的 Model Execution 记录 `usage`（input/output tokens），以用量 badge 的形式在房间内可见（本机自诊，不上传）。
 
 ## Legacy 数据说明
 

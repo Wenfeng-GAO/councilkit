@@ -54,6 +54,14 @@
  *
  * The report NEVER contains prompt/completion bodies, cookies or tokens —
  * counts, digests, model ids and latencies only.
+ *
+ * S2 onwards (plan-a §2 A1–A10): each ordinary round is focus(facilitator) +
+ * one message per participant + summary(facilitator) = 4 executions / 3
+ * messages / 1 summary; a convergence round adds the facilitator report
+ * (same roundId) = 5 executions. focus/report reuse the facilitator's Session
+ * (no new spawn), so spawn=1/participant/scope is unchanged. A real-model
+ * convergence vote drives the room to its DESIGNED terminal state (one report
+ * + concluded) — recognized as designedConclusion, never a defect.
  */
 import "fake-indexeddb/auto";
 
@@ -61,8 +69,9 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { Socket } from "node:net";
 import { CouncilKitRuntimeDB } from "@/lib/runtime-db";
-import type { Participant } from "@/models/discussion/entities";
+import type { DiscussionRound, Participant } from "@/models/discussion/entities";
 import {
+  TransactionError,
   createDiscussionAgent,
   createDiscussionRoom,
   createParticipant,
@@ -140,8 +149,52 @@ const FALLBACK_MODEL_HINTS: Record<RouteId | "codex", string> = {
 const DEFAULT_ROUNDS = 2;
 const SOAK_MIN_ROUNDS = 10;
 const SOAK_MIN_MS = 15 * 60 * 1000;
+const SOAK_MIN_MINUTES = SOAK_MIN_MS / 60_000;
+/**
+ * S9 (fix-1) verification convenience: real soak needs SOAK_MIN_ROUNDS + 15min,
+ * which is unworkable for a --dry-run self-check. These env overrides compress
+ * the exit condition for a demo run ONLY — never set them for the real gate.
+ * The override is recorded in the report notes so a compressed dry-run can
+ * never be mistaken for a real soak pass.
+ */
+function soakMinRounds(): number {
+  const override = Number.parseInt(process.env.CK_SMOKE_SOAK_MIN_ROUNDS ?? "", 10);
+  return Number.isFinite(override) && override > 0 ? override : SOAK_MIN_ROUNDS;
+}
+function soakMinMs(): number {
+  const override = Number.parseInt(process.env.CK_SMOKE_SOAK_MIN_MS ?? "", 10);
+  return Number.isFinite(override) && override > 0 ? override : SOAK_MIN_MS;
+}
+/**
+ * S9 (fix-1): the soak contract is "≥ SOAK_MIN_MS of sustained real load with
+ * stable spawn / no ACK leak / rotation recovery". Under S2 every round is an
+ * independent Bernoulli trial for a real-model convergence vote, so a single
+ * room running ≥ SOAK_MIN_ROUNDS is probabilistically unreachable (the real
+ * facilitator can conclude after ANY summary). The honest soak shape in the
+ * S2 era is a CROSS-ROOM lifecycle: keep completing rooms (each one a designed
+ * conclusion) until totalRoundsCompleted ≥ SOAK_MIN_ROUNDS AND elapsedMs ≥
+ * SOAK_MIN_MS (both must hold — the same "later of the two" semantics). The
+ * matrix rows (--route <x> / all, non-soak) are UNCHANGED.
+ */
+const SOAK_ROOMS_HARD_LIMIT = 20;
 /** Upper bound for one Round (matches the Host's fixed per-turn timeout). */
 const ROUND_TIMEOUT_MS = TIMEOUTS.turnMs;
+
+/**
+ * S9 (fix-2): the soak (cross-room lifecycle) row exposes which facilitator
+ * role drives it via `CK_SMOKE_SOAK_FACILITATOR` — `codex` (default) or
+ * `claude`. SOAK ROW ONLY — matrix rows always use codex as facilitator, so
+ * the binary summary is an explicit Codex execution. Every room the soak spins
+ * up across the lifecycle inherits the same facilitator role.
+ */
+type FacilitatorRole = "claude" | "codex";
+function soakFacilitatorRole(): FacilitatorRole {
+  const value = process.env.CK_SMOKE_SOAK_FACILITATOR ?? "codex";
+  if (value !== "claude" && value !== "codex") {
+    throw new Error(`CK_SMOKE_SOAK_FACILITATOR must be "codex" or "claude", got "${value}"`);
+  }
+  return value;
+}
 
 interface CliOptions {
   help: boolean;
@@ -165,17 +218,31 @@ OPTIONS:
   --rounds <N>
       Rounds per row (default: ${DEFAULT_ROUNDS}).
   --soak
-      After the selected rows, run the ant-glm5.2+Codex room for
-      ${SOAK_MIN_ROUNDS} consecutive rounds OR >= ${SOAK_MIN_MS / 60000} minutes, whichever is LATER.
-      Asserts: spawn/init counts flat after round 1, Codex thread never
-      rebuilt, no ACK pending leak, per-round Message/Summary anchors unique.
-      Partial JSON is written after every round so a long run is inspectable.
+      After the selected rows, run the ant-glm5.2+Codex load for at least
+      ${SOAK_MIN_MINUTES} minutes with >= ${SOAK_MIN_ROUNDS} total completed rounds
+      (BOTH must hold — LATER-of-the-two semantics). S9 (fix-1): under S2 a real
+      facilitator can conclude a room after ANY round, so the soak drives a
+      CROSS-ROOM lifecycle — every designed conclusion is asserted (1 report +
+      room.concluded + ack-clean + requested=effective), the room is closed,
+      and a fresh room (same route, new seed) is spun up until the exit
+      condition is met (roomsCreated hard-capped at ${SOAK_ROOMS_HARD_LIMIT}).
+      Asserts: spawn stable (1 prewarm + rotations per room per participant,
+      aggregated per role = roomsCreated + total rotations, ADDITIVE — each
+      room contributes one prewarm and every needs_rebase rotation rebuilds
+      both participants), Codex thread never rebuilt, no ACK pending leak,
+      per-round Message/Summary anchors unique across the whole lifecycle.
+      Partial JSON is written after every round.
+      S9 (fix-2): CK_SMOKE_SOAK_FACILITATOR=codex|claude (default codex) picks
+      the soak row's facilitator role — SOAK ROW ONLY, matrix rows are fixed.
   --out <file.json>
       Machine report path (default in --soak mode: ./live-runtime-smoke-report.json).
   --dry-run
       Synthetic end-to-end self-check WITHOUT real CLIs: same Host composed
-      with the fake-driver rig, one synthetic row (route ant-glm5.2, 1 round).
-      Mutually exclusive with --soak; selection flags are ignored.
+      with the fake-driver rig. Alone: one synthetic row (route ant-glm5.2,
+      1 round). With --soak (S9 fix-1): drives the cross-room soak path against
+      the fake rig — the fake reply has no convergence marker, so the single
+      room runs out to the soak exit condition (compress with
+      CK_SMOKE_SOAK_MIN_ROUNDS / CK_SMOKE_SOAK_MIN_MS). Never touches real CLIs.
   --help
       This text.
 
@@ -237,9 +304,11 @@ function parseCli(argv: string[]): CliOptions {
         throw new Error(`unknown argument "${arg}" (see --help)`);
     }
   }
-  if (options.dryRun && options.soak) {
-    throw new Error("--dry-run and --soak are mutually exclusive");
-  }
+  // S9 (fix-1): --dry-run --soak is now ALLOWED — it drives the soak path
+  // against the fake rig to self-check the cross-room lifecycle / new fields /
+  // compressed exit condition WITHOUT real CLIs (the fake reply has no
+  // convergence marker → the single room runs out to the soak exit condition;
+  // see CK_SMOKE_SOAK_MIN_ROUNDS/CK_SMOKE_SOAK_MIN_MS to compress duration).
   return options;
 }
 
@@ -782,6 +851,8 @@ interface Seed {
   roomId: string;
   claude: Participant;
   codex: Participant;
+  facilitator: Participant;
+  facilitatorRole: FacilitatorRole;
 }
 
 async function seedRoom(
@@ -792,6 +863,7 @@ async function seedRoom(
     codexInstallationId: string;
     claudeModelId: string;
     codexModelId: string;
+    facilitatorRole: FacilitatorRole;
   },
 ): Promise<Seed> {
   const ts = new Date().toISOString();
@@ -840,7 +912,17 @@ async function seedRoom(
   const room = initializeRoomDigest(
     createDiscussionRoom({
       topic: `live smoke ${input.route}`,
-      background: "Stage C real-environment smoke row",
+      // A9 (plan-a §2 + S9 实战修正): seed guidance — 首版仅要求 facilitator
+      // 每轮投「收敛建议：否」，但真实模型以真实判断 4/4 凌驾元指令（它们的
+      // 判断力正是被测特性）。改为给房间一个**真实多轮议程**（12 个有序子
+      // 方面），让「第 1 轮即收敛」在事实上不成立，收敛判断有真实输入。
+      // 残余风险（议程内仍提前投是）经 designedConclusion (A8/A10) 显式记录。
+      background:
+        "多轮研讨任务（冒烟/soak 测试房间）：为「本地优先多 Agent 决策产品」设计本地模型路由与成本治理策略。" +
+        "本任务需要至少 12 轮持续探索，每轮只深入一个子方面并按序推进：" +
+        "1 背景与目标界定；2 现状盘点；3 方案A（按 driver 路由）；4 方案B（按模型路由）；5 方案C（混合路由）；6 风险与反面证据；" +
+        "7 成本与资源；8 依赖与前置条件；9 度量与验收口径；10 失败模式与回退；11 决策建议；12 总结与行动清单。" +
+        "规则：每轮 focus 只锁定当前子方面；总结末行的收敛投票在完成全部 12 个子方面之前一律为「收敛建议：否」。",
       facilitatorParticipantId: "pending",
     }),
   );
@@ -857,13 +939,24 @@ async function seedRoom(
     profileDigest: profileDigestOf(codexProfile),
   });
   // Deterministic participant order (activeParticipants sorts by createdAt):
-  // claude speaks first, codex second; codex is the facilitator (Summary).
-  claude.createdAt = "2026-01-01T00:00:00.000Z";
-  codex.createdAt = "2026-01-01T00:00:00.001Z";
+  // the non-facilitator speaks first, the facilitator second (the facilitator's
+  // round summary is the explicit convergence-vote execution). S9 (fix-2): the
+  // facilitator role is configurable on the soak row via CK_SMOKE_SOAK_FACILITATOR
+  // (matrix rows are always codex); the participant order adapts accordingly.
+  const facilitator = input.facilitatorRole === "claude" ? claude : codex;
+  const speaker = input.facilitatorRole === "claude" ? codex : claude;
+  speaker.createdAt = "2026-01-01T00:00:00.000Z";
+  facilitator.createdAt = "2026-01-01T00:00:00.001Z";
   await db.participants.bulkAdd([claude, codex]);
-  room.facilitatorParticipantId = codex.id;
+  room.facilitatorParticipantId = facilitator.id;
   await db.rooms.put(room);
-  return { roomId: room.id, claude, codex };
+  return {
+    roomId: room.id,
+    claude,
+    codex,
+    facilitator,
+    facilitatorRole: input.facilitatorRole,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +985,11 @@ interface RowReport {
   closeClean: boolean | null;
   approval: { deniedByPolicy: boolean; declinedRequests: number };
   sentinel: { protected: boolean; fileChangeActivities: number };
+  /** A8/A10 (plan-a §2): true when a real-model convergence vote drove the
+   * room to its designed terminal state (one report + concluded) during this
+   * matrix row / soak — a designed conclusion, never a defect. Recorded so the
+   * JSON/acceptance doc can surface it explicitly instead of silently. */
+  designedConclusion: boolean;
   soak: {
     roundsDone: number;
     elapsedMs: number;
@@ -903,6 +1001,19 @@ interface RowReport {
     spawnStable: boolean;
     codexThreadStable: boolean;
     uniqueRoundOutputs: boolean;
+    /** S9 (fix-1): cross-room lifecycle. A room is recorded once when a real-
+     * model convergence vote concludes it (designed conclusion). The soak
+     * clock keeps running across rooms; ${rooms.length} covers the lifespan. */
+    rooms: Array<{
+      index: number;
+      roundsCompleted: number;
+      designedConclusion: boolean;
+      rotations: number;
+    }>;
+    /** Sum of completed rounds across every room in the lifecycle. */
+    totalRoundsCompleted: number;
+    /** Number of rooms created during the soak lifecycle so far. */
+    roomsCreated: number;
   } | null;
   findings: string[];
   notes: string[];
@@ -939,6 +1050,7 @@ function emptyRowReport(route: string, mode: "real" | "dry-run", soak: boolean):
     closeClean: null,
     approval: { deniedByPolicy: true, declinedRequests: 0 },
     sentinel: { protected: true, fileChangeActivities: 0 },
+    designedConclusion: false,
     soak: soak
       ? {
           roundsDone: 0,
@@ -949,6 +1061,9 @@ function emptyRowReport(route: string, mode: "real" | "dry-run", soak: boolean):
           spawnStable: true,
           codexThreadStable: true,
           uniqueRoundOutputs: true,
+          rooms: [],
+          totalRoundsCompleted: 0,
+          roomsCreated: 0,
         }
       : null,
     findings: [],
@@ -959,6 +1074,55 @@ function emptyRowReport(route: string, mode: "real" | "dry-run", soak: boolean):
 // ---------------------------------------------------------------------------
 // Row runner
 // ---------------------------------------------------------------------------
+
+/** A8 (plan-a §2): a real-model convergence vote drove the Room into its
+ * DESIGNED terminal state. Positively assert the design contract (exactly one
+ * committed Decision Report + room concluded + every committed execution acked
+ * + requested=effective on every committed execution), then record it as a
+ * designedConclusion so the JSON/acceptance doc surfaces it explicitly. This
+ * is a finding, never a failure. */
+async function assertDesignedConclusion(
+  db: CouncilKitRuntimeDB,
+  roomId: string,
+  report: RowReport,
+  attemptRound: number,
+): Promise<void> {
+  const room = await db.rooms.get(roomId);
+  if (!room || room.status !== "concluded") {
+    throw new Error(
+      `designed conclusion check: room not concluded (status=${room?.status ?? "missing"})`,
+    );
+  }
+  const reports = await db.reports.where("roomId").equals(roomId).toArray();
+  if (reports.length !== 1) {
+    throw new Error(`designed conclusion check: expected exactly 1 report, saw ${reports.length}`);
+  }
+  const reportExecution = await db.modelExecutions
+    .where("roomId")
+    .equals(roomId)
+    .filter((execution) => execution.resultKind === "report")
+    .first();
+  if (!reportExecution || reportExecution.state !== "committed") {
+    throw new Error("designed conclusion check: report execution missing or not committed");
+  }
+  if (reportExecution.effectiveModel !== reportExecution.requestedModel) {
+    throw new Error(
+      `designed conclusion check: report execution effective ${
+        reportExecution.effectiveModel ?? "unknown"
+      } != requested ${reportExecution.requestedModel}`,
+    );
+  }
+  // No ACK leak on any execution of the room, including the report's.
+  const allExecutions = await db.modelExecutions.where("roomId").equals(roomId).toArray();
+  const pending = allExecutions.filter((execution) => execution.ackState === "pending").length;
+  if (pending > 0) {
+    throw new Error(`designed conclusion check: ${pending} execution(s) still ackState=pending`);
+  }
+  report.designedConclusion = true;
+  report.findings.push(
+    `designed conclusion at round ${attemptRound}: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2).`,
+  );
+}
 
 function withRoundTimeout<T>(promise: Promise<T>, roundNumber: number): Promise<T> {
   return Promise.race([
@@ -976,7 +1140,12 @@ async function runRow(
   rig: Rig,
   client: MeasuringClient,
   route: RouteId,
-  options: { rounds: number; soak: boolean; onProgress: () => Promise<void> },
+  options: {
+    rounds: number;
+    soak: boolean;
+    facilitatorRole: FacilitatorRole;
+    onProgress: () => Promise<void>;
+  },
 ): Promise<RowReport> {
   const report = emptyRowReport(route, rig.kind === "real" ? "real" : "dry-run", options.soak);
   const db = new CouncilKitRuntimeDB(`smoke-${route}-${crypto.randomUUID()}`);
@@ -985,8 +1154,10 @@ async function runRow(
   const roleOf = new Map<string, Role>();
   const warmedParticipants = new Set<string>();
   const seenAnchors = new Set<string>();
-  let codexParticipantId: string | null = null;
-  let seedRoomId: string | null = null;
+  // S9 (fix-1): every room opened across the soak lifecycle (matrix path has
+  // exactly one). Hoisted outside the try so the tear-down finally can close
+  // every Scope even when the loop threw.
+  const soakRoomIds = new Set<string>();
 
   const noteLatency = (role: Role, executionId: string): void => {
     const dispatchAt = client.dispatchAtMs.get(executionId);
@@ -1054,34 +1225,189 @@ async function runRow(
       codexInstallationId: codexInstallation.installationId,
       claudeModelId: claudeModel,
       codexModelId: codexModel,
+      facilitatorRole: options.facilitatorRole,
     });
     roleOf.set(seed.claude.id, "claude");
     roleOf.set(seed.codex.id, "codex");
-    codexParticipantId = seed.codex.id;
-    seedRoomId = seed.roomId;
     const orchestrator = createDiscussionOrchestrator({
       db,
       client,
       display: { onPreview: (_roomId, event) => tap.onEvent(event) },
     });
 
+    // S9 (fix-1): cross-room lifecycle state for the soak path. The matrix
+    // (non-soak) path only ever runs ONE room, so these current-room mirrors
+    // stay pinned to `seed` and the cumulative soak accumulators stay dormant.
+    // `currentRoomId` / `currentClaudeId` / `currentCodexId` /
+    // `currentFacilitatorId` let the shared round loop address whichever room
+    // the soak is currently driving; the `soakRoomIds` set closes every room's
+    // Scope at tear-down and underpins the cross-room final ACK + codex-policy
+    // scans.
+    soakRoomIds.add(seed.roomId);
+    let currentRoomId = seed.roomId;
+    let currentClaudeId = seed.claude.id;
+    let currentCodexId = seed.codex.id;
+    let currentFacilitatorId = seed.facilitator.id;
+    let roundsThisRoom = 0;
+    let rotationsThisRoom = 0;
+    let soakRoomIndex = 0;
+    // S9 (fix-2): spawn aggregation is INCREMENTAL. Each room contributes one
+    // prewarm per participant; each needs_rebase rotation rebuilds BOTH
+    // participants. The per-role total = roomsCreated + totalRotations
+    // (ADDITIVE — each room one prewarm, each rotation one rebuild). We sync
+    // report.spawnCounts the moment roomsCreated/rotations change so the report
+    // carries the accurate count on EVERY path (including failure), instead of
+    // a single end-of-run aggregate that the catch/finally never reaches.
+    const syncSoakSpawnAggregate = (): void => {
+      if (!report.soak) return;
+      const total = report.soak.roomsCreated + report.soak.rotations;
+      report.spawnCounts.claude = total;
+      report.spawnCounts.codex = total;
+    };
+    if (report.soak) {
+      report.soak.roomsCreated = 1;
+      syncSoakSpawnAggregate();
+    }
+
     await orchestrator.ensureScope(seed.roomId, [seed.claude, seed.codex]);
-    report.spawnCounts.claude = rig.spawnCount(seed.claude.id);
-    report.spawnCounts.codex = rig.spawnCount(seed.codex.id);
-    if (report.spawnCounts.claude !== 1 || report.spawnCounts.codex !== 1) {
+    // Per-room invariant: exactly ONE prewarm per participant at scope create
+    // (reported for the matrix path; the soak path carries its incremental
+    // aggregate from syncSoakSpawnAggregate — checked here, never overwritten).
+    const seedClaudeSpawns = rig.spawnCount(seed.claude.id);
+    const seedCodexSpawns = rig.spawnCount(seed.codex.id);
+    if (!report.soak) {
+      report.spawnCounts.claude = seedClaudeSpawns;
+      report.spawnCounts.codex = seedCodexSpawns;
+    }
+    if (seedClaudeSpawns !== 1 || seedCodexSpawns !== 1) {
       throw new Error(
-        `expected exactly one spawn per participant at scope create, saw claude=${report.spawnCounts.claude} codex=${report.spawnCounts.codex}`,
+        `expected exactly one spawn per participant at scope create, saw claude=${seedClaudeSpawns} codex=${seedCodexSpawns}`,
       );
     }
 
+    /**
+     * S9 (fix-1): create the next room in the soak lifecycle (same route +
+     * models, fresh seed). Returns the new room's participant ids. Mirrors the
+     * entry-block seeding/ensureScope/spawn-check so every room is held to the
+     * identical invariant — only invoked on the soak path.
+     */
+    const beginSoakRoom = async (): Promise<void> => {
+      const nextSeed = await seedRoom(db, {
+        route,
+        claudeInstallationId: claudeInstallation.installationId,
+        codexInstallationId: codexInstallation.installationId,
+        claudeModelId: claudeModel,
+        codexModelId: codexModel,
+        facilitatorRole: options.facilitatorRole,
+      });
+      roleOf.set(nextSeed.claude.id, "claude");
+      roleOf.set(nextSeed.codex.id, "codex");
+      currentRoomId = nextSeed.roomId;
+      currentClaudeId = nextSeed.claude.id;
+      currentCodexId = nextSeed.codex.id;
+      currentFacilitatorId = nextSeed.facilitator.id;
+      soakRoomIds.add(nextSeed.roomId);
+      soakRoomIndex += 1;
+      if (report.soak) {
+        report.soak.roomsCreated = soakRoomIndex + 1;
+        syncSoakSpawnAggregate();
+      }
+      await orchestrator.ensureScope(nextSeed.roomId, [nextSeed.claude, nextSeed.codex]);
+      const claudeSpawns = rig.spawnCount(nextSeed.claude.id);
+      const codexSpawns = rig.spawnCount(nextSeed.codex.id);
+      if (claudeSpawns !== 1 || codexSpawns !== 1) {
+        throw new Error(
+          `soak lifecycle room ${soakRoomIndex}: expected exactly one spawn per participant at scope create, saw claude=${claudeSpawns} codex=${codexSpawns}`,
+        );
+      }
+    };
+
+    /**
+     * S9 (fix-1): close this completed room's Scope so its driver cohort does
+     * not leak across the lifecycle (the Host never reuses a closed Scope; the
+     * next room cold-builds its own). Best-effort — a dead Host / 404 just
+     * means the scope is already gone (closeScope at tear-down reaps stragglers).
+     */
+    const closeSoakRoom = async (roomId: string): Promise<void> => {
+      const binding = await db.runtimeBindings
+        .where("roomId")
+        .equals(roomId)
+        .filter((candidate) => candidate.state === "active")
+        .first();
+      if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
+        await client
+          .closeScope(binding.executionScopeId, {
+            controllerId: binding.controllerId,
+            leaseEpoch: binding.leaseEpoch,
+          })
+          .catch(() => undefined);
+      }
+    };
+
     // --- rounds --------------------------------------------------------------
     const startedAt = Date.now();
+    const minRounds = soakMinRounds();
+    const minMs = soakMinMs();
+    if (options.soak && report.soak && (minRounds !== SOAK_MIN_ROUNDS || minMs !== SOAK_MIN_MS)) {
+      report.notes.push(
+        `soak exit condition COMPRESSED for this run: minRounds=${minRounds} (real=${SOAK_MIN_ROUNDS}), minMs=${minMs} (real=${SOAK_MIN_MINUTES}min) via CK_SMOKE_SOAK_MIN_ROUNDS/CK_SMOKE_SOAK_MIN_MS. A compressed run is a demo/self-check only — it is NEVER a substitute for the real ≥${SOAK_MIN_ROUNDS}-rounds + ${SOAK_MIN_MINUTES}min gate.`,
+      );
+    }
     let roundsDone = 0;
     for (;;) {
       roundsDone += 1;
       report.rounds.attempted = roundsDone;
       const respawnsBefore = codexRespawnCount(rig);
-      const round = await withRoundTimeout(orchestrator.startRound(seed.roomId), roundsDone);
+      // A8 (plan-a §2): a real-model convergence vote (=是 on a summary's last
+      // line, after ≥1 completed round) drives the room through its DESIGNED
+      // terminal state — one facilitator Decision Report commits and the room
+      // becomes concluded. The NEXT startRound then throws ROOM_CONCLUDED
+      // (orchestrator:511-515). Recognize that as a designed conclusion (never
+      // a defect): positively assert reports==1 + room.concluded + every
+      // completed round's invariants still hold, record designedConclusion.
+      // S9 (fix-1): on the soak path the lifecycle KEEPS GOING — record this
+      // room, close its Scope, and spin up the next one (same route, fresh
+      // seed) until totalRoundsCompleted ≥ SOAK_MIN_ROUNDS AND elapsedMs ≥
+      // SOAK_MIN_MS. The matrix (non-soak) path still just records + breaks.
+      // dry-run is immune (fake reply has no marker → parse reads 否 → no
+      // report, so it runs the SINGLE room out to the soak exit condition).
+      let round: DiscussionRound | null = null;
+      try {
+        round = await withRoundTimeout(orchestrator.startRound(currentRoomId), roundsDone);
+      } catch (error) {
+        if (error instanceof TransactionError && error.code === "ROOM_CONCLUDED") {
+          await assertDesignedConclusion(db, currentRoomId, report, roundsDone);
+          if (options.soak && report.soak) {
+            report.soak.rooms.push({
+              index: soakRoomIndex,
+              roundsCompleted: roundsThisRoom,
+              designedConclusion: true,
+              rotations: rotationsThisRoom,
+            });
+            report.soak.totalRoundsCompleted = report.rounds.completed;
+            await closeSoakRoom(currentRoomId);
+            const exitMet =
+              report.soak.totalRoundsCompleted >= minRounds && Date.now() - startedAt >= minMs;
+            if (exitMet || report.soak.roomsCreated >= SOAK_ROOMS_HARD_LIMIT) {
+              if (!exitMet && report.soak.roomsCreated >= SOAK_ROOMS_HARD_LIMIT) {
+                throw new Error(
+                  `soak lifecycle hit the room hard limit (${SOAK_ROOMS_HARD_LIMIT}) before reaching ${minRounds} total rounds AND ${minMs / 60000}min — exposing a pathological loop instead of relaxing the gate`,
+                );
+              }
+              break;
+            }
+            // Fresh room, fresh per-room counters; elapsedMs + rooms + total
+            // rounds carry over (per fix-1: never cleared).
+            rotationsThisRoom = 0;
+            roundsThisRoom = 0;
+            await beginSoakRoom();
+            await options.onProgress();
+            continue;
+          }
+          break;
+        }
+        throw error;
+      }
       if (!round || round.phase !== "completed") {
         const reason = round?.pauseReason;
         const pauseDetail = typeof reason?.detail === "string" ? reason.detail : "";
@@ -1107,8 +1433,10 @@ async function runRow(
           pauseDetail === "server reported a terminal error";
         if ((rebaseRotation || externalTransient) && report.soak) {
           if (rebaseRotation) {
+            rotationsThisRoom += 1;
             report.soak.rotations += 1;
             report.soak.rotationDetails.push(pauseDetail);
+            syncSoakSpawnAggregate();
           } else {
             report.soak.externalInterruptions.push(pauseDetail);
             if (report.soak.externalInterruptions.length > 3) {
@@ -1117,11 +1445,11 @@ async function runRow(
               );
             }
           }
-          await orchestrator.abortPausedRound(seed.roomId);
+          await orchestrator.abortPausedRound(currentRoomId);
           if (rebaseRotation) {
             const binding = await db.runtimeBindings
               .where("roomId")
-              .equals(seed.roomId)
+              .equals(currentRoomId)
               .filter((candidate) => candidate.state === "active")
               .first();
             if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
@@ -1139,22 +1467,34 @@ async function runRow(
         );
       }
 
-      // Participant order snapshot: claude first, codex second.
+      // Participant order snapshot: the non-facilitator speaks first, the
+      // facilitator second (S9 fix-2: the soak facilitator role is configurable).
+      const speakerId = options.facilitatorRole === "claude" ? currentCodexId : currentClaudeId;
       const orderOk =
         round.participantOrder.length === 2 &&
-        round.participantOrder[0] === seed.claude.id &&
-        round.participantOrder[1] === seed.codex.id;
+        round.participantOrder[0] === speakerId &&
+        round.participantOrder[1] === currentFacilitatorId;
       report.rounds.participantOrderOk = report.rounds.participantOrderOk && orderOk;
 
-      const executions = (await db.modelExecutions.where("roomId").equals(seed.roomId).toArray())
+      const executions = (await db.modelExecutions.where("roomId").equals(currentRoomId).toArray())
         .filter((execution) => execution.roundId === round.id)
         .sort((a, b) =>
           a.createdAt === b.createdAt
             ? a.executionId.localeCompare(b.executionId)
             : a.createdAt.localeCompare(b.createdAt),
         );
-      if (executions.length !== 3) {
-        throw new Error(`round ${roundsDone}: expected 3 executions, saw ${executions.length}`);
+      // A1 (plan-a §2): S2 onwards each round = focus(facilitator) + one
+      // message per participant + summary(facilitator) = 4 executions for a
+      // 2-participant room. A convergence round adds the facilitator report
+      // (same roundId — report anchors on the completed round, orchestrator:687)
+      // → 5 executions ordinary rounds K=4; a round whose executions include a
+      // resultKind==="report" expects K=5.
+      const hasReport = executions.some((execution) => execution.resultKind === "report");
+      const expectedExecutions = hasReport ? 5 : 4;
+      if (executions.length !== expectedExecutions) {
+        throw new Error(
+          `round ${roundsDone}: expected ${expectedExecutions} executions (${hasReport ? "convergence round" : "ordinary round"}), saw ${executions.length}`,
+        );
       }
       for (const execution of executions) {
         const role = roleOf.get(execution.participantId);
@@ -1199,22 +1539,26 @@ async function runRow(
         }
       }
 
-      // The Summary is an explicit Codex execution (facilitator = codex).
+      // The Summary is an explicit facilitator execution (S9 fix-2: on the soak
+      // row the facilitator role is configurable — CK_SMOKE_SOAK_FACILITATOR;
+      // matrix rows keep codex as the fixed facilitator).
       const summaries = executions.filter((execution) => execution.resultKind === "summary");
       const summaryRows = await db.summaries.where("roundId").equals(round.id).count();
       const summariesOk =
         summaries.length === 1 &&
-        summaries.every((execution) => execution.participantId === seed.codex.id) &&
+        summaries.every((execution) => execution.participantId === currentFacilitatorId) &&
         summaryRows === 1;
       report.rounds.summariesOk = report.rounds.summariesOk && summariesOk;
       if (!summariesOk) throw new Error(`round ${roundsDone}: summary assertions failed`);
 
-      // Each round commits exactly its two participant Messages; their source
-      // anchors join the cross-round uniqueness set (Message/Summary unique).
+      // A2 (plan-a §2): S2's focus ring commits a Message (committedEntityType=
+      // "message", discussion-transactions:1005-1018), so each ordinary round
+      // commits THREE messages: facilitator focus + one per participant. The
+      // report commits to the reports table, never to messages.
       const messageRows = await db.messages.where("roundId").equals(round.id).toArray();
-      if (messageRows.length !== 2) {
+      if (messageRows.length !== 3) {
         throw new Error(
-          `round ${roundsDone}: expected 2 committed messages, saw ${messageRows.length}`,
+          `round ${roundsDone}: expected 3 committed messages (focus + 2 participants), saw ${messageRows.length}`,
         );
       }
       for (const message of messageRows) {
@@ -1232,26 +1576,32 @@ async function runRow(
       }
 
       report.rounds.completed += 1;
+      roundsThisRoom += 1;
 
       // --- soak-only stability assertions (flat after round 1) ---------------
       if (options.soak && report.soak) {
         report.soak.roundsDone = roundsDone;
         report.soak.elapsedMs = Date.now() - startedAt;
-        if (roundsDone > 1) {
-          // Exactly one spawn per participant PER SCOPE: a designed
-          // needs_rebase rotation adds one new spawn per participant (the old
-          // driver closes with its scope); anything more is a leak.
-          const expectedSpawns = 1 + report.soak.rotations;
+        report.soak.totalRoundsCompleted = report.rounds.completed;
+        if (roundsThisRoom >= 1) {
+          // Exactly one spawn per participant PER SCOPE of THIS room: a
+          // designed needs_rebase rotation adds one spawn per participant (the
+          // old driver closes with its scope); anything more is a leak. Each
+          // room has its own participantIds, so the per-room check is run on
+          // the current room's participants; spawnStable is the AND across the
+          // whole lifecycle. Per fix-1, total expected spawns per participant
+          // role summed over rooms = roomsCreated + total rotations.
+          const expectedSpawns = 1 + rotationsThisRoom;
           const spawnStable =
-            rig.spawnCount(seed.claude.id) === expectedSpawns &&
-            rig.spawnCount(seed.codex.id) === expectedSpawns;
+            rig.spawnCount(currentClaudeId) === expectedSpawns &&
+            rig.spawnCount(currentCodexId) === expectedSpawns;
           const threadStable = codexRespawnCount(rig) === respawnsBefore;
           report.soak.spawnStable = report.soak.spawnStable && spawnStable;
           report.soak.codexThreadStable = report.soak.codexThreadStable && threadStable;
           if (!spawnStable) {
             throw new Error(
-              `soak: spawn count grew beyond 1+rotations=${expectedSpawns} ` +
-                `(claude=${rig.spawnCount(seed.claude.id)}, codex=${rig.spawnCount(seed.codex.id)})`,
+              `soak: spawn count grew beyond 1+rotationsThisRoom=${expectedSpawns} ` +
+                `(claude=${rig.spawnCount(currentClaudeId)}, codex=${rig.spawnCount(currentCodexId)})`,
             );
           }
           if (!threadStable) throw new Error("soak: codex driver respawned (thread rebuilt)");
@@ -1260,13 +1610,26 @@ async function runRow(
       }
 
       const keepGoing = options.soak
-        ? report.rounds.completed < SOAK_MIN_ROUNDS || Date.now() - startedAt < SOAK_MIN_MS
+        ? report.rounds.completed < minRounds || Date.now() - startedAt < minMs
         : roundsDone < options.rounds;
       if (!keepGoing) break;
     }
 
-    // --- final ACK scan: no pending left after completion --------------------
-    const allExecutions = await db.modelExecutions.where("roomId").equals(seed.roomId).toArray();
+    // --- final ACK scan: no pending left across the lifecycle ----------------
+    // S9 (fix-1): the soak lifecycle spans multiple rooms; scan every room's
+    // executions. The matrix path has exactly one room, so behaviour is
+    // identical for it. S9 (fix-2): report.spawnCounts already reflect the
+    // per-role AGGREGATE across the lifecycle — synced incrementally on every
+    // roomsCreated / rotations change (roomsCreated + totalRotations, additive),
+    // so the accurate count survives even a mid-loop failure path. The matrix
+    // path's first-scope counts were set once at scope create above.
+    const allExecutions = (
+      await Promise.all(
+        [...soakRoomIds].map((roomId) =>
+          db.modelExecutions.where("roomId").equals(roomId).toArray(),
+        ),
+      )
+    ).flat();
     report.ackLeaks = allExecutions.filter((execution) => execution.ackState === "pending").length;
     if (report.ackLeaks > 0) {
       throw new Error(
@@ -1275,12 +1638,18 @@ async function runRow(
     }
 
     // --- Codex policy: approval denied + read-only dedicated cwd -------------
+    // S9 (fix-1): count declines across EVERY codex participant in the soak
+    // lifecycle (matrix path has exactly one, so identical behaviour).
+    const codexParticipantIds = new Set(
+      [...roleOf.entries()].filter(([, role]) => role === "codex").map(([id]) => id),
+    );
     const declined = rig.logger
       .diagnostics()
       .filter(
         (entry) =>
           entry.kind === "codex.server_request_declined" &&
-          entry.context?.participantId === codexParticipantId,
+          typeof entry.context?.participantId === "string" &&
+          codexParticipantIds.has(entry.context.participantId as string),
       ).length;
     report.approval = { deniedByPolicy: true, declinedRequests: declined };
     report.notes.push(
@@ -1292,7 +1661,7 @@ async function runRow(
     );
     const codexExecutionIds = new Set(
       allExecutions
-        .filter((execution) => execution.participantId === codexParticipantId)
+        .filter((execution) => roleOf.get(execution.participantId) === "codex")
         .map((execution) => execution.executionId),
     );
     const fileChangeActivities = [...tap.executions.entries()]
@@ -1326,18 +1695,22 @@ async function runRow(
   } finally {
     // --- normal close + machine-wide leak assertion ---------------------------
     try {
-      const binding = seedRoomId
-        ? await db.runtimeBindings
-            .where("roomId")
-            .equals(seedRoomId)
-            .filter((candidate) => candidate.state === "active")
-            .first()
-        : undefined;
-      if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch) {
-        await client.closeScope(binding.executionScopeId, {
-          controllerId: binding.controllerId,
-          leaseEpoch: binding.leaseEpoch,
-        });
+      // S9 (fix-1): close every room's Scope the lifecycle opened (each
+      // completed soak room was already closed in-line; matrix path has one).
+      for (const roomId of soakRoomIds) {
+        const binding = await db.runtimeBindings
+          .where("roomId")
+          .equals(roomId)
+          .filter((candidate) => candidate.state === "active")
+          .first();
+        if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch) {
+          await client
+            .closeScope(binding.executionScopeId, {
+              controllerId: binding.controllerId,
+              leaseEpoch: binding.leaseEpoch,
+            })
+            .catch(() => undefined);
+        }
       }
       for (let i = 0; i < 50 && rig.liveDriverCount() > 0; i += 1) await sleep(100);
       let clean = rig.liveDriverCount() === 0;
@@ -1378,7 +1751,12 @@ function codexRespawnCount(rig: Rig): number {
 async function runIsolatedRow(
   kind: "real" | "fake",
   route: RouteId,
-  options: { rounds: number; soak: boolean; onProgress: () => Promise<void> },
+  options: {
+    rounds: number;
+    soak: boolean;
+    facilitatorRole: FacilitatorRole;
+    onProgress: () => Promise<void>;
+  },
 ): Promise<RowReport> {
   console.error(`\n=== row ${route} (${kind === "real" ? "real" : "dry-run"}) ===`);
   const logLines: string[] = [];
@@ -1407,7 +1785,7 @@ async function runIsolatedRow(
     `  row ${route}: ${report.ok ? "ok" : `FAIL — ${report.failure ?? "unknown"}`} ` +
       `(rounds ${report.rounds.completed}/${report.rounds.attempted}, ` +
       `spawns claude=${report.spawnCounts.claude} codex=${report.spawnCounts.codex} probes=${report.spawnCounts.probes}, ` +
-      `ackLeaks=${report.ackLeaks}, closeClean=${report.closeClean ?? "n/a"})`,
+      `ackLeaks=${report.ackLeaks}, closeClean=${report.closeClean ?? "n/a"}, designedConclusion=${report.designedConclusion})`,
   );
   return report;
 }
@@ -1446,7 +1824,8 @@ function printHumanSummary(report: SmokeReport): void {
     out.push(
       `  ackLeaks=${row.ackLeaks} closeClean=${row.closeClean ?? "n/a"} ` +
         `approvalDenied=${row.approval.deniedByPolicy} (declined=${row.approval.declinedRequests}) ` +
-        `sentinelProtected=${row.sentinel.protected} (fileChange=${row.sentinel.fileChangeActivities})`,
+        `sentinelProtected=${row.sentinel.protected} (fileChange=${row.sentinel.fileChangeActivities}) ` +
+        `designedConclusion=${row.designedConclusion}`,
     );
     if (row.soak) {
       out.push(
@@ -1456,6 +1835,11 @@ function printHumanSummary(report: SmokeReport): void {
           `spawnStable=${row.soak.spawnStable} ` +
           `codexThreadStable=${row.soak.codexThreadStable} ` +
           `uniqueRoundOutputs=${row.soak.uniqueRoundOutputs}`,
+      );
+      out.push(
+        `  soak lifecycle: roomsCreated=${row.soak.roomsCreated} ` +
+          `totalRoundsCompleted=${row.soak.totalRoundsCompleted} ` +
+          `rooms=${row.soak.rooms.length} (indices ${row.soak.rooms.map((room) => room.index).join(",") || "n/a"})`,
       );
       for (const detail of row.soak.rotationDetails) {
         out.push(`  rotation: ${detail}`);
@@ -1503,20 +1887,46 @@ async function main(): Promise<void> {
   };
 
   if (cli.dryRun) {
-    // One full synthetic row against the fake-driver rig; no real CLI touched.
-    rows.push(await runIsolatedRow("fake", "ant-glm5.2", { rounds: 1, soak: false, onProgress }));
+    // Fake-rig self-check; no real CLI touched. --dry-run --soak (S9 fix-1)
+    // runs the cross-room soak path against the fake rig — the fake reply has
+    // no convergence marker, so the single room runs straight out to the soak
+    // exit condition (compress via CK_SMOKE_SOAK_MIN_ROUNDS/CK_SMOKE_SOAK_MIN_MS).
+    // S9 (fix-2): the dry-run soak honors CK_SMOKE_SOAK_FACILITATOR too, so the
+    // self-check exercises the chosen facilitator's participant-order / summary
+    // assertions (default codex; claude available for the cross-evidence path).
+    rows.push(
+      await runIsolatedRow("fake", "ant-glm5.2", {
+        rounds: cli.soak ? cli.rounds : 1,
+        soak: cli.soak,
+        facilitatorRole: soakFacilitatorRole(),
+        onProgress,
+      }),
+    );
   } else {
     const selected = cli.route === "all" ? ROUTE_IDS : [cli.route];
     for (const route of selected) {
       rows.push(
-        await runIsolatedRow("real", route, { rounds: cli.rounds, soak: false, onProgress }),
+        await runIsolatedRow("real", route, {
+          rounds: cli.rounds,
+          soak: false,
+          facilitatorRole: "codex",
+          onProgress,
+        }),
       );
     }
     if (cli.soak) {
       // The long-run gate: representative GLM 5.2 + Codex room, 10 consecutive
-      // rounds or >= 15 minutes, whichever is LATER (plan §687-696).
+      // rounds or >= 15 minutes, whichever is LATER (plan §687-696). S9 (fix-2):
+      // the SOAK row's facilitator role is CK_SMOKE_SOAK_FACILITATOR-selectable
+      // (codex default; claude as an optional cross-evidence variant). Matrix
+      // rows above are unaffected — always codex as the fixed facilitator.
       rows.push(
-        await runIsolatedRow("real", "ant-glm5.2", { rounds: cli.rounds, soak: true, onProgress }),
+        await runIsolatedRow("real", "ant-glm5.2", {
+          rounds: cli.rounds,
+          soak: true,
+          facilitatorRole: soakFacilitatorRole(),
+          onProgress,
+        }),
       );
     }
   }
