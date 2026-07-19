@@ -12,9 +12,18 @@ export interface HostSectionProps {
   hostOnline: boolean | null;
   health: HealthResponse | undefined;
   onShowRestartHelp: () => void;
+  /** S6: export the sanitized diagnostics bundle as a single JSON download. */
+  onExportDiagnostics: () => void;
+  exporting: boolean;
 }
 
-export function HostSection({ hostOnline, health, onShowRestartHelp }: HostSectionProps) {
+export function HostSection({
+  hostOnline,
+  health,
+  onShowRestartHelp,
+  onExportDiagnostics,
+  exporting,
+}: HostSectionProps) {
   return (
     <section aria-labelledby="settings-host" className="flex flex-col gap-3">
       <div>
@@ -36,6 +45,15 @@ export function HostSection({ hostOnline, health, onShowRestartHelp }: HostSecti
           <p className="break-all text-xs text-muted">
             Host 实例：{health.hostInstanceId} · Node {health.node.version}
           </p>
+          <div className="mt-1">
+            <Button variant="ghost" onClick={onExportDiagnostics} disabled={exporting}>
+              {exporting ? "正在导出诊断包…" : "导出诊断包"}
+            </Button>
+            <p className="mt-1 text-xs text-muted">
+              下载单个 JSON：健康状态、Installation 清单、计数与最近告警；绝不含
+              prompt、模型输出、token、Cookie 或环境变量
+            </p>
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-2 rounded border border-error bg-surface px-3 py-2 text-sm">

@@ -347,5 +347,54 @@ export const closeScopeResponseSchema = z
   .strict();
 export type CloseScopeResponse = z.infer<typeof closeScopeResponseSchema>;
 
+// ---------------------------------------------------------------------------
+// Diagnostics export (session-authenticated, S6)
+// ---------------------------------------------------------------------------
+
+/** One sanitized warn/error line from the Host problems ring. `context` stays
+ * free-form (already sanitizeValue-capped at write time); the rest is fixed
+ * vocabulary. */
+export const diagnosticLogRecordSchema = z
+  .object({
+    at: z.string().min(1),
+    level: z.enum(["warn", "error"]),
+    event: z.string().min(1),
+    context: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+export type DiagnosticLogRecord = z.infer<typeof diagnosticLogRecordSchema>;
+
+/** Same-machine operator bundle, sanitized by construction: never carries
+ * prompts, model output, tokens, cookies, secrets or env dumps, and Host
+ * config paths (distDir/watchdogProgram/driverWorkRoot) stay out — only
+ * installations keep realpaths (Q10: required for same-machine
+ * self-diagnosis, documented in README). */
+export const diagnosticsResponseSchema = z
+  .object({
+    generatedAt: z.string().min(1),
+    health: healthResponseSchema,
+    config: z
+      .object({
+        mode: z.enum(["development", "production"]),
+        port: z.number().int().positive(),
+        node: z.object({ version: z.string(), major: z.number().int() }).strict(),
+        startedAt: z.string().min(1),
+        uptimeMs: z.number().int().nonnegative(),
+      })
+      .strict(),
+    installations: z.array(installationDtoSchema),
+    scopes: z
+      .object({
+        activeScopes: z.number().int().nonnegative(),
+        liveDriverProcesses: z.number().int().nonnegative(),
+        runningExecutions: z.number().int().nonnegative(),
+        eventConnections: z.number().int().nonnegative(),
+      })
+      .strict(),
+    logs: z.object({ recent: z.array(diagnosticLogRecordSchema) }).strict(),
+  })
+  .strict();
+export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
+
 // Re-export for handler convenience.
 export { LIMITS, usageSchema };

@@ -7,6 +7,7 @@ import {
   type ControllerRequest,
   type CreateScopeRequest,
   type CreateScopeResponse,
+  type DiagnosticsResponse,
   type ExecuteRequest,
   type ExecuteResponse,
   type ExecutionProfileDto,
@@ -22,6 +23,7 @@ import {
   ackResponseSchema,
   closeScopeResponseSchema,
   createScopeResponseSchema,
+  diagnosticsResponseSchema,
   executeResponseSchema,
   executionStatusSchema,
   healthResponseSchema,
@@ -111,6 +113,16 @@ export class RuntimeClient {
 
   health(): Promise<HealthResponse> {
     return this.call("GET", "/api/v1/health", { schema: healthResponseSchema, auth: "session" });
+  }
+
+  /** S6: sanitized same-machine diagnostics bundle (session read; Settings is
+   * the only consumer). The schema parse runs before the page serializes the
+   * data into the downloaded file — validation and download are two steps. */
+  diagnostics(): Promise<DiagnosticsResponse> {
+    return this.call("GET", "/api/v1/diagnostics", {
+      schema: diagnosticsResponseSchema,
+      auth: "session",
+    });
   }
 
   listInstallations(): Promise<InstallationsResponse> {

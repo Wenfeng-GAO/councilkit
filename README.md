@@ -46,6 +46,32 @@ lsof -nP -iTCP:43127 -sTCP:LISTEN
 
 结束占用进程后重新 `pnpm start`。
 
+## 后台托管（launchd，macOS）
+
+前台 `pnpm start` 之外，可以把 Runtime Host 交给 launchd 托管：登录后自动启动、崩溃自动拉起（KeepAlive，限频 10 秒）。先确保已 `pnpm build`（托管入口是 `dist-host/main.mjs`），然后：
+
+```bash
+node scripts/install-service.mjs            # 写入 plist（--dry-run 只打印不写盘）
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.councilkit.host.plist
+```
+
+安装脚本只写 `~/Library/LaunchAgents/com.councilkit.host.plist`，**绝不代为 load**——上面的 `bootstrap` 需要你显式执行（旧版 macOS 用 `launchctl load -w`）。plist 把 Node 路径固定为运行脚本时的解释器，并注入常见 PATH 以保住 CLI 发现；**更换 Node 版本或移动仓库目录后必须重跑安装脚本**。托管后端口被占时会结构化退出、由 launchd 每 10 秒重拉，先用 `lsof`（见上节）排查占用。
+
+验证托管生效：`launchctl list | grep councilkit` 出现非 `-` 的 PID，`curl http://127.0.0.1:43127/api/v1/health` 返回 200，且 Settings 页 Installations 仍为 trusted。日志在 `~/Library/Logs/CouncilKit/host.out.log` 与 `host.err.log`。
+
+卸载（脚本只删 plist，不代为 unload、不删日志）：
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.councilkit.host.plist
+node scripts/uninstall-service.mjs
+```
+
+### 诊断包
+
+排查 Host 问题时，在 **Settings → Host** 段点击「导出诊断包」，下载单个 JSON 文件（也可 `GET /api/v1/diagnostics`，session 鉴权）。内容：Host 健康信息与 Driver 状态、Installations（state/detail）、Scope/Execution 的分类计数、非敏感配置（mode/port/Node 版本/uptime）、最近 50 条 warn/error 结构化日志（已过 sanitize）。
+
+注意：诊断包可能包含本机绝对路径（Installations 的可执行文件 **realpath** 与日志上下文中的路径）——这是本机自诊的必需信息，属同机用户边界，请勿把诊断包发到公开渠道。诊断包**绝不包含** prompt 正文、模型输出、token、Cookie、API Key 或环境变量：入环的 warn/error 日志已对 `token=`、`Cookie:`、`"api_key":` 等秘密形态的**值**统一脱敏为 `[redacted]`。
+
 ## 验证命令
 
 ```bash
