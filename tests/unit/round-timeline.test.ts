@@ -108,7 +108,12 @@ describe("pauseReasonCopy", () => {
       expect(copy.title.length).toBeGreaterThan(0);
       expect(copy.description.length).toBeGreaterThan(0);
       for (const entry of copy.repair) {
-        expect(["/settings", "/rooms/new"]).toContain(entry.href);
+        expect([
+          "/settings",
+          "/settings#settings-installations",
+          "/settings#settings-agents",
+          "/rooms/new",
+        ]).toContain(entry.href);
         expect(entry.label.length).toBeGreaterThan(0);
       }
     }
@@ -122,8 +127,10 @@ describe("pauseReasonCopy", () => {
   });
 
   it("points model/profile problems at settings", () => {
-    expect(pauseReasonCopy("model_mismatch").repair[0]?.href).toBe("/settings");
-    expect(pauseReasonCopy("prewarm_failed").repair[0]?.href).toBe("/settings");
+    expect(pauseReasonCopy("model_mismatch").repair[0]?.href).toBe("/settings#settings-agents");
+    expect(pauseReasonCopy("prewarm_failed").repair[0]?.href).toBe(
+      "/settings#settings-installations",
+    );
     expect(pauseReasonCopy("needs_rebase").repair[0]?.href).toBe("/rooms/new");
   });
 });
@@ -195,9 +202,10 @@ describe("state labels", () => {
     expect(roundPhaseLabel("running")).toBe("进行中");
     expect(roundPhaseLabel("completed")).toBe("已完成");
     expect(roundPhaseLabel("aborted")).toBe("已终止");
+    expect(roundPhaseLabel("paused")).toBe("本轮已暂停");
     expect(roomRunStateLabel("idle")).toBe("空闲");
     expect(roomRunStateLabel("running")).toBe("运行中");
-    expect(roomRunStateLabel("paused")).toBe("已暂停");
+    expect(roomRunStateLabel("paused")).toBe("已暂停调度");
   });
 });
 

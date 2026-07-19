@@ -1,3 +1,4 @@
+import { installPrimaryShortcut } from "@/app/shortcuts";
 import { ControlBanner } from "@/components/room/ControlBanner";
 import { DiscussionStream } from "@/components/room/DiscussionStream";
 import { ErrorBanner } from "@/components/room/ErrorBanner";
@@ -28,7 +29,7 @@ import {
   useRuntimeRoom,
   useRuntimeRounds,
 } from "@/stores/runtime-queries";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 
 /**
@@ -59,6 +60,17 @@ const FAILED_REPORT_STATES: ReadonlySet<ModelExecutionState> = new Set([
   "failed",
   "interrupted",
   "discarded",
+]);
+
+// R5 中断确认的「本轮正在生成」判定口径：live execution 真实态。与
+// deriveParticipantRoundStatus 的 generating 同源（RoomHeader.tsx
+// LIVE_EXECUTION_STATES）——activeRound.activeExecutionId 非空且对应 execution
+// state ∈ prepared/running/succeeded_uncommitted。区分于 round phase：dispatch
+// 间隙（activeExecutionId===null 的合法窗口）不假报「将中断当前生成」。
+const ROUND_LIVE_EXECUTION_STATES: ReadonlySet<ModelExecutionState> = new Set([
+  "prepared",
+  "running",
+  "succeeded_uncommitted",
 ]);
 
 export function deriveRoomPhase(
@@ -124,6 +136,122 @@ export function canConcludeNow(input: CanConcludeNowInput): boolean {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// S8 tab-hidden 通知（纯函数 — unit-tested as exports；effect 在段 2 接线）。
+// 三种语义事件：round-completed / round-paused / report-ready。prev/next 签名
+// 比对沿用 useRoomAnnouncer 的 prevRef 模式；roundId 变化只重置签名不报；同帧
+// 多事件优先级 report-ready > round-paused > round-completed。
+// ---------------------------------------------------------------------------
+
+export type RoomNotifyEvent =
+  | { kind: "round-completed"; roundNumber: number }
+  | { kind: "round-paused"; roundNumber: number }
+  | { kind: "report-ready" };
+
+export interface RoomNotifySignature {
+  roundId: string | null;
+  phase: string | null;
+  roundNumber: number | null;
+  hasReport: boolean;
+}
+
+/** Compare two signatures and return the single semantic event to surface
+ * (null = no event). roundId 切换 → null（新轮次首帧只重置签名）；同签名 →
+ * null；同帧多事件优先级 report-ready > round-paused > round-completed。 */
+export function detectRoomNotifyEvent(
+  prev: RoomNotifySignature,
+  next: RoomNotifySignature,
+): RoomNotifyEvent | null {
+  if (prev.roundId !== next.roundId) return null;
+
+  const events: RoomNotifyEvent[] = [];
+  if (!prev.hasReport && next.hasReport) {
+    events.push({ kind: "report-ready" });
+  }
+  if (prev.phase !== "paused" && next.phase === "paused" && next.roundNumber != null) {
+    events.push({ kind: "round-paused", roundNumber: next.roundNumber });
+  }
+  if (prev.phase !== "completed" && next.phase === "completed" && next.roundNumber != null) {
+    events.push({ kind: "round-completed", roundNumber: next.roundNumber });
+  }
+  if (events.length === 0) return null;
+
+  const priority: ReadonlyArray<RoomNotifyEvent["kind"]> = [
+    "report-ready",
+    "round-paused",
+    "round-completed",
+  ];
+  for (const kind of priority) {
+    const found = events.find((event) => event.kind === kind);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Armed document.title for a hidden tab (S8). 前缀符号 ⚠/✓ 提示性质，baseTitle
+ * （"CouncilKit"）作为后缀保留。 */
+export function notifyTitle(event: RoomNotifyEvent, baseTitle: string): string {
+  switch (event.kind) {
+    case "round-paused":
+      return `⚠ 第 ${event.roundNumber} 轮已暂停 · ${baseTitle}`;
+    case "round-completed":
+      return `✓ 第 ${event.roundNumber} 轮已完成 · ${baseTitle}`;
+    case "report-ready":
+      return `✓ 决策报告已生成 · ${baseTitle}`;
+  }
+}
+
+/** favicon 状态点取色口径：paused → warn，completed/report → success。 */
+export function notifyTone(event: RoomNotifyEvent): "warn" | "success" {
+  return event.kind === "round-paused" ? "warn" : "success";
+}
+
+// ---------------------------------------------------------------------------
+// S8 favicon 状态点（canvas dataURL，不预置图标文件——现状 index.html 无 icon
+// link，预置文件需动 index.html/public 且无法表达双态）。模块级辅助仅在
+// RoomPage effect 调用时读 DOM，模块加载无副作用（shortcuts.ts 先例）。token
+// 取 --color-warn/--color-success（globals.css:14-15），fallback 常量。canvas
+// 不可用在 try/catch 内降级为不动 favicon（title 已独立武装）。
+// ---------------------------------------------------------------------------
+
+const FAVICON_LINK_ATTR = "data-councilkit-status-icon";
+
+function resolveDotColor(tone: "warn" | "success"): string {
+  const token = tone === "warn" ? "--color-warn" : "--color-success";
+  const fromCss = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  return fromCss || (tone === "warn" ? "#d97706" : "#16a34a");
+}
+
+function setFaviconDot(tone: "warn" | "success"): void {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 32;
+    canvas.height = 32;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = resolveDotColor(tone);
+    context.beginPath();
+    context.arc(16, 16, 12, 0, Math.PI * 2);
+    context.fill();
+    const dataUrl = canvas.toDataURL();
+    let link = document.querySelector<HTMLLinkElement>(`link[${FAVICON_LINK_ATTR}]`);
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      link.setAttribute(FAVICON_LINK_ATTR, "");
+      document.head.appendChild(link);
+    }
+    link.href = dataUrl;
+  } catch {
+    // canvas 不可用：降级为仅 title 提示，favicon 不动。
+  }
+}
+
+function clearFaviconDot(): void {
+  const link = document.querySelector<HTMLLinkElement>(`link[${FAVICON_LINK_ATTR}]`);
+  if (link) link.remove();
+}
+
 export function RoomPage() {
   const { roomId } = useParams<{ roomId: string }>();
   const tick = useRuntimeDiscussionStore((state) =>
@@ -150,23 +278,103 @@ export function RoomPage() {
   // lock unavailability; takeover errors surface as takeover_failed through
   // the display bridge. On unmount the acquire is aborted and any held lock
   // released so a navigated-away page never keeps control.
+  //
+  // S8 controlRef 重构（R8）：cleanup 读 controlRef.current 而非闭包 slot——
+  // handleTakeover 重跑 controlRoom 会写入新 slot，旧闭包会漏释放 takeover 产生
+  // 的新锁。ref 让 cleanup 始终拿到最新 slot。
+  //
+  // R1 竞态守卫：切房时旧 effect 的 controlRoom 异步仍在排队——房间 A 的
+  // takeoverScope 等待期间切到 B，A 迟到完成若无条件写入共享 ref 会把 A 的 handle
+  // 覆盖成 B 当前的 slot，B 的真 handle 丢失 → B 卸载无法释放其锁。修复：effect
+  // 局部 cancelled 标志 + handle 归属守卫——异步完成时先判未取消且当前 room 仍是
+  // 本 effect 的 room 才允许写共享 ref；cleanup 置 cancelled 并 abort。释放只释放
+  // 本 effect 自己登记的 handle（以闭包 slot 自身为准，不读可能被后续 effect 覆写
+  // 的共享 ref）。
   const roomExists = !!room;
+  // Control slot carries its roomId so cleanup can tell "a slot for THIS room"
+  // (mount slot or a takeover slot that replaced it) from another room's slot.
+  interface ControlSlot {
+    abort: AbortController;
+    handle: { release(): void } | null;
+    roomId: string;
+  }
+  const controlRef = useRef<ControlSlot | null>(null);
   useEffect(() => {
     if (!roomId || !roomExists) return;
-    const abort = new AbortController();
-    let handle: { release(): void } | null = null;
+    const slot: ControlSlot = { abort: new AbortController(), handle: null, roomId };
+    controlRef.current = slot;
     void getAppRuntime()
-      .orchestrator.controlRoom(roomId, abort.signal)
+      .orchestrator.controlRoom(roomId, slot.abort.signal)
       .then((acquired) => {
-        handle = acquired;
-        if (abort.signal.aborted) acquired?.release();
+        // Ownership guard (R1 + takeover-slot leak): register only when THIS slot
+        // is still the live one and un-aborted; otherwise release immediately —
+        // a late completion must never write into another room's slot.
+        if (controlRef.current !== slot || slot.abort.signal.aborted) {
+          acquired?.release();
+          return;
+        }
+        slot.handle = acquired ?? null;
       })
       .catch(() => undefined);
     return () => {
-      abort.abort();
-      handle?.release();
+      // Release whatever slot belongs to THIS room (mount slot, or a takeover
+      // slot that replaced it — they share this roomId), and abort its controller
+      // so a late completion releases instead of registering. Never touch another
+      // room's slot.
+      slot.abort.abort();
+      const current = controlRef.current;
+      if (current && current.roomId === roomId) {
+        current.abort.abort();
+        current.handle?.release();
+        controlRef.current = null;
+      }
     };
   }, [roomId, roomExists]);
+
+  // S8 强制接管（observing → controlling）：steal 抢锁即放，再重跑 controlRoom
+  // 走既有 takeover 路径（takeoverScope + 更高 leaseEpoch）。计划 §1.3 / R3。
+  // 锁名字面量 `councilkit-room-${roomId}` 与 discussion-orchestrator.ts:144
+  // 同源——两侧注释互引防漂移。navigator.locks 不可用退化为直接重跑
+  // controlRoom（self-healing 排队）。
+  const [takeoverPending, setTakeoverPending] = useState(false);
+  const handleTakeover = useCallback(() => {
+    if (!roomId) return;
+    // 先终结当前房间的旧 control session（挂载 effect 的排队 acquire 或先前的
+    // takeover slot）：abort 其 controller 并释放其 handle——新 slot 取而代之，
+    // 旧 session 迟到的完成会被归属守卫拦下（只释放、不写入）。
+    const prev = controlRef.current;
+    if (prev && prev.roomId === roomId) {
+      prev.abort.abort();
+      prev.handle?.release();
+    }
+    const slot: ControlSlot = { abort: new AbortController(), handle: null, roomId };
+    controlRef.current = slot;
+    setTakeoverPending(true);
+    const releaseSteal =
+      typeof navigator !== "undefined" && navigator.locks
+        ? new Promise<void>((resolve) => {
+            // steal: 抢到即放，仅为打破对方锁——本体控制权靠下面的 controlRoom。
+            void navigator.locks
+              .request(`councilkit-room-${roomId}`, { steal: true }, () => undefined)
+              .finally(() => resolve());
+          })
+        : Promise.resolve();
+    void releaseSteal.finally(() => {
+      void getAppRuntime()
+        .orchestrator.controlRoom(roomId, slot.abort.signal)
+        .then((acquired) => {
+          // Ownership guard（与挂载 effect 同款）：takeover 完成后若 slot 已被
+          // cleanup 或新一轮 takeover 替换/abort，立即释放，绝不写入他人 slot。
+          if (controlRef.current !== slot || slot.abort.signal.aborted) {
+            acquired?.release();
+            return;
+          }
+          slot.handle = acquired ?? null;
+        })
+        .catch(() => undefined)
+        .finally(() => setTakeoverPending(false));
+    });
+  }, [roomId]);
 
   // Control transitions: announce takeovers; on losing control drop the local
   // preview immediately and stay read-only.
@@ -252,6 +460,73 @@ export function RoomPage() {
     return () => clearInterval(timer);
   }, [roomId, controlState]);
 
+  // S8 tab-hidden 通知接线（计划 §1.1，R4：headless Chromium 不可测，仅手验）。
+  // 仅当 document.visibilityState === "hidden" 时武装 title + favicon 状态点；
+  // 可见时转换不武装（用户看得见）。visibilitychange 变 visible → 恢复 baseTitle
+  // + 摘除状态 favicon；变 hidden → 不追溯补发。卸载/切房间恢复初值。
+  const baseTitleRef = useRef<string>("CouncilKit");
+  const prevNotifySignatureRef = useRef<RoomNotifySignature>({
+    roundId: null,
+    phase: null,
+    roundNumber: null,
+    hasReport: false,
+  });
+  const reportAvailable = !!report;
+  // R2 通知签名源必须不随 activeRoundId 清空而断裂：commitSummary 原子置轮 completed
+  // + 清 room.activeRoundId → currentRound 立即变 null → 签名从 r1/summarizing 变
+  // null/null，roundId 变化触发 detectRoomNotifyEvent 返回 null → 通知漏报。签名
+  // round 来源改取 recovery.rounds 中 roundNumber 最大的最新轮（轮完成后仍留在
+  // rounds 列表），签名 transfer 变为 r1/summarizing → r1/completed（roundId 不
+  // 变），纯函数判定不变；currentRound 缺席时它仍能给出已完成轮的稳定 roundId。
+  const recoveryRounds = recovery?.rounds ?? rounds ?? [];
+  const latestRound = recoveryRounds.length
+    ? recoveryRounds.reduce<(typeof recoveryRounds)[number] | null>(
+        (latest, round) => (!latest || round.roundNumber > latest.roundNumber ? round : latest),
+        null,
+      )
+    : null;
+  const nextRoundId = latestRound?.id ?? null;
+  const nextPhase = latestRound?.phase ?? null;
+  const nextRoundNumber = latestRound?.roundNumber ?? null;
+  useEffect(() => {
+    baseTitleRef.current = document.title || "CouncilKit";
+  }, []);
+  useEffect(() => {
+    const next: RoomNotifySignature = {
+      roundId: nextRoundId,
+      phase: nextPhase,
+      roundNumber: nextRoundNumber,
+      hasReport: reportAvailable,
+    };
+    const prev = prevNotifySignatureRef.current;
+    prevNotifySignatureRef.current = next;
+    // 可见时转换不武装：用户已经在看本页，title/favicon 无需提示。
+    if (document.visibilityState !== "hidden") return;
+    const event = detectRoomNotifyEvent(prev, next);
+    if (!event) return;
+    document.title = notifyTitle(event, baseTitleRef.current);
+    setFaviconDot(notifyTone(event));
+  }, [nextRoundId, nextPhase, nextRoundNumber, reportAvailable]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: R4 roomId 刻意驱动切房时 cleanup 旧房间 title/favicon 武装
+  useEffect(() => {
+    function onVisibilityChange(): void {
+      if (document.visibilityState === "visible") {
+        document.title = baseTitleRef.current;
+        clearFaviconDot();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      // 卸载/切房间：恢复初值避免脏 title/状态 favicon 留在他页。
+      document.title = baseTitleRef.current;
+      clearFaviconDot();
+    };
+    // R4：依赖加 roomId——React Router 复用 RoomPage 实例时切房不触发 cleanup，旧
+    // 房间武装的 title/favicon 会残留到他页。加 roomId 使切房时先 cleanup 旧房间，
+    // 新房间重新评估并重新读取 baseTitle。
+  }, [roomId]);
+
   const announcement = useRoomAnnouncer({
     currentRound,
     messages: currentMessages,
@@ -262,9 +537,27 @@ export function RoomPage() {
 
   const controlling = controlState === "controlling";
   const hasActiveRound = !!currentRound;
+  // R5：按真实 live execution 判定，而非 round phase——dispatch 间隙
+  // （activeExecutionId===null 的合法窗口）不会被 round phase 误判为「正在生成」，
+  // 避免对空隙发送时误弹「将中断当前生成」。口径与 deriveParticipantRoundStatus
+  // 的 generating 同源（见 RoomHeader.tsx LIVE_EXECUTION_STATES）。
   const roundGenerating =
-    !!currentRound && (currentRound.phase === "running" || currentRound.phase === "summarizing");
+    !!currentRound &&
+    activeExecutionId !== null &&
+    (currentExecutions ?? []).some(
+      (execution) =>
+        execution.executionId === activeExecutionId &&
+        ROUND_LIVE_EXECUTION_STATES.has(execution.state),
+    );
   const controlHint = controlling ? undefined : "当前页面没有控制权，无法操作";
+  // S8 controllerId 数据源：复刻 RoomHeader.tsx latestNonClosed 选择，从
+  // recovery.bindings 取最新非 closed 的 controllerId，传 ControlBanner 显示
+  // 「控制者 #<前8位>」——observing 辨识对方 tab，controlling 辨识自己（R1）。
+  const roomBindings = (recovery?.bindings ?? []).filter((binding) => binding.roomId === roomId);
+  const latestBindingForController = roomBindings.length
+    ? roomBindings.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0]
+    : undefined;
+  const controllerId = latestBindingForController?.controllerId ?? null;
   const facilitatorSpeaker =
     participants && agents
       ? resolveSpeaker(
@@ -315,12 +608,39 @@ export function RoomPage() {
 
   // #report anchor scroll: React Router client nav does not scroll to hash.
   // Re-run when the report lands (its id changes) so the element exists.
+  // S8 a11y：reduced-motion 下改 "auto"（globals.css 的媒体查询管不到 JS 动画）。
   const location = useLocation();
   useEffect(() => {
     if (location.hash !== "#report" || !report) return;
     const node = document.getElementById("report");
-    if (node) node.scrollIntoView({ behavior: "smooth" });
+    if (!node) return;
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    node.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
   }, [report, location.hash]);
+
+  // S8 主快捷键 ⌘/Ctrl+Enter：焦点在发言框→发送（走 UserInputBar 表单既有
+  // trim/disabled 校验，零逻辑复制）；否则可开始新一轮→start-round。Modal 打
+  // 开时 shortcuts.ts 自身静默。canStartRound 与「开始新一轮」按钮 disabled 条件
+  // 同源（§1.7）。onSend 通过 activeElement.form.requestSubmit 复用表单校验。
+  useEffect(() => {
+    return installPrimaryShortcut({
+      onSend: () => {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+          active.form?.requestSubmit();
+        }
+      },
+      onStartRound: () => intents.startRound.mutate(),
+      canStartRound: () =>
+        controlling &&
+        !concluding &&
+        !hasActiveRound &&
+        phase !== "concluded" &&
+        !intents.startRound.isPending,
+    });
+  }, [controlling, concluding, hasActiveRound, phase, intents.startRound]);
 
   if (!roomId) return <EmptyState title="缺少房间 ID" />;
   if (roomLoading) return <EmptyState title="加载中…" />;
@@ -331,7 +651,13 @@ export function RoomPage() {
   return (
     <div className="flex flex-col">
       <RoomHeader room={room} participants={participants ?? []} agents={agents ?? []} />
-      <ControlBanner state={controlState} notice={notice} />
+      <ControlBanner
+        state={controlState}
+        notice={notice}
+        controllerId={controllerId}
+        onTakeover={handleTakeover}
+        takeoverPending={takeoverPending}
+      />
       <ErrorBanner
         message={mutationError ? mutationError.message : null}
         onDismiss={dismissMutationError}
@@ -376,7 +702,7 @@ export function RoomPage() {
                   disabled={!controlling || intents.pauseRoom.isPending}
                   title={controlHint}
                 >
-                  {intents.pauseRoom.isPending ? "正在暂停…" : "暂停"}
+                  {intents.pauseRoom.isPending ? "正在暂停调度…" : "暂停调度"}
                 </Button>
               ) : null}
               {room.runState === "paused" ? (
@@ -385,7 +711,7 @@ export function RoomPage() {
                   disabled={!controlling || intents.resumeRoom.isPending}
                   title={controlHint}
                 >
-                  {intents.resumeRoom.isPending ? "正在继续…" : "继续"}
+                  {intents.resumeRoom.isPending ? "正在恢复调度…" : "恢复调度"}
                 </Button>
               ) : null}
               {/* R9: appended at the operation-row tail so existing button
@@ -439,6 +765,7 @@ export function RoomPage() {
           controlState={controlState}
           hasActiveRound={hasActiveRound}
           concluding={concluding}
+          roundGenerating={roundGenerating}
           sendUserMessage={intents.sendUserMessage}
         />
       ) : null}

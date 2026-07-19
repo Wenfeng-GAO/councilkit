@@ -94,7 +94,7 @@ export function PausedPanel({
     : null;
 
   const roomPaused = room?.runState === "paused";
-  const gateHint = roomPaused ? "（房已暂停，先点「继续」释放调度门）" : "";
+  const gateHint = roomPaused ? "（已暂停调度，先点『恢复调度』释放调度门）" : "";
 
   const closeConfirmSkip = () => {
     setConfirmSkipOpen(false);

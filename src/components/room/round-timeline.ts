@@ -54,7 +54,7 @@ export const ROUND_PHASE_LABELS: Record<RoundPhase, string> = {
   prewarming: "预热中",
   running: "进行中",
   summarizing: "总结中",
-  paused: "已暂停",
+  paused: "本轮已暂停",
   completed: "已完成",
   aborted: "已终止",
 };
@@ -83,7 +83,7 @@ export function roundPhaseTone(phase: RoundPhase): "muted" | "info" | "success" 
 export const ROOM_RUN_STATE_LABELS: Record<RoomRunState, string> = {
   idle: "空闲",
   running: "运行中",
-  paused: "已暂停",
+  paused: "已暂停调度",
 };
 
 export function roomRunStateLabel(runState: RoomRunState): string {

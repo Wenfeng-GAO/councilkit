@@ -9,7 +9,7 @@ interface RoomListItemProps {
 const RUN_STATE_PILL: Record<RoomRunState, { tone: "muted" | "info" | "warn"; text: string }> = {
   idle: { tone: "muted", text: "空闲" },
   running: { tone: "info", text: "运行中" },
-  paused: { tone: "warn", text: "已暂停" },
+  paused: { tone: "warn", text: "已暂停调度" },
 };
 
 export function RoomListItem({ room }: RoomListItemProps) {

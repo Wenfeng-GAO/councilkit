@@ -115,9 +115,11 @@ export async function expectObserverControlsDisabled(page: Page): Promise<void> 
   await expect(start).toBeVisible();
   await expect(start).toBeDisabled();
   // Round-scoped mutations are not rendered at all without an active round.
+  // (R9: 暂停调度/恢复调度 是 runState 调度门按钮的新词法——observer 页本轮无活动
+  // 轮故不渲染，count-0 断言改名前后均绿，同步以守 Q2 词法。)
   await expect(page.getByRole("button", { name: "停止生成" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "暂停", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "继续", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "暂停调度", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "恢复调度", exact: true })).toHaveCount(0);
   const input = page.getByRole("textbox", { name: "用户发言" });
   await expect(input).toBeDisabled();
   await expect(page.getByText("只读观察中，无法发言（另一页面正在控制）")).toBeVisible();

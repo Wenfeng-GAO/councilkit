@@ -1,4 +1,6 @@
+import { profileReadinessView } from "@/components/settings/view-model";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
@@ -6,10 +8,12 @@ import { Textarea } from "@/components/ui/Textarea";
 import { runtimeDb } from "@/lib/runtime-db";
 import type { DiscussionAgent, DiscussionMode, Participant } from "@/models/discussion/entities";
 import { createDiscussionRoom } from "@/models/discussion/factories";
-import { profileDigestOf } from "@/models/execution-profile";
+import { type ExecutionProfileRecord, profileDigestOf, toDto } from "@/models/execution-profile";
 import { initializeRoomDigest } from "@/orchestrator/context-snapshot";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { useAgents, useExecutionProfiles } from "@/stores/runtime-queries";
+import type { ProfileReadinessState } from "@shared/runtime/contracts";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -57,6 +61,47 @@ export function pickEnabledAgents(agents: readonly DiscussionAgent[]): Discussio
   return agents.filter((agent) => agent.enabled);
 }
 
+/**
+ * S8 预检 badge 判定（纯函数，parseMaxRoundsInput 先例）：profiles ready +
+ * agents ≥ 2 + facilitator 已选 → 此房间可运行。problems 顺序固定 agents →
+ * facilitator → profiles；建议性、不阻塞提交（prewarm 仍是权威门；探针可能
+ * 滞后）。profile 状态文案复用只读 profileReadinessView；state=undefined 归一
+ * 到「就绪状态未知（Host 离线或尚未探测）」。
+ */
+export interface RoomReadinessProblem {
+  kind: "agents" | "facilitator" | "profile";
+  message: string;
+}
+
+export function deriveRoomReadiness(input: {
+  agentCount: number;
+  facilitatorChosen: boolean;
+  profiles: ReadonlyArray<{ name: string; state: ProfileReadinessState | undefined }>;
+}): { ready: boolean; problems: RoomReadinessProblem[] } {
+  const problems: RoomReadinessProblem[] = [];
+  if (input.agentCount < 2) {
+    problems.push({ kind: "agents", message: "至少需要 2 个 Agent" });
+  }
+  if (!input.facilitatorChosen) {
+    problems.push({ kind: "facilitator", message: "尚未选择 Facilitator" });
+  }
+  for (const profile of input.profiles) {
+    if (profile.state === "ready") continue;
+    if (profile.state === undefined) {
+      problems.push({
+        kind: "profile",
+        message: `「${profile.name}」的就绪状态未知（Host 离线或尚未探测）`,
+      });
+    } else {
+      problems.push({
+        kind: "profile",
+        message: `「${profile.name}」未就绪：${profileReadinessView(profile.state).label}`,
+      });
+    }
+  }
+  return { ready: problems.length === 0, problems };
+}
+
 function Gate({ title, hint, ctaLabel, onCta }: GateProps) {
   return (
     <div className="mx-auto max-w-2xl px-6 py-8">
@@ -92,6 +137,71 @@ export function NewRoomPage() {
   const orderedSelected = selectedIds
     .map((id) => agentsById.get(id))
     .filter((agent): agent is DiscussionAgent => !!agent);
+
+  // S8 预检 badge（计划 §1.4）：选中后按 (profile, 该 profile 首个选中 agent 的
+  // modelId) 去重探针，复用 Settings readiness 握手口径。badge 建议性、不阻塞
+  // 提交（prewarm 仍是权威门；探针可能滞后）。
+  const client = useMemo(() => getAppRuntime().client, []);
+  const healthQuery = useQuery({
+    queryKey: ["host", "health"],
+    queryFn: () => client.health(),
+    refetchInterval: 5000,
+    retry: false,
+  });
+  const hostOnline = healthQuery.isPending ? null : healthQuery.isSuccess;
+  const readinessPairs = useMemo(() => {
+    const seen = new Set<string>();
+    const pairs: { profileId: string; modelId: string }[] = [];
+    for (const agent of orderedSelected) {
+      if (seen.has(agent.executionProfileId)) continue;
+      seen.add(agent.executionProfileId);
+      pairs.push({ profileId: agent.executionProfileId, modelId: agent.modelId });
+    }
+    return pairs;
+  }, [orderedSelected]);
+  const readinessQueries = useQueries({
+    queries: readinessPairs.map((pair) => {
+      const profile = profilesById.get(pair.profileId);
+      return {
+        queryKey: [
+          "host",
+          "profile-readiness",
+          pair.profileId,
+          profile?.revision ?? 0,
+          pair.modelId,
+        ],
+        // enabled 已门控 profile 存在；queryFn 内 current 必非空，as 断言安全
+        // （避免 noNonNullAssertion）。
+        queryFn: () => {
+          const current = profilesById.get(pair.profileId) as ExecutionProfileRecord;
+          return client.profileReadiness(toDto(current), pair.modelId);
+        },
+        enabled: hostOnline === true && !!profile,
+        staleTime: 30_000,
+        retry: false,
+      };
+    }),
+  });
+  const roomReadiness = useMemo(() => {
+    const profileStates: { name: string; state: ProfileReadinessState | undefined }[] =
+      readinessPairs.map((pair, index) => {
+        const profile = profilesById.get(pair.profileId);
+        // R3：Host 离线时 readiness 查询被 enabled=false 停用，但 TanStack 保留旧
+        // 成功缓存 → 离线后仍显示绿。派生输入在 hostOnline!==true 时统一归一到
+        // undefined，落入 deriveRoomReadiness 既有「就绪状态未知（Host 离线或尚未
+        // 探测）」分支，避免沿用过期缓存误导。
+        return {
+          name: profile?.name ?? "未知 Profile",
+          state: hostOnline === true ? readinessQueries[index]?.data?.readiness?.state : undefined,
+        };
+      });
+    return deriveRoomReadiness({
+      agentCount: orderedSelected.length,
+      facilitatorChosen:
+        facilitatorId !== null && orderedSelected.some((a) => a.id === facilitatorId),
+      profiles: profileStates,
+    });
+  }, [readinessPairs, readinessQueries, profilesById, orderedSelected, facilitatorId, hostOnline]);
 
   const toggleAgent = (agent: DiscussionAgent) => {
     setErrors((prev) => ({ ...prev, agents: undefined }));
@@ -380,6 +490,25 @@ export function NewRoomPage() {
           <p role="alert" className="text-sm text-error">
             创建房间失败: {submitError}
           </p>
+        ) : null}
+        {orderedSelected.length > 0 ? (
+          <div
+            data-testid="room-readiness"
+            className="flex flex-col gap-1 rounded border border-edge bg-surface px-3 py-2 text-xs"
+          >
+            {roomReadiness.ready ? (
+              <StatusPill tone="success" text="此房间可运行" />
+            ) : (
+              <>
+                <StatusPill tone="warn" text="此房间尚未就绪" />
+                <ul className="list-disc pl-5 text-muted">
+                  {roomReadiness.problems.map((problem) => (
+                    <li key={`${problem.kind}:${problem.message}`}>{problem.message}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         ) : null}
         <Button onClick={submit} disabled={pending}>
           {pending ? "创建中…" : "创建并进入"}

@@ -22,4 +22,24 @@
     @apply bg-bg text-fg antialiased;
     font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
+
+  /* S8 a11y：全局键盘焦点轮廓（accent token）。
+     层叠说明：Tailwind utilities 层晚于 base 层，TextInput 的 outline-none
+     （focus:border-accent 焦态）会覆盖本规则——有意保留输入框的边框焦态。 */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* S8 a11y：reduced-motion 下关闭非必要动画/过渡/平滑滚动。 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
