@@ -148,7 +148,8 @@ test.describe("scope controller and observer pages", () => {
     await expect(await summaryContent(pageB, 1)).toContainText(`reply-${claudePid}-3`);
 
     // Request audit: the observer page issued no mutation — GETs only — and
-    // it did open the read-only event stream for the live preview.
+    // it did open the read-only event stream for the live preview. The S8
+    // precheck badge is controller-only, so no readiness probe appears here.
     expect(apiRequests.length).toBeGreaterThan(0);
     expect(apiRequests.every((request) => request.method === "GET")).toBe(true);
     expect(apiRequests.some((request) => /\/executions\/[^/]+\/events/.test(request.url))).toBe(
@@ -208,10 +209,13 @@ test.describe("scope controller and observer pages", () => {
     await pageA.getByRole("button", { name: "开始新一轮" }).click();
     await expect(pausedPanel(pageA)).toBeVisible({ timeout: 20_000 });
     await expect(pausedPanel(pageA)).toContainText("第 3 轮已暂停：执行环境预热失败");
+    // S8直达：prewarm_failed 的修复链接直指 Installations 段锚点（Q2 词法 + 段级直达）。
     await pausedPanel(pageA)
-      .getByRole("link", { name: "前往 Runtime 设置检查 Installation 与登录状态" })
+      .getByRole("link", {
+        name: "前往 Runtime 设置的 Installations 段检查 Installation 与登录状态",
+      })
       .click();
-    await pageA.waitForURL(/\/settings$/);
+    await pageA.waitForURL(/\/settings#settings-installations$/);
     await expect(pageA.getByRole("heading", { name: "设置" })).toBeVisible();
   });
 
@@ -242,12 +246,13 @@ test.describe("scope controller and observer pages", () => {
     await pageA.getByRole("button", { name: "开始新一轮" }).click();
     await expect(pausedPanel(pageA)).toBeVisible({ timeout: 20_000 });
     await expect(pausedPanel(pageA)).toContainText("第 2 轮已暂停：执行环境预热失败");
+    // S8直达：prewarm_failed 修复链接直指 Installations 段锚点（段级直达，hash-scroll effect 接续）。
     await expect(
       pausedPanel(pageA).getByRole("link", {
-        name: "前往 Runtime 设置检查 Installation 与登录状态",
+        name: "前往 Runtime 设置的 Installations 段检查 Installation 与登录状态",
       }),
     ).toBeVisible();
-    await waitRoundPhase(pageA, 2, "已暂停");
+    await waitRoundPhase(pageA, 2, "本轮已暂停");
     await expect(pageA.getByRole("heading", { name: "E2E Host 离线" })).toBeVisible();
 
     // Recover: unroute, end the paused round, and a fresh round completes;

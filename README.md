@@ -89,6 +89,13 @@ pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
 
 注意：真实冒烟与 `pnpm test` 不得并发运行（两者都会占用固定端口与真实 CLI 资源）。
 
+## 快捷键
+
+房间页支持两个全局快捷键（弹窗打开时静默）：
+
+- **⌘/Ctrl + Enter**：焦点在发言框 → 发送当前输入；其他焦点 → 开始新一轮（首次为「发起讨论」）。发送复用发言框既有校验（内容非空、未禁用），不会绕过门控。
+- **Esc**：关闭当前弹窗（既有行为，由弹窗组件自身处理）。
+
 ## 架构
 
 - 调用链：RoomPage → 持久化 Discussion Orchestrator → Runtime Client → Runtime Host → Participant Driver 进程。UI 不拥有 Round 生命周期；Host 不理解 Room/Round 语义。

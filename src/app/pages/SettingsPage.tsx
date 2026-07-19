@@ -23,8 +23,8 @@ import { runtimeKeys, useAgents, useExecutionProfiles } from "@/stores/runtime-q
 import { CREDENTIAL_MODE, type DriverId } from "@shared/runtime/contracts";
 import type { ClaudeRoute, ProfileReadiness } from "@shared/runtime/schemas";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 
 /**
  * S7（S1 登记雷修复）：Agent 编辑合并。`createDiscussionAgent` 工厂恒产
@@ -127,6 +127,21 @@ export async function submitAgentEdit(
 export function SettingsPage() {
   const { client } = getAppRuntime();
   const queryClient = useQueryClient();
+
+  // S8 hash-scroll（裁决 #1）：React Router 客户端导航不滚 hash（RoomPage #report
+  // 手写 effect 先例）。paused 面板的「直达链接」指向 #settings-installations /
+  // #settings-agents，此处效果等价把对应 section 滚入视口。reduced-motion 下
+  // 用 "auto"（globals.css 媒体查询管不到 JS 动画）。
+  const settingsLocation = useLocation();
+  useEffect(() => {
+    if (!settingsLocation.hash) return;
+    const node = document.getElementById(settingsLocation.hash.slice(1));
+    if (!node) return;
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    node.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
+  }, [settingsLocation.hash]);
 
   // S5 (R2): a manual "重新检查" forces refresh=1 (bypass the Host probe cache
   // + failure backoff) for both readiness and catalog. The button is disabled

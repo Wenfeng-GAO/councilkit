@@ -8,7 +8,11 @@ import type { RoundPauseReason } from "@/models/discussion/entities";
  */
 
 export interface PauseRepairEntry {
-  href: "/settings" | "/rooms/new";
+  href:
+    | "/settings"
+    | "/settings#settings-installations"
+    | "/settings#settings-agents"
+    | "/rooms/new";
   label: string;
 }
 
@@ -21,13 +25,15 @@ export interface PauseReasonCopy {
   repair: PauseRepairEntry[];
 }
 
+// S8 直达链接：段级锚点对齐 SettingsPage 的 section id（settings-installations /
+// settings-agents），SettingsPage 的 hash-scroll effect 在段 2 补齐后即直达。
 const SETTINGS_PROFILES: PauseRepairEntry = {
-  href: "/settings",
-  label: "前往 Runtime 设置检查 Installation 与登录状态",
+  href: "/settings#settings-installations",
+  label: "前往 Runtime 设置的 Installations 段检查 Installation 与登录状态",
 };
 const SETTINGS_MODEL: PauseRepairEntry = {
-  href: "/settings",
-  label: "前往设置检查 Agent 的 Profile 与 modelId",
+  href: "/settings#settings-agents",
+  label: "前往设置的 Agents 段检查该 Agent 的 Profile 与 modelId",
 };
 const NEW_ROOM: PauseRepairEntry = { href: "/rooms/new", label: "重新开始一个新房间" };
 

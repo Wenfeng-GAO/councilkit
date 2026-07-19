@@ -1,5 +1,8 @@
+import { deriveRoomReadiness } from "@/app/pages/NewRoomPage";
 import { UsageBadge, aggregateUsage } from "@/components/room/UsageBadge";
 import {
+  isFailedExecution,
+  isSkippedFailure,
   resolveSpeaker,
   roomRunStateLabel,
   roomRunStateTone,
@@ -13,12 +16,19 @@ import type {
   DiscussionRound,
   Participant,
 } from "@/models/discussion/entities";
+import type { ModelExecution } from "@/models/discussion/model-execution";
+import { type ExecutionProfileRecord, toDto } from "@/models/execution-profile";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
 import { useRuntimeDiscussionStore } from "@/stores/runtime-discussion";
 import { useControlState, useRoomIntents } from "@/stores/runtime-intents";
-import { useActiveRuntimeBindings, useRoomRecoveryFacts } from "@/stores/runtime-queries";
-import { QUOTAS } from "@shared/runtime/contracts";
+import {
+  useActiveRuntimeBindings,
+  useExecutionProfiles,
+  useRoomRecoveryFacts,
+} from "@/stores/runtime-queries";
+import { type ProfileReadinessState, QUOTAS } from "@shared/runtime/contracts";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 
 interface RoomHeaderProps {
@@ -71,6 +81,79 @@ const TERMINAL_ROUND_PHASES = new Set(["completed", "aborted"]);
  * blocks release. Exported for direct unit coverage of every phase. */
 export function isUnresolvedActiveRoundPhase(phase: DiscussionRound["phase"]): boolean {
   return !TERMINAL_ROUND_PHASES.has(phase);
+}
+
+// ---------------------------------------------------------------------------
+// S8 Participant 本轮状态条（纯推导，零新增状态机）：四态是对 participantOrder
+// 的干净划分——activeExecution 指向本人且 live → generating；本轮有 committed
+// message → done；终态失败 message + 无 committed → 复用 isSkippedFailure 判
+// skipped/failed；其余 waiting。无需显式 cursor 比较（plan-a §1.2 单测断言等价）。
+// ---------------------------------------------------------------------------
+
+export type ParticipantRoundStatus = "waiting" | "generating" | "done" | "failed" | "skipped";
+
+export const PARTICIPANT_STATUS_LABELS: Record<ParticipantRoundStatus, string> = {
+  waiting: "等待中",
+  generating: "生成中",
+  done: "已完成",
+  failed: "失败",
+  skipped: "已跳过",
+};
+
+/** Derive one Participant's status in the active round (S8). Returns null when
+ * there is no active round or the Participant is not in its order (between
+ * rounds / late joiners) so the strip renders only the name. 规则见上方分节。 */
+export function deriveParticipantRoundStatus(input: {
+  participantId: string;
+  round: DiscussionRound | null;
+  /** Room executions; the function filters to the active round internally. */
+  executions: readonly ModelExecution[];
+  /** Room rounds, for the isSkippedFailure cursor lookup（与时间线「· 已跳过」
+   * 标记同口径）。 */
+  rounds: readonly DiscussionRound[];
+}): ParticipantRoundStatus | null {
+  const { participantId, round, executions, rounds } = input;
+  if (!round || !round.participantOrder.includes(participantId)) return null;
+
+  const roundExecutions = executions.filter((execution) => execution.roundId === round.id);
+
+  // generating：activeExecution 指向本人且 live。覆盖发言中、summarizing 与
+  // focus 阶段的 facilitator（其 summary/focus execution 的 participantId 即
+  // facilitator）；terminal 态的 activeExecution 不计（落入后续规则）。
+  const activeExecution = round.activeExecutionId
+    ? roundExecutions.find((execution) => execution.executionId === round.activeExecutionId)
+    : undefined;
+  if (
+    activeExecution &&
+    activeExecution.participantId === participantId &&
+    LIVE_EXECUTION_STATES.has(activeExecution.state)
+  ) {
+    return "generating";
+  }
+
+  // done：本轮存在 committed message。focus 的 committedEntityType 虽为 message
+  // 但 resultKind="focus"，不会把 facilitator 误判 done。
+  const hasCommittedMessage = roundExecutions.some(
+    (execution) =>
+      execution.participantId === participantId &&
+      execution.resultKind === "message" &&
+      execution.state === "committed",
+  );
+  if (hasCommittedMessage) return "done";
+
+  // failed/skipped：终态失败 message + 无 committed —— isSkippedFailure 同口径
+  // （cursor 已越过 → skipped；未越过 → failed）。
+  const failedMessageExecution = roundExecutions.find(
+    (execution) =>
+      execution.participantId === participantId &&
+      execution.resultKind === "message" &&
+      isFailedExecution(execution),
+  );
+  if (failedMessageExecution) {
+    return isSkippedFailure(failedMessageExecution, rounds, executions) ? "skipped" : "failed";
+  }
+
+  return "waiting";
 }
 
 /** Room header (U6): topic, runState + mode + status pills (text labels, not
@@ -256,6 +339,86 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
   const releaseDisabled = !gate.allowed || releasePending;
   const nearQuota = activeScopeCount >= maxActiveScopes - 1;
 
+  // S8 预检 badge（计划 §1.4）：active participants 的 (executionProfileId,
+  // modelId 快照) 去重探针，复用 Settings 的 readiness 握手口径（host 60s 缓存、
+  // retry:false、staleTime:30s）。derived problems → warn pill；全 ready → success
+  // pill「此房间可运行」。concluded 不渲染。建议性，不阻塞操作。
+  // 仅 controlling 页渲染并探针：observer 页不渲染——§578「observer 只发 GET」
+  // 的只读契约禁止 observer 触发 Host 探针工作，且「可运行」提示面向可行动者。
+  const client = useMemo(() => getAppRuntime().client, []);
+  const healthQuery = useQuery({
+    queryKey: ["host", "health"],
+    queryFn: () => client.health(),
+    refetchInterval: 5000,
+    retry: false,
+  });
+  const hostOnline = healthQuery.isPending ? null : healthQuery.isSuccess;
+  const profilesQuery = useExecutionProfiles();
+  const profiles = useMemo(() => profilesQuery.data ?? [], [profilesQuery.data]);
+  // pairs 去重：(profileId, modelId)。badge 只探参与本轮的 profile × 该快照 modelId。
+  const readinessPairs = useMemo(() => {
+    const seen = new Set<string>();
+    const pairs: { profileId: string; modelId: string }[] = [];
+    for (const participant of active) {
+      const key = `${participant.executionProfileId}::${participant.modelId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ profileId: participant.executionProfileId, modelId: participant.modelId });
+    }
+    return pairs;
+  }, [active]);
+  const readinessQueries = useQueries({
+    queries: readinessPairs.map((pair) => {
+      const profile = profiles.find((candidate) => candidate.id === pair.profileId);
+      return {
+        queryKey: [
+          "host",
+          "profile-readiness",
+          pair.profileId,
+          profile?.revision ?? 0,
+          pair.modelId,
+        ],
+        // enabled 门控 profile 存在；queryFn 内 current 必非空，as 断言安全
+        // （避免 noNonNullAssertion）。
+        queryFn: () => {
+          const current = profiles.find(
+            (candidate) => candidate.id === pair.profileId,
+          ) as ExecutionProfileRecord;
+          return client.profileReadiness(toDto(current), pair.modelId);
+        },
+        enabled: controlling && hostOnline === true && !!profile,
+        staleTime: 30_000,
+        retry: false,
+      };
+    }),
+  });
+  const roomReadiness = useMemo(() => {
+    const profileStates: { name: string; state: ProfileReadinessState | undefined }[] =
+      readinessPairs.map((pair, index) => {
+        const profile = profiles.find((candidate) => candidate.id === pair.profileId);
+        // R3：Host 离线时 readiness 查询 enabled=false 停用，但 TanStack 保留旧成功
+        // 缓存 → 离线后仍显绿。派生输入在 hostOnline!==true 时归一到 undefined，落入
+        // deriveRoomReadiness 既有「就绪状态未知」分支，避免沿用过期缓存。
+        return {
+          name: profile?.name ?? "未知 Profile",
+          state: hostOnline === true ? readinessQueries[index]?.data?.readiness?.state : undefined,
+        };
+      });
+    return deriveRoomReadiness({
+      agentCount: active.length,
+      facilitatorChosen: participants.some((p) => p.id === room.facilitatorParticipantId),
+      profiles: profileStates,
+    });
+  }, [
+    readinessPairs,
+    readinessQueries,
+    profiles,
+    active.length,
+    participants,
+    room.facilitatorParticipantId,
+    hostOnline,
+  ]);
+
   return (
     <header className="border-b border-edge px-6 py-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -276,6 +439,23 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
         </span>
         <UsageBadge totals={roomUsageTotals} />
         {nearQuota ? <StatusPill tone="warn" text="接近运行时上限，建议先释放不用的房间" /> : null}
+        {controlling && room.status !== "concluded" ? (
+          <span
+            data-testid="room-readiness"
+            className="inline-flex flex-wrap items-center gap-1.5 text-xs"
+          >
+            {roomReadiness.ready ? (
+              <StatusPill tone="success" text="此房间可运行" />
+            ) : (
+              <>
+                <StatusPill tone="warn" text="此房间未就绪" />
+                <span className="text-muted">
+                  {roomReadiness.problems.map((problem) => problem.message).join("；")}
+                </span>
+              </>
+            )}
+          </span>
+        ) : null}
         {warm ? (
           <Button
             variant="ghost"
@@ -296,9 +476,18 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
         <ul className="mt-2 flex flex-wrap gap-2" aria-label="参与者">
           {active.map((participant) => {
             const speaker = resolveSpeaker(participant.id, participantsById, agentsById);
+            const status = deriveParticipantRoundStatus({
+              participantId: participant.id,
+              round: activeRound ?? null,
+              executions: recovery?.executions ?? [],
+              rounds: recovery?.rounds ?? [],
+            });
+            const statusLabel = status ? PARTICIPANT_STATUS_LABELS[status] : null;
             return (
               <li
                 key={participant.id}
+                tabIndex={statusLabel ? 0 : undefined}
+                aria-label={statusLabel ? `${speaker.name}：${statusLabel}` : speaker.name}
                 className="flex items-center gap-1.5 rounded border border-edge bg-surface px-2 py-1 text-xs text-fg"
               >
                 <span
@@ -307,6 +496,7 @@ export function RoomHeader({ room, participants, agents }: RoomHeaderProps) {
                   aria-hidden="true"
                 />
                 {speaker.name}
+                {statusLabel ? <span className="text-muted">· {statusLabel}</span> : null}
               </li>
             );
           })}
