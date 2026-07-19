@@ -17,6 +17,7 @@ import type {
 import type { InstallationRecord } from "@host/installations/registry";
 import { createLogger } from "@host/logging";
 import { type ProcessSupervisor, createProcessSupervisor } from "@host/process/process-supervisor";
+import { buildBinding } from "@host/profiles/resolver";
 import type { ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -422,6 +423,38 @@ describe("claude-stream-json driver protocol", () => {
     if (terminal.type !== "completed") throw new Error("unreachable");
     expect(terminal.effectiveModel).toBe("k3");
     expect(terminal.modelVerdict).toBe("match");
+  });
+
+  it("keeps existing Moonshot K3 agents ready after the provider model-id drift", async () => {
+    const legacyModelIds = ["k3[1m]", "Kimi-K3[1m]", "Kimi-K3"];
+    for (const modelId of legacyModelIds) {
+      const spec: ParticipantSpec = {
+        participantId: "p-1",
+        profile: {
+          driverId: "claude-stream-json",
+          installationId: "fake-cld",
+          credentialMode: "installation-managed",
+          options: { route: "moonshot" },
+        },
+        modelId,
+      };
+      const rig = await createRig({
+        spec,
+        config: {
+          initModel: "k3",
+          catalog: [
+            { value: "default", resolvedModel: "k3" },
+            { value: "opus[1m]", resolvedModel: "k3[1m]" },
+            { value: "k3", resolvedModel: "k3" },
+          ],
+        },
+      });
+
+      const binding = buildBinding(spec, makeInstallation(), rig.prewarmResult);
+      expect(binding.readiness).toEqual({ state: "ready", detail: null });
+      expect(binding.binding?.requestedModel).toBe(modelId);
+      expect(binding.binding?.canonicalModelId).toBe("k3");
+    }
   });
 
   it("rejects prewarm when the route's declared serving model left the catalog", async () => {

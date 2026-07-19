@@ -46,6 +46,12 @@ interface RouteDef {
    */
   servesModel?: string;
   /**
+   * Explicit provider aliases accepted for existing Agent records. These are
+   * binding-time compatibility names only: execution always uses
+   * `servesModel`, so result verification remains canonical and strict.
+   */
+  modelAliases?: readonly string[];
+  /**
    * Provider-declared context window class (the catalog ids' `[1m]` suffix =
    * 1M tokens). The Session Reconciler's 50% cumulative-input threshold uses
    * this instead of its 64k unknown-window default — reporting null here
@@ -67,6 +73,7 @@ const ROUTES: Record<ClaudeRoute, RouteDef> = {
   moonshot: {
     argv: ["moonshot"],
     servesModel: "k3",
+    modelAliases: ["k3[1m]", "Kimi-K3[1m]", "Kimi-K3"],
     contextWindowTokens: 1_000_000,
   },
   deepseek: { argv: ["deepseek"], contextWindowTokens: 1_000_000 },
@@ -584,6 +591,10 @@ export function createClaudeStreamJsonDriver(
       return route;
     }
 
+    function currentModelAliases(): string[] {
+      return ["default", ...(ROUTES[currentRoute()].modelAliases ?? [])];
+    }
+
     async function respawn(reason: string): Promise<void> {
       logger.warn("claude.respawn", { participantId, reason });
       const old = process;
@@ -709,7 +720,7 @@ export function createClaudeStreamJsonDriver(
           // Idempotent prewarm: re-handshake only after a crash.
           return {
             canonicalModelId: canonicalModel ?? input.spec.modelId,
-            modelAliases: ["default"],
+            modelAliases: currentModelAliases(),
             capability: { protocol: "claude-stream-json", controlInitialize: true },
             catalog,
           };
@@ -723,7 +734,7 @@ export function createClaudeStreamJsonDriver(
         }
         return {
           canonicalModelId: canonicalModel ?? input.spec.modelId,
-          modelAliases: ["default"],
+          modelAliases: currentModelAliases(),
           capability: { protocol: "claude-stream-json", controlInitialize: true },
           catalog,
         };
