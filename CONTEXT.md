@@ -80,6 +80,14 @@ _Avoid_: closed、finished、archived
 两个独立维度：Room 的用户调度门（idle / running / paused，UI 称「已暂停调度」）与 Round 的状态机（UI 称「本轮已暂停」）。暂停调度不改写 Round 的 phase，暂停 Round 不改变 Room 的门。
 _Avoid_: 用「暂停」同时指代两者
 
+**Idle Scope**:
+Execution Scope 进入空闲后的回收判据：最后一个 Model Execution 结束超过 `idleScopeTtlMs`（默认 30 分钟）后，Runtime Host 自动 close 该 Scope 的预热资源，浏览器侧下一次开轮走冷建恢复。它不是用户意图，而是一个后台超时；在 TTL 之前 Scope 仍保持 warm 并可被复用。
+_Avoid_: Release Runtime、pauseRoom、Session discard
+
+**Release Runtime**:
+用户显式释放当前 Room 的 warm Execution Scope 的意图（UI「释放运行时」）：仅当没有活动 Model Execution 时允许，立即 close 预热资源，下一轮 `startRound` 经 ensureScope 冷建续跑。与 Idle Scope 的自动超时不同，这是用户主动行为；与 pauseRoom 不同，它不动 Room 的调度门，只是回收执行资源。
+_Avoid_: Idle Scope、pauseRoom、delete Room
+
 ## Example dialogue
 
 > **开发者**：房间需要直接连接 Codex 吗？

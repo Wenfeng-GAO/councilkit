@@ -1,0 +1,164 @@
+{
+  "tool": "live-runtime-smoke",
+  "generatedAt": "2026-07-19T08:27:32.637Z",
+  "mode": "real",
+  "soak": true,
+  "roundsRequested": 2,
+  "node": "v22.17.0",
+  "partial": false,
+  "ok": true,
+  "rows": [
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 2,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 5038,
+        "codex": 9643
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          10066
+        ],
+        "codex": [
+          14943,
+          13579,
+          3760,
+          7202,
+          5035
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": false,
+      "soak": null,
+      "findings": [],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    },
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 1,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 5230,
+        "codex": 12119
+      },
+      "warmFirstDeltaMs": {
+        "claude": [],
+        "codex": [
+          15346,
+          6435,
+          3252
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": true,
+      "soak": {
+        "roundsDone": 1,
+        "elapsedMs": 76428,
+        "rotations": 0,
+        "rotationDetails": [],
+        "externalInterruptions": [],
+        "spawnStable": true,
+        "codexThreadStable": true,
+        "uniqueRoundOutputs": true
+      },
+      "findings": [
+        "designed conclusion at round 2: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2)."
+      ],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    }
+  ]
+}

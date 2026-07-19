@@ -1,0 +1,181 @@
+{
+  "tool": "live-runtime-smoke",
+  "generatedAt": "2026-07-19T09:19:38.234Z",
+  "mode": "real",
+  "soak": true,
+  "roundsRequested": 2,
+  "node": "v22.17.0",
+  "partial": false,
+  "ok": false,
+  "rows": [
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 1,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 10500,
+        "codex": 9809
+      },
+      "warmFirstDeltaMs": {
+        "claude": [],
+        "codex": [
+          5989,
+          9719,
+          2812
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": true,
+      "soak": null,
+      "findings": [
+        "designed conclusion at round 2: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2)."
+      ],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    },
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": false,
+      "failure": "round 4: execution not committed (state=failed, outcome=n/a, requested=gpt-5.6-sol, effective=unknown)",
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 4,
+        "completed": 2,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 0
+      },
+      "coldFirstDeltaMs": {
+        "claude": 3173,
+        "codex": 9952
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          6797
+        ],
+        "codex": [
+          24509,
+          9998,
+          11345,
+          9888,
+          6545,
+          10452,
+          14468,
+          12669
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": true,
+      "soak": {
+        "roundsDone": 3,
+        "elapsedMs": 144082,
+        "rotations": 0,
+        "rotationDetails": [],
+        "externalInterruptions": [],
+        "spawnStable": true,
+        "codexThreadStable": true,
+        "uniqueRoundOutputs": true,
+        "rooms": [
+          {
+            "index": 0,
+            "roundsCompleted": 1,
+            "designedConclusion": true,
+            "rotations": 0
+          }
+        ],
+        "totalRoundsCompleted": 2,
+        "roomsCreated": 2
+      },
+      "findings": [
+        "designed conclusion at round 2: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2)."
+      ],
+      "notes": []
+    }
+  ]
+}

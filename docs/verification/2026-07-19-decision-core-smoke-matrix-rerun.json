@@ -1,0 +1,203 @@
+{
+  "tool": "live-runtime-smoke",
+  "generatedAt": "2026-07-19T07:57:31.958Z",
+  "mode": "real",
+  "soak": false,
+  "roundsRequested": 2,
+  "node": "v22.17.0",
+  "partial": false,
+  "ok": false,
+  "rows": [
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 1,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 3205,
+        "codex": 11590
+      },
+      "warmFirstDeltaMs": {
+        "claude": [],
+        "codex": [
+          10829,
+          3376,
+          6050
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": true,
+      "soak": null,
+      "findings": [
+        "designed conclusion at round 2: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2)."
+      ],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    },
+    {
+      "route": "moonshot",
+      "mode": "real",
+      "ok": false,
+      "failure": "round 1 did not complete (phase=paused, paused: execution_failed — No enqueue replay within the dispatch window.). A requested/effective mismatch or unknown tool state pauses per product semantics; the row FAILS and is never papered over.",
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "Kimi-K3[1m]",
+          "effective": []
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": []
+        }
+      },
+      "rounds": {
+        "attempted": 1,
+        "completed": 0,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 0
+      },
+      "coldFirstDeltaMs": {
+        "claude": null,
+        "codex": null
+      },
+      "warmFirstDeltaMs": {
+        "claude": [],
+        "codex": []
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": false,
+      "soak": null,
+      "findings": [],
+      "notes": []
+    },
+    {
+      "route": "deepseek",
+      "mode": "real",
+      "ok": true,
+      "failure": null,
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "deepseek-v4-pro[1m]",
+          "effective": [
+            "deepseek-v4-pro[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 1,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 4
+      },
+      "coldFirstDeltaMs": {
+        "claude": 2406,
+        "codex": 11283
+      },
+      "warmFirstDeltaMs": {
+        "claude": [],
+        "codex": [
+          13771,
+          3852,
+          4013
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": true,
+      "soak": null,
+      "findings": [
+        "designed conclusion at round 2: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2)."
+      ],
+      "notes": [
+        "Codex approval-type server requests are answered {decision: denied} unconditionally (driver handleServerRequest), and thread/start fixes approvalPolicy=never with sandbox=read-only on a participant-dedicated cwd. No approval request arrived during this run.",
+        "Sentinel write-attempt is out of scope; asserted from Host-surfaced signals (zero fileChange activity under the read-only sandbox). Residual risk (plan §588): local file reads and network access may still be governed by the user's own Codex configuration — accepted and documented."
+      ]
+    }
+  ]
+}

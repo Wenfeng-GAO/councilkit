@@ -1,0 +1,213 @@
+{
+  "tool": "live-runtime-smoke",
+  "generatedAt": "2026-07-19T09:30:24.817Z",
+  "mode": "real",
+  "soak": true,
+  "roundsRequested": 2,
+  "node": "v22.17.0",
+  "partial": false,
+  "ok": false,
+  "rows": [
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": false,
+      "failure": "round 2: execution not committed (state=failed, outcome=n/a, requested=gpt-5.6-sol, effective=unknown)",
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 2,
+        "completed": 1,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 0
+      },
+      "coldFirstDeltaMs": {
+        "claude": 1819,
+        "codex": 19382
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          7141
+        ],
+        "codex": [
+          11510,
+          9049,
+          9926,
+          7861,
+          9188
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": false,
+      "soak": null,
+      "findings": [],
+      "notes": []
+    },
+    {
+      "route": "ant-glm5.2",
+      "mode": "real",
+      "ok": false,
+      "failure": "round 8: execution not committed (state=failed, outcome=n/a, requested=gpt-5.6-sol, effective=unknown)",
+      "installations": {
+        "claude": "cld-178240c6225e",
+        "codex": "codex-fdd3ce2d94ea"
+      },
+      "models": {
+        "claude": {
+          "requested": "GLM-5.2[1m]",
+          "effective": [
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]",
+            "GLM-5.2[1m]"
+          ]
+        },
+        "codex": {
+          "requested": "gpt-5.6-sol",
+          "effective": [
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol",
+            "gpt-5.6-sol"
+          ]
+        }
+      },
+      "rounds": {
+        "attempted": 8,
+        "completed": 4,
+        "participantOrderOk": true,
+        "summariesOk": true
+      },
+      "spawnCounts": {
+        "claude": 1,
+        "codex": 1,
+        "probes": 0
+      },
+      "coldFirstDeltaMs": {
+        "claude": 7719,
+        "codex": 13959
+      },
+      "warmFirstDeltaMs": {
+        "claude": [
+          11164
+        ],
+        "codex": [
+          9648,
+          8937,
+          5335,
+          7264,
+          7824,
+          7991,
+          5222,
+          8038,
+          7697,
+          4853,
+          4058,
+          7441,
+          11016,
+          19107
+        ]
+      },
+      "ackLeaks": 0,
+      "closeClean": true,
+      "approval": {
+        "deniedByPolicy": true,
+        "declinedRequests": 0
+      },
+      "sentinel": {
+        "protected": true,
+        "fileChangeActivities": 0
+      },
+      "designedConclusion": true,
+      "soak": {
+        "roundsDone": 7,
+        "elapsedMs": 297634,
+        "rotations": 0,
+        "rotationDetails": [],
+        "externalInterruptions": [],
+        "spawnStable": true,
+        "codexThreadStable": true,
+        "uniqueRoundOutputs": true,
+        "rooms": [
+          {
+            "index": 0,
+            "roundsCompleted": 1,
+            "designedConclusion": true,
+            "rotations": 0
+          },
+          {
+            "index": 1,
+            "roundsCompleted": 1,
+            "designedConclusion": true,
+            "rotations": 0
+          },
+          {
+            "index": 2,
+            "roundsCompleted": 1,
+            "designedConclusion": true,
+            "rotations": 0
+          }
+        ],
+        "totalRoundsCompleted": 4,
+        "roomsCreated": 4
+      },
+      "findings": [
+        "designed conclusion at round 2: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2).",
+        "designed conclusion at round 4: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2).",
+        "designed conclusion at round 6: real-model convergence vote (=是 on a summary last line, ≥1 completed round) drove one facilitator Decision Report + room.concluded — a designed terminal state, not a defect (per plan-a §5 risk 1 / ruling #2)."
+      ],
+      "notes": []
+    }
+  ]
+}
