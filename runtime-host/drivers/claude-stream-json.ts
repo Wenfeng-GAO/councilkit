@@ -22,7 +22,7 @@ import type {
  * (2026-07): control `initialize` handshakes without a model call and yields
  * the resolvedModel catalog; the canonical model is the catalog `default`,
  * unless the route declares its verified serving model (`servesModel`, e.g.
- * moonshot → Kimi-K3[1m]) — still closed-set against the catalog. `system/init`
+ * moonshot → k3) — still closed-set against the catalog. `system/init`
  * (first turn) must show empty tools/MCP/skills/slash commands; user-message
  * replay confirms enqueue; `result.result` is the authoritative output;
  * usage/cost are cumulative and reported as per-turn diffs.
@@ -57,16 +57,16 @@ interface RouteDef {
 /**
  * Closed route set: model selection comes only from this explicit mapping.
  * moonshot's catalog default is claude-opus-4-8[1m], but the route's serving
- * model is provider-side and drifts: Kimi-K2.5 (verified 2026-07-17) was
- * replaced by Kimi-K3[1m] (verified 2026-07-18 — the provider dropped
- * Kimi-K2.5 from the handshake catalog; declaration updated per the plan's
- * drift-remedy precedent).
+ * model is provider-side and drifts: Kimi-K2.5 (verified 2026-07-17) →
+ * Kimi-K3[1m] (verified 2026-07-18) → k3 (verified 2026-07-19 — the provider
+ * now rejects Kimi-K3[1m]/Kimi-K3 with 401 and requires `k3`/`kimi-k3`;
+ * Kimi-K2.5 is accepted again. cld mapping fixed in lockstep).
  */
 const ROUTES: Record<ClaudeRoute, RouteDef> = {
   "ant-glm5.2": { argv: ["ant", "glm5.2"], contextWindowTokens: 1_000_000 },
   moonshot: {
     argv: ["moonshot"],
-    servesModel: "Kimi-K3[1m]",
+    servesModel: "k3",
     contextWindowTokens: 1_000_000,
   },
   deepseek: { argv: ["deepseek"], contextWindowTokens: 1_000_000 },

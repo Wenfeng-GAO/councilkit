@@ -393,34 +393,34 @@ describe("claude-stream-json driver protocol", () => {
           credentialMode: "installation-managed",
           options: { route: "moonshot" },
         },
-        modelId: "Kimi-K3[1m]",
+        modelId: "k3",
       },
       config: {
-        // The route serves Kimi-K3[1m] while the catalog default is Opus —
-        // mirrors the live moonshot installation (drift-verified 2026-07-18).
-        initModel: "Kimi-K3[1m]",
+        // The route serves k3 while the catalog default is Opus —
+        // mirrors the live moonshot installation (drift-verified 2026-07-19).
+        initModel: "k3",
         catalog: [
           { value: "default", resolvedModel: "claude-opus-4-8[1m]" },
           { value: "opus[1m]", resolvedModel: "claude-opus-4-8[1m]" },
-          { value: "Kimi-K3[1m]", resolvedModel: "Kimi-K3[1m]" },
+          { value: "k3", resolvedModel: "k3" },
         ],
       },
     });
     // Canonical is the route's declared serving model, not the catalog default.
-    expect(rig.prewarmResult.canonicalModelId).toBe("Kimi-K3[1m]");
+    expect(rig.prewarmResult.canonicalModelId).toBe("k3");
     // The route declares its provider window class (no 64k false-throttle).
     expect(rig.driver.contextWindowTokens()).toBe(1_000_000);
     const run = executeCollecting(rig.driver, {
       executionId: "exec-1",
       prompt: "Hello.",
-      modelId: "Kimi-K3[1m]",
+      modelId: "k3",
       coldStart: true,
     });
     await run.done;
     const terminal = terminalOf(run.events);
     expect(terminal.type).toBe("completed");
     if (terminal.type !== "completed") throw new Error("unreachable");
-    expect(terminal.effectiveModel).toBe("Kimi-K3[1m]");
+    expect(terminal.effectiveModel).toBe("k3");
     expect(terminal.modelVerdict).toBe("match");
   });
 
@@ -435,7 +435,7 @@ describe("claude-stream-json driver protocol", () => {
             credentialMode: "installation-managed",
             options: { route: "moonshot" },
           },
-          modelId: "Kimi-K3[1m]",
+          modelId: "k3",
         },
         config: {
           initModel: "claude-opus-4-8[1m]",

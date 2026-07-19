@@ -15,7 +15,7 @@ V1 已交付物：
 - **管理面**：房间删除/重命名/复制（级联清零、legacy 零读取）；Agent 启停/导入导出/就绪握手测试；用量 badge。
 - **体验打磨**：通知/标题/favicon 感知、参与者状态、接管与预检 UI、快捷键、无障碍。
 
-门状态（验收时点）：`pnpm typecheck` 三程序全绿、`pnpm lint` 全绿、`pnpm test`（vitest 全量）全绿、`pnpm test:e2e`（Chromium）40/40 两遍无 flake；真实冒烟矩阵 `--route all` 2/3 ok（moonshot 行外部环境阻塞，已隔离定性、不替代通过）；soak 跨房间生命周期已验证，**≥15min 持续负载合同由 claude(cld)-facilitator 变体达成（932372ms、15 轮、10 房、不变量全绿）**，codex-facilitator 变体受 codex app-server 长会话边界未决故障外部阻塞（补齐性质），结果见 `docs/verification/2026-07-18-decision-core-acceptance.md`（不宣称「全量通过」——三个显式开放项：moonshot 待 cld 侧、codex-facilitator soak 变体待稳定窗口补齐、launchd 崩溃拉起待用户）。
+门状态（验收时点）：`pnpm typecheck` 三程序全绿、`pnpm lint` 全绿、`pnpm test`（vitest 全量）全绿、`pnpm test:e2e`（Chromium）40/40 两遍无 flake；**真实冒烟矩阵 `--route all` 3/3 全通**（ant/deepseek 首轮通过；moonshot 外部环境阻塞经直连探测确诊 provider K3 id 二次漂移，cld+本仓映射修复后重跑通过）；soak 跨房间生命周期已验证，**≥15min 持续负载合同由 claude(cld)-facilitator 变体达成（932372ms、15 轮、10 房、不变量全绿）**，codex-facilitator 变体受 codex app-server 长会话边界未决故障外部阻塞（补齐性质），结果见 `docs/verification/2026-07-18-decision-core-acceptance.md`（两个显式开放项：codex-facilitator soak 变体待稳定窗口补齐、launchd 崩溃拉起待用户）。
 
 ## V1.1
 

@@ -141,7 +141,7 @@ type RouteId = (typeof ROUTE_IDS)[number];
  */
 const FALLBACK_MODEL_HINTS: Record<RouteId | "codex", string> = {
   "ant-glm5.2": "GLM-5.2[1m]",
-  moonshot: "Kimi-K3[1m]",
+  moonshot: "k3",
   deepseek: "deepseek-v4-pro[1m]",
   codex: "gpt-5.6-sol",
 };
