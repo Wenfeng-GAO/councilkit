@@ -60,6 +60,7 @@ import {
 } from "../../runtime-host/installations/registry";
 import { createLogger } from "../../runtime-host/logging";
 import { createProfileProbe } from "../../runtime-host/profiles/probe";
+import { diagnosticsRoutes } from "../../runtime-host/routes/diagnostics";
 import { healthRoutes } from "../../runtime-host/routes/health";
 import { installationRoutes } from "../../runtime-host/routes/installations";
 import { modelRoutes } from "../../runtime-host/routes/models";
@@ -583,6 +584,7 @@ async function main(): Promise<void> {
     ...installationRoutes(services),
     ...modelRoutes(services),
     ...withEventStreamTracking(scopeRoutes(services)),
+    ...diagnosticsRoutes(services),
     ...testRoutes(scopeManager, executions, profileProbe),
   ];
 

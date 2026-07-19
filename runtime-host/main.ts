@@ -16,6 +16,7 @@ import { createInstallationRegistry } from "./installations/registry";
 import { createLogger } from "./logging";
 import { createProcessSupervisor } from "./process/process-supervisor";
 import { createProfileProbe } from "./profiles/probe";
+import { diagnosticsRoutes } from "./routes/diagnostics";
 import { healthRoutes } from "./routes/health";
 import { installationRoutes } from "./routes/installations";
 import { modelRoutes } from "./routes/models";
@@ -136,6 +137,7 @@ async function main(): Promise<void> {
     ...installationRoutes(services),
     ...modelRoutes(services),
     ...scopeRoutes(services),
+    ...diagnosticsRoutes(services),
   ];
 
   let viteMiddlewares:

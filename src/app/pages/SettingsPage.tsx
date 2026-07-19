@@ -42,6 +42,10 @@ export function SettingsPage() {
   // stack a second wave of forced handshakes.
   const [recheckInFlight, setRecheckInFlight] = useState(false);
 
+  // S6: diagnostics export in flight (button disabled while the Host
+  // assembles the bundle and the download is triggered).
+  const [exportingDiagnostics, setExportingDiagnostics] = useState(false);
+
   // --- Host health (polled; the page blocks new execution when it drops) ---
   const healthQuery = useQuery({
     queryKey: ["host", "health"],
@@ -235,6 +239,31 @@ export function SettingsPage() {
     catalogQueries.some((query) => query.isFetching);
   const rechecking = recheckInFlight || anyProbeFetching;
 
+  // S6: diagnostics export — the Host assembles a sanitized same-machine
+  // bundle; the page only serializes the validated DTO into a single-file
+  // download (the ReportView Blob pattern, zero new dependencies). Failures
+  // are silent by design, like the recheck calls above: the button re-enables
+  // and the 5s health poll surfaces Host trouble.
+  const handleExportDiagnostics = async () => {
+    setExportingDiagnostics(true);
+    try {
+      const data = await client.diagnostics();
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `councilkit-diagnostics-${data.generatedAt.replace(/[:.]/g, "-")}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Host read failure: no partial file is produced; the button re-enables.
+    } finally {
+      setExportingDiagnostics(false);
+    }
+  };
+
   // --- Repair actions ---
   const revalidateMut = useMutation({
     mutationFn: (installationId: string) => client.revalidateInstallation(installationId),
@@ -397,6 +426,8 @@ export function SettingsPage() {
           hostOnline={hostOnline}
           health={healthQuery.data}
           onShowRestartHelp={() => setInfoModal("restart")}
+          onExportDiagnostics={() => void handleExportDiagnostics()}
+          exporting={exportingDiagnostics}
         />
 
         <InstallationsSection
