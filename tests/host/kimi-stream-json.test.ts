@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type { HostConfig } from "@host/config";
 import { createKimiStreamJsonDriver } from "@host/drivers/kimi-stream-json";
@@ -15,7 +17,11 @@ import type {
 } from "@host/drivers/types";
 import type { InstallationRecord } from "@host/installations/registry";
 import { createLogger } from "@host/logging";
-import { type ProcessSupervisor, createProcessSupervisor } from "@host/process/process-supervisor";
+import {
+  type DriverProcess,
+  type ProcessSupervisor,
+  createProcessSupervisor,
+} from "@host/process/process-supervisor";
 import type { ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -444,7 +450,8 @@ describe("kimi-stream-json driver", () => {
     expect(terminal.type).toBe("completed");
     if (terminal.type !== "completed") throw new Error("unreachable");
     // The protocol proves an assistant content frame with no tool activity and
-    // no off-protocol leak → "none", the only value classifyCompleted commits.
+    // no off-protocol leak → "none" (committable; classifyCompleted admits both
+    // "none" and "completed", discarding only "unknown").
     expect(terminal.toolState).toBe("none");
     expect(terminal.output).toBe("Clean discussion answer.");
   });
@@ -524,6 +531,125 @@ describe("kimi-stream-json driver", () => {
         expect(event.error.message).not.toContain(secret);
       }
     }
+  });
+
+  it("G1: exit reported but stdout never drains within the grace -> STREAM_DRAIN_TIMEOUT, toolState=unknown, session invalidated (next turn cold, no -S)", async () => {
+    // Why a controllable DriverProcess double instead of a fixture scenario:
+    // through the REAL plumbing the watchdog self-exits ~25ms after its Driver
+    // process exits (watchdog-child.mjs exitSoon), so the Host-side stdout
+    // pipe always EOFs within the grace — a fixture cannot hold it open (its
+    // children only inherit the fixture<->watchdog pipe, never the
+    // watchdog<->Host pipe; verified empirically: the turn settles completed).
+    // The stuck-drain scenario arises when the watchdog already reported the
+    // exit on the control channel but then hangs before EOF (SIGSTOP / wedged
+    // forwarding). This double reproduces exactly that ordering at the
+    // DriverProcess seam — the review-sanctioned controllable mock — with REAL
+    // timers: frames arrive, the exit event lands, stdout EOF comes only after
+    // EXIT_DRAIN_GRACE_MS (1500ms) has elapsed. The turn spawn is doubled; the
+    // probe and the follow-up turn still run through the real supervisor.
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+
+    const turnStdout = new Readable({ read() {} });
+    const turnStderr = new Readable({ read() {} });
+    turnStderr.push(null);
+    const turnEvents = new EventEmitter();
+    const stuckProcess: DriverProcess = {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin: new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+      stdout: turnStdout,
+      stderr: turnStderr,
+      events: turnEvents,
+      waitSupervised: () => Promise.resolve(),
+      kill: () => {},
+      closeStdin: () => {},
+      shutdown: () => Promise.resolve(),
+      __testInjectControlLine: () => {},
+    };
+    let turnSpawnCount = 0;
+    const seamSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        // Turn spawns carry `-p`; the provider-list probe does not. Double the
+        // FIRST turn spawn only — everything else runs on the real supervisor.
+        if (spec.argv.includes("-p")) {
+          turnSpawnCount += 1;
+          if (turnSpawnCount === 1) return Promise.resolve(stuckProcess);
+        }
+        return realSupervisor.spawnDriver(spec);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: seamSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, { reply: "Cold rebase after drain timeout." });
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+
+    const run = executeCollecting(driver, execInput("exec-1", "Drain timeout."));
+    await waitFor(() => turnSpawnCount === 1, 2000);
+    // Let the driver's spawn-then handler attach the feeders before frames land.
+    await new Promise((r) => setTimeout(r, 50));
+    // Partial evidence: an assistant content frame and the resume hint arrive…
+    turnStdout.push(
+      `${JSON.stringify({ role: "assistant", content: "Tail frames still in flight." })}\n`,
+    );
+    turnStdout.push(
+      `${JSON.stringify({ role: "meta", type: "session.resume_hint", session_id: "session-fake-1" })}\n`,
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    // …then the exit control frame lands while stdout stays open. EOF arrives
+    // only after the grace has elapsed (2500ms > 1500ms), so any late tail
+    // frames would land into an already-settled turn.
+    turnEvents.emit("exit", { code: 0, signal: null });
+    setTimeout(() => turnStdout.push(null), 2500);
+
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("STREAM_DRAIN_TIMEOUT");
+    expect(terminal.toolState).toBe("unknown");
+    expect(terminal.retryable).toBe(true);
+    // The session was synchronously invalidated (epoch bumped): the CLI's
+    // persisted session can no longer be trusted as a strict continuation.
+    expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+
+    // Next turn runs on the REAL supervisor/fixture as a full cold rebase:
+    // no -S carried (session was invalidated), and it commits cleanly.
+    const run2 = executeCollecting(driver, execInput("exec-2", "Rebase."));
+    await run2.done;
+    expect(terminalOf(run2.events).type).toBe("completed");
+    const turnPids = aggregatePids()
+      .map(statsOf)
+      .filter((s): s is Record<string, unknown> => s !== null && Number(s.turns) > 0);
+    expect(turnPids.filter((s) => s.hadSid === true)).toHaveLength(0);
   });
 
   it("F2: a turn whose exit control frame lands before the stdout tail still settles from the full frames", async () => {
@@ -612,6 +738,88 @@ describe("kimi-stream-json driver", () => {
     await waitFor(
       () => pgrepCount("fake-kimi[.]mjs") === 0 && pgrepCount("watchdog-child[.]mjs") === 0,
       8000,
+    ).catch(() => undefined);
+    expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
+    expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
+  });
+
+  it("G2: close() during a pending probe spawn waits for it, reaps the late probe, and never resurrects ready", async () => {
+    // A gated supervisor blocks the probe spawn mid-window (the promise
+    // between `supervisor.spawnDriver(...)` being called and resolving). close()
+    // must cover that window: wait for the pending probe, shut the late process
+    // down, stay closed — and prewarm must fail rather than write ready.
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+    const gate: { release: () => void } = { release: () => {} };
+    const spawnGate = new Promise<void>((resolvePromise) => {
+      gate.release = resolvePromise;
+    });
+    let gatedSpawnCount = 0;
+    const gatedSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        gatedSpawnCount += 1;
+        return spawnGate.then(() => realSupervisor.spawnDriver(spec));
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: gatedSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, {});
+
+    // Prewarm blocks inside the probe spawn (the gate is closed).
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await waitFor(() => gatedSpawnCount === 1, 2000);
+
+    // close() inside the spawn window: while the gate stays closed it must NOT
+    // return — it waits for the pending probe spawn.
+    let closeResolved = false;
+    const closePromise = driver.close().then(() => {
+      closeResolved = true;
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(closeResolved).toBe(false);
+
+    // Open the gate: the late probe spawns, is shut down immediately, close
+    // completes, and prewarm rejects instead of resurrecting ready.
+    gate.release();
+    await closePromise;
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(String(outcome.error)).toContain("closed");
+    }
+    expect(driver.capabilityState()).toBe("checking"); // closed — never ready again
+
+    // No probe/watchdog process survived the close.
+    await waitFor(
+      () => pgrepCount("fake-kimi[.]mjs") === 0 && pgrepCount("watchdog-child[.]mjs") === 0,
+      6000,
     ).catch(() => undefined);
     expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
     expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);

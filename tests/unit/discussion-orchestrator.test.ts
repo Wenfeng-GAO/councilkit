@@ -1275,6 +1275,155 @@ describe("discussion orchestrator (U5)", () => {
     ]);
   });
 
+  it("5c. a kimi-shaped completed(toolState=completed) terminal (tooled turn) also COMMITS through classifyCompleted (G4/F1 symmetry)", async () => {
+    // Same kimi terminal shape as 5b, but the turn used tools: the driver
+    // honestly reports toolState="completed" (D7/E10), which classifyCompleted
+    // must ALSO admit — only "unknown" is discarded (commit-execution.ts:64-81).
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, client } = makeOrchestrator();
+    const { token } = await orchestrator.ensureScope(room.id, [p1, p2]);
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const scopeId = binding?.executionScopeId as string;
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    const execution = createModelExecution({
+      executionId: "exec-kimi-completed-1",
+      roomId: room.id,
+      roundId: round.id,
+      participantId: p1.id,
+      resultKind: "message",
+      requestedModel: p1.modelId,
+      contextRevision: room.contextRevision,
+      expectedRoomDigest: room.contextDigest,
+      participantSnapshotDigest: p1.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "message", text: "answer" }),
+    });
+    await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
+    await beginExecution(db, { execution, token });
+    await markExecutionDispatched(db, {
+      executionId: execution.executionId,
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: scopeId,
+      dispatchState: "unknown",
+    });
+
+    const completed: CompletedEvent = {
+      executionId: execution.executionId,
+      seq: 5,
+      at: new Date().toISOString(),
+      type: "completed",
+      output: "kimi tooled-turn body",
+      requestedModel: p1.modelId,
+      effectiveModel: p1.modelId,
+      modelVerdict: "match",
+      toolState: "completed", // D7/E10: provable tool activity, normal exit
+      dispatchState: "accepted",
+      usage: null,
+      finalSeq: 5,
+    };
+    host.registerExecution({
+      executionId: execution.executionId,
+      participantId: p1.id,
+      scopeId,
+      state: "completed",
+      terminalEvent: completed,
+    });
+
+    const deps = { db, client, scopeId, token, currentHostInstanceId: host.hostInstanceId };
+    const result = await handleCompletedExecution(deps, execution.executionId, completed);
+    expect(result.kind).toBe("committed");
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(1);
+    expect(host.ackCalls).toEqual([
+      expect.objectContaining({ disposition: "committed", result: "acknowledged" }),
+    ]);
+  });
+
+  it("5d. a kimi-shaped completed(toolState=unknown) terminal is DISCARDED as tool_state_unknown (G4/F1 symmetry)", async () => {
+    // The polluted-stream kimi terminal (off-protocol non-JSON stdout, no tool
+    // frames) reports toolState="unknown"; classifyCompleted must discard it
+    // as tool_state_unknown — the commit-side counterpart of 5b/5c.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, client } = makeOrchestrator();
+    const { token } = await orchestrator.ensureScope(room.id, [p1, p2]);
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const scopeId = binding?.executionScopeId as string;
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    const execution = createModelExecution({
+      executionId: "exec-kimi-unknown-001",
+      roomId: room.id,
+      roundId: round.id,
+      participantId: p1.id,
+      resultKind: "message",
+      requestedModel: p1.modelId,
+      contextRevision: room.contextRevision,
+      expectedRoomDigest: room.contextDigest,
+      participantSnapshotDigest: p1.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "message", text: "answer" }),
+    });
+    await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
+    await beginExecution(db, { execution, token });
+    await markExecutionDispatched(db, {
+      executionId: execution.executionId,
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: scopeId,
+      dispatchState: "unknown",
+    });
+
+    const completed: CompletedEvent = {
+      executionId: execution.executionId,
+      seq: 5,
+      at: new Date().toISOString(),
+      type: "completed",
+      output: "kimi polluted-stream body",
+      requestedModel: p1.modelId,
+      effectiveModel: p1.modelId,
+      modelVerdict: "match",
+      toolState: "unknown", // off-protocol leak, unclassifiable → discard
+      dispatchState: "accepted",
+      usage: null,
+      finalSeq: 5,
+    };
+    host.registerExecution({
+      executionId: execution.executionId,
+      participantId: p1.id,
+      scopeId,
+      state: "completed",
+      terminalEvent: completed,
+    });
+
+    const deps = { db, client, scopeId, token, currentHostInstanceId: host.hostInstanceId };
+    const result = await handleCompletedExecution(deps, execution.executionId, completed);
+    expect(result).toEqual({ kind: "discarded", runtimeOutcome: "tool_state_unknown" });
+    // Nothing landed; the execution row records the structured discard.
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(0);
+    const stored = await db.modelExecutions.get(execution.executionId);
+    expect(stored?.state).toBe("discarded");
+    expect(stored?.runtimeOutcome).toBe("tool_state_unknown");
+    expect(stored?.error?.code).toBe("TOOL_STATE_UNKNOWN");
+    expect(host.ackCalls).toEqual([
+      expect.objectContaining({ disposition: "discarded", result: "acknowledged" }),
+    ]);
+  });
+
   it("7. pauses at prewarm when a participant is not ready; nobody speaks", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();

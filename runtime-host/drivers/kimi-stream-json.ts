@@ -43,8 +43,9 @@ import type {
  * (none → active → completed / crash → unknown):
  *   - exit 0, NO tool frames AND NO off-protocol non-JSON lines → `"none"`
  *     (the protocol proves an assistant content frame with no tool activity —
- *     a discussion-shaped turn). This is the only terminal that the commit
- *     pipeline's `classifyCompleted` admits (commit-execution.ts:64-72).
+ *     a discussion-shaped turn). A clean no-tool terminal is committable; the
+ *     commit pipeline's `classifyCompleted` admits `none` and `completed` and
+ *     discards only `unknown` (commit-execution.ts:64-81).
  *   - exit 0, tool frames OR role:"tool" frames present → `"completed"`
  *     (provable tool activity that completed normally — committable, same as
  *     codex's completed-tool turn).
@@ -98,11 +99,15 @@ const PROMPT_MAX_BYTES = 200 * 1024;
 const SKILLS_DIR_NAME = "skills-empty";
 
 /**
- * Bounded grace (F2) the driver waits for stdout tail frames after the process
- * exit event but before the stdout pipe reports `end`. A Node child can emit
- * `exit` before its stdio pipes close; this window is sub-millisecond on a
- * healthy fast-exit turn, so 1.5s is a generous ceiling that still bounds the
- * total settle latency when stdout never closes (e.g. killed process).
+ * Bounded grace (F2/G1) the driver waits for stdout tail frames after the
+ * process exit event but before the stdout pipe reports `end`. A Node child can
+ * emit `exit` before its stdio pipes close; on a healthy fast-exit turn the
+ * stdout pipe closes within a few ms and the turn settles from the full frames.
+ * If the grace elapses WITHOUT stdout draining, the protocol stream is provably
+ * incomplete (late tool_calls / role:"tool" / resume_hint / off-protocol lines
+ * may still be in flight), so the turn is settled as an unknown interrupted
+ * terminal rather than risk an erroneous clean completion (G1, D8). 1.5s is a
+ * generous ceiling that still bounds the total settle latency.
  */
 const EXIT_DRAIN_GRACE_MS = 1500;
 
@@ -250,6 +255,14 @@ export function createKimiStreamJsonDriver(
      * Null when no probe is outstanding.
      */
     let activeProbe: DriverProcess | null = null;
+    /**
+     * G2: the in-flight probe SPAWN promise, registered BEFORE the
+     * `await supervisor.spawnDriver(...)` so close() covers that window too —
+     * otherwise close() can return while a probe spawn is still pending and the
+     * late probe process would be adopted (and could resurrect `ready`) after
+     * the driver was closed. Null when no probe spawn is outstanding.
+     */
+    let pendingProbe: Promise<DriverProcess> | null = null;
 
     async function reapActiveProcess(reason: string): Promise<void> {
       const proc = activeProcess;
@@ -324,9 +337,11 @@ export function createKimiStreamJsonDriver(
      * non-empty assistant frame (the success path). Per D7 / ADR-0012 (E10):
      *   - tool activity present (assistant.tool_calls / role:"tool") → "completed"
      *   - no tool activity, no off-protocol non-JSON lines → "none" (a clean
-     *     discussion-shaped turn; the only value classifyCompleted commits)
+     *     discussion-shaped turn)
      *   - no tool activity but off-protocol non-JSON lines leaked → "unknown"
      *     (the stream was polluted in an unclassifiable way → discard path)
+     * classifyCompleted commits both "none" and "completed"; only "unknown" is
+     * discarded (commit-execution.ts:64-81).
      */
     function completedToolState(turn: ActiveTurn): ToolState {
       if (turn.sawToolActivity) return "completed";
@@ -584,11 +599,40 @@ export function createKimiStreamJsonDriver(
           if (!drain.stdoutEnded) {
             if (!drain.graceTimer) {
               drain.graceTimer = setTimeout(() => {
-                // Grace elapsed: settle with whatever frames we already have.
+                // Grace elapsed but the stdout pipe STILL has not drained. The
+                // protocol stream is incomplete (G1, D8): tail frames —
+                // assistant content, resume_hint, tool_calls, role:"tool", or
+                // off-protocol non-JSON lines — may still be in flight, and we
+                // can no longer prove the terminal toolState from partial
+                // evidence. Do NOT take the normal completed-completion path
+                // (which would risk an erroneous toolState=none that the commit
+                // pipeline admits): settle as an unknown interrupted terminal,
+                // invalidate the session, and reap the process group so a
+                // late frame can never land into a settled turn.
                 drain.graceTimer = undefined;
-                if (!drain.settled && !turn.settled) {
+                if (!drain.settled && !turn.settled && activeTurn === turn) {
                   drain.settled = true;
-                  if (activeTurn === turn) settleOnExit(turn, drain.exitCode, stderrRing.text());
+                  clearTurnTimers(turn);
+                  activeTurn = null;
+                  invalidateSession("stream_drain_timeout");
+                  emitTerminal(turn, {
+                    type: "failed",
+                    error: makeError(
+                      "STREAM_DRAIN_TIMEOUT",
+                      "stream",
+                      "Process exited but stdout did not drain within the grace window; tail frames may have been lost.",
+                      {
+                        driverId: "kimi-stream-json",
+                        executionId: turn.executionId,
+                        participantId,
+                        retryable: true,
+                      },
+                    ),
+                    dispatchState: turn.dispatchState,
+                    toolState: "unknown",
+                    retryable: true,
+                  });
+                  void reapActiveProcess("drain_timeout");
                 }
               }, EXIT_DRAIN_GRACE_MS);
               drain.graceTimer.unref();
@@ -782,6 +826,13 @@ export function createKimiStreamJsonDriver(
         // The parsed default line is diagnostic only (recorded inside the
         // probe); execution always pins `-m kimi-code/k3`. No secret fields.
         void probeOk;
+        // G2: a concurrent close() during the probe is terminal — never
+        // resurrect `ready` on a closing/closed driver.
+        if (state === "closing" || state === "closed") {
+          throw Object.assign(new Error("kimi driver closed during prewarm"), {
+            runtimeCode: "AUTH_REQUIRED",
+          });
+        }
         state = "ready";
 
         return {
@@ -913,6 +964,18 @@ export function createKimiStreamJsonDriver(
         if (probe) {
           await probe.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
         }
+        // G2: cover a still-PENDING probe spawn — wait for it to resolve and
+        // shut the late process down immediately, so close() never returns
+        // while a probe is about to be adopted behind its back. (The probe's
+        // own post-spawn closing/closed check is the second line of defense;
+        // shutdown is idempotent, mirroring the F4 pending-spawn pattern.)
+        const pendingProbeSpawn = pendingProbe;
+        if (pendingProbeSpawn) {
+          await pendingProbeSpawn
+            .then((spawned) => spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined))
+            .catch(() => undefined);
+          pendingProbe = null;
+        }
         activeTurn = null;
         invalidateSession("close");
         state = "closed";
@@ -942,7 +1005,10 @@ export function createKimiStreamJsonDriver(
     }> {
       const cwd = join(workRoot, participantId);
       await mkdir(cwd, { recursive: true });
-      const spawned = await supervisor.spawnDriver({
+      // G2: register the pending spawn BEFORE the await so close() can cover
+      // the window; a probe that resolves after close() is shut down, never
+      // adopted.
+      const spawnPromise = supervisor.spawnDriver({
         participantId: `${participantId}-probe`,
         executable,
         argv: ["provider", "list"],
@@ -950,6 +1016,22 @@ export function createKimiStreamJsonDriver(
         envInherit: ENV_INHERIT,
         envSet: {},
       });
+      pendingProbe = spawnPromise;
+      let spawned: DriverProcess;
+      try {
+        spawned = await spawnPromise;
+      } finally {
+        if (pendingProbe === spawnPromise) pendingProbe = null;
+      }
+      // G2: close() ran while the probe spawn was pending. Never adopt the
+      // process — shut it down and fail the probe instead of probing (and
+      // potentially resurrecting `ready` on) a closing/closed driver.
+      if (state === "closing" || state === "closed") {
+        await spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+        throw Object.assign(new Error("kimi driver closed during the provider probe"), {
+          runtimeCode: "AUTH_REQUIRED",
+        });
+      }
       activeProbe = spawned;
       let output = "";
       const ring = createBoundedRing(LIMITS.stderrRingBytes);

@@ -65,11 +65,14 @@ HTTP Driver and API-key storage remain excluded (ADR-0001).
 
 - Catalog = `["kimi-code/k3"]`; canonical = `kimi-code/k3`; `modelAliases = []`
   (the bare `k3` alias is not guessed); context window `1_048_576`.
-- The protocol is **final-only**: a turn emits exactly
-  `{"role":"assistant","content":"…"}` (authoritative) then
+- The protocol is **final-only**: a clean discussion turn (no tool calls)
+  emits exactly `{"role":"assistant","content":"…"}` (authoritative) then
   `{"role":"meta","type":"session.resume_hint","session_id":"session_<uuid>"}`.
-  The driver emits **no `output.delta`** (the protocol has none) and reports
-  **`usage: null`** (no usage field exists — never estimated).
+  A tooled turn additionally emits assistant frames carrying `tool_calls`,
+  `role:"tool"` frames, and bare non-JSON tool-stdout lines (see the toolState
+  section below). The driver emits **no `output.delta`** (the protocol has
+  none) and reports **`usage: null`** (no usage field exists — never
+  estimated).
 - `effectiveModel = requestedModel` and `modelVerdict = "match"`: the only
   model evidence is the Host's exact `-m` alias. This is **CLI-alias evidence**,
   not a claim that no provider-side reroute exists; if a live frame ever
@@ -88,9 +91,10 @@ crash-after-tool → unknown):
 
 - **exit 0, no tool frames AND no off-protocol non-JSON lines → `"none"`** —
   the protocol proves an assistant `content` frame with no tool activity. This
-  is the only terminal the commit pipeline's `classifyCompleted`
-  (`src/orchestrator/commit-execution.ts`:64-72) admits; a discussion-shaped
-  turn lands here.
+  is the clean no-tool path a discussion-shaped turn lands on. The commit
+  pipeline's `classifyCompleted` (`src/orchestrator/commit-execution.ts`:64-81)
+  admits BOTH `"none"` and `"completed"` terminals and discards only
+  `"unknown"`.
 - **exit 0, tool activity present (`tool_calls` / `role:"tool"`) → `"completed"`**
   — provable tool activity that completed normally; committable, the same as a
   codex completed-tool turn.
