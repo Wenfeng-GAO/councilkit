@@ -110,6 +110,9 @@ export function createScopeManager(deps: ScopeManagerDeps) {
   function activeScopeCount(): number {
     let count = 0;
     for (const scope of scopes.values()) {
+      // 防御层:显式排除 closed/closing(由 if 条件隐式实现)。closed scope 永久驻留
+      // scopes map(closeScopeInternal 不 delete),若后续重构把条件改为其它判定,
+      // 此注释固化语义:closing/closed 不算 active,不要把它们计入 maxActiveScopes。
       if (scope.state === "creating" || scope.state === "active") count += 1;
     }
     return count;
@@ -118,6 +121,12 @@ export function createScopeManager(deps: ScopeManagerDeps) {
   function liveDriverProcessCount(): number {
     let count = 0;
     for (const scope of scopes.values()) {
+      // 防御层:closed/closing scope 的残留 entry 不应计入配额。closeScopeInternal
+      // 不 delete scopeId(closed scope 永久驻留 scopes map),若不加此 guard,任何
+      // residual runtime(如 race 漏网)都会被永久计入 liveDriverProcessCount,累积
+      // 触发 maxDriverProcesses(16)RESOURCE_LIMIT。与 closeScopeInternal L537 早 return
+      // 同语义:closing/closed 不再是活 scope。
+      if (scope.state === "closed" || scope.state === "closing") continue;
       for (const entry of scope.participants.values()) {
         if (
           entry.runtime === "ready" ||
@@ -241,6 +250,26 @@ export function createScopeManager(deps: ScopeManagerDeps) {
         spec,
         installation,
       });
+      // Race: creating-TTL sweeper (or controller-close) closed the scope while
+      // prewarm was in flight. Do NOT land binding/readiness on a closed scope —
+      // that would resurrect a ready participant counted by liveDriverProcessCount
+      // and leak maxDriverProcesses quota. driver.close() is idempotent.
+      if (scope.state !== "creating" && scope.state !== "active") {
+        entry.runtime = "cold";
+        entry.binding = null;
+        entry.readiness = null;
+        try {
+          await entry.driver.close();
+        } catch {
+          /* best effort */
+        }
+        logger.warn("scope.prewarm_race_closed", {
+          scopeId: scope.scopeId,
+          participantId: spec.participantId,
+          scopeState: scope.state,
+        });
+        return;
+      }
       const resolved = buildBinding(spec, installation, prewarm);
       entry.binding = resolved.binding;
       entry.readiness = resolved.readiness;
@@ -328,6 +357,29 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     await Promise.all(
       [...scope.participants.values()].map((entry) => prewarmParticipant(scope, entry)),
     );
+
+    // Belt-and-suspenders: if the creating-TTL sweeper closed the scope while
+    // prewarm was in flight, any participant that resolved BEFORE the close (and
+    // set runtime="ready") must be torn down so liveDriverProcessCount excludes it.
+    // prewarmParticipant has its own scope.state guard (Step 1), but multi-participant
+    // windows where some prewarms resolved before close and others after can still
+    // leave "ready" entries on a closed scope. defense-in-depth; no-op in normal flow.
+    if (scope.state === "closed" || scope.state === "closing") {
+      await Promise.all(
+        [...scope.participants.values()].map(async (entry) => {
+          if (entry.runtime === "ready" || entry.runtime === "prewarming") {
+            entry.runtime = "cold";
+            entry.binding = null;
+            entry.readiness = null;
+            try {
+              await entry.driver.close();
+            } catch {
+              /* idempotent */
+            }
+          }
+        }),
+      );
+    }
 
     return { scopeId, controllerId, leaseEpoch: scope.leaseEpoch, scope: toStatus(scope) };
   }

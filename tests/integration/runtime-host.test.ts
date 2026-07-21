@@ -44,6 +44,11 @@ function createFakeDriver(
      * scope is "closing" and awaiting driver.close()) — reproduces a late
      * terminal routed through emitAndSweep → scheduleIdleSweep. */
     lateTerminalOnClose?: string;
+    /** rot-runtime-host-scopes-001: inject a delay before prewarm resolves so
+     * the creating-TTL sweeper can fire before prewarm lands. 0 = synchronous
+     * (preserves all existing tests). >0 = setTimeout-based delay (real timer,
+     * consistent with V3 real-clock style). */
+    prewarmDelayMs?: number;
   } = {},
 ): FakeDriver {
   const reply = options.reply ?? `answer-from-${participantId}`;
@@ -58,12 +63,15 @@ function createFakeDriver(
     executeCalls: [],
     prewarm(input: PrewarmInput): Promise<PrewarmResult> {
       fake.prewarmCount += 1;
-      return Promise.resolve({
+      const result: PrewarmResult = {
         canonicalModelId: input.spec.modelId,
         modelAliases: [],
         capability: { protocol: "fake" },
         catalog: [input.spec.modelId],
-      });
+      };
+      const delay = options.prewarmDelayMs ?? 0;
+      if (delay <= 0) return Promise.resolve(result);
+      return new Promise((resolve) => setTimeout(() => resolve(result), delay));
     },
     execute(input: ExecuteInput, emit: Emit): Promise<void> {
       savedEmit = emit;
@@ -203,7 +211,14 @@ async function createRig(
     /** V3: per-participant driver options (e.g. lateTerminalOnClose) applied
      * at factory time so the created FakeDriver owns its own closeCount + the
      * emit captured during execute (a second driver would read neither). */
-    driverOptions?: Record<string, { lateTerminalOnClose?: string }>;
+    driverOptions?: Record<string, { lateTerminalOnClose?: string; prewarmDelayMs?: number }>;
+    /** rot-runtime-host-scopes-001: override the creating-scope TTL to a short
+     * value so the sweeper can fire within a test. Falls back to the 30s
+     * production default (TIMEOUTS.creatingScopeTtlMs) when omitted. */
+    creatingScopeTtlMs?: number;
+    /** Injectable clock used by checkScopeCreateRate + scopeCreateTimestamps.
+     * Only affects rate-gating; real setTimeout/setInterval still use wall-clock. */
+    now?: () => number;
   } = {},
 ): Promise<Rig> {
   const drivers = new Map<string, FakeDriver>();
@@ -224,6 +239,8 @@ async function createRig(
     logger: nullLogger,
     hostInstanceId: "integration-host",
     idleScopeTtlMs: options.idleScopeTtlMs,
+    creatingScopeTtlMs: options.creatingScopeTtlMs,
+    now: options.now,
   });
   const host = await createTestHost({
     extraServices: {
@@ -1053,5 +1070,165 @@ describe("idle scope reaper", () => {
     // fired closeScopeInternal again (closeCount → 2). It stays 1.
     await new Promise((r) => setTimeout(r, IDLE_TTL_MS * 2 + 80));
     expect(driver.closeCount).toBe(1);
+  });
+});
+
+describe("scope-manager creating-TTL × prewarm race (rot-runtime-host-scopes-001)", () => {
+  // These tests use real setTimeout with short TTLs (consistent with the idle
+  // scope reaper style above — no fake timers). The bug: creating-TTL sweeper
+  // can close the scope while prewarm is still in flight; without the scope.state
+  // guard in prewarmParticipant, the late-resolving prewarm would overwrite
+  // entry.runtime to "ready" on a closed scope, which liveDriverProcessCount
+  // would then count forever (closeScopeInternal never deletes the scopeId),
+  // exhausting maxDriverProcesses(16) and triggering 429 RESOURCE_LIMIT.
+
+  it("AC1: sweeper closes scope during slow prewarm → participant ends cold, no quota leak", async () => {
+    // creatingScopeTtlMs=50ms fires before prewarm resolves at 200ms.
+    const rig = await createRig({
+      creatingScopeTtlMs: 50,
+      driverOptions: { "p-race-1": { prewarmDelayMs: 200 } },
+    });
+    rigs.push(rig);
+
+    // Create the scope (do NOT activate — the sweeper only fires while "creating").
+    const created = await api<{ scopeId: string; controllerId: string; leaseEpoch: number }>(
+      rig.host,
+      "POST",
+      "/api/v1/scopes",
+      { scopeRequestId: "req-race-ac1-0001", participants: [spec("p-race-1")] },
+    );
+    expect(created.status).toBe(200);
+
+    // createScope awaited Promise.all(prewarm) which only returns after the
+    // 200ms prewarm. By then the 50ms sweeper has already closed the scope.
+    const scopeId = created.data.scopeId;
+    const scopeObj = rig.scopeManager._scopes.get(scopeId);
+    expect(scopeObj).toBeDefined();
+    expect(scopeObj?.state).toBe("closed");
+
+    // Critical assertion: the participant must NOT be left as "ready" on a
+    // closed scope. Pre-fix, prewarmParticipant would overwrite entry.runtime
+    // to "ready" after the close; post-fix, its scope.state guard keeps it cold.
+    const entry = scopeObj?.participants.get("p-race-1");
+    expect(entry?.runtime).toBe("cold");
+    expect(entry?.binding).toBeNull();
+
+    // liveDriverProcessCount excludes closed scopes (Step 3 defensive guard),
+    // so the quota counter is 0 and activeScopes is 0.
+    const counts = rig.scopeManager.counts();
+    expect(counts.liveDriverProcesses).toBe(0);
+    expect(counts.activeScopes).toBe(0);
+
+    // The driver was closed twice: once by closeScopeInternal (sweeper) and
+    // once by prewarmParticipant's scope.state guard (Step 1). Both close()
+    // calls are idempotent on the FakeDriver.
+    const driver = rig.drivers.get("p-race-1") as FakeDriver;
+    expect(driver.prewarmCount).toBe(1);
+    expect(driver.closeCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("AC2: 20 consecutive slow-prewarm creates with short creating-TTL → no RESOURCE_LIMIT (429)", async () => {
+    // Inject a fake clock that advances 70s on each read so the
+    // scopeCreatesPerMinute=10 rate gate never trips (each timestamp lives in
+    // its own 60s window). The gate is purely based on `now()`; real
+    // setTimeout (creatingScopeTtlMs=50, prewarmDelayMs=100) still uses wall-clock.
+    let fakeNow = 1_000_000;
+    const advance = () => {
+      fakeNow += 70_000;
+      return fakeNow;
+    };
+    const rig = await createRig({
+      creatingScopeTtlMs: 50,
+      now: () => fakeNow,
+      driverOptions: {}, // participants configured per-iteration below via factory
+    });
+    // Override the driver factory so each call uses fresh prewarmDelayMs.
+    // (createRig already built its factory using the shared options, but we
+    // want per-iteration participant IDs. Instead, rely on the rig's factory
+    // which always creates a FakeDriver with the shared `driverOptions[pid]`
+    // — since we don't set prewarmDelayMs per pid, we need a different rig.)
+    rigs.push(rig);
+    await rig.scopeManager.closeAll("swap-rig");
+    await rig.host.cleanup();
+    rigs.pop();
+
+    // Build a rig whose factory always injects prewarmDelayMs for any pid.
+    const drivers = new Map<string, FakeDriver>();
+    const installations = fakeInstallationRegistry();
+    const executions = createExecutionRegistry({ logger: nullLogger });
+    const reconciler = createSessionReconciler();
+    const scopeManager = createScopeManager({
+      installations,
+      executions,
+      reconciler,
+      driverFactories: {
+        "codex-app-server": (participantId: string) => {
+          const driver = createFakeDriver(participantId, { prewarmDelayMs: 100 });
+          drivers.set(participantId, driver);
+          return driver;
+        },
+      },
+      logger: nullLogger,
+      hostInstanceId: "integration-host-stress",
+      creatingScopeTtlMs: 50,
+      now: () => fakeNow,
+    });
+    const host = await createTestHost({
+      extraServices: {
+        installationRegistry: installations,
+        executionRegistry: executions,
+        scopeManager,
+        driverCapabilities: () => [{ driverId: "codex-app-server", capability: "ready" }],
+      },
+      routesFactory: (services) => [...installationRoutes(services), ...scopeRoutes(services)],
+    });
+    const stressRig: Rig = { host, scopeManager, drivers };
+    rigs.push(stressRig);
+
+    // 20 > maxDriverProcesses(16): pre-fix, each closed scope leaked one
+    // "ready" entry. After the 16th, liveDriverProcessCount + 1 > 16 would
+    // throw 429 RESOURCE_LIMIT. Post-fix: all closed, all entries cold, and
+    // liveDriverProcessCount skips closed scopes → never trips.
+    const N = 20;
+    const statuses: number[] = [];
+    const errors: unknown[] = [];
+    for (let i = 0; i < N; i += 1) {
+      advance(); // make `now()` fresh so rate-gate always sees <=1 in-window
+      try {
+        const res = await api<{ scopeId: string }>(host, "POST", "/api/v1/scopes", {
+          scopeRequestId: `req-race-stress-${i}`,
+          participants: [spec(`p-stress-${i}`)],
+        });
+        statuses.push(res.status);
+      } catch (error) {
+        errors.push(error);
+        statuses.push(-1);
+      }
+    }
+
+    // No RESOURCE_LIMIT (429). (RATE_LIMITED is also 429 but bypassed by `now`.)
+    const tooMany = statuses.filter((s) => s === 429);
+    expect(`429 count: ${tooMany.length}, errors: ${errors.length}`).toBe(
+      "429 count: 0, errors: 0",
+    );
+    // All 20 creates succeeded (200).
+    expect(statuses.every((s) => s === 200)).toBe(true);
+
+    // After all creates resolve, every scope is closed (sweeper fired at 50ms,
+    // prewarm resolved at 100ms, createScope returned at ~100ms+).
+    await new Promise((r) => setTimeout(r, 60));
+    let closedCount = 0;
+    for (const scope of scopeManager._scopes.values()) {
+      if (scope.state === "closed") closedCount += 1;
+    }
+    expect(closedCount).toBe(N);
+
+    // No leaked ready entries; liveDriverProcesses is 0 across all 20 scopes.
+    const counts = scopeManager.counts();
+    expect(counts.liveDriverProcesses).toBe(0);
+    expect(counts.activeScopes).toBe(0);
+
+    // Closed scopes remain in the map (裁决:不做 scopes.delete).
+    expect(scopeManager._scopes.size).toBe(N);
   });
 });
