@@ -565,6 +565,10 @@ describe("kimi-stream-json driver", () => {
     const turnStderr = new Readable({ read() {} });
     turnStderr.push(null);
     const turnEvents = new EventEmitter();
+    // H2: spy on shutdown — the drain-timeout grace must reap the process
+    // through the handle the turn still holds (the exit handler clears
+    // activeProcess, so a reap keyed on activeProcess would be a no-op).
+    let shutdownCalls = 0;
     const stuckProcess: DriverProcess = {
       participantId,
       pid: -1,
@@ -581,7 +585,10 @@ describe("kimi-stream-json driver", () => {
       waitSupervised: () => Promise.resolve(),
       kill: () => {},
       closeStdin: () => {},
-      shutdown: () => Promise.resolve(),
+      shutdown: () => {
+        shutdownCalls += 1;
+        return Promise.resolve();
+      },
       __testInjectControlLine: () => {},
     };
     let turnSpawnCount = 0;
@@ -640,6 +647,10 @@ describe("kimi-stream-json driver", () => {
     // The session was synchronously invalidated (epoch bumped): the CLI's
     // persisted session can no longer be trusted as a strict continuation.
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+    // H2: the grace branch REALLY reaped the process — the exit handler had
+    // already cleared activeProcess, so the shutdown went through the handle
+    // the turn still held. Exactly once: close() must not double-shutdown.
+    expect(shutdownCalls).toBe(1);
 
     // Next turn runs on the REAL supervisor/fixture as a full cold rebase:
     // no -S carried (session was invalidated), and it commits cleanly.
@@ -813,6 +824,10 @@ describe("kimi-stream-json driver", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(String(outcome.error)).toContain("closed");
+      // H4: a close-triggered probe failure carries the lifecycle label
+      // CANCELLED — it must NOT be remapped to AUTH_REQUIRED (which would
+      // poison readiness/diagnostics with a false auth signal).
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
     }
     expect(driver.capabilityState()).toBe("checking"); // closed — never ready again
 
@@ -852,5 +867,275 @@ describe("kimi-stream-json driver", () => {
     expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
     expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
     void run;
+  });
+
+  it("H1: an over-8MiB NDJSON line fails PROTOCOL_LIMIT, invalidates the session, and reaps the still-alive process (next turn cold, no -S)", async () => {
+    // Turn 1 runs REAL and establishes a session. Turn 2 is doubled at the
+    // DriverProcess seam: it emits a single NDJSON line over the 8 MiB cap and
+    // then stays alive (no exit). The splitter stops parsing permanently on
+    // the limit trip, so without an explicit reap the CLI could keep running —
+    // even executing tools — after the Host already emitted the terminal, and
+    // the poisoned session would keep receiving incremental prompts.
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+
+    const turnStdout = new Readable({ read() {} });
+    const turnStderr = new Readable({ read() {} });
+    turnStderr.push(null);
+    const turnEvents = new EventEmitter();
+    let shutdownCalls = 0;
+    const oversizedProcess: DriverProcess = {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin: new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+      stdout: turnStdout,
+      stderr: turnStderr,
+      events: turnEvents,
+      waitSupervised: () => Promise.resolve(),
+      kill: () => {},
+      closeStdin: () => {},
+      shutdown: () => {
+        shutdownCalls += 1;
+        return Promise.resolve();
+      },
+      __testInjectControlLine: () => {},
+    };
+    let turnSpawnCount = 0;
+    const seamSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        // Turn spawns carry `-p`; the provider-list probe does not. Double the
+        // SECOND turn spawn only — everything else runs on the real supervisor.
+        if (spec.argv.includes("-p")) {
+          turnSpawnCount += 1;
+          if (turnSpawnCount === 2) return Promise.resolve(oversizedProcess);
+        }
+        return realSupervisor.spawnDriver(spec);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: seamSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, { reply: "Seed reply." });
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+
+    // Turn 1 (real): establishes the session, epoch stays 0.
+    const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
+    await run1.done;
+    expect(terminalOf(run1.events).type).toBe("completed");
+    expect(driver.sessionEpoch).toBe(0);
+
+    // Turn 2 (doubled): one line over the 8 MiB NDJSON cap; process stays alive.
+    const run2 = executeCollecting(driver, execInput("exec-2", "Oversized line."));
+    await waitFor(() => turnSpawnCount === 2, 2000);
+    // Let the driver's spawn-then handler attach the feeders before bytes land.
+    await new Promise((r) => setTimeout(r, 50));
+    turnStdout.push(`${"x".repeat(8 * 1024 * 1024 + 16)}\n`);
+    await run2.done;
+    const terminal = terminalOf(run2.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("PROTOCOL_LIMIT");
+    // Session synchronously invalidated (epoch bumped) and the still-alive
+    // process reaped through the held handle — exactly once (close() must not
+    // double-shutdown after the handle was dropped).
+    expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+    expect(shutdownCalls).toBe(1);
+
+    // Next turn runs on the REAL supervisor/fixture as a full cold start: no
+    // -S carried (the session was invalidated), and it completes cleanly.
+    const run3 = executeCollecting(driver, execInput("exec-3", "Rebase."));
+    await run3.done;
+    expect(terminalOf(run3.events).type).toBe("completed");
+    const turnPids = aggregatePids()
+      .map(statsOf)
+      .filter((s): s is Record<string, unknown> => s !== null && Number(s.turns) > 0);
+    expect(turnPids.filter((s) => s.hadSid === true)).toHaveLength(0);
+  });
+
+  it("H3/H4: prewarm not awaited + immediate close -> no probe spawns after close returns; prewarm fails CANCELLED", async () => {
+    // prewarm yields at ensureLayout; close() must be able to finish first and
+    // the trailing prewarm continuation must then stop BEFORE spawnDriver —
+    // a closed driver never spawns a probe, and the failure is labelled with
+    // the lifecycle code CANCELLED, not AUTH_REQUIRED.
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+    let spawnCalls = 0;
+    const countingSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        spawnCalls += 1;
+        return realSupervisor.spawnDriver(spec);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: countingSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, {});
+
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    // close() while prewarm is parked at the ensureLayout await.
+    await driver.close();
+    // Give any (buggy) trailing prewarm continuation ample chance to spawn.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(spawnCalls).toBe(0);
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
+    }
+    expect(driver.capabilityState()).toBe("checking"); // closed — never ready
+    expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
+    expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
+  });
+
+  it("H5: resume-miss stderr arriving AFTER exit + stdout EOF is still classified as resume-miss (retryable not_dispatched)", async () => {
+    // Turn 1 REAL establishes the session. Turn 2 is doubled: stdout EOFs and
+    // the exit (code 1) lands immediately, but the `Session … not found`
+    // stderr line is only written 200ms later. The driver must wait its
+    // bounded stderr grace and classify from the complete ring — a late
+    // resume-miss must NOT be misreported as a generic DRIVER_CRASH (which
+    // would lose the retryable not_dispatched cold-rebase path).
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+
+    const turnStdout = new Readable({ read() {} });
+    const turnStderr = new Readable({ read() {} });
+    const turnEvents = new EventEmitter();
+    const lateStderrProcess: DriverProcess = {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin: new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+      stdout: turnStdout,
+      stderr: turnStderr,
+      events: turnEvents,
+      waitSupervised: () => Promise.resolve(),
+      kill: () => {},
+      closeStdin: () => {},
+      shutdown: () => Promise.resolve(),
+      __testInjectControlLine: () => {},
+    };
+    let turnSpawnCount = 0;
+    const seamSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        if (spec.argv.includes("-p")) {
+          turnSpawnCount += 1;
+          if (turnSpawnCount === 2) return Promise.resolve(lateStderrProcess);
+        }
+        return realSupervisor.spawnDriver(spec);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: seamSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, { reply: "Seed reply." });
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+
+    const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
+    await run1.done;
+    expect(terminalOf(run1.events).type).toBe("completed");
+
+    const run2 = executeCollecting(driver, execInput("exec-2", "Resume miss, late stderr."));
+    await waitFor(() => turnSpawnCount === 2, 2000);
+    // Let the driver's spawn-then handler attach the feeders first.
+    await new Promise((r) => setTimeout(r, 50));
+    // stdout EOF and the exit land first…
+    turnStdout.push(null);
+    turnEvents.emit("exit", { code: 1, signal: null });
+    // …the resume-miss text arrives 200ms later (within the 500ms stderr grace).
+    setTimeout(() => {
+      turnStderr.push('error: failed to run prompt: Session "session-fake-1" not found.\n');
+      turnStderr.push(null);
+    }, 200);
+
+    await run2.done;
+    const terminal = terminalOf(run2.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    // Resume-miss classification: DRIVER_CRASH code but retryable
+    // not_dispatched (a generic crash would be non-retryable with
+    // dispatchState "unknown").
+    expect(terminal.error.code).toBe("DRIVER_CRASH");
+    expect(terminal.dispatchState).toBe("not_dispatched");
+    expect(terminal.retryable).toBe(true);
+    expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
   });
 });

@@ -111,6 +111,18 @@ const SKILLS_DIR_NAME = "skills-empty";
  */
 const EXIT_DRAIN_GRACE_MS = 1500;
 
+/**
+ * Bounded grace (H5) the driver waits for the stderr pipe to report `end`
+ * after the process exit AND the stdout drain, before classifying a non-zero
+ * exit. stderr is an independent pipe: the resume-miss text (`Session … not
+ * found`) can land AFTER stdout EOF, and classifying from a partially-filled
+ * ring would misreport a resume-miss (retryable not_dispatched) as a generic
+ * DRIVER_CRASH, losing the automatic cold-rebase retry. This wait runs once,
+ * only on the non-zero-exit path, and is timed separately from the stdout
+ * drain grace above.
+ */
+const STDERR_DRAIN_GRACE_MS = 500;
+
 type DriverState = "cold" | "ready" | "busy" | "closing" | "closed";
 
 interface ActiveTurn {
@@ -157,6 +169,17 @@ export function createKimiStreamJsonDriver(
 
     function diagnostic(kind: string, message: string, context?: Record<string, unknown>) {
       logger.diagnostic(`kimi.${kind}`, message, { participantId, ...context });
+    }
+
+    /**
+     * Lifecycle check behind a function boundary: TypeScript's control-flow
+     * narrowing does not invalidate `state` across `await`s, so inline
+     * `state === "closing"` comparisons after an earlier narrowing check in
+     * the same function would fail typecheck even though close() CAN flip the
+     * state concurrently. The indirection keeps every check honest.
+     */
+    function isClosingOrClosed(): boolean {
+      return state === "closing" || state === "closed";
     }
 
     async function ensureLayout(): Promise<void> {
@@ -586,11 +609,35 @@ export function createKimiStreamJsonDriver(
           processExit: false as boolean,
           exitCode: null as number | null,
           stdoutEnded: false as boolean,
+          stderrEnded: false as boolean,
           settled: false as boolean,
           graceTimer: undefined as NodeJS.Timeout | undefined,
+          stderrGraceTimer: undefined as NodeJS.Timeout | undefined,
         };
+        // H2: this turn's spawned handle. The exit handler clears the shared
+        // activeProcess as soon as the exit lands, but stdout may still be
+        // draining — the handle must survive until the drain settles so the
+        // drain-timeout grace (and the NDJSON limit path) can reap the process
+        // group directly instead of calling a reap that finds nothing.
+        let turnProcess: DriverProcess | null = null;
 
-        function trySettle(reason: "exit" | "drained"): void {
+        function finishSettle(): void {
+          if (drain.settled || turn.settled) return;
+          drain.settled = true;
+          if (drain.graceTimer) {
+            clearTimeout(drain.graceTimer);
+            drain.graceTimer = undefined;
+          }
+          if (drain.stderrGraceTimer) {
+            clearTimeout(drain.stderrGraceTimer);
+            drain.stderrGraceTimer = undefined;
+          }
+          // The process already exited; nothing is left to reap through it.
+          turnProcess = null;
+          if (activeTurn === turn) settleOnExit(turn, drain.exitCode, stderrRing.text());
+        }
+
+        function trySettle(reason: "exit" | "drained" | "stderr"): void {
           if (drain.settled || turn.settled) return;
           if (!drain.processExit) return;
           void reason;
@@ -632,19 +679,44 @@ export function createKimiStreamJsonDriver(
                     toolState: "unknown",
                     retryable: true,
                   });
-                  void reapActiveProcess("drain_timeout");
+                  // H2: the exit handler already cleared activeProcess, so
+                  // reapActiveProcess would find nothing here. Shut down the
+                  // handle this turn still holds — the wedged watchdog, its
+                  // Host pipes and the supervisor record must not linger until
+                  // a global shutdown (close() has already lost this handle).
+                  const proc = turnProcess;
+                  turnProcess = null;
+                  if (proc) {
+                    void proc.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+                  }
                 }
               }, EXIT_DRAIN_GRACE_MS);
               drain.graceTimer.unref();
             }
             return;
           }
-          drain.settled = true;
-          if (drain.graceTimer) {
-            clearTimeout(drain.graceTimer);
-            drain.graceTimer = undefined;
+          // H5: on a NON-zero exit the stderr tail (the resume-miss text) can
+          // still be in flight on its independent pipe even after stdout
+          // drained. Wait a bounded grace for stderr `end` before classifying,
+          // so a late `Session … not found` is not misread as a generic
+          // DRIVER_CRASH. Skipped for cancels (teardown is already requested)
+          // and for exit 0 (the classification does not consult stderr).
+          if (drain.exitCode !== 0 && !turn.cancelling && !drain.stderrEnded) {
+            if (!drain.stderrGraceTimer) {
+              drain.stderrGraceTimer = setTimeout(() => {
+                drain.stderrGraceTimer = undefined;
+                diagnostic(
+                  "stderr_drain_timeout",
+                  "stderr did not end within the grace; classifying the non-zero exit from the captured ring",
+                  {},
+                );
+                finishSettle();
+              }, STDERR_DRAIN_GRACE_MS);
+              drain.stderrGraceTimer.unref();
+            }
+            return;
           }
-          if (activeTurn === turn) settleOnExit(turn, drain.exitCode, stderrRing.text());
+          finishSettle();
         }
 
         // F4: track the in-flight spawn so cancel()/close() can cover and wait
@@ -672,7 +744,14 @@ export function createKimiStreamJsonDriver(
               return;
             }
             activeProcess = spawned;
+            turnProcess = spawned;
             spawned.stderr.on("data", (chunk: Buffer) => stderrRing.append(chunk.toString("utf8")));
+            spawned.stderr.on("end", () => {
+              // H5: stderr drained — a pending non-zero-exit classification
+              // can now read the complete resume-miss evidence from the ring.
+              drain.stderrEnded = true;
+              trySettle("stderr");
+            });
             attachNdjsonSplitter(spawned.stdout, {
               onLine(line) {
                 let message: Record<string, unknown>;
@@ -689,6 +768,16 @@ export function createKimiStreamJsonDriver(
               },
               onLimitExceeded() {
                 if (activeTurn === turn && !turn.settled) {
+                  // H1: the splitter stops parsing permanently after the limit
+                  // trip (no further onLine/onEnd), so this turn can never
+                  // settle from frames — and the CLI process may keep running
+                  // (even executing tools) after the Host emits the terminal,
+                  // with the prompt possibly already persisted into the resume
+                  // session. Invalidate the session FIRST (synchronously, so
+                  // the next turn cold-rebases instead of resuming a poisoned
+                  // session), fail the turn, then reap the process group via
+                  // the handle this turn holds.
+                  invalidateSession("protocol_limit");
                   failTurn(
                     turn,
                     makeError("PROTOCOL_LIMIT", "stream", "NDJSON line exceeded the 8 MiB limit.", {
@@ -697,6 +786,10 @@ export function createKimiStreamJsonDriver(
                       participantId,
                     }),
                   );
+                  const proc = turnProcess ?? spawned;
+                  turnProcess = null;
+                  if (activeProcess === proc) activeProcess = null;
+                  void proc.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
                 }
               },
               onEnd() {
@@ -794,6 +887,15 @@ export function createKimiStreamJsonDriver(
         }
         persona = input.spec.personaPrompt ?? null;
         await ensureLayout();
+        // H3: close() may have completed while ensureLayout yielded — never
+        // proceed (towards the probe spawn) on a closing/closed driver. H4:
+        // CANCELLED is the lifecycle label; a close-triggered failure must not
+        // be misreported as AUTH_REQUIRED (which poisons readiness/diagnostics).
+        if (isClosingOrClosed()) {
+          throw Object.assign(new Error("kimi driver closed during prewarm"), {
+            runtimeCode: "CANCELLED",
+          });
+        }
 
         // Closed-set model validation: the probe's placeholder model
         // (`__catalog__`) and any out-of-set Agent modelId both surface
@@ -814,11 +916,16 @@ export function createKimiStreamJsonDriver(
         // is recorded, but execution always passes an explicit -m.
         const probeOk = await runProviderProbe(input.installation.realpath).catch((error) => {
           const msg = error instanceof Error ? error.message : "provider list failed";
+          const runtimeCode =
+            error instanceof Error ? (error as { runtimeCode?: string }).runtimeCode : undefined;
+          // H4: preserve the lifecycle label — a failure caused by close()
+          // (CANCELLED) must not be remapped to AUTH_REQUIRED.
           const code =
-            error instanceof Error &&
-            (error as { runtimeCode?: string }).runtimeCode === "HANDSHAKE_TIMEOUT"
+            runtimeCode === "HANDSHAKE_TIMEOUT"
               ? "HANDSHAKE_TIMEOUT"
-              : "AUTH_REQUIRED";
+              : runtimeCode === "CANCELLED"
+                ? "CANCELLED"
+                : "AUTH_REQUIRED";
           throw Object.assign(new Error(`kimi provider probe failed: ${msg}`), {
             runtimeCode: code,
           });
@@ -827,10 +934,10 @@ export function createKimiStreamJsonDriver(
         // probe); execution always pins `-m kimi-code/k3`. No secret fields.
         void probeOk;
         // G2: a concurrent close() during the probe is terminal — never
-        // resurrect `ready` on a closing/closed driver.
-        if (state === "closing" || state === "closed") {
+        // resurrect `ready` on a closing/closed driver. H4: lifecycle label.
+        if (isClosingOrClosed()) {
           throw Object.assign(new Error("kimi driver closed during prewarm"), {
-            runtimeCode: "AUTH_REQUIRED",
+            runtimeCode: "CANCELLED",
           });
         }
         state = "ready";
@@ -1005,6 +1112,15 @@ export function createKimiStreamJsonDriver(
     }> {
       const cwd = join(workRoot, participantId);
       await mkdir(cwd, { recursive: true });
+      // H3: the LAST lifecycle check before spawning — there must be no await
+      // between this check and the pendingProbe registration below, so close()
+      // can never return and then have a probe process spawn behind its back.
+      // H4: CANCELLED is the lifecycle label, not AUTH_REQUIRED.
+      if (isClosingOrClosed()) {
+        throw Object.assign(new Error("kimi driver closed before the provider probe"), {
+          runtimeCode: "CANCELLED",
+        });
+      }
       // G2: register the pending spawn BEFORE the await so close() can cover
       // the window; a probe that resolves after close() is shut down, never
       // adopted.
@@ -1026,10 +1142,10 @@ export function createKimiStreamJsonDriver(
       // G2: close() ran while the probe spawn was pending. Never adopt the
       // process — shut it down and fail the probe instead of probing (and
       // potentially resurrecting `ready` on) a closing/closed driver.
-      if (state === "closing" || state === "closed") {
+      if (isClosingOrClosed()) {
         await spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
         throw Object.assign(new Error("kimi driver closed during the provider probe"), {
-          runtimeCode: "AUTH_REQUIRED",
+          runtimeCode: "CANCELLED", // H4: lifecycle label, not an auth failure
         });
       }
       activeProbe = spawned;
