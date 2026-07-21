@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "protocol_version": "bug-hunter-v1",
+  "source": "bug-hunter-v1",
+  "scan_id": "20260720T153529Z-7149e3af-752f",
+  "fingerprint": "d56a0ba18122c243c69495f312791fbee65844b6421aee3e581a0543e2d9ea1d",
+  "validator_decision": "CONFIRMED",
+  "repo_root": "/Users/hengzhuo/code/github/Wenfeng-GAO/councilkit",
+  "base_ref": "main",
+  "base_sha": "7149e3af5420658d7da0d69ed52998148d2928b8",
+  "issue": {
+    "title": "scope-manager creating-TTL sweeper 与并发 prewarm 竞争致驱动进程泄漏与 maxDriverProcesses 配额耗尽",
+    "description": "runtime-host/scopes/scope-manager.ts 中 createScope 在 prewarm 前 arm 30s creatingScopeTtlMs sweeper; sweeper fire 的 closeScopeInternal 与并发 prewarmParticipant 无互斥/取消/scope.state 检查且从不 scopes.delete. 当 driver.close() 先于 driver.prewarm() resolve, 后 resolve 的 prewarm 把已 closed scope 的 entry.runtime 覆盖为 ready, 该 entry 永久被 liveDriverProcessCount 计入, 累积到 >16 触发 429 RESOURCE_LIMIT.",
+    "type": "bug",
+    "severity": "P2",
+    "priority": "medium",
+    "acceptance_criteria": [
+      "静态复现：注入 fake factory + creatingScopeTtlMs=1s + prewarm delay 35s，断言 close 后无 runtime=='ready' 与 liveDriverProcesses 不含泄漏条目",
+      "压力：连续 20 次 slow-prewarm 创建，断言不触发 maxDriverProcesses RESOURCE_LIMIT",
+      "回归：扩展 V3 测试集合增加 create-vs-prearm 竞争用例"
+    ]
+  },
+  "evidence": [
+    "scope-manager.ts:164-173 scheduleCreatingSweep 在 prewarm 之前 arm 一把 30s (creatingScopeTtlMs) 的 sweeper，fire 时直接 void closeScopeInternal(scope,'creating-ttl')，与第 328 行的并行 prewarm Promise.all 无互斥",
+    "scope-manager.ts:322-330 先 scopes.set 再 scheduleCreatingSweep 再 await Promise.all prewarm；creating-ttl 分支不会取消尚未完成的 prewarm",
+    "scope-manager.ts:536-559 closeScopeInternal 把 state 置 closing/closed，await entry.driver.close()，再把 entry.runtime='cold'，但全程不 await 也不检查 createScope 那侧仍在飞行中的 prewarmParticipant",
+    "claude-stream-json.ts:456-499 预热生成 supervisor.spawnDriver 进程并复用至 handshake；若 close() 在 spawn 解析前运行，close() 与之无协同，spawn 后置的 process 不会被 close 再清理一次",
+    "claude-stream-json.ts:710-732 / codex-app-server.ts:564-619 prewarm 完成后将 state='ready' 返回；prewarmParticipant(scope-manager.ts:244-247) 据此把 entry.runtime='ready'、entry.binding=resolved.binding 落到一个 state 已为 'closed' 的 scope",
+    "scope-manager.ts:118-132 liveDriverProcessCount 遍历 scopes.values() 并把 runtime 为 ready/busy/prewarming 全部计入；scope-manager.ts:536-559 closeScopeInternal 只 set state='closed'，从不 scopes.delete，故 closed scope 的 ready entry 仍被计数",
+    "scope-manager.ts:289-291 createScope 用 liveDriverProcessCount()+participants.length > QUOTAS.maxDriverProcesses 判定配额；持续累积的泄漏 ready 条目会最终触发 429 RESOURCE_LIMIT",
+    "grep 证实仓库内无 creating-ttl / scheduleCreatingSweep 的测试覆盖（仅 runtime-contract.test.ts:112 断言常量值），V3 测试(runtime-host.test.ts:1003)只覆盖 close-vs-late-terminal 窗口，未覆盖 create-vs-prewarm 窗口"
+  ],
+  "metadata": {
+    "protocol_version": "multica-v1",
+    "source": "bug-hunter-v1",
+    "mode": "simple",
+    "runtime_profile": "codex-coder",
+    "workflow_state": "BOOTSTRAPPING",
+    "repo_root": "/Users/hengzhuo/code/github/Wenfeng-GAO/councilkit",
+    "base_ref": "main",
+    "base_sha": "7149e3af5420658d7da0d69ed52998148d2928b8",
+    "fingerprint": "d56a0ba18122c243c69495f312791fbee65844b6421aee3e581a0543e2d9ea1d",
+    "validator_verdict": "CONFIRMED",
+    "allow_merge": false,
+    "allow_external_validation": false
+  },
+  "publish_mode": "handoff",
+  "assignment": {
+    "assign_last": true,
+    "target_squad_name": "squad-engineering-codex",
+    "target_squad_id": null
+  }
+}
