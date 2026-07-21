@@ -12,8 +12,8 @@ import type { DriverId } from "@shared/runtime/contracts";
  * the inherited PATH followed by the built-in macOS well-known directories.
  */
 
-export type InstallationName = "cld" | "codex";
-export type BinaryName = InstallationName | "claude";
+export type InstallationName = "cld" | "codex" | "kimi";
+export type BinaryName = InstallationName | "claude" | "cfuse-claude-code";
 
 export interface DiscoveredCandidate {
   name: BinaryName;
@@ -28,8 +28,11 @@ export interface DiscoveredInstallation {
   name: InstallationName;
   driverId: DriverId;
   wrapper: DiscoveredCandidate;
-  /** `cld` composite only: the underlying Claude executable (null = incomplete). */
+  /** `cld` composite only: the underlying Claude executable (null = absent). */
   claude: DiscoveredCandidate | null;
+  /** `cld` composite only: the `cfuse-claude-code` backend the `cfuse` route
+   * execs via `CLD_CFUSE_BIN` (null = absent; cfuse route then unavailable). */
+  cfuse: DiscoveredCandidate | null;
 }
 
 export interface DiscoveryOutcome {
@@ -42,11 +45,12 @@ export interface DiscoveryOptions {
   wellKnownDirs?: string[];
 }
 
-const BINARY_NAMES: readonly BinaryName[] = ["cld", "codex", "claude"];
+const BINARY_NAMES: readonly BinaryName[] = ["cld", "codex", "claude", "cfuse-claude-code", "kimi"];
 
 const DRIVER_BY_NAME: Record<InstallationName, DriverId> = {
   cld: "claude-stream-json",
   codex: "codex-app-server",
+  kimi: "kimi-stream-json",
 };
 
 function defaultWellKnownDirs(env: NodeJS.ProcessEnv): string[] {
@@ -57,6 +61,8 @@ function defaultWellKnownDirs(env: NodeJS.ProcessEnv): string[] {
     "/usr/bin",
     join(home, ".local", "bin"),
     join(home, "bin"),
+    // kimi-code installs its binary under its own data dir, not always on PATH.
+    join(home, ".kimi-code", "bin"),
   ];
 }
 
@@ -113,6 +119,7 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
       driverId: DRIVER_BY_NAME.cld,
       wrapper: cld,
       claude: found.get("claude") ?? null,
+      cfuse: found.get("cfuse-claude-code") ?? null,
     });
   }
   const codex = found.get("codex");
@@ -122,6 +129,17 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
       driverId: DRIVER_BY_NAME.codex,
       wrapper: codex,
       claude: null,
+      cfuse: null,
+    });
+  }
+  const kimi = found.get("kimi");
+  if (kimi) {
+    installations.push({
+      name: "kimi",
+      driverId: DRIVER_BY_NAME.kimi,
+      wrapper: kimi,
+      claude: null,
+      cfuse: null,
     });
   }
   return { installations };

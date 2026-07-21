@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { HostConfig } from "@host/config";
 import { createClaudeStreamJsonDriver } from "@host/drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "@host/drivers/codex-app-server";
+import { createKimiStreamJsonDriver } from "@host/drivers/kimi-stream-json";
 import type {
   DriverDeps,
   DriverEvent,
@@ -37,6 +38,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const WATCHDOG_PROGRAM = join(repoRoot, "runtime-host/process/watchdog-child.mjs");
 const FAKE_CLD = join(repoRoot, "tests/fixtures/drivers/fake-cld.mjs");
 const FAKE_CODEX = join(repoRoot, "tests/fixtures/drivers/fake-codex-app-server.mjs");
+const FAKE_KIMI = join(repoRoot, "tests/fixtures/drivers/fake-kimi.mjs");
 const FINGERPRINT = "f".repeat(64);
 
 const BASE_TIMEOUTS: DriverTimeouts = {
@@ -70,11 +72,13 @@ afterEach(async () => {
     () =>
       pgrepCount("fake-cld[.]mjs") === 0 &&
       pgrepCount("fake-codex-app-server[.]mjs") === 0 &&
+      pgrepCount("fake-kimi[.]mjs") === 0 &&
       pgrepCount("watchdog-child[.]mjs") === 0,
     5000,
   ).catch(() => undefined);
   expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
   expect(pgrepCount("fake-codex-app-server[.]mjs")).toBe(0);
+  expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
   expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
   await rm(tempRoot, { recursive: true, force: true });
 });
@@ -198,7 +202,7 @@ function deltaCountOf(events: DriverEvent[]): number {
 
 interface DriverScenario {
   label: string;
-  driverId: "claude-stream-json" | "codex-app-server";
+  driverId: "claude-stream-json" | "codex-app-server" | "kimi-stream-json";
   modelId: string;
   reply: string;
   /** Fixture config that crashes the process mid-turn. */
@@ -212,6 +216,12 @@ interface DriverScenario {
   expectedAliases: string[];
   /** claude emits a standalone usage event per turn; codex rides on completed. */
   emitsStandaloneUsage: boolean;
+  /** Streaming model: claude/codex stream deltas (final-only for kimi). */
+  preview: "streaming" | "final-only";
+  /** Process model: claude/codex are long-lived; kimi is per-turn. */
+  processModel: "persistent" | "per-turn";
+  /** Usage reporting: standalone / completed / none. */
+  usage: "standalone" | "completed" | "none";
   /** Expected per-turn (diffed, never cumulative) input tokens. */
   turnInputTokens(prompt: string, turnIndex: number): number;
   makeDriver(deps: DriverDeps, participantId: string): ParticipantDriver;
@@ -232,6 +242,9 @@ const claudeScenario: DriverScenario = {
   expectedCatalog: ["GLM-5.2[1m]"],
   expectedAliases: ["default"],
   emitsStandaloneUsage: true,
+  preview: "streaming",
+  processModel: "persistent",
+  usage: "standalone",
   turnInputTokens: (prompt) => 100 + prompt.length,
   makeDriver: (deps, participantId) => createClaudeStreamJsonDriver(deps)(participantId),
   makeSpec: (participantId) => ({
@@ -273,6 +286,9 @@ const codexScenario: DriverScenario = {
   expectedCatalog: ["gpt-5.6-sol", "gpt-5.5"],
   expectedAliases: [],
   emitsStandaloneUsage: false,
+  preview: "streaming",
+  processModel: "persistent",
+  usage: "completed",
   turnInputTokens: (_prompt, turnIndex) => 501 + turnIndex,
   makeDriver: (deps, participantId) => createCodexAppServerDriver(deps)(participantId),
   makeSpec: (participantId) => ({
@@ -526,3 +542,119 @@ for (const scenario of [claudeScenario, codexScenario]) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// kimi-stream-json: per-turn process model (D2 constraint — NOT a long-lived
+// pretense). The shared claude/codex loop assumes streaming + a single PID,
+// so Kimi gets its own scenario + contract asserting the FINAL-ONLY, per-turn,
+// usage=null shape: two turns are TWO pids with the same -S session id, epoch
+// stays stable across healthy turns, and cancel clears the session.
+// ---------------------------------------------------------------------------
+
+const KIMI_MODEL = "kimi-code/k3";
+const kimiScenario: DriverScenario = {
+  label: "kimi-stream-json",
+  driverId: "kimi-stream-json",
+  modelId: KIMI_MODEL,
+  reply: "Fake kimi answer.",
+  crashConfig: { crashAfterAssistant: true },
+  unknownConfig: { badJson: true },
+  crashDispatchStates: ["accepted"],
+  expectedPrewarmCounts: { providerLists: 1 },
+  expectedCatalog: [KIMI_MODEL],
+  expectedAliases: [],
+  emitsStandaloneUsage: false,
+  preview: "final-only",
+  processModel: "per-turn",
+  usage: "none",
+  turnInputTokens: () => 0,
+  makeDriver: (deps, participantId) => createKimiStreamJsonDriver(deps)(participantId),
+  makeSpec: (participantId) => ({
+    participantId,
+    profile: {
+      driverId: "kimi-stream-json",
+      installationId: "fake-kimi",
+      credentialMode: "installation-managed",
+      options: {},
+    },
+    modelId: KIMI_MODEL,
+  }),
+  makeInstallation: () => ({
+    installationId: "fake-kimi",
+    driverId: "kimi-stream-json",
+    name: "kimi",
+    discoveredPath: FAKE_KIMI,
+    realpath: FAKE_KIMI,
+    fingerprint: FINGERPRINT,
+    state: "trusted",
+    components: [{ role: "wrapper", path: FAKE_KIMI, fingerprint: FINGERPRINT }],
+    detail: null,
+  }),
+};
+
+describe("driver contract: kimi-stream-json (per-turn, final-only)", () => {
+  it("prewarm handshakes provider list once, returns the K3 closed catalog", async () => {
+    const rig = await createRig(kimiScenario);
+    expect(rig.driver.sessionEpoch).toBe(0);
+    expect(rig.prewarmResult.canonicalModelId).toBe(KIMI_MODEL);
+    expect(rig.prewarmResult.catalog).toEqual([KIMI_MODEL]);
+    expect(rig.prewarmResult.modelAliases).toEqual([]);
+    expect(rig.prewarmResult.capability.protocol).toBe("kimi-stream-json");
+    expect(rig.driver.contextWindowTokens()).toBe(1_048_576);
+    const stats = aggregateStats();
+    expect(stats.counts.providerLists).toBeGreaterThanOrEqual(1);
+  });
+
+  it("two turns are TWO pids resuming the same -S session; final-only, usage null, epoch stable", async () => {
+    const rig = await createRig(kimiScenario, { config: { reply: "Per-turn resume." } });
+    const run1 = executeCollecting(rig.driver, execInput(kimiScenario, "exec-1", "One."));
+    await run1.done;
+    const completed1 = terminalOf(run1.events);
+    expect(completed1.type).toBe("completed");
+    if (completed1.type !== "completed") throw new Error("unreachable");
+    expect(completed1.output).toBe("Per-turn resume.");
+    expect(run1.events.filter((e) => e.type === "output.delta")).toHaveLength(0);
+    expect(completed1.usage).toBeNull();
+    expect(completed1.modelVerdict).toBe("match");
+    expect(completed1.toolState).toBe("unknown");
+    expect(rig.driver.sessionEpoch).toBe(0);
+
+    const run2 = executeCollecting(rig.driver, execInput(kimiScenario, "exec-2", "Two."));
+    await run2.done;
+    const completed2 = terminalOf(run2.events);
+    expect(completed2.type).toBe("completed");
+    if (completed2.type !== "completed") throw new Error("unreachable");
+    expect(run2.events.filter((e) => e.type === "output.delta")).toHaveLength(0);
+    expect(completed2.usage).toBeNull();
+    expect(rig.driver.sessionEpoch).toBe(0);
+
+    // Per-turn: two distinct pids; the second carried the -S resume id.
+    const turnPids = aggregateStats()
+      .pids.map((pid) => {
+        const raw = readdirSync(tempRoot).includes(`stats.${pid}`)
+          ? (JSON.parse(readFileSync(join(tempRoot, `stats.${pid}`), "utf8")) as Record<
+              string,
+              unknown
+            >)
+          : null;
+        return raw && Number(raw.turns) > 0 ? raw : null;
+      })
+      .filter((s): s is Record<string, unknown> => s !== null);
+    expect(turnPids.length).toBe(2);
+    expect(new Set(turnPids.map((s) => s.pid)).size).toBe(2);
+    const resumeIds = turnPids.flatMap((s) =>
+      Array.isArray(s.resumeIds) ? (s.resumeIds as unknown[]) : [],
+    );
+    expect(resumeIds).toHaveLength(1);
+  });
+
+  it("cancel clears the session and bumps epoch (no long-lived process to keep)", async () => {
+    const rig = await createRig(kimiScenario, { config: { delayMs: 400 } });
+    const run = executeCollecting(rig.driver, execInput(kimiScenario, "exec-1", "Cancel."));
+    await new Promise((r) => setTimeout(r, 80));
+    await rig.driver.cancel("exec-1");
+    await run.done;
+    expect(terminalOf(run.events).type).toBe("interrupted");
+    expect(rig.driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+  });
+});

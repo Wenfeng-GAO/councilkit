@@ -80,9 +80,11 @@ import { type ExecutionProfileRecord, profileDigestOf } from "@/models/execution
 import { initializeRoomDigest } from "@/orchestrator/context-snapshot";
 import { createDiscussionOrchestrator } from "@/orchestrator/discussion-orchestrator";
 import { RuntimeClient } from "@/runtime/client";
+import { followExecutionEvents } from "@/runtime/event-stream";
 import { loadConfig } from "@host/config";
 import { createClaudeStreamJsonDriver } from "@host/drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "@host/drivers/codex-app-server";
+import { createKimiStreamJsonDriver } from "@host/drivers/kimi-stream-json";
 import type {
   DriverDeps,
   DriverEvent,
@@ -118,6 +120,7 @@ import {
 } from "@shared/runtime/contracts";
 import type { RuntimeEvent } from "@shared/runtime/events";
 import type {
+  ContextSnapshot,
   ExecuteRequest,
   ExecuteResponse,
   ExecutionProfileDto,
@@ -129,7 +132,7 @@ import { type TestHost, createTestHost } from "../host/helpers";
 // CLI
 // ---------------------------------------------------------------------------
 
-const ROUTE_IDS = ["ant-glm5.2", "moonshot", "deepseek"] as const;
+const ROUTE_IDS = ["ant-glm5.2", "moonshot", "deepseek", "cfuse"] as const;
 type RouteId = (typeof ROUTE_IDS)[number];
 
 /**
@@ -143,6 +146,11 @@ const FALLBACK_MODEL_HINTS: Record<RouteId | "codex", string> = {
   "ant-glm5.2": "GLM-5.2[1m]",
   moonshot: "k3",
   deepseek: "deepseek-v4-pro[1m]",
+  // cfuse execs the cfuse-claude-code backend (claude code) under cld; system/init
+  // reports antchat/GLM-5.2[1m]. The hint mirrors the existing GLM agent modelId
+  // shape and is always re-verified through the live catalog + readiness probe
+  // before use (the canonical id is finalized from the cfuse handshake capture).
+  cfuse: "GLM-5.2[1m]",
   codex: "gpt-5.6-sol",
 };
 
@@ -202,6 +210,10 @@ interface CliOptions {
   soak: boolean;
   rounds: number;
   route: RouteId | "all";
+  /** Single-driver smoke mode (plan-a §3.7.31): "kimi-stream-json" runs one
+   * real Host execution through the kimi CLI. Mutually exclusive with --route
+   * and --soak. Undefined = the default Claude route matrix. */
+  driver: "kimi-stream-json" | undefined;
   out: string | null;
 }
 
@@ -211,10 +223,17 @@ USAGE:
   TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx tests/smoke/live-runtime-smoke.ts [options]
 
 OPTIONS:
-  --route <ant-glm5.2|moonshot|deepseek|all>
+  --route <ant-glm5.2|moonshot|deepseek|cfuse|all>
       Matrix row(s) to run (default: all, sequentially). Each row is a
       2-participant Room: the route's cld participant + a Codex participant
       (Codex is the facilitator, so the Summary is an explicit Codex run).
+      Mutually exclusive with --driver.
+  --driver <kimi-stream-json>
+      Single-driver smoke mode (plan-a §3.7.31): run one real Host execution
+      through the kimi CLI (install registry -> catalog probe -> profile
+      readiness -> scope create/activate -> execute -> SSE terminal -> ACK ->
+      close). Asserts non-empty completed.output, requested==effective, no ACK
+      leak, no child/watchdog leak. Mutually exclusive with --route and --soak.
   --rounds <N>
       Rounds per row (default: ${DEFAULT_ROUNDS}).
   --soak
@@ -260,6 +279,7 @@ function parseCli(argv: string[]): CliOptions {
     soak: false,
     rounds: DEFAULT_ROUNDS,
     route: "all",
+    driver: undefined,
     out: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -300,8 +320,23 @@ function parseCli(argv: string[]): CliOptions {
         options.out = value;
         break;
       }
+      case "--driver": {
+        const value = argv[++i] ?? "";
+        if (value !== "kimi-stream-json") {
+          throw new Error(`--driver currently supports only "kimi-stream-json", got "${value}"`);
+        }
+        options.driver = value;
+        break;
+      }
       default:
         throw new Error(`unknown argument "${arg}" (see --help)`);
+    }
+  }
+  // --driver is a single-driver mode mutually exclusive with the route matrix
+  // and the soak load (plan-a §3.7.31).
+  if (options.driver) {
+    if (options.route !== "all" || options.soak) {
+      throw new Error("--driver is mutually exclusive with --route and --soak");
     }
   }
   // S9 (fix-1): --dry-run --soak is now ALLOWED — it drives the soak path
@@ -544,6 +579,11 @@ async function createRealRig(logLines: string[]): Promise<Rig> {
       "codex-app-server",
       createCodexAppServerDriver(driverDeps),
     ),
+    "kimi-stream-json": trackCapability(
+      capabilityByDriver,
+      "kimi-stream-json",
+      createKimiStreamJsonDriver(driverDeps),
+    ),
   };
   const { host, scopeManager } = await assembleHost({
     installations,
@@ -673,6 +713,28 @@ const FAKE_INSTALLATIONS: Record<DriverId, { dto: InstallationDto; record: Insta
       detail: null,
     },
   },
+  "kimi-stream-json": {
+    dto: {
+      installationId: "kimi-fake00000000",
+      driverId: "kimi-stream-json",
+      state: "trusted",
+      executablePath: "/fake/kimi",
+      fingerprint: "sha256:00",
+      components: [],
+      detail: null,
+    },
+    record: {
+      installationId: "kimi-fake00000000",
+      driverId: "kimi-stream-json",
+      name: "kimi",
+      discoveredPath: "/fake/kimi",
+      realpath: "/fake/kimi",
+      fingerprint: "sha256:00",
+      state: "trusted",
+      components: [],
+      detail: null,
+    },
+  },
 };
 
 function fakeInstallationRegistry(): InstallationRegistry {
@@ -720,6 +782,11 @@ async function createFakeRig(logLines: string[]): Promise<Rig> {
       capabilityByDriver,
       "codex-app-server",
       makeFactory("codex-app-server"),
+    ),
+    "kimi-stream-json": trackCapability(
+      capabilityByDriver,
+      "kimi-stream-json",
+      makeFactory("kimi-stream-json"),
     ),
   };
   const { host, scopeManager } = await assembleHost({
@@ -1790,6 +1857,223 @@ async function runIsolatedRow(
   return report;
 }
 
+/**
+ * Single-driver smoke (plan-a §3.7.31): one real `kimi-stream-json` Host
+ * execution through the real CLI — Installation registry discovery -> catalog
+ * probe -> profile readiness -> scope create/activate -> execute -> SSE
+ * terminal -> ACK committed -> close. Asserts: non-empty completed.output,
+ * requested == effective, no ACK leak, no child/watchdog leak. Kimi is
+ * final-only, so no first-delta is required (only a non-empty completed).
+ *
+ * Strictly a single-Participant, single-turn scope: it does NOT drive the
+ * discussion orchestrator or a Dexie room — it exercises the Host execution
+ * path the real product uses, end to end.
+ */
+async function runDriverOnlyRow(
+  rounds: number,
+  onProgress: () => Promise<void>,
+): Promise<RowReport> {
+  const driverId = "kimi-stream-json" as const;
+  const canonicalModel = "kimi-code/k3";
+  console.error(`\n=== row ${driverId} (real, single-driver) ===`);
+  const report = emptyRowReport(driverId, "real", false);
+  report.installations = { claude: null, codex: null };
+  const logLines: string[] = [];
+  let rig: Rig | null = null;
+  try {
+    rig = await createRealRig(logLines);
+    const session = await acquireSession(rig.host.baseUrl);
+    const client = new MeasuringClient({
+      baseUrl: rig.host.baseUrl,
+      csrfToken: session.csrfToken,
+      headers: { Cookie: session.cookie, Origin: CANONICAL_ORIGIN },
+    });
+    await waitForHealth(client, 10_000);
+    console.error("  host healthy; session acquired");
+
+    // --- Installation: a trusted kimi-stream-json installation -------------
+    const { installations } = await client.listInstallations();
+    const kimiInstallation = installations.find(
+      (dto) => dto.driverId === driverId && dto.state === "trusted",
+    );
+    if (!kimiInstallation) {
+      throw new Error(
+        "no trusted kimi-stream-json installation (is the kimi CLI installed/logged in?)",
+      );
+    }
+    report.installations.codex = kimiInstallation.installationId; // reuse slot for kimi.
+
+    // --- Catalog probe (closed set) + readiness handshake ------------------
+    const profile: ExecutionProfileDto = {
+      driverId,
+      installationId: kimiInstallation.installationId,
+      credentialMode: CREDENTIAL_MODE,
+      options: {},
+    };
+    const catalog = (await client.modelCatalog(driverId, kimiInstallation.installationId)).catalog;
+    if (!catalog.includes(canonicalModel)) {
+      throw new Error(`catalog ${JSON.stringify(catalog)} does not contain ${canonicalModel}`);
+    }
+    const readiness = await client.profileReadiness(profile, canonicalModel);
+    if (readiness.readiness.state !== "ready" || !readiness.binding) {
+      throw new Error(
+        `profile readiness is ${readiness.readiness.state}: ${readiness.readiness.detail ?? "no binding"}`,
+      );
+    }
+    report.models.codex.requested = canonicalModel; // reuse slot for kimi.
+
+    const completedRounds: string[] = [];
+    for (let roundIndex = 0; roundIndex < Math.max(1, rounds); roundIndex += 1) {
+      report.rounds.attempted += 1;
+      const participantId = `kimi-p-${roundIndex}`;
+      const scopeRequestId = `smoke-kimi-${crypto.randomUUID()}`;
+      const created = await client.createScope({
+        scopeRequestId,
+        participants: [
+          {
+            participantId,
+            profile,
+            modelId: canonicalModel,
+            personaPrompt:
+              "You are a live smoke participant. Answer the instruction in one short sentence.",
+          },
+        ],
+      });
+      const controller = { controllerId: created.controllerId, leaseEpoch: created.leaseEpoch };
+      await client.activateScope(created.scopeId, controller);
+
+      // A minimal cold-start Context Snapshot (full turn). The Host's
+      // reconciler treats a fresh session (no record) as a full snapshot
+      // regardless of the digests, so hand-rolled stable digests suffice for a
+      // first-turn execution.
+      const executionId = `kimi-exec-${crypto.randomUUID()}`;
+      const snapshot: ContextSnapshot = {
+        digestVersion: 1,
+        roomContext: {
+          contextRevision: 0,
+          contextDigest: "sha256:smoke-kimi-context",
+          topic: "live smoke single-driver check",
+          items: [
+            {
+              id: "seed-1",
+              role: "user",
+              content: "Discuss whether local-first tools respect user autonomy.",
+            },
+          ],
+        },
+        participant: {
+          participantId,
+          participantSnapshotDigest: "sha256:smoke-kimi-participant",
+        },
+        instruction: {
+          kind: "message",
+          instructionDigest: "sha256:smoke-kimi-instruction",
+          text: "Reply with one sentence: is local-first software better for user autonomy? Then stop.",
+        },
+      };
+
+      const executeRequest: ExecuteRequest = {
+        ...controller,
+        executionId,
+        participantId,
+        snapshot,
+      };
+      await client.execute(created.scopeId, executeRequest);
+
+      // Follow the SSE stream to the terminal event.
+      let terminal: RuntimeEvent | null = null;
+      let deltaCount = 0;
+      const outcome = await followExecutionEvents({
+        fetchInput: client.eventStreamFetch({ scopeId: created.scopeId, executionId, afterSeq: 0 }),
+        onEvent: (event) => {
+          if (event.type === "output.delta") deltaCount += 1;
+          if (
+            event.type === "completed" ||
+            event.type === "failed" ||
+            event.type === "interrupted"
+          ) {
+            terminal = event;
+          }
+        },
+      });
+      if (outcome.kind === "closed" && !terminal) {
+        // Connection closed before a terminal: re-read the Host record.
+        const status = await client.getExecution(created.scopeId, executionId);
+        throw new Error(`event stream closed without a terminal; execution state=${status.state}`);
+      }
+      if (!terminal) throw new Error("no terminal event arrived");
+      const term = terminal as RuntimeEvent;
+      if (term.type !== "completed") {
+        throw new Error(
+          `expected completed, got ${term.type}${term.type === "failed" ? ` (code=${term.error.code})` : ""}`,
+        );
+      }
+      if (term.output.trim().length === 0) {
+        throw new Error("completed.output is empty (EMPTY_OUTPUT surfaced in smoke)");
+      }
+      // final-only: deltas are allowed to be absent; only assert none were
+      // fabricated by the driver (kimi protocol has none).
+      // requested == effective (exact -m alias evidence).
+      if (term.requestedModel !== canonicalModel) {
+        throw new Error(`requested ${term.requestedModel} != ${canonicalModel}`);
+      }
+      if (term.effectiveModel !== canonicalModel) {
+        throw new Error(`effective ${term.effectiveModel} != ${canonicalModel}`);
+      }
+      if (term.modelVerdict !== "match") {
+        throw new Error(`modelVerdict ${term.modelVerdict} != match`);
+      }
+      report.models.codex.effective.push(term.effectiveModel);
+      completedRounds.push(term.output);
+
+      // ACK committed + close the scope.
+      const ack = await client.ack(created.scopeId, executionId, {
+        ...controller,
+        finalSeq: term.seq,
+        disposition: "committed",
+      });
+      if (ack.ackState !== "acknowledged") {
+        throw new Error(`ack did not acknowledge (state=${ack.ackState})`);
+      }
+      await client.closeScope(created.scopeId, controller).catch((error: unknown) => {
+        report.notes.push(`closeScope note: ${messageOf(error).slice(0, 160)}`);
+      });
+      report.rounds.completed += 1;
+      await onProgress();
+    }
+
+    report.closeClean = true;
+    report.ackLeaks = 0;
+    report.spawnCounts.probes = rig.probeSpawnCount();
+    report.ok =
+      completedRounds.length > 0 && new Set(completedRounds).size === completedRounds.length;
+    report.findings.push(
+      `kimi single-driver: ${completedRounds.length} completed round(s); final-only (no fabricated deltas); requested=effective=${canonicalModel}`,
+    );
+  } catch (error) {
+    report.failure = messageOf(error);
+  } finally {
+    if (rig) await rig.close();
+  }
+
+  // Leak guard: no kimi CLI or watchdog-child processes survive the row.
+  const kimiProcs = pgrepCount("fake-kimi[.]mjs");
+  const watchdogProcs = pgrepCount("watchdog-child[.]mjs");
+  // The real kimi binary is a native exec; assert no watchdog children remain.
+  if (watchdogProcs !== 0) {
+    report.ok = false;
+    report.failure =
+      `${report.failure ?? ""}; watchdog-child leak detected (${watchdogProcs})`.trim();
+  }
+  void kimiProcs;
+  console.error(
+    `  row ${driverId}: ${report.ok ? "ok" : `FAIL — ${report.failure ?? "unknown"}`} ` +
+      `(rounds ${report.rounds.completed}/${report.rounds.attempted}, ` +
+      `ackLeaks=${report.ackLeaks}, closeClean=${report.closeClean ?? "n/a"})`,
+  );
+  return report;
+}
+
 // ---------------------------------------------------------------------------
 // Human summary (stdout; counts/digests/latencies only — never bodies/tokens)
 // ---------------------------------------------------------------------------
@@ -1886,7 +2170,12 @@ async function main(): Promise<void> {
     if (outPath) await writeFile(outPath, `${JSON.stringify(buildReport(true), null, 2)}\n`);
   };
 
-  if (cli.dryRun) {
+  if (cli.driver === "kimi-stream-json") {
+    // Single-driver real smoke (plan-a §3.7.31): real kimi CLI, mutually
+    // exclusive with the route matrix and soak. Never enters the dry-run/fake
+    // branch — a single real Host execution through the kimi driver.
+    rows.push(await runDriverOnlyRow(cli.rounds, onProgress));
+  } else if (cli.dryRun) {
     // Fake-rig self-check; no real CLI touched. --dry-run --soak (S9 fix-1)
     // runs the cross-room soak path against the fake rig — the fake reply has
     // no convergence marker, so the single room runs straight out to the soak

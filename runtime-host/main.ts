@@ -10,6 +10,7 @@ import {
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "./drivers/codex-app-server";
+import { createKimiStreamJsonDriver } from "./drivers/kimi-stream-json";
 import type { DriverDeps, ParticipantDriver, PrewarmInput, PrewarmResult } from "./drivers/types";
 import { createExecutionRegistry } from "./executions/execution-registry";
 import { createInstallationRegistry } from "./installations/registry";
@@ -99,6 +100,11 @@ async function main(): Promise<void> {
       capabilityByDriver,
       "codex-app-server",
       createCodexAppServerDriver(driverDeps),
+    ),
+    "kimi-stream-json": withCapabilityTracking(
+      capabilityByDriver,
+      "kimi-stream-json",
+      createKimiStreamJsonDriver(driverDeps),
     ),
   };
 

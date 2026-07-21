@@ -51,7 +51,7 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 export const installationComponentSchema = z
   .object({
-    role: z.enum(["wrapper", "claude-binary"]),
+    role: z.enum(["wrapper", "claude-binary", "cfuse-binary"]),
     path: z.string().min(1),
     fingerprint: z.string().min(1),
   })
@@ -93,7 +93,7 @@ export type ModelCatalogResponse = z.infer<typeof modelCatalogResponseSchema>;
 // Execution Profiles
 // ---------------------------------------------------------------------------
 
-export const claudeRouteSchema = z.enum(["ant-glm5.2", "moonshot", "deepseek"]);
+export const claudeRouteSchema = z.enum(["ant-glm5.2", "moonshot", "deepseek", "cfuse"]);
 export type ClaudeRoute = z.infer<typeof claudeRouteSchema>;
 
 export const claudeStreamJsonOptionsSchema = z.object({ route: claudeRouteSchema }).strict();
@@ -103,6 +103,14 @@ export const codexAppServerOptionsSchema = z
   .object({ reasoningEffort: z.string().min(1).max(64).optional() })
   .strict();
 export type CodexAppServerOptions = z.infer<typeof codexAppServerOptionsSchema>;
+
+/**
+ * `kimi-stream-json` options: the Kimi model is selected by the Agent's
+ * `modelId` against the closed K3 catalog — the Profile carries no model,
+ * route, argv or token fields (strict empty object).
+ */
+export const kimiStreamJsonOptionsSchema = z.object({}).strict();
+export type KimiStreamJsonOptions = z.infer<typeof kimiStreamJsonOptionsSchema>;
 
 /** Typed Execution Profile DTO. Strict by construction: no executable, argv,
  * shell, raw env or token fields can pass validation. */
@@ -121,6 +129,14 @@ export const executionProfileSchema = z.discriminatedUnion("driverId", [
       installationId: z.string().min(1),
       credentialMode: z.literal(CREDENTIAL_MODE),
       options: codexAppServerOptionsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      driverId: z.literal("kimi-stream-json"),
+      installationId: z.string().min(1),
+      credentialMode: z.literal(CREDENTIAL_MODE),
+      options: kimiStreamJsonOptionsSchema,
     })
     .strict(),
 ]);

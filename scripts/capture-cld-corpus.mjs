@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Captures a real `cld ant glm5.2` stream-json session as {dir,msg} NDJSON
+ * Captures a real `cld <route>` stream-json session as {dir,msg} NDJSON
  * for the protocol corpus (tests/fixtures/protocol-corpus/cld/). The raw
- * capture lands in /tmp/ck-proto/cld-ant-glm5.2.jsonl; run
+ * capture lands in /tmp/ck-proto/cld-<route>.jsonl by default; run
  * scripts/build-protocol-corpus.mjs afterwards to redact it into the repo.
  *
  * Recorded sequence (dir convention: "out" = host->stdin, "in" = stdout->host):
@@ -14,11 +14,55 @@
  *
  * argv mirrors runtime-host/drivers/claude-stream-json.ts buildArgv exactly
  * (no persona), so the capture matches the driver's real traffic.
+ *
+ * Usage:
+ *   node scripts/capture-cld-corpus.mjs [--route <id>] [outPath]
+ *
+ * --route defaults to ant-glm5.2 and must be one of the closed route set
+ * (ant-glm5.2|moonshot|deepseek|cfuse). For the cfuse route the capture is
+ * also used to decide servesModel/modelAliases from the four-way handshake
+ * evidence (plan-a §4.1); cfuse execs the cfuse-binary backend via CLD_CFUSE_BIN.
  */
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
-const OUT_PATH = process.argv[2] ?? "/tmp/ck-proto/cld-ant-glm5.2.jsonl";
+// Closed route set + the leading argv mirrored from ROUTES in
+// runtime-host/drivers/claude-stream-json.ts. Keeping a local copy here (not
+// importing the TS) keeps the capture script a standalone mjs tool.
+const ROUTE_ARGV = {
+  "ant-glm5.2": ["ant", "glm5.2"],
+  moonshot: ["moonshot"],
+  deepseek: ["deepseek"],
+  cfuse: ["cfuse"],
+};
+const ROUTE_IDS = Object.keys(ROUTE_ARGV);
+
+function parseArgs(argv) {
+  const options = { route: "ant-glm5.2", outPath: null };
+  const positional = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--route") {
+      const value = argv[++i] ?? "";
+      if (!ROUTE_IDS.includes(value)) {
+        throw new Error(`--route must be one of ${ROUTE_IDS.join("|")}, got "${value}"`);
+      }
+      options.route = value;
+    } else if (arg === "--help" || arg === "-h") {
+      process.stdout.write(
+        `usage: node scripts/capture-cld-corpus.mjs [--route ${ROUTE_IDS.join("|")}] [outPath]\n  default route: ant-glm5.2; default outPath: /tmp/ck-proto/cld-<route>.jsonl\n`,
+      );
+      process.exit(0);
+    } else {
+      positional.push(arg);
+    }
+  }
+  options.outPath = positional[0] ?? `/tmp/ck-proto/cld-${options.route}.jsonl`;
+  return options;
+}
+
+const { route, outPath } = parseArgs(process.argv.slice(2));
+const OUT_PATH = outPath;
 
 const DISCUSSION_CONTRACT = [
   "You are one Participant in a structured CouncilKit discussion.",
@@ -27,8 +71,7 @@ const DISCUSSION_CONTRACT = [
 ].join(" ");
 
 const argv = [
-  "ant",
-  "glm5.2",
+  ...ROUTE_ARGV[route],
   "--print",
   "--input-format",
   "stream-json",
@@ -50,9 +93,15 @@ const argv = [
   DISCUSSION_CONTRACT,
 ];
 
+// The cfuse route execs the cfuse-binary backend via CLD_CFUSE_BIN, not the
+// claude binary. The driver injects CLD_CFUSE_BIN; mirror that here so the
+// capture matches real cfuse traffic. (Default backend path is cld's own
+// default ~/.local/bin/cfuse-claude-code when the env is unset.)
+const spawnEnv = { ...process.env, CLD_SKIP_UPDATE_CHECK: "1" };
+
 const frames = [];
 const child = spawn("cld", argv, {
-  env: { ...process.env, CLD_SKIP_UPDATE_CHECK: "1" },
+  env: spawnEnv,
   stdio: ["pipe", "pipe", "pipe"],
 });
 child.stderr.on("data", () => {});

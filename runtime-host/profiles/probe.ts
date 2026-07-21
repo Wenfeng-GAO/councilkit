@@ -240,21 +240,33 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
     route?: ClaudeRoute,
   ): Promise<{ catalog: string[] }> {
     // Catalog needs no real profile options beyond the claude route; the
-    // schema-valid minimal DTO only carries the binding target.
-    const profile: ExecutionProfileDto =
-      driverId === "claude-stream-json"
-        ? {
-            driverId,
-            installationId,
-            credentialMode: "installation-managed",
-            options: { route: route ?? "ant-glm5.2" },
-          }
-        : {
-            driverId,
-            installationId,
-            credentialMode: "installation-managed",
-            options: {},
-          };
+    // schema-valid minimal DTO only carries the binding target. Explicit
+    // three-branch construction avoids an implicit "non-claude == codex"
+    // type assumption now that a third driver exists.
+    let profile: ExecutionProfileDto;
+    if (driverId === "claude-stream-json") {
+      profile = {
+        driverId,
+        installationId,
+        credentialMode: "installation-managed",
+        options: { route: route ?? "ant-glm5.2" },
+      };
+    } else if (driverId === "codex-app-server") {
+      profile = {
+        driverId,
+        installationId,
+        credentialMode: "installation-managed",
+        options: {},
+      };
+    } else {
+      // kimi-stream-json: empty options (model selected by the Agent's modelId).
+      profile = {
+        driverId,
+        installationId,
+        credentialMode: "installation-managed",
+        options: {},
+      };
+    }
     const { driver, installation, spec } = gateProbeDriver(profile, CATALOG_PROBE_MODEL_ID);
     try {
       const prewarm = await driver.prewarm({

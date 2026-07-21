@@ -11,8 +11,9 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
 - pnpm。
 - Chromium（仅 `pnpm test:e2e` 需要）。
 - 至少一个已安装并登录的本机 CLI：
-  - `cld`（Runtime Driver `claude-stream-json`，支持 `cld ant glm5.2` / `cld moonshot` / `cld deepseek` 三条 route）。
+  - `cld`（Runtime Driver `claude-stream-json`，支持 `cld ant glm5.2` / `cld moonshot` / `cld deepseek` / `cld cfuse` 四条 route；`cld cfuse` 经 `cfuse-claude-code` 后端透传，不依赖 `claude` binary）。
   - Codex CLI（Runtime Driver `codex-app-server`，即官方 `codex app-server`）。
+  - 本地 `kimi` CLI + coding plan 登录（Runtime Driver `kimi-stream-json`，模型 `kimi-code/k3`，发现路径含 `~/.kimi-code/bin`）。
 
 认证统一为 `installation-managed`：本机 Runtime Installation 自行解析凭据，CouncilKit 从不读取或存储 API Key，也不提供 browser-direct fallback。
 
@@ -29,7 +30,7 @@ pnpm start
 用 Chromium 打开 `http://127.0.0.1:43127`，然后：
 
 1. 打开 **Settings**，按「Host → Installations/登录能力 → Execution Profiles → Agents」四段检查：Host 可用，且至少一个 Runtime Installation 处于 trusted、对应 Driver 显示 ready。
-2. 在 **Execution Profiles** 段创建两个 Profile（例如一个基于 `claude-stream-json`，一个基于 `codex-app-server`）。
+2. 在 **Execution Profiles** 段创建两个或更多 Profile（例如一个基于 `claude-stream-json`（含 cfuse route），一个基于 `codex-app-server` 或 `kimi-stream-json`）。
 3. 在 **Agents** 段创建两个 Agent，各自绑定一个 Profile 并从该 Driver 的闭集目录选择 `modelId`。
 4. 进入 **New Room**，选择这两个 Agent、确认发言顺序并显式指定 Facilitator；可选填写「目标输出（targetOutput）」与「最大轮次（maxRounds，留空=不限）」，并选择讨论模式（brainstorm / planning / review，只影响引导方式与报告侧重，不改执行规则）。创建 Room。
 5. 在 Room 页面点击 **开始新一轮**（首次为「发起讨论」）：Facilitator 先给本轮焦点方向，两个 Participant 依次发言，Facilitator 生成 Round Summary。
@@ -98,6 +99,10 @@ pnpm test:e2e    # Playwright，仅 Chromium，先构建再启动真实 Host
 
 ```bash
 pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
+
+# 单 driver 真实冒烟（kimi CLI；与 --route/--soak 互斥）
+TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx tests/smoke/live-runtime-smoke.ts \
+  --driver kimi-stream-json --rounds 1
 ```
 
 注意：真实冒烟与 `pnpm test` 不得并发运行（两者都会占用固定端口与真实 CLI 资源）。
@@ -115,9 +120,9 @@ pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
 - Dexie `councilkit-runtime-v1` 是讨论的唯一事实源（Room/Round/Message/Summary/ModelExecution/DecisionReport）；CLI thread/process 只是可丢弃的 Execution Session 缓存。
 - Message/Summary 使用 persist → ACK 幂等提交：先 Dexie 事务成功，再 ACK Host；同一 `executionId` 的完成事件重放不会重复落库。
 - Web Lock + `leaseEpoch` fencing 保证一个 Execution Scope 同时只有一个 Scope Controller 可以执行 Host mutation 与 Dexie 提交；其他标签页只读观察。
-- 每个活跃 Participant 保持一个长期 Driver 进程和隔离的 Execution Session；纯追加轮次只向健康 Session 下发增量 Context Snapshot。
+- 每个活跃 Participant 保持一个 Driver 实例和隔离的 Execution Session；Claude/Codex 为长期进程，Kimi 为每 turn 短进程 + `-S` 跨进程 resume（ADR-0012）；纯追加轮次只向健康 Session 下发增量 Context Snapshot。
 - 页面刷新使用同一 Scope 与 `executionId` 重连事件流，从最后收到的 `eventSeq` 继续，不重新调用模型。
-- V1 只有两个内置 Runtime Driver：`claude-stream-json` 与 `codex-app-server`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
+- V1 有三个内置 Runtime Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
 
 ## 管理面
 

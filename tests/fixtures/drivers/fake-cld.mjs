@@ -28,9 +28,18 @@
  *   statsPath         string  stats file prefix; stats land at `<statsPath>.<pid>`
  *
  * Stats (written after every event, tmp+rename): {pid, initializes, interrupts,
- * userMessages, results}. Usage/cost in result frames are CUMULATIVE across
- * turns of this process (per turn: input += 100 + promptLength, output +=
- * reply.length, cost += 0.001) because the driver reports per-turn diffs.
+ * userMessages, results, routeArgv, hasCldClaudeBin, hasCldCfuseBin}. Usage/cost
+ * in result frames are CUMULATIVE across turns of this process (per turn:
+ * input += 100 + promptLength, output += reply.length, cost += 0.001) because
+ * the driver reports per-turn diffs.
+ *
+ * cfuse route assertion aid (plan-a §3.6.17): the driver spawns `cld cfuse ...`
+ * with CLD_CFUSE_BIN set and CLD_CLAUDE_BIN absent, and every other route with
+ * CLD_CLAUDE_BIN set and CLD_CFUSE_BIN absent. The fixture records only the
+ * route's leading argv token and the two presence booleans (never the binary
+ * paths — they are realpaths the Host validates, not for the fixture to echo)
+ * so a test can assert the route-specific component pin without re-running the
+ * real CLI.
  *
  * Protocol implemented (matching runtime-host/drivers/claude-stream-json.ts):
  * - control_request initialize -> control_response success with models catalog
@@ -69,7 +78,17 @@ function readConfig() {
   }
 }
 
-const stats = { initializes: 0, interrupts: 0, userMessages: 0, results: 0 };
+const stats = {
+  initializes: 0,
+  interrupts: 0,
+  userMessages: 0,
+  results: 0,
+  // Route/component pin scent (set once at startup from argv + the driver's
+  // envSet; booleans only — never the real binary paths).
+  routeArgv: process.argv.slice(2).find((arg) => !arg.startsWith("-")) ?? null,
+  hasCldClaudeBin: process.env.CLD_CLAUDE_BIN !== undefined,
+  hasCldCfuseBin: process.env.CLD_CFUSE_BIN !== undefined,
+};
 
 function writeStats(config) {
   if (!config.statsPath) return;

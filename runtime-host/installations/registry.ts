@@ -83,8 +83,13 @@ interface InternalInstallation {
   /** Present exactly while a full validation has passed at least once. */
   wrapper: PinnedFile | null;
   claude: PinnedFile | null;
+  /** Pinned `cfuse-claude-code` backend (the `cfuse` route execs this via
+   * `CLD_CFUSE_BIN`). A cld installation is trusted with EITHER backend. */
+  cfuse: PinnedFile | null;
   /** Last discovered `claude` candidate path, even when never pinned. */
   claudePath: string | null;
+  /** Last discovered `cfuse-claude-code` candidate path, even when never pinned. */
+  cfusePath: string | null;
   /** Best-effort realpath for DTOs when nothing is pinned. */
   knownRealpath: string | null;
   detail: string | null;
@@ -166,6 +171,7 @@ export function createInstallationRegistry(
     installationId: string,
     wrapperResult: ValidationResult,
     claudeResult: ValidationResult | null,
+    cfuseResult: ValidationResult | null,
   ): InternalInstallation {
     const base = {
       installationId,
@@ -174,6 +180,7 @@ export function createInstallationRegistry(
       discoveredPath: candidate.wrapper.path,
       source: candidate.wrapper.source,
       claudePath: candidate.claude?.path ?? null,
+      cfusePath: candidate.cfuse?.path ?? null,
     };
     const knownRealpath = wrapperResult.ok
       ? wrapperResult.record.realpath
@@ -183,6 +190,7 @@ export function createInstallationRegistry(
       state,
       wrapper: null,
       claude: null,
+      cfuse: null,
       knownRealpath,
       detail: detail(text),
     });
@@ -194,18 +202,40 @@ export function createInstallationRegistry(
       );
     }
     if (candidate.name === "cld") {
-      if (!candidate.claude) {
-        return unpinned(
-          "invalid",
-          "Composite installation is incomplete: no `claude` executable found on PATH or the well-known directories.",
-        );
-      }
-      if (!claudeResult || !claudeResult.ok) {
-        const reason = claudeResult && !claudeResult.ok ? claudeResult.reason : "not_found";
-        const why = claudeResult && !claudeResult.ok ? claudeResult.detail : "missing";
+      // The `cld` wrapper drives two independent backends: `claude` (ant /
+      // moonshot / deepseek routes, exec'd via CLD_CLAUDE_BIN) and
+      // `cfuse-claude-code` (the cfuse route, exec'd via CLD_CFUSE_BIN). Each
+      // backend is validated independently; a cld installation is trusted
+      // when the wrapper plus AT LEAST ONE backend validates. A cfuse-only
+      // environment must not be marked invalid for lacking `claude`.
+      const claudePin =
+        candidate.claude && claudeResult?.ok
+          ? pin(candidate.claude.path, claudeResult.record)
+          : null;
+      const cfusePin =
+        candidate.cfuse && cfuseResult?.ok ? pin(candidate.cfuse.path, cfuseResult.record) : null;
+      if (!claudePin && !cfusePin) {
+        const claudeReason = candidate.claude
+          ? claudeResult && !claudeResult.ok
+            ? claudeResult.reason
+            : "not_found"
+          : "not_found";
+        const cfuseReason = candidate.cfuse
+          ? cfuseResult && !cfuseResult.ok
+            ? cfuseResult.reason
+            : "not_found"
+          : "not_found";
         const state =
-          reason === "bad_owner" || reason === "writable_path" ? "discovered" : "invalid";
-        return unpinned(state, `claude binary validation failed (${reason}): ${why}`);
+          claudeReason === "bad_owner" ||
+          claudeReason === "writable_path" ||
+          cfuseReason === "bad_owner" ||
+          cfuseReason === "writable_path"
+            ? "discovered"
+            : "invalid";
+        return unpinned(
+          state,
+          `Composite installation has no valid backend (claude: ${claudeReason}, cfuse: ${cfuseReason}).`,
+        );
       }
       if (!promotable(candidate)) {
         return unpinned("discovered", "Candidate source is not eligible for V1 auto-promotion.");
@@ -214,7 +244,8 @@ export function createInstallationRegistry(
         ...base,
         state: "trusted",
         wrapper: pin(candidate.wrapper.path, wrapperResult.record),
-        claude: pin(candidate.claude.path, claudeResult.record),
+        claude: claudePin,
+        cfuse: cfusePin,
         knownRealpath,
         detail: null,
       };
@@ -227,6 +258,7 @@ export function createInstallationRegistry(
       state: "trusted",
       wrapper: pin(candidate.wrapper.path, wrapperResult.record),
       claude: null,
+      cfuse: null,
       knownRealpath,
       detail: null,
     };
@@ -262,30 +294,32 @@ export function createInstallationRegistry(
       };
     }
     if (existing.name === "cld") {
-      const claudePin = existing.claude;
-      if (!claudePin) {
-        return {
-          ...existing,
-          state: "changed",
-          detail: "Composite installation lost its pinned claude binary.",
-        };
+      // Re-validate each pinned backend independently. The wrapper already
+      // validated above. The installation stays trusted while at least one
+      // pinned backend still validates; a drifted backend is dropped from the
+      // pin set only by a fresh discovery (classify), so here a drift on any
+      // pinned backend surfaces as `changed` to force revalidation.
+      const backendDrift = (pin: PinnedFile, label: string): string | null => {
+        const result = validate(pin.discoveredPath);
+        if (!result.ok) {
+          return `Pinned ${label} binary no longer validates (${result.reason}): ${result.detail}`;
+        }
+        const drift = pinDrift(pin, result.record);
+        return drift ? `Pinned ${label} binary drifted: ${drift}.` : null;
+      };
+      if (existing.claude) {
+        const msg = backendDrift(existing.claude, "claude");
+        if (msg) return { ...existing, state: "changed", detail: detail(msg) };
       }
-      const claudeResult = validate(claudePin.discoveredPath);
-      if (!claudeResult.ok) {
-        return {
-          ...existing,
-          state: "changed",
-          detail: detail(
-            `Pinned claude binary no longer validates (${claudeResult.reason}): ${claudeResult.detail}`,
-          ),
-        };
+      if (existing.cfuse) {
+        const msg = backendDrift(existing.cfuse, "cfuse");
+        if (msg) return { ...existing, state: "changed", detail: detail(msg) };
       }
-      const claudeDrift = pinDrift(claudePin, claudeResult.record);
-      if (claudeDrift) {
+      if (!existing.claude && !existing.cfuse) {
         return {
           ...existing,
           state: "changed",
-          detail: detail(`Pinned claude binary drifted: ${claudeDrift}.`),
+          detail: "Composite installation lost its pinned backend binary.",
         };
       }
     }
@@ -306,10 +340,25 @@ export function createInstallationRegistry(
       claude: existing.claudePath
         ? { name: "claude", path: existing.claudePath, source: existing.source, pathIndex: 0 }
         : null,
+      cfuse: existing.cfusePath
+        ? {
+            name: "cfuse-claude-code",
+            path: existing.cfusePath,
+            source: existing.source,
+            pathIndex: 0,
+          }
+        : null,
     };
     const wrapperResult = validate(existing.discoveredPath);
     const claudeResult = candidate.claude ? validate(candidate.claude.path) : null;
-    const fresh = classify(candidate, existing.installationId, wrapperResult, claudeResult);
+    const cfuseResult = candidate.cfuse ? validate(candidate.cfuse.path) : null;
+    const fresh = classify(
+      candidate,
+      existing.installationId,
+      wrapperResult,
+      claudeResult,
+      cfuseResult,
+    );
     if (fresh.state !== "trusted") return fresh;
     return {
       ...fresh,
@@ -332,6 +381,13 @@ export function createInstallationRegistry(
         role: "claude-binary",
         path: record.claude.realpath,
         fingerprint: record.claude.fingerprint,
+      });
+    }
+    if (record.cfuse) {
+      components.push({
+        role: "cfuse-binary",
+        path: record.cfuse.realpath,
+        fingerprint: record.cfuse.fingerprint,
       });
     }
     return {
@@ -368,6 +424,8 @@ export function createInstallationRegistry(
       const wrapperResult = validate(candidate.wrapper.path);
       const claudeResult =
         candidate.name === "cld" && candidate.claude ? validate(candidate.claude.path) : null;
+      const cfuseResult =
+        candidate.name === "cld" && candidate.cfuse ? validate(candidate.cfuse.path) : null;
       const realpath = wrapperResult.ok
         ? wrapperResult.record.realpath
         : bestEffortRealpath(candidate.wrapper.path);
@@ -380,7 +438,7 @@ export function createInstallationRegistry(
       } else {
         records.set(
           installationId,
-          classify(candidate, installationId, wrapperResult, claudeResult),
+          classify(candidate, installationId, wrapperResult, claudeResult, cfuseResult),
         );
       }
     }

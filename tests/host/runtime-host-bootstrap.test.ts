@@ -83,6 +83,7 @@ describe("fixed canonical origin", () => {
     expect(drivers.map((d) => d.driverId).sort()).toEqual([
       "claude-stream-json",
       "codex-app-server",
+      "kimi-stream-json",
     ]);
     // Public health leaks no paths/models/fingerprints.
     const raw = JSON.stringify(body);

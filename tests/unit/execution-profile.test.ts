@@ -74,6 +74,35 @@ describe("execution profile DTO", () => {
     expect(validated.ok).toBe(true);
   });
 
+  it("round-trips the kimi profile variant with empty options (no model saved)", () => {
+    const record = claudeRecord({
+      driverId: "kimi-stream-json",
+      installationId: "kimi-fedcba987654",
+      options: {},
+    });
+    const dto = toDto(record);
+    expect(dto).toEqual({
+      driverId: "kimi-stream-json",
+      installationId: "kimi-fedcba987654",
+      credentialMode: "installation-managed",
+      options: {},
+    });
+    const validated = validateProfileDto(dto);
+    expect(validated.ok).toBe(true);
+    if (validated.ok) expect(validated.dto).toEqual(dto);
+    // Kimi Profile saves no model, route, argv or token.
+    expect(JSON.stringify(dto)).not.toMatch(/executable|argv|shell|token|model/i);
+    // Strict options reject any field on the kimi variant.
+    expect(
+      validateProfileDto({
+        driverId: "kimi-stream-json",
+        installationId: "kimi-fedcba987654",
+        credentialMode: CREDENTIAL_MODE,
+        options: { modelId: "kimi-code/k3" },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects executable/argv/shell/env/token injection", () => {
     const base = toDto(claudeRecord()) as unknown as Record<string, unknown>;
     const injections: Record<string, unknown>[] = [

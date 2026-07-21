@@ -11,10 +11,13 @@ import type { Logger } from "../logging";
 import type { ProcessSupervisor } from "../process/process-supervisor";
 
 /**
- * The Host Driver contract both V1 drivers implement. One driver instance
- * belongs to exactly one Participant; Participants never share processes or
- * Execution Sessions, and a Participant runs at most one Model Execution at
- * a time (enforced by the scope manager).
+ * The Host Driver contract all V1 drivers implement. One driver instance
+ * belongs to exactly one Participant; Participants never share Execution
+ * Sessions, and a Participant runs at most one Model Execution at a time
+ * (enforced by the scope manager). Claude and Codex back one long-lived
+ * process per Participant; Kimi is a controlled exception — one short-lived
+ * process per turn with Participant-level session-ID continuity via `-S`
+ * resume — and performs no in-place retry.
  */
 
 /** Distributes Omit over a union so per-variant fields survive. */

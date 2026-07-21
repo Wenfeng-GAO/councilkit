@@ -590,3 +590,226 @@ describe("probe cache + backoff + invalidation", () => {
     expect(cached.data?.cachedAt).toBe(next.data?.cachedAt);
   });
 });
+
+/**
+ * cfuse route (Slice 1): the claude route whitelist admits `cfuse`, and the
+ * readiness handshake carries route: "cfuse" on the resolved binding. The
+ * route participates in the catalog cache key (different route → fresh
+ * handshake). Backed by a tiny fake claude driver that echoes the profile.
+ */
+const CFUSE_DTO: InstallationDto = {
+  installationId: "cld-cfuse0000000",
+  driverId: "claude-stream-json",
+  state: "trusted",
+  executablePath: "/fake/cld",
+  fingerprint: "sha256:00",
+  components: [
+    { role: "wrapper", path: "/fake/cld", fingerprint: "sha256:00" },
+    { role: "cfuse-binary", path: "/fake/cfuse", fingerprint: "sha256:01" },
+  ],
+  detail: null,
+};
+
+const CFUSE_RECORD: InstallationRecord = {
+  installationId: CFUSE_DTO.installationId,
+  driverId: "claude-stream-json",
+  name: "cld",
+  discoveredPath: "/fake/cld",
+  realpath: "/fake/cld",
+  fingerprint: "sha256:00",
+  state: "trusted",
+  components: CFUSE_DTO.components,
+  detail: null,
+};
+
+const CFUSE_MODEL = "GLM-5.2[1m]";
+
+describe("cfuse route readiness + catalog cache key", () => {
+  it("resolves a cfuse-route claude profile ready with route on the binding", async () => {
+    const drivers: FakeDriver[] = [];
+    const profileProbe = createProfileProbe({
+      installations: fakeRegistry({
+        dtos: [CFUSE_DTO],
+        assertExecutable: () => CFUSE_RECORD,
+      }),
+      driverFactories: {
+        "claude-stream-json": (participantId: string) => {
+          const driver = createFakeDriver(participantId);
+          // The fake driver hard-codes codex semantics; soft-override the
+          // prewarm to claude cfuse reality (canonical = requested model).
+          driver.prewarm = async (input) => {
+            driver.prewarmCount += 1;
+            return {
+              canonicalModelId: input.spec.modelId,
+              modelAliases: ["default"],
+              capability: { protocol: "claude-stream-json", controlInitialize: true },
+              catalog: [input.spec.modelId],
+            };
+          };
+          drivers.push(driver);
+          return driver;
+        },
+      },
+      logger: nullLogger,
+    });
+    host = await createTestHost({
+      extraServices: { installationRegistry: fakeRegistry({ dtos: [CFUSE_DTO] }), profileProbe },
+      routesFactory: (services) => installationRoutes(services),
+    });
+
+    const res = await postReadiness(
+      host,
+      JSON.stringify({
+        profile: {
+          driverId: "claude-stream-json",
+          installationId: CFUSE_DTO.installationId,
+          credentialMode: "installation-managed",
+          options: { route: "cfuse" },
+        },
+        modelId: CFUSE_MODEL,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.data?.readiness.state).toBe("ready");
+    expect(res.data?.binding?.route).toBe("cfuse");
+    expect(res.data?.binding?.canonicalModelId).toBe(CFUSE_MODEL);
+    expect(drivers[0]?.closeCount).toBe(1);
+  });
+});
+
+/**
+ * kimi-stream-json (Slice 2): the catalog probe passes no route, the readiness
+ * binding carries no route, and an out-of-catalog model surfaces
+ * model_unavailable. Backed by a tiny fake kimi driver echoing the K3 closed
+ * set; the probe driver is always closed (no CLI process leak).
+ */
+const KIMI_DTO: InstallationDto = {
+  installationId: "kimi-0123456789ab",
+  driverId: "kimi-stream-json",
+  state: "trusted",
+  executablePath: "/fake/kimi",
+  fingerprint: "sha256:00",
+  components: [{ role: "wrapper", path: "/fake/kimi", fingerprint: "sha256:00" }],
+  detail: null,
+};
+
+const KIMI_RECORD: InstallationRecord = {
+  installationId: KIMI_DTO.installationId,
+  driverId: "kimi-stream-json",
+  name: "kimi",
+  discoveredPath: "/fake/kimi",
+  realpath: "/fake/kimi",
+  fingerprint: "sha256:00",
+  state: "trusted",
+  components: KIMI_DTO.components,
+  detail: null,
+};
+
+const KIMI_MODEL = "kimi-code/k3";
+
+describe("kimi-stream-json readiness + catalog (no route)", () => {
+  it("resolves a kimi profile ready with the K3 canonical model and no route", async () => {
+    const drivers: FakeDriver[] = [];
+    const profileProbe = createProfileProbe({
+      installations: fakeRegistry({
+        dtos: [KIMI_DTO],
+        assertExecutable: () => KIMI_RECORD,
+      }),
+      driverFactories: {
+        "kimi-stream-json": (participantId: string) => {
+          const driver = createFakeDriver(participantId);
+          driver.prewarm = async (input) => {
+            driver.prewarmCount += 1;
+            if (input.spec.modelId !== KIMI_MODEL) {
+              throw Object.assign(new Error(`model ${input.spec.modelId} not in kimi catalog`), {
+                runtimeCode: "MODEL_UNAVAILABLE",
+                catalog: [KIMI_MODEL],
+              });
+            }
+            return {
+              canonicalModelId: KIMI_MODEL,
+              modelAliases: [],
+              capability: {
+                protocol: "kimi-stream-json",
+                providerProbe: "provider-list",
+                sessionResume: true,
+                outputMode: "final-only",
+                modelSelection: "exact-cli-alias",
+              },
+              catalog: [KIMI_MODEL],
+            };
+          };
+          drivers.push(driver);
+          return driver;
+        },
+      },
+      logger: nullLogger,
+    });
+    host = await createTestHost({
+      extraServices: { installationRegistry: fakeRegistry({ dtos: [KIMI_DTO] }), profileProbe },
+      routesFactory: (services) => installationRoutes(services),
+    });
+
+    const res = await postReadiness(
+      host,
+      JSON.stringify({
+        profile: {
+          driverId: "kimi-stream-json",
+          installationId: KIMI_DTO.installationId,
+          credentialMode: "installation-managed",
+          options: {},
+        },
+        modelId: KIMI_MODEL,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.data?.readiness.state).toBe("ready");
+    expect(res.data?.binding?.route).toBeUndefined();
+    expect(res.data?.binding?.canonicalModelId).toBe(KIMI_MODEL);
+    expect(res.data?.binding?.modelAliases).toEqual([]);
+    expect(drivers[0]?.closeCount).toBe(1); // probe driver always closed
+  });
+
+  it("an out-of-catalog kimi modelId surfaces model_unavailable", async () => {
+    const profileProbe = createProfileProbe({
+      installations: fakeRegistry({
+        dtos: [KIMI_DTO],
+        assertExecutable: () => KIMI_RECORD,
+      }),
+      driverFactories: {
+        "kimi-stream-json": (participantId: string) => {
+          const driver = createFakeDriver(participantId);
+          driver.prewarm = async (input) => {
+            driver.prewarmCount += 1;
+            throw Object.assign(new Error(`model ${input.spec.modelId} not in kimi catalog`), {
+              runtimeCode: "MODEL_UNAVAILABLE",
+              catalog: [KIMI_MODEL],
+            });
+          };
+          return driver;
+        },
+      },
+      logger: nullLogger,
+    });
+    host = await createTestHost({
+      extraServices: { installationRegistry: fakeRegistry({ dtos: [KIMI_DTO] }), profileProbe },
+      routesFactory: (services) => installationRoutes(services),
+    });
+
+    const res = await postReadiness(
+      host,
+      JSON.stringify({
+        profile: {
+          driverId: "kimi-stream-json",
+          installationId: KIMI_DTO.installationId,
+          credentialMode: "installation-managed",
+          options: {},
+        },
+        modelId: "kimi-code/not-a-model",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.data?.readiness.state).toBe("model_unavailable");
+    expect(res.data?.binding).toBeNull();
+  });
+});

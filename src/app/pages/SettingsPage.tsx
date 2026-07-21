@@ -390,12 +390,16 @@ export function SettingsPage() {
   // --- Profile CRUD (Dexie; DTO strictly validated on the way in/out) ---
   const refreshRuntimeQueries = () => queryClient.invalidateQueries({ queryKey: runtimeKeys.all });
 
-  const profileOptionsOf = (values: ProfileFormValues) =>
-    values.driverId === "claude-stream-json"
-      ? { route: values.route }
-      : values.reasoningEffort.trim().length > 0
+  const profileOptionsOf = (values: ProfileFormValues) => {
+    if (values.driverId === "claude-stream-json") return { route: values.route };
+    if (values.driverId === "codex-app-server") {
+      return values.reasoningEffort.trim().length > 0
         ? { reasoningEffort: values.reasoningEffort.trim() }
         : {};
+    }
+    // kimi-stream-json: no model/argv/token Profile options (strict empty {}).
+    return {};
+  };
 
   const handleCreateProfile = async (values: ProfileFormValues): Promise<string | null> => {
     const validation = validateProfileDto({

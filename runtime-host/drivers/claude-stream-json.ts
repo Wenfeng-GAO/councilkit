@@ -77,6 +77,22 @@ const ROUTES: Record<ClaudeRoute, RouteDef> = {
     contextWindowTokens: 1_000_000,
   },
   deepseek: { argv: ["deepseek"], contextWindowTokens: 1_000_000 },
+  // cfuse execs `cld cfuse`, which transparently runs the `cfuse-claude-code`
+  // backend (default `~/.local/bin/cfuse-claude-code`) via CLD_CFUSE_BIN — the
+  // `claude` binary / CLD_CLAUDE_BIN is NOT involved. Live cfuse handshake
+  // capture (2026-07-22, plan-a §4.1 four-way evidence) is uniform: the control
+  // `initialize` catalog default, the full catalog, `system/init.model` and the
+  // success-result `modelUsage` key all report `antchat/GLM-5.2[1m]` — so no
+  // servesModel divergence is set (canonical = the catalog default). Existing
+  // GLM agents carry the un-prefixed modelId `GLM-5.2[1m]`; since the cfuse
+  // catalog uses the `antchat/`-prefixed form, modelAliases admits the legacy
+  // id as a binding-time compatibility name (moonshot precedent) — execution
+  // still uses the canonical catalog default.
+  cfuse: {
+    argv: ["cfuse"],
+    modelAliases: ["GLM-5.2[1m]"],
+    contextWindowTokens: 1_000_000,
+  },
 };
 
 const ENV_INHERIT = [
@@ -453,28 +469,7 @@ export function createClaudeStreamJsonDriver(
       }
     }
 
-    async function spawnAndHandshake(installation: PrewarmInput["installation"]): Promise<void> {
-      const claudeComponent = installation.components.find((c) => c.role === "claude-binary");
-      if (!claudeComponent) {
-        throw Object.assign(new Error("cld composite installation is missing its claude binary"), {
-          runtimeCode: "INSTALLATION_INVALID",
-        });
-      }
-      const spec = installationRecordToSpec(installation);
-      const cwd = join(workRoot, participantId);
-      await mkdir(cwd, { recursive: true });
-      const spawned = await supervisor.spawnDriver({
-        participantId,
-        executable: installation.realpath ?? spec,
-        argv: buildArgv(persona),
-        cwd,
-        envInherit: ENV_INHERIT,
-        envSet: {
-          CLD_SKIP_UPDATE_CHECK: "1",
-          CLD_CLAUDE_BIN: claudeComponent.path,
-        },
-      });
-      process = spawned;
+    async function attachHandshakeStreams(spawned: DriverProcess): Promise<void> {
       spawned.stderr.on("data", (chunk: Buffer) => noteStderr(chunk.toString("utf8")));
       spawned.events.on(
         "exit",
@@ -511,8 +506,54 @@ export function createClaudeStreamJsonDriver(
           // stdout closed: process is exiting; exit handler covers state.
         },
       });
-
       await spawned.waitSupervised(timeouts.handshakeMs);
+    }
+
+    async function spawnAndHandshake(installation: PrewarmInput["installation"]): Promise<void> {
+      const routeNow = currentRoute();
+      // Route-specific backend pin: the cfuse route execs `cfuse-claude-code`
+      // via CLD_CFUSE_BIN and never touches the claude binary / CLD_CLAUDE_BIN;
+      // every other route execs `claude` via CLD_CLAUDE_BIN. The wrapper (cld)
+      // realpath is the spawn executable in both branches. Missing the route's
+      // required component is INSTALLATION_INVALID naming the missing role.
+      const envSet: Record<string, string> = { CLD_SKIP_UPDATE_CHECK: "1" };
+      if (routeNow === "cfuse") {
+        const cfuseComponent = installation.components.find((c) => c.role === "cfuse-binary");
+        if (!cfuseComponent) {
+          throw Object.assign(
+            new Error(
+              "cld installation is missing the cfuse-binary component required by the cfuse route",
+            ),
+            { runtimeCode: "INSTALLATION_INVALID" },
+          );
+        }
+        envSet.CLD_CFUSE_BIN = cfuseComponent.path;
+      } else {
+        const claudeComponent = installation.components.find((c) => c.role === "claude-binary");
+        if (!claudeComponent) {
+          throw Object.assign(
+            new Error(
+              `cld installation is missing the claude-binary component required by the ${routeNow} route`,
+            ),
+            { runtimeCode: "INSTALLATION_INVALID" },
+          );
+        }
+        envSet.CLD_CLAUDE_BIN = claudeComponent.path;
+      }
+      const spec = installationRecordToSpec(installation);
+      const cwd = join(workRoot, participantId);
+      await mkdir(cwd, { recursive: true });
+      const spawned = await supervisor.spawnDriver({
+        participantId,
+        executable: installation.realpath ?? spec,
+        argv: buildArgv(persona),
+        cwd,
+        envInherit: ENV_INHERIT,
+        envSet,
+      });
+      process = spawned;
+      await attachHandshakeStreams(spawned);
+
       const init = (await sendControl({ subtype: "initialize" })) as {
         models?: { value: string; resolvedModel?: string }[];
       };

@@ -150,7 +150,7 @@ export function ProfileFormModal({
               label,
             }))}
           />
-        ) : (
+        ) : driverId === "codex-app-server" ? (
           <TextInput
             label="Reasoning effort（codex-app-server 选项，可留空）"
             value={reasoningEffort}
@@ -158,6 +158,11 @@ export function ProfileFormModal({
             placeholder="例如：medium"
             help="仅保存 Driver 声明的类型化选项；Profile 不保存模型与凭据。"
           />
+        ) : (
+          <p className="text-xs text-muted">
+            Kimi 的模型在 Agent 中从闭集目录（kimi-code/k3）选择；Profile 不保存模型、argv
+            或凭据，无可编辑选项。
+          </p>
         )}
         {error ? (
           <p role="alert" className="text-xs text-error">

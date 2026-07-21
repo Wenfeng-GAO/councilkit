@@ -13,6 +13,9 @@ import { bootSettings } from "./security-helpers";
 const PROFILE = "资产 GLM Profile";
 const MODEL = "e2e-claude-model";
 const INSTALLATION = "claude-e2e-fake01";
+const KIMI_PROFILE = "资产 Kimi Profile";
+const KIMI_MODEL = "kimi-code/k3";
+const KIMI_INSTALLATION = "kimi-e2e-fake001";
 
 /** AgentsSection 行：卡片含 Agent 名的 <li>（行首 pill 区 + 行尾操作组）。 */
 function agentListItem(page: Page, name: string): Locator {
@@ -212,6 +215,39 @@ test.describe("S7 agent assets", () => {
     // 行内结果区：readiness StatusPill + 固定尾注（不触发模型生成）。
     await expect(row.getByText("就绪", { exact: true })).toBeVisible();
     await expect(row.getByText(/仅验证执行环境，未调用模型生成/)).toBeVisible();
+  });
+
+  test("Kimi driver：Profile 无可编辑 options，Agent model select 出现 kimi-code/k3，Dexie options 为 {}", async () => {
+    test.slow();
+    await bootSettings(page);
+    // Kimi Profile：driverId=kimi-stream-json，无可编辑 route/reasoning 控件。
+    await createProfile(page, {
+      name: KIMI_PROFILE,
+      driverId: "kimi-stream-json",
+      installationId: KIMI_INSTALLATION,
+    });
+    await expect(page.getByText(KIMI_PROFILE, { exact: true })).toBeVisible();
+
+    // Agent modelId 选择器出现闭集 canonical 模型 kimi-code/k3。
+    await createAgent(page, {
+      name: "Kimi 特工",
+      persona: "Kimi 特工的人格设定。",
+      profileName: KIMI_PROFILE,
+      modelId: KIMI_MODEL,
+      color: "#4ff76e",
+    });
+
+    // Dexie 行：Profile options 严格为 {}（不保存 model/route/argv/token）。
+    interface ProfileOptionsRow {
+      name: string;
+      driverId: string;
+      options: Record<string, unknown>;
+    }
+    const profiles = await readStore<ProfileOptionsRow>(page, "executionProfiles");
+    const kimiProfile = profiles.find((profile) => profile.name === KIMI_PROFILE);
+    expect(kimiProfile, "kimi profile should be persisted").toBeDefined();
+    expect(kimiProfile?.driverId).toBe("kimi-stream-json");
+    expect(kimiProfile?.options).toEqual({});
   });
 
   test("S7 fix-3 #2：并发编辑冲突——双页同 context，B 持旧 revision 提交 → 冲突文案 + A 的改名是最终值", async () => {

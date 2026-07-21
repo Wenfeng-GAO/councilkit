@@ -13,7 +13,7 @@ _Avoid_: Runtime、daemon、gateway、backend
 _Avoid_: Runtime Host、Runtime Driver、facilitator
 
 **Runtime Driver**:
-Runtime Host 内置的一种模型执行协议实现；同一种 Runtime Driver 可以形成零个或多个 **Execution Profile**，且不由用户创建。V1 只有 `claude-stream-json` 和 `codex-app-server`。
+Runtime Host 内置的一种模型执行协议实现；同一种 Runtime Driver 可以形成零个或多个 **Execution Profile**，且不由用户创建。V1 三个内置 Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`。
 _Avoid_: Provider、Runtime、Agent、Execution Profile
 
 **Runtime Installation**:
@@ -29,7 +29,7 @@ Runtime Installation 获得认证能力的方式；秘密内容不属于 Profile
 _Avoid_: API key field、local-cli-login、Execution Profile、Agent
 
 **Execution Session**:
-模型调用之间可保留的临时连续状态；它属于且仅属于一个 **Participant**，每个 Participant 同时至多关联一个当前 Session。Session 可以被丢弃并从 CouncilKit 的讨论记录重新建立；同一 Agent 的不同 Participant 不共享 Session。
+模型调用之间可保留的临时连续状态；它属于且仅属于一个 **Participant**，每个 Participant 同时至多关联一个当前 Session。Session 可以被丢弃并从 CouncilKit 的讨论记录重新建立；同一 Agent 的不同 Participant 不共享 Session。Claude/Codex 的 Session 由单一长期进程承载；Kimi 的 Session 跨每 turn 短进程经 `-S <session_id>` resume 保持连续（ADR-0012），但仍属于单 Participant、可丢弃。
 _Avoid_: Room、transcript、source of truth
 
 **Execution Scope**:

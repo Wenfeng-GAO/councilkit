@@ -122,6 +122,7 @@ interface ParticipantRig {
 const DEFAULT_CATALOGS: Record<DriverId, string[]> = {
   "claude-stream-json": ["e2e-claude-model"],
   "codex-app-server": ["e2e-codex-model"],
+  "kimi-stream-json": ["kimi-code/k3"],
 };
 
 const rigs = new Map<string, ParticipantRig>();
@@ -280,10 +281,11 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
 
 const FAKE_INSTALLATIONS: Record<
   string,
-  { driverId: DriverId; name: "cld" | "codex"; path: string }
+  { driverId: DriverId; name: "cld" | "codex" | "kimi"; path: string }
 > = {
   "claude-e2e-fake01": { driverId: "claude-stream-json", name: "cld", path: "/fake/cld" },
   "codex-e2e-fake001": { driverId: "codex-app-server", name: "codex", path: "/fake/codex" },
+  "kimi-e2e-fake001": { driverId: "kimi-stream-json", name: "kimi", path: "/fake/kimi" },
 };
 
 const installationStates = new Map<string, InstallationState>(
@@ -548,6 +550,8 @@ async function main(): Promise<void> {
       createScriptedDriver("claude-stream-json", participantId),
     "codex-app-server": (participantId: string) =>
       createScriptedDriver("codex-app-server", participantId),
+    "kimi-stream-json": (participantId: string) =>
+      createScriptedDriver("kimi-stream-json", participantId),
   };
 
   const scopeManager = createScopeManager({

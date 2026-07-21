@@ -139,6 +139,27 @@ function aggregateStats(): AggregatedStats {
   return { counts, pids };
 }
 
+/** Reads the first stats file verbatim (includes the route/env scent the
+ * aggregate drops: routeArgv string + hasCldClaudeBin/hasCldCfuseBin booleans). */
+function firstStats(): Record<string, unknown> | null {
+  let names: string[] = [];
+  try {
+    names = readdirSync(tempRoot);
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    if (!name.startsWith("stats.") || name.endsWith(".tmp")) continue;
+    if (!Number.isInteger(Number(name.slice("stats.".length)))) continue;
+    try {
+      return JSON.parse(readFileSync(join(tempRoot, name), "utf8")) as Record<string, unknown>;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
 type CompletedDriverEvent = Extract<DriverEvent, { type: "completed" }>;
 type FailedDriverEvent = Extract<DriverEvent, { type: "failed" }>;
 type InterruptedDriverEvent = Extract<DriverEvent, { type: "interrupted" }>;
@@ -205,6 +226,26 @@ function makeInstallation(): InstallationRecord {
   };
 }
 
+/** cfuse-route installation: wrapper + cfuse-binary only (no claude-binary),
+ * mirroring a cfuse-only environment. The cfuse route must spawn via
+ * CLD_CFUSE_BIN and never depend on CLD_CLAUDE_BIN. */
+function makeCfuseInstallation(): InstallationRecord {
+  return {
+    installationId: "fake-cld",
+    driverId: "claude-stream-json",
+    name: "cld",
+    discoveredPath: FAKE_CLD,
+    realpath: FAKE_CLD,
+    fingerprint: FINGERPRINT,
+    state: "trusted",
+    components: [
+      { role: "wrapper", path: FAKE_CLD, fingerprint: FINGERPRINT },
+      { role: "cfuse-binary", path: FAKE_CLD, fingerprint: FINGERPRINT },
+    ],
+    detail: null,
+  };
+}
+
 interface Rig {
   driver: ParticipantDriver;
   supervisor: ProcessSupervisor;
@@ -217,6 +258,7 @@ async function createRig(
     config?: Record<string, unknown>;
     timeouts?: Partial<DriverTimeouts>;
     spec?: ParticipantSpec;
+    installation?: InstallationRecord;
   } = {},
 ): Promise<Rig> {
   const participantId = "p-1";
@@ -244,7 +286,7 @@ async function createRig(
   const prewarmResult = await driver.prewarm({
     participantId,
     spec: options.spec ?? makeSpec(participantId),
-    installation: makeInstallation(),
+    installation: options.installation ?? makeInstallation(),
   });
   return { driver, supervisor, participantId, prewarmResult };
 }
@@ -476,5 +518,98 @@ describe("claude-stream-json driver protocol", () => {
         },
       }),
     ).rejects.toMatchObject({ runtimeCode: "INCOMPATIBLE_DRIVER" });
+  });
+});
+
+describe("claude-stream-json driver cfuse route", () => {
+  it("prewarms a cfuse-only installation (no claude-binary) and declares its window", async () => {
+    const rig = await createRig({
+      spec: {
+        participantId: "p-1",
+        profile: {
+          driverId: "claude-stream-json",
+          installationId: "fake-cld",
+          credentialMode: "installation-managed",
+          options: { route: "cfuse" },
+        },
+        modelId: MODEL_ID,
+      },
+      installation: makeCfuseInstallation(),
+    });
+    // cfuse route serves the catalog default (no servesModel divergence yet).
+    expect(rig.prewarmResult.canonicalModelId).toBe(MODEL_ID);
+    // The live cfuse handshake catalog is antchat/-prefixed
+    // (antchat/GLM-5.2[1m]); modelAliases admits the legacy un-prefixed
+    // GLM agent modelId GLM-5.2[1m] as a binding-time compat name.
+    expect(rig.prewarmResult.modelAliases).toContain("GLM-5.2[1m]");
+    expect(rig.driver.contextWindowTokens()).toBe(1_000_000);
+    // cfuse spawn scent: leading argv "cfuse", CLD_CFUSE_BIN set, CLD_CLAUDE_BIN absent.
+    await waitFor(() => firstStats() !== null, 3000);
+    const scent = firstStats();
+    expect(scent?.routeArgv).toBe("cfuse");
+    expect(scent?.hasCldCfuseBin).toBe(true);
+    expect(scent?.hasCldClaudeBin).toBe(false);
+  });
+
+  it("completes a real cfuse turn over the cfuse-binary pin", async () => {
+    const rig = await createRig({
+      spec: {
+        participantId: "p-1",
+        profile: {
+          driverId: "claude-stream-json",
+          installationId: "fake-cld",
+          credentialMode: "installation-managed",
+          options: { route: "cfuse" },
+        },
+        modelId: MODEL_ID,
+      },
+      installation: makeCfuseInstallation(),
+    });
+    const run = executeCollecting(rig.driver, execInput("exec-1", "Hello."));
+    await run.done;
+    expect(run.events[0]?.type).toBe("started");
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    expect(terminal.dispatchState).toBe("accepted");
+    expect(aggregateStats().counts.userMessages).toBe(1);
+  });
+
+  it("fails INSTALLATION_INVALID prewarm on the cfuse route when cfuse-binary is missing", async () => {
+    // A full (claude+cfuse) installation does NOT satisfy the cfuse route —
+    // cfuse execs the cfuse-binary, not the claude-binary.
+    await expect(
+      createRig({
+        spec: {
+          participantId: "p-1",
+          profile: {
+            driverId: "claude-stream-json",
+            installationId: "fake-cld",
+            credentialMode: "installation-managed",
+            options: { route: "cfuse" },
+          },
+          modelId: MODEL_ID,
+        },
+        installation: makeInstallation(), // has claude-binary, no cfuse-binary
+      }),
+    ).rejects.toMatchObject({ runtimeCode: "INSTALLATION_INVALID" });
+  });
+
+  it("non-cfuse routes still REQUIRE claude-binary (a cfuse-only install is INSTALLATION_INVALID)", async () => {
+    await expect(
+      createRig({
+        spec: {
+          participantId: "p-1",
+          profile: {
+            driverId: "claude-stream-json",
+            installationId: "fake-cld",
+            credentialMode: "installation-managed",
+            options: { route: "ant-glm5.2" },
+          },
+          modelId: MODEL_ID,
+        },
+        installation: makeCfuseInstallation(), // cfuse-binary only, no claude-binary
+      }),
+    ).rejects.toMatchObject({ runtimeCode: "INSTALLATION_INVALID" });
   });
 });

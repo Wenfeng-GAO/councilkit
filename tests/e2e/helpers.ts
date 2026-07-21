@@ -121,11 +121,12 @@ export async function freshPage(
 
 export interface CreateProfileInput {
   name: string;
-  driverId: "claude-stream-json" | "codex-app-server";
+  driverId: "claude-stream-json" | "codex-app-server" | "kimi-stream-json";
   /** installationId value, e.g. "claude-e2e-fake01". */
   installationId: string;
-  /** claude-stream-json route; defaults to the form's ant-glm5.2. */
-  route?: "ant-glm5.2" | "moonshot" | "deepseek";
+  /** claude-stream-json route; defaults to the form's ant-glm5.2. cfuse is the
+   * GLM-5.2 backend route. */
+  route?: "ant-glm5.2" | "moonshot" | "deepseek" | "cfuse";
 }
 
 export async function createProfile(page: Page, input: CreateProfileInput): Promise<void> {

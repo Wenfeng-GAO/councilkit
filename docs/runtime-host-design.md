@@ -187,21 +187,27 @@ Room `paused` 时，只要 Controller 续租，Scope 和进程继续保持 warm�
 
 ## 长期进程模型
 
-V1 统一采用“每个活跃 Participant 一个长期 Driver 进程”：
+V1 的进程模型是 Driver-specific 的：“每个活跃 Participant 一个 Driver 实例”这一不变量对所有 Driver 成立，但进程生命周期因 Driver 而异：
+
+- Claude 与 Codex：每个活跃 Participant 一个**长期** Driver 进程。
+- Kimi：每个 turn 一个**短命**进程（`kimi -p` prompt-mode 无长驻 stdin，E1），Participant 级 Execution Session 通过 `-S <session_id>` 跨进程 resume 保持连续性（ADR-0012 受控例外）。
+
+不变量（所有 Driver 通用）：
 
 - 同一 Agent 在不同 Room 中形成不同 Participant，绝不共享进程或 Execution Session。
 - 每个 Participant 同时最多有一个进行中的 Model Execution。
 - 取消优先使用 Driver 协议；协议取消失败或进程失效时才终止进程组。
 - 单个 Driver 崩溃只影响对应 Participant。
 - Host 正常退出时终止所有子进程组；异常退出由 parent-pipe watchdog 回收，遗漏项由下次启动在核验身份后清理。
-- Context Snapshot 发生非追加替换时允许重建 Session；Codex 可在原 app-server 中准备新 thread，Claude 则重启进程并立即并行预热。完整 Snapshot 在该 Participant 下一次 Model Execution 时注入，不为预热额外调用模型。
+- Context Snapshot 发生非追加替换时允许重建 Session；Codex 可在原 app-server 中准备新 thread，Claude 则重启进程并立即并行预热，Kimi 则清 session id 并 bump sessionEpoch（下 turn 全量 rebase）。完整 Snapshot 在该 Participant 下一次 Model Execution 时注入，不为预热额外调用模型。
 
-V1 只实现两个 Runtime Driver：
+V1 实现三个 Runtime Driver：
 
 | Driver | Runtime Installation | 执行路径 |
 |---|---|---|
-| `claude-stream-json` | `cld` | `cld ant glm5.2`、`cld moonshot`、`cld deepseek` |
+| `claude-stream-json` | `cld` | `cld ant glm5.2`、`cld moonshot`、`cld deepseek`、`cld cfuse`（经 `cfuse-claude-code` 后端 + `CLD_CFUSE_BIN`，不使用 `claude` binary） |
 | `codex-app-server` | 官方 `codex` | `codex app-server --listen stdio://` |
+| `kimi-stream-json` | 本地 `kimi`（coding plan OAuth） | 每 turn `kimi [-S <sid>] -m kimi-code/k3 -p <prompt> --output-format stream-json --skills-dir <空>`（短命进程 + 跨进程 resume） |
 
 现有 Gateway 数据只作为 legacy 数据保留，不参与 V1 执行。
 
@@ -385,7 +391,7 @@ Codex 兼容性：
 
 - warm 路径 Host 自身开销 p95 小于 50ms。
 - 已存在事件缓存时，页面重连恢复小于 1 秒。
-- 两个 Driver 同时通过验收后再切换正式执行路径。
+- 三个 Driver（`claude-stream-json`、`codex-app-server`、`kimi-stream-json`）同时通过验收后再切换正式执行路径。
 - 生产切换后不保留 Gateway/browser-direct fallback；开发阶段可以使用显式 feature flag 对照验证，但不能静默回退。
 
 ## 已记录的架构决策
@@ -397,3 +403,8 @@ Codex 兼容性：
 - [ADR-0005：Execution Profile 不接受任意命令](./adr/0005-use-typed-runtime-profiles-instead-of-raw-commands.md)
 - [ADR-0006：使用持久化 Round 状态机与幂等提交](./adr/0006-use-durable-round-state-and-idempotent-commit.md)
 - [ADR-0007：Codex 兼容性基于能力而非 CLI 版本](./adr/0007-negotiate-codex-capabilities-instead-of-pinning-versions.md)
+- [ADR-0008：Room 与 Round 双状态轴](./adr/0008-two-state-axes-for-room-and-round.md)
+- [ADR-0009：Decision Report 作为一等持久化实体](./adr/0009-decision-report-as-first-class-persisted-entity.md)
+- [ADR-0010：讨论模式即指令模板（盲审推迟）](./adr/0010-discussion-modes-as-instruction-templates-blind-review-deferred.md)
+- [ADR-0011：机械收敛规则](./adr/0011-mechanical-convergence-rule.md)
+- [ADR-0012：新增 cfuse route 与 kimi CLI driver](./adr/0012-add-cfuse-route-and-kimi-cli-driver.md)

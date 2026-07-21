@@ -62,7 +62,7 @@ export function resolveStatic(
   }
   if (profile.driverId === "claude-stream-json") {
     const route = profile.options.route;
-    if (!["ant-glm5.2", "moonshot", "deepseek"].includes(route)) {
+    if (!["ant-glm5.2", "moonshot", "deepseek", "cfuse"].includes(route)) {
       return {
         readiness: { state: "invalid_binding", detail: `unsupported route ${route}` },
         installation,

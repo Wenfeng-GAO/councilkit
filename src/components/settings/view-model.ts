@@ -17,12 +17,14 @@ import type { ClaudeRoute } from "@shared/runtime/schemas";
 export const DRIVER_DISPLAY_NAMES: Record<DriverId, string> = {
   "claude-stream-json": "Claude (cld CLI)",
   "codex-app-server": "Codex (app-server)",
+  "kimi-stream-json": "Kimi K3 (kimi CLI)",
 };
 
 export const CLAUDE_ROUTE_LABELS: Record<string, string> = {
   "ant-glm5.2": "GLM 5.2 (ant)",
   moonshot: "Kimi (moonshot)",
   deepseek: "DeepSeek",
+  cfuse: "GLM-5.2 (cfuse)",
 };
 
 export function driverDisplayName(driverId: DriverId): string {

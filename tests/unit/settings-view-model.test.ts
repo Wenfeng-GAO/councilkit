@@ -116,6 +116,7 @@ describe("settings view-model", () => {
   it("exposes stable driver display names and a shared catalog query key", () => {
     expect(driverDisplayName("claude-stream-json")).toContain("Claude");
     expect(driverDisplayName("codex-app-server")).toContain("Codex");
+    expect(driverDisplayName("kimi-stream-json")).toContain("Kimi");
     expect(modelCatalogQueryKey("codex-app-server", "inst-1")).toEqual([
       "host",
       "model-catalog",
@@ -129,6 +130,14 @@ describe("settings view-model", () => {
       "claude-stream-json",
       "inst-2",
       "moonshot",
+    ]);
+    // Kimi catalog query carries no route (route slot is "").
+    expect(modelCatalogQueryKey("kimi-stream-json", "inst-3")).toEqual([
+      "host",
+      "model-catalog",
+      "kimi-stream-json",
+      "inst-3",
+      "",
     ]);
   });
 });

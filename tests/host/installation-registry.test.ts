@@ -421,6 +421,84 @@ describe("cld composite installation", () => {
   });
 });
 
+describe("cld cfuse backend (cfuse-claude-code)", () => {
+  it("discovers cfuse-claude-code alongside cld and claude", async () => {
+    const root = await makeRoot();
+    const bin = join(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper-v1");
+    await writeExecutable(bin, "claude", "claude-v1");
+    await writeExecutable(bin, "cfuse-claude-code", "cfuse-v1");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    const cld = outcome.installations.find((entry) => entry.name === "cld");
+    expect(cld).toBeDefined();
+    expect(cld?.claude?.name).toBe("claude");
+    expect(cld?.cfuse?.name).toBe("cfuse-claude-code");
+  });
+
+  it("pins wrapper + claude + cfuse when all three backends validate", async () => {
+    const root = await makeRoot();
+    const bin = join(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper-v1");
+    await writeExecutable(bin, "claude", "claude-v1");
+    await writeExecutable(bin, "cfuse-claude-code", "cfuse-v1");
+    const registry = makeRegistry(bin);
+    const dto = first(registry.list());
+    expect(dto.state).toBe("trusted");
+    expect(dto.components.map((component) => component.role)).toEqual([
+      "wrapper",
+      "claude-binary",
+      "cfuse-binary",
+    ]);
+    const cfuse = dto.components[2];
+    expect(cfuse?.fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("is trusted with only wrapper + cfuse when claude is absent (cfuse-only env)", async () => {
+    const root = await makeRoot();
+    const bin = join(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper-v1");
+    await writeExecutable(bin, "cfuse-claude-code", "cfuse-v1");
+    const registry = makeRegistry(bin);
+    const dto = first(registry.list());
+    expect(dto.state).toBe("trusted");
+    expect(dto.components.map((component) => component.role)).toEqual(["wrapper", "cfuse-binary"]);
+    expect(registry.assertExecutable(dto.installationId).realpath).toBeTruthy();
+  });
+
+  it("is invalid when the wrapper exists but neither backend is present", async () => {
+    const root = await makeRoot();
+    const bin = join(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper-only");
+    const registry = makeRegistry(bin);
+    const dto = first(registry.list());
+    expect(dto.state).toBe("invalid");
+    expect(dto.detail).toContain("backend");
+    expectInstallationError(
+      () => registry.assertExecutable(dto.installationId),
+      "INSTALLATION_UNTRUSTED",
+    );
+  });
+
+  it("goes changed when the pinned cfuse binary is replaced", async () => {
+    const root = await makeRoot();
+    const bin = join(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper-v1");
+    await writeExecutable(bin, "claude", "claude-v1");
+    const cfusePath = await writeExecutable(bin, "cfuse-claude-code", "cfuse-v1");
+    const registry = makeRegistry(bin);
+    const dto = first(registry.list());
+    expect(dto.state).toBe("trusted");
+
+    await writeFile(cfusePath, "cfuse-v2-replaced");
+    await chmod(cfusePath, 0o755);
+    expect(registry.revalidate(dto.installationId).state).toBe("changed");
+    expectInstallationError(
+      () => registry.assertExecutable(dto.installationId),
+      "INSTALLATION_CHANGED",
+    );
+  });
+});
+
 describe("assessProfileStatic", () => {
   it("maps unknown/mismatched/untrusted/trusted installations", async () => {
     const root = await makeRoot();
@@ -458,5 +536,25 @@ describe("assessProfileStatic", () => {
     expect(assessProfileStatic(codexProfile(dto.installationId), registry).state).toBe(
       "runtime_unavailable",
     );
+  });
+
+  it("accepts the cfuse route on a trusted cld installation (route whitelist)", async () => {
+    const root = await makeRoot();
+    const bin = join(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper-v1");
+    await writeExecutable(bin, "cfuse-claude-code", "cfuse-v1");
+    const registry = makeRegistry(bin);
+    const dto = first(registry.list());
+    expect(dto.driverId).toBe("claude-stream-json");
+    const result = assessProfileStatic(
+      {
+        driverId: "claude-stream-json",
+        installationId: dto.installationId,
+        credentialMode: "installation-managed",
+        options: { route: "cfuse" },
+      },
+      registry,
+    );
+    expect(result.state).toBe("ready");
   });
 });

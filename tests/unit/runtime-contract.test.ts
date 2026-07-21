@@ -17,6 +17,7 @@ import {
   executeRequestSchema,
   executionProfileSchema,
   healthResponseSchema,
+  installationComponentSchema,
   resolvedBindingSchema,
 } from "@shared/runtime/schemas";
 import { describe, expect, it } from "vitest";
@@ -74,8 +75,8 @@ describe("runtime contract constants (compatibility pins)", () => {
     expect(CANONICAL_HOST_HEADER).toBe("127.0.0.1:43127");
   });
 
-  it("pins exactly the two V1 drivers", () => {
-    expect(DRIVER_IDS).toEqual(["claude-stream-json", "codex-app-server"]);
+  it("pins exactly the three V1 drivers", () => {
+    expect(DRIVER_IDS).toEqual(["claude-stream-json", "codex-app-server", "kimi-stream-json"]);
   });
 
   it("pins V1 protocol limits", () => {
@@ -154,6 +155,29 @@ describe("execution profile schema", () => {
     ).toBe(false);
   });
 
+  it("accepts the cfuse route on a claude-stream-json profile", () => {
+    expect(
+      executionProfileSchema.safeParse({
+        driverId: "claude-stream-json",
+        installationId: "cld-cfuse123",
+        credentialMode: "installation-managed",
+        options: { route: "cfuse" },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts a cfuse-binary installation component alongside wrapper/claude-binary", () => {
+    const component = {
+      role: "cfuse-binary",
+      path: "/home/u/.local/bin/cfuse-claude-code",
+      fingerprint: "sha256:abcd",
+    };
+    expect(installationComponentSchema.safeParse(component).success).toBe(true);
+    expect(installationComponentSchema.safeParse({ ...component, role: "fusey" }).success).toBe(
+      false,
+    );
+  });
+
   it("rejects non installation-managed credential modes and unknown drivers", () => {
     const base = claudeProfileFixture() as unknown as Record<string, unknown>;
     expect(executionProfileSchema.safeParse({ ...base, credentialMode: "api-key" }).success).toBe(
@@ -163,6 +187,29 @@ describe("execution profile schema", () => {
     expect(executionProfileSchema.safeParse({ ...base, driverId: "codex-acp" }).success).toBe(
       false,
     );
+  });
+
+  it("accepts a kimi-stream-json profile with empty options and rejects model/argv/token options", () => {
+    const kimi = {
+      driverId: "kimi-stream-json",
+      installationId: "kimi-abc123",
+      credentialMode: "installation-managed",
+      options: {},
+    };
+    expect(executionProfileSchema.safeParse(kimi).success).toBe(true);
+    // Strict: kimi options carry no model, route, argv, env or token fields.
+    expect(
+      executionProfileSchema.safeParse({ ...kimi, options: { modelId: "kimi-code/k3" } }).success,
+    ).toBe(false);
+    expect(executionProfileSchema.safeParse({ ...kimi, options: { route: "cfuse" } }).success).toBe(
+      false,
+    );
+    expect(executionProfileSchema.safeParse({ ...kimi, options: { argv: ["x"] } }).success).toBe(
+      false,
+    );
+    expect(
+      executionProfileSchema.safeParse({ ...kimi, options: { token: "sk-..." } }).success,
+    ).toBe(false);
   });
 });
 
@@ -254,6 +301,7 @@ describe("health + binding responses", () => {
       drivers: [
         { driverId: "claude-stream-json", capability: "checking" },
         { driverId: "codex-app-server", capability: "ready" },
+        { driverId: "kimi-stream-json", capability: "checking" },
       ],
     };
     expect(healthResponseSchema.safeParse(health).success).toBe(true);
@@ -280,6 +328,18 @@ describe("health + binding responses", () => {
       route: "ant-glm5.2",
     };
     expect(resolvedBindingSchema.safeParse(binding).success).toBe(true);
+    // kimi binding carries no route/reasoningEffort — generic fields only.
+    const kimiBinding = {
+      bindingDigest: "d".repeat(64),
+      driverId: "kimi-stream-json",
+      installationId: "kimi-abc123",
+      installationFingerprint: "e".repeat(64),
+      capabilityDigest: "f".repeat(64),
+      requestedModel: "kimi-code/k3",
+      canonicalModelId: "kimi-code/k3",
+      modelAliases: [],
+    };
+    expect(resolvedBindingSchema.safeParse(kimiBinding).success).toBe(true);
   });
 });
 
