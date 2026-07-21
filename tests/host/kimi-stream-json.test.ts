@@ -306,7 +306,7 @@ describe("kimi-stream-json driver", () => {
     expect(completed1.usage).toBeNull();
     expect(completed1.modelVerdict).toBe("match");
     expect(completed1.effectiveModel).toBe(MODEL);
-    expect(completed1.toolState).toBe("unknown");
+    expect(completed1.toolState).toBe("none");
     expect(completed1.dispatchState).toBe("accepted");
 
     // Session resumed on turn 2: epoch stays 0 (healthy turn).
@@ -422,11 +422,46 @@ describe("kimi-stream-json driver", () => {
     expect(terminal.error.code).toBe("STREAM_IDLE_TIMEOUT");
   });
 
-  it("malformed JSON line is ignored; the turn still completes via the assistant frame", async () => {
+  it("malformed JSON line is off-protocol: turn completes with toolState=unknown (discardable, F6)", async () => {
     const driver = await createDriver({ badJson: true });
     const run = executeCollecting(driver, execInput("exec-1", "Bad json line."));
     await run.done;
-    expect(terminalOf(run.events).type).toBe("completed");
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    // No tool activity, but the non-JSON line is off-protocol (E10): the
+    // terminal toolState is "unknown" — the commit pipeline discards it, the
+    // core reviewer concern (F6/D7). The assistant output was still accepted.
+    expect(terminal.toolState).toBe("unknown");
+    expect(terminal.output).toBe("Fake kimi answer.");
+  });
+
+  it("a clean turn (no tool frames, no off-protocol) reports toolState=none (committable, F1)", async () => {
+    const driver = await createDriver({ reply: "Clean discussion answer." });
+    const run = executeCollecting(driver, execInput("exec-1", "Clean turn."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    // The protocol proves an assistant content frame with no tool activity and
+    // no off-protocol leak → "none", the only value classifyCompleted commits.
+    expect(terminal.toolState).toBe("none");
+    expect(terminal.output).toBe("Clean discussion answer.");
+  });
+
+  it("a tooled turn (tool_calls + role:tool + bare stdout) reports toolState=completed (committable, F1)", async () => {
+    const driver = await createDriver({ toolTurn: true });
+    const run = executeCollecting(driver, execInput("exec-1", "Tooled turn."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    // tool_calls + role:"tool" frames = provable tool activity that completed
+    // normally → "completed". The authoritative output is the LAST assistant
+    // content frame (the tool-call-only frame is NOT an output candidate).
+    expect(terminal.toolState).toBe("completed");
+    expect(terminal.output).toBe("Fake kimi answer.");
+    expect(terminal.dispatchState).toBe("accepted");
   });
 
   it("close() bumps epoch and is closed; a later execute fails not_dispatched without respawn", async () => {
@@ -489,5 +524,125 @@ describe("kimi-stream-json driver", () => {
         expect(event.error.message).not.toContain(secret);
       }
     }
+  });
+
+  it("F2: a turn whose exit control frame lands before the stdout tail still settles from the full frames", async () => {
+    // delayExitStdoutMs holds stdout open briefly after the frames are written,
+    // then exits — the driver must wait for the stdout drain (or its bounded
+    // grace) before settling, so the assistant + resume_hint frames are NOT
+    // dropped into an EMPTY_OUTPUT misclassification.
+    const driver = await createDriver({ reply: "Drained tail.", delayExitStdoutMs: 60 });
+    const run = executeCollecting(driver, execInput("exec-1", "Exit before stdout."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    expect(terminal.output).toBe("Drained tail.");
+    expect(terminal.toolState).toBe("none");
+  });
+
+  it("F3: a successful first turn establishes a sid; a resume turn that hangs idles out and the NEXT turn is a full coldStart with no -S", async () => {
+    // Turn 1 succeeds and captures a resume hint (clean, toolState=none).
+    // Turn 2 is a resume turn that emits nothing and hangs (idle timeout). It
+    // must fail AND the sessionEpoch must bump synchronously so turn 3 is a
+    // cold rebase (full prompt, no -S) rather than an incremental resume.
+    const driver = await createDriver({ reply: "First cold." });
+    const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
+    await run1.done;
+    expect(terminalOf(run1.events).type).toBe("completed");
+    const epochAfterTurn1 = driver.sessionEpoch;
+
+    // Reconfigure the fixture so the SECOND (resume) turn hangs forever.
+    await writeFixtureConfig("p-1", { statsPath: join(tempRoot, "stats"), hang: true });
+    const run2 = executeCollecting(driver, execInput("exec-2", "Hang on resume."));
+    await run2.done;
+    const t2 = terminalOf(run2.events);
+    expect(t2.type).toBe("failed");
+    if (t2.type !== "failed") throw new Error("unreachable");
+    expect(t2.error.code).toBe("STREAM_IDLE_TIMEOUT");
+    // F3: the timeout invalidated the session synchronously (before the
+    // terminal), bumping the epoch.
+    expect(driver.sessionEpoch).toBeGreaterThan(epochAfterTurn1);
+
+    // Wait for the timed-out turn-2 process group to be fully reaped before
+    // turn 3 so the supervisor does not reject a second live driver for the
+    // same participant (the reap is best-effort async on the timeout path).
+    await waitFor(
+      () => pgrepCount("fake-kimi[.]mjs") === 0 && pgrepCount("watchdog-child[.]mjs") === 0,
+      6000,
+    );
+
+    // Restore a working fixture for turn 3.
+    await writeFixtureConfig("p-1", {
+      statsPath: join(tempRoot, "stats"),
+      reply: "Cold rebase reply.",
+    });
+    const run3 = executeCollecting(driver, execInput("exec-3", "Rebase."));
+    await run3.done;
+    expect(terminalOf(run3.events).type).toBe("completed");
+
+    // The resume stats prove turn 3 was a cold rebase (no -S): exactly ONE turn
+    // ran with an inbound -S (turn 2, the resume that hung), and it used the
+    // seed session id; turns 1 and 3 ran cold (hadSid === false). If the F3
+    // synchronous invalidation had NOT bumped the epoch, turn 3 would have
+    // carried -S too — so asserting hadSid===false count >= 2 is the gate.
+    const pids = aggregatePids();
+    const turnPids = pids
+      .map(statsOf)
+      .filter((s): s is Record<string, unknown> => s !== null && Number(s.turns) > 0);
+    const withSid = turnPids.filter((s) => s.hadSid === true);
+    const withoutSid = turnPids.filter((s) => s.hadSid === false);
+    expect(withoutSid.length).toBeGreaterThanOrEqual(2); // turns 1 and 3
+    expect(withSid).toHaveLength(1); // turn 2 only
+    for (const s of withSid) {
+      for (const sid of Array.isArray(s.resumeIds) ? (s.resumeIds as unknown[]) : []) {
+        expect(sid).toBe("session-fake-1");
+      }
+    }
+  });
+
+  it("F5: a hung provider probe is bounded by an absolute deadline and surfaces HANDSHAKE_TIMEOUT (never hangs forever)", async () => {
+    // providerHang keeps `provider list` alive forever (OAuth-interactive
+    // hang). The prewarm probe must hit its deadline, shut the probe down, and
+    // surface HANDSHAKE_TIMEOUT — not block the execute promise.
+    await expect(createDriver({ providerHang: true })).rejects.toMatchObject({
+      runtimeCode: "HANDSHAKE_TIMEOUT",
+    });
+    // No fake-kimi turn process leaked (only the probe, which was reaped).
+    await waitFor(
+      () => pgrepCount("fake-kimi[.]mjs") === 0 && pgrepCount("watchdog-child[.]mjs") === 0,
+      8000,
+    ).catch(() => undefined);
+    expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
+    expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
+  });
+
+  it("F4: close() during a pending/hung turn races the spawn safely — driver closes, no turn process leaks", async () => {
+    // The spawn resolves before close, but the turn hangs (no frames), so a
+    // process group IS live when close() runs. close() must reap it and the
+    // (already tracked) pending spawn rather than leave a running kimi behind.
+    const driver = await createDriver({ hang: true });
+    const run = executeCollecting(driver, execInput("exec-1", "Hang then close."));
+    // Let the spawn resolve and the turn start hanging.
+    await new Promise((r) => setTimeout(r, 60));
+    await driver.close();
+    // close() returned without blocking. The in-flight turn's execute promise
+    // is intentionally left unsettled by close() (the driver is being torn
+    // down); we do NOT await run.done here. The driver is closed; a later
+    // execute is not_dispatched (no respawn).
+    const run2 = executeCollecting(driver, execInput("exec-2", "After close."));
+    await run2.done;
+    const t = terminalOf(run2.events);
+    expect(t.type).toBe("failed");
+    if (t.type !== "failed") throw new Error("unreachable");
+    expect(t.dispatchState).toBe("not_dispatched");
+    // No turn/spawn process leaked past close.
+    await waitFor(
+      () => pgrepCount("fake-kimi[.]mjs") === 0 && pgrepCount("watchdog-child[.]mjs") === 0,
+      6000,
+    ).catch(() => undefined);
+    expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
+    expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
+    void run;
   });
 });

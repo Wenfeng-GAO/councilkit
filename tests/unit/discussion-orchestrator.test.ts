@@ -1199,6 +1199,82 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.ackCalls).toEqual([expect.objectContaining({ disposition: "discarded" })]);
   });
 
+  it("5b. a kimi-shaped completed(toolState=none) terminal COMMITS through classifyCompleted (review-0 P0 evidence)", async () => {
+    // The kimi-stream-json driver emits exactly this shape on a clean
+    // discussion turn (F1/D7): toolState="none", modelVerdict="match",
+    // effectiveModel===requestedModel, usage=null. classifyCompleted must
+    // return {kind:"commit"} — the P0 fix stands iff this path commits rather
+    // than discarding as TOOL_STATE_UNKNOWN.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, client } = makeOrchestrator();
+    const { token } = await orchestrator.ensureScope(room.id, [p1, p2]);
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const scopeId = binding?.executionScopeId as string;
+    const round = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+    await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+    const execution = createModelExecution({
+      executionId: "exec-kimi-none-0001",
+      roomId: room.id,
+      roundId: round.id,
+      participantId: p1.id,
+      resultKind: "message",
+      requestedModel: p1.modelId,
+      contextRevision: room.contextRevision,
+      expectedRoomDigest: room.contextDigest,
+      participantSnapshotDigest: p1.participantSnapshotDigest,
+      instructionDigest: computeInstructionDigest({ kind: "message", text: "answer" }),
+    });
+    await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
+    await beginExecution(db, { execution, token });
+    await markExecutionDispatched(db, {
+      executionId: execution.executionId,
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: scopeId,
+      dispatchState: "unknown",
+    });
+
+    // kimi-stream-json terminal shape for a clean discussion turn:
+    const completed: CompletedEvent = {
+      executionId: execution.executionId,
+      seq: 5,
+      at: new Date().toISOString(),
+      type: "completed",
+      output: "kimi discussion body",
+      requestedModel: p1.modelId,
+      effectiveModel: p1.modelId,
+      modelVerdict: "match",
+      toolState: "none", // F1/D7: clean discussion turn → "none"
+      dispatchState: "accepted",
+      usage: null, // kimi reports no usage
+      finalSeq: 5,
+    };
+    host.registerExecution({
+      executionId: execution.executionId,
+      participantId: p1.id,
+      scopeId,
+      state: "completed",
+      terminalEvent: completed,
+    });
+
+    const deps = { db, client, scopeId, token, currentHostInstanceId: host.hostInstanceId };
+    const result = await handleCompletedExecution(deps, execution.executionId, completed);
+    expect(result.kind).toBe("committed");
+    // The body landed as a message.
+    expect(await db.messages.where("roomId").equals(room.id).count()).toBe(1);
+    expect(host.ackCalls).toEqual([
+      expect.objectContaining({ disposition: "committed", result: "acknowledged" }),
+    ]);
+  });
+
   it("7. pauses at prewarm when a participant is not ready; nobody speaks", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();

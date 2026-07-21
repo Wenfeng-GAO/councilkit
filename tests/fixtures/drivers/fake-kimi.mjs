@@ -33,12 +33,20 @@
  *   emptyAssistant    bool    emit `{"role":"assistant","content":""}` (EMPTY_OUTPUT)
  *   noAssistant       bool    emit no assistant frame, just the hint (EMPTY_OUTPUT)
  *   rotateSessionId   bool    resume turn returns a different session id (divergence)
- *   badJson           bool    emit a malformed JSON line before the assistant frame
+ *   badJson           bool    emit a malformed (non-JSON) line before the assistant
+ *                         frame — off-protocol tool-stdout leak (E10); turn still
+ *                         completes but the terminal toolState becomes "unknown"
+ *   toolTurn          bool    emit a tooled turn: assistant tool_calls frame →
+ *                         role:"tool" frame → a bare non-JSON stdout line → the
+ *                         final assistant content frame. Terminal toolState="completed".
  *   resumeMiss        bool    exit 1 with stderr `Session "..." not found` when a
  *                         `-S` is present (resume-miss race)
  *   crashAfterAssistant bool  emit assistant then exit(3) (DRIVER_CRASH on exit)
  *   hang              bool    emit nothing and never exit (idle/turn timeout)
  *   ignoreSigterm     bool    ignore SIGTERM so the watchdog escalates to SIGKILL
+ *   delayExitStdoutMs number  after emitting frames, hold stdout open for this many
+ *                         ms before flushThenExit (F2: exit control frame races the
+ *                         stdout drain; 0 = close immediately)
  *   delayMs           number  delay before emitting frames (default 0)
  *   statsPath         string  stats file prefix; stats land at `<statsPath>.<pid>`
  *
@@ -56,16 +64,19 @@ const DEFAULTS = {
   sessionId: "session-fake-1",
   providerDefault: "kimi-code/k3",
   providerExit: 0,
+  providerHang: false,
   noResumeHint: false,
   emptyAssistant: false,
   noAssistant: false,
   rotateSessionId: false,
   badJson: false,
+  toolTurn: false,
   resumeMiss: false,
   crashAfterAssistant: false,
   hang: false,
   ignoreSigterm: false,
   delayMs: 0,
+  delayExitStdoutMs: 0,
   statsPath: null,
 };
 
@@ -170,6 +181,14 @@ function sleep(ms) {
 async function providerList(config) {
   stats.providerLists += 1;
   writeStats(config);
+  if (config.providerHang) {
+    // Simulate an OAuth-interactive hang: stay alive forever, never exit, never
+    // write the default line. The driver's probe deadline (F5) must fire.
+    return new Promise(() => {
+      process.stdin.on("data", () => {});
+      process.stdin.on("end", () => {});
+    });
+  }
   if (config.providerExit !== 0) {
     process.stderr.write(`error: provider list exited (code ${config.providerExit})\n`);
     flushThenExit(config.providerExit);
@@ -207,7 +226,21 @@ async function runTurn(config, parsed) {
 
   if (config.delayMs > 0) await sleep(config.delayMs);
 
-  if (config.badJson) {
+  if (config.toolTurn) {
+    // A tooled turn (E10): assistant tool_calls frame → role:"tool" frame → a
+    // bare non-JSON tool-stdout line → final assistant content frame. The
+    // driver records tool activity (tool_calls + role:"tool") + off-protocol,
+    // and maps the terminal toolState to "completed".
+    send({
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        { id: "call_1", type: "function", name: "read_file", args: { path: "/tmp/x" } },
+      ],
+    });
+    send({ role: "tool", tool_call_id: "call_1", content: "file contents here" });
+    process.stdout.write("THIS IS A BARE TOOL STDOUT LINE (not json)\n");
+  } else if (config.badJson) {
     process.stdout.write("{not valid json\n");
   }
 
@@ -234,6 +267,13 @@ async function runTurn(config, parsed) {
       command: `kimi -r ${sid}`,
       content: `To resume this session: kimi -r ${sid}`,
     });
+  }
+
+  // F2: optionally hold stdout open for a few ms after the frames are written
+  // before closing — emulates a process whose exit control frame lands before
+  // the stdout pipe drains, exercising the driver's exit/stdout-drain ordering.
+  if (config.delayExitStdoutMs > 0) {
+    await sleep(config.delayExitStdoutMs);
   }
 
   flushThenExit(0);

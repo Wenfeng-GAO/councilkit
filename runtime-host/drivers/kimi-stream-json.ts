@@ -1,10 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
+import type { ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
-import { attachNdjsonSplitter } from "./ndjson";
+import { attachNdjsonSplitter, withDeadline } from "./ndjson";
 import type {
   DriverDeps,
   DriverEvent,
@@ -33,11 +34,28 @@ import type {
  * key fields — Host stays out of secrets); the text probe is diagnostic only,
  * execution always passes an explicit `-m`.
  *
- * Tool observability: `-p` mode makes kimi a tooled coding agent with no
- * zero-tools switch (E4); the protocol carries no tool telemetry. The driver
- * therefore reports the honest `toolState: "unknown"` — never a fabricated
- * "none" — and mitigates with a dedicated cwd, an empty `--skills-dir`, and a
- * DISCUSSION_CONTRACT instruction (D2 / ADR-0012).
+ * Tool state from protocol evidence (D7, ADR-0012; E10 probe
+ * /tmp/kimi-probe-tools.out): `kimi -p --output-format stream-json` DOES carry
+ * tool telemetry — assistant frames with a `tool_calls` field and `role:"tool"`
+ * frames — and a tooled turn's raw tool stdout leaks as bare non-JSON lines on
+ * the stream (E10: ~720 bare lines vs 4 JSON frames). The driver maps the
+ * terminal `toolState` from that evidence, aligned with the codex semantics
+ * (none → active → completed / crash → unknown):
+ *   - exit 0, NO tool frames AND NO off-protocol non-JSON lines → `"none"`
+ *     (the protocol proves an assistant content frame with no tool activity —
+ *     a discussion-shaped turn). This is the only terminal that the commit
+ *     pipeline's `classifyCompleted` admits (commit-execution.ts:64-72).
+ *   - exit 0, tool frames OR role:"tool" frames present → `"completed"`
+ *     (provable tool activity that completed normally — committable, same as
+ *     codex's completed-tool turn).
+ *   - exit 0, tool frames absent but off-protocol non-JSON stdout was seen
+ *     (and no tool frames) → `"unknown"` (the stream was polluted in a way we
+ *     cannot classify → discard, matching codex's crash-into-unknown path).
+ *   - tool activity seen then the turn ended abnormally (non-zero exit,
+ *     timeout, crash, cancel) → `"unknown"`.
+ * The DISCUSSION_CONTRACT (cwd + empty `--skills-dir` + first-turn contract
+ * text) keeps the discussion-shaped turn on the clean `"none"` path; if the
+ * model elects to use a tool, the terminal honestly reports `"completed"`.
  *
  * No in-place retry: a resume-miss (exit≠0, stderr `Session … not found`)
  * bumps sessionEpoch and surfaces a retryable `not_dispatched` failure so the
@@ -79,6 +97,15 @@ const PROMPT_MAX_BYTES = 200 * 1024;
 /** Empty skills directory isolates the turn from user/project skills (D2). */
 const SKILLS_DIR_NAME = "skills-empty";
 
+/**
+ * Bounded grace (F2) the driver waits for stdout tail frames after the process
+ * exit event but before the stdout pipe reports `end`. A Node child can emit
+ * `exit` before its stdio pipes close; this window is sub-millisecond on a
+ * healthy fast-exit turn, so 1.5s is a generous ceiling that still bounds the
+ * total settle latency when stdout never closes (e.g. killed process).
+ */
+const EXIT_DRAIN_GRACE_MS = 1500;
+
 type DriverState = "cold" | "ready" | "busy" | "closing" | "closed";
 
 interface ActiveTurn {
@@ -86,12 +113,21 @@ interface ActiveTurn {
   modelId: string;
   emit: Emit;
   coldStart: boolean;
-  /** True once the authoritative assistant frame arrived. */
+  /** True once an authoritative assistant frame with non-empty content arrived. */
   sawAssistant: boolean;
-  /** Captured authoritative output (final-only). */
+  /**
+   * Captured authoritative output. The LAST assistant frame carrying a
+   * non-empty string `content` wins (E10: an assistant frame may carry only
+   * `tool_calls`; a later assistant frame carries the final text). A
+   * tool-call-only frame is tool activity, NOT output.
+   */
   output: string;
   /** Resume hint captured this turn (null until the meta frame arrives). */
   resumeHint: string | null;
+  /** True when any tool activity was observed (tool_calls / role:"tool"). */
+  sawToolActivity: boolean;
+  /** True when a non-JSON stdout line leaked onto the stream (E10). */
+  sawOffProtocol: boolean;
   dispatchState: "not_dispatched" | "accepted" | "unknown";
   cancelling: boolean;
   settled: boolean;
@@ -140,12 +176,16 @@ export function createKimiStreamJsonDriver(
       turn.resolve();
     }
 
-    function failTurn(turn: ActiveTurn, error: ReturnType<typeof makeError>) {
+    function failTurn(
+      turn: ActiveTurn,
+      error: ReturnType<typeof makeError>,
+      toolState: ToolState = "unknown",
+    ) {
       emitTerminal(turn, {
         type: "failed",
         error,
         dispatchState: turn.dispatchState,
-        toolState: "unknown",
+        toolState,
         retryable: error.retryable,
       });
     }
@@ -153,12 +193,13 @@ export function createKimiStreamJsonDriver(
     function interruptTurn(
       turn: ActiveTurn,
       reason: "user_cancelled" | "driver_crash" | "timeout" | "unknown",
+      toolState: ToolState = "unknown",
     ) {
       emitTerminal(turn, {
         type: "interrupted",
         reason,
         dispatchState: turn.dispatchState,
-        toolState: "unknown",
+        toolState,
       });
     }
 
@@ -177,6 +218,11 @@ export function createKimiStreamJsonDriver(
     function armIdleTimer(turn: ActiveTurn) {
       if (turn.idleTimer) clearTimeout(turn.idleTimer);
       turn.idleTimer = setTimeout(() => {
+        // F3: synchronously invalidate the session BEFORE the terminal — a
+        // hung turn may have silently accepted a prompt into a session whose
+        // state can no longer be trusted, so the next turn cold-rebases. The
+        // invalidation happens exactly once here (emitTerminal clears the turn).
+        invalidateSession("stream_idle_timeout");
         failTurn(
           turn,
           makeError("STREAM_IDLE_TIMEOUT", "stream", "No protocol frames within the idle limit.", {
@@ -185,14 +231,25 @@ export function createKimiStreamJsonDriver(
             participantId,
           }),
         );
-        // No process to kill yet here: the watchdog escalation is owned by the
-        // turn timer + cancel path. The idle timer only fails the turn; the
-        // spawn reap is handled below via the activeProcess shutdown.
+        // Reap the process group so the timed-out turn is not left running.
         void reapActiveProcess("idle_timeout");
       }, timeouts.streamIdleMs);
     }
 
     let activeProcess: DriverProcess | null = null;
+    /**
+     * F4: the in-flight spawnDriver promise. cancel()/close() cover and await this
+     * so a process that spawns after the turn was settled/driver closed is either
+     * awaited-to-shutdown (still pending) or no-ops (already resolved). Null when
+     * no spawn is outstanding.
+     */
+    let pendingSpawn: Promise<DriverProcess> | null = null;
+    /**
+     * F5: the in-flight provider-list probe process, tracked so close() reaps it
+     * (it is NOT the per-turn activeProcess, so close() would otherwise miss it).
+     * Null when no probe is outstanding.
+     */
+    let activeProbe: DriverProcess | null = null;
 
     async function reapActiveProcess(reason: string): Promise<void> {
       const proc = activeProcess;
@@ -208,13 +265,28 @@ export function createKimiStreamJsonDriver(
       armIdleTimer(turn); // any frame resets the idle window
       const role = typeof message.role === "string" ? message.role : "";
       if (role === "assistant") {
+        // A tooled turn emits assistant frames carrying only `tool_calls`
+        // (E10); a later assistant frame carries the final text `content`.
+        // The LAST assistant frame with a NON-EMPTY string content is the
+        // authoritative output; a tool-called-only frame is tool activity,
+        // not output, and is never treated as the deliverable.
+        const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+        if (hasToolCalls) {
+          turn.sawToolActivity = true;
+        }
         const content = typeof message.content === "string" ? message.content : "";
-        // final-only: the assistant frame IS the authoritative full output; no
-        // deltas are emitted (the protocol has none).
-        turn.output = content;
-        turn.sawAssistant = true;
-        // Bytes were provably accepted and answered by the model.
-        turn.dispatchState = "accepted";
+        if (content.length > 0) {
+          turn.output = content;
+          turn.sawAssistant = true;
+          // Bytes were provably accepted and answered by the model.
+          turn.dispatchState = "accepted";
+        }
+        return;
+      }
+      if (role === "tool") {
+        // role:"tool" frames carry tool result stdout (E10): provable tool
+        // activity. They are NEVER output candidates.
+        turn.sawToolActivity = true;
         return;
       }
       if (role === "meta") {
@@ -232,6 +304,34 @@ export function createKimiStreamJsonDriver(
       }
       // Open set: unknown roles are ignored (never fatal).
       diagnostic("unknown_role", `ignored role=${role || "(none)"}`);
+    }
+
+    /**
+     * Record a non-JSON stdout line (E10: tool raw stdout leaks as bare lines on
+     * a tooled turn). It is off-protocol evidence — it does not fail the turn,
+     * but it affects the terminal toolState mapping (F1/F6).
+     */
+    function noteOffProtocolLine(turn: ActiveTurn, line: string) {
+      if (turn.settled) return;
+      turn.sawOffProtocol = true;
+      diagnostic("off_protocol_line", "non-JSON stdout line observed", {
+        len: sanitizeString(line, 64),
+      });
+    }
+
+    /**
+     * Map the terminal toolState for a turn that completed with exit 0 and a
+     * non-empty assistant frame (the success path). Per D7 / ADR-0012 (E10):
+     *   - tool activity present (assistant.tool_calls / role:"tool") → "completed"
+     *   - no tool activity, no off-protocol non-JSON lines → "none" (a clean
+     *     discussion-shaped turn; the only value classifyCompleted commits)
+     *   - no tool activity but off-protocol non-JSON lines leaked → "unknown"
+     *     (the stream was polluted in an unclassifiable way → discard path)
+     */
+    function completedToolState(turn: ActiveTurn): ToolState {
+      if (turn.sawToolActivity) return "completed";
+      if (turn.sawOffProtocol) return "unknown";
+      return "none";
     }
 
     function settleOnExit(turn: ActiveTurn, code: number | null, stderrText: string) {
@@ -348,6 +448,8 @@ export function createKimiStreamJsonDriver(
         }
       }
       // success: no generation bump (the Execution Session continuity holds).
+      // toolState is mapped from the protocol evidence collected this turn
+      // (F1, D7, ADR-0012/E10): none / completed / unknown.
       emitTerminal(turn, {
         type: "completed",
         output: turn.output,
@@ -357,7 +459,7 @@ export function createKimiStreamJsonDriver(
         // not a claim that no provider-side reroute exists.
         effectiveModel: turn.modelId,
         modelVerdict: "match",
-        toolState: "unknown",
+        toolState: completedToolState(turn),
         dispatchState: "accepted",
         usage: null,
         finalSeq: 0, // registry re-stamps
@@ -443,6 +545,8 @@ export function createKimiStreamJsonDriver(
           sawAssistant: false,
           output: "",
           resumeHint: null,
+          sawToolActivity: false,
+          sawOffProtocol: false,
           dispatchState: "not_dispatched",
           cancelling: false,
           settled: false,
@@ -455,16 +559,74 @@ export function createKimiStreamJsonDriver(
         const stderrRing = createBoundedRing(LIMITS.stderrRingBytes);
         const executable = installation.realpath;
 
-        supervisor
-          .spawnDriver({
-            participantId,
-            executable,
-            argv,
-            cwd,
-            envInherit: ENV_INHERIT,
-            envSet: {},
-          })
+        // F2: a Node child's `exit` event can fire BEFORE its stdio pipes
+        // close, and the watchdog control channel + the forwarded stdout are
+        // independent pipes. Track both processExit and stdoutEnded and only
+        // settle once both are observed (with a bounded grace when exit lands
+        // first), so late stdout tail frames (assistant / resume_hint) are not
+        // dropped into an EMPTY_OUTPUT or resume-miss misclassification. stderr
+        // is best-effort; its resume-miss text is read at settle from whatever
+        // the bounded ring has captured.
+        const drain = {
+          processExit: false as boolean,
+          exitCode: null as number | null,
+          stdoutEnded: false as boolean,
+          settled: false as boolean,
+          graceTimer: undefined as NodeJS.Timeout | undefined,
+        };
+
+        function trySettle(reason: "exit" | "drained"): void {
+          if (drain.settled || turn.settled) return;
+          if (!drain.processExit) return;
+          void reason;
+          // stdout may lag the exit event; if it is still draining, arm a
+          // bounded grace once (exit-first) and settle when the drain path runs.
+          if (!drain.stdoutEnded) {
+            if (!drain.graceTimer) {
+              drain.graceTimer = setTimeout(() => {
+                // Grace elapsed: settle with whatever frames we already have.
+                drain.graceTimer = undefined;
+                if (!drain.settled && !turn.settled) {
+                  drain.settled = true;
+                  if (activeTurn === turn) settleOnExit(turn, drain.exitCode, stderrRing.text());
+                }
+              }, EXIT_DRAIN_GRACE_MS);
+              drain.graceTimer.unref();
+            }
+            return;
+          }
+          drain.settled = true;
+          if (drain.graceTimer) {
+            clearTimeout(drain.graceTimer);
+            drain.graceTimer = undefined;
+          }
+          if (activeTurn === turn) settleOnExit(turn, drain.exitCode, stderrRing.text());
+        }
+
+        // F4: track the in-flight spawn so cancel()/close() can cover and wait
+        // for it; the spawned process is rejected (immediately shut down) if the
+        // turn was already settled or the driver is closing/closed by the time
+        // the spawn resolves.
+        const spawnPromise = supervisor.spawnDriver({
+          participantId,
+          executable,
+          argv,
+          cwd,
+          envInherit: ENV_INHERIT,
+          envSet: {},
+        });
+        pendingSpawn = spawnPromise;
+
+        spawnPromise
           .then((spawned) => {
+            pendingSpawn = null;
+            // F4 race window: if cancel()/close() settled the turn or closed the
+            // driver while the spawn was pending, never adopt this process — kill
+            // it immediately and install no timers / no feeders.
+            if (state === "closing" || state === "closed" || turn.settled || activeTurn !== turn) {
+              void spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+              return;
+            }
             activeProcess = spawned;
             spawned.stderr.on("data", (chunk: Buffer) => stderrRing.append(chunk.toString("utf8")));
             attachNdjsonSplitter(spawned.stdout, {
@@ -473,7 +635,10 @@ export function createKimiStreamJsonDriver(
                 try {
                   message = JSON.parse(line) as Record<string, unknown>;
                 } catch {
-                  diagnostic("bad_json", "non-JSON stdout line", {});
+                  // F6/D7 (E10): a non-JSON line is tool raw stdout leaking onto
+                  // the stream — off-protocol evidence that affects the terminal
+                  // toolState, NOT a silent ignore.
+                  if (activeTurn === turn) noteOffProtocolLine(turn, line);
                   return;
                 }
                 if (activeTurn === turn) onFrame(turn, message);
@@ -491,14 +656,16 @@ export function createKimiStreamJsonDriver(
                 }
               },
               onEnd() {
-                // stdout closed: the process is exiting; the exit handler settles.
+                // stdout drained: attempt to settle if the exit already happened.
+                drain.stdoutEnded = true;
+                trySettle("drained");
               },
             });
             spawned.events.once("exit", ({ code }: { code: number | null }) => {
               activeProcess = null;
-              if (activeTurn === turn && !turn.settled) {
-                settleOnExit(turn, code, stderrRing.text());
-              }
+              drain.processExit = true;
+              drain.exitCode = code;
+              trySettle("exit");
               if (state === "busy") state = "ready";
             });
             // Wait for watchdog supervision; a fast healthy turn may already be
@@ -530,15 +697,18 @@ export function createKimiStreamJsonDriver(
             // still times out rather than hanging the execute promise).
             turn.turnTimer = setTimeout(() => {
               if (activeTurn === turn && !turn.settled) {
+                // F3: synchronously invalidate the session BEFORE the terminal so
+                // the next turn cold-rebases — the timed-out process may have
+                // already accepted/persisted an unknown incremental prompt.
+                invalidateSession("turn_timeout");
                 interruptTurn(turn, "timeout");
-                void reapActiveProcess("turn_timeout").then(() => {
-                  invalidateSession("turn_timeout");
-                });
+                void reapActiveProcess("turn_timeout");
               }
             }, timeouts.turnMs);
             armIdleTimer(turn);
           })
           .catch((error: unknown) => {
+            pendingSpawn = null;
             if (activeTurn === turn && !turn.settled) {
               const msg = error instanceof Error ? error.message : "spawn failed";
               invalidateSession("spawn_threw");
@@ -600,8 +770,13 @@ export function createKimiStreamJsonDriver(
         // is recorded, but execution always passes an explicit -m.
         const probeOk = await runProviderProbe(input.installation.realpath).catch((error) => {
           const msg = error instanceof Error ? error.message : "provider list failed";
+          const code =
+            error instanceof Error &&
+            (error as { runtimeCode?: string }).runtimeCode === "HANDSHAKE_TIMEOUT"
+              ? "HANDSHAKE_TIMEOUT"
+              : "AUTH_REQUIRED";
           throw Object.assign(new Error(`kimi provider probe failed: ${msg}`), {
-            runtimeCode: "AUTH_REQUIRED",
+            runtimeCode: code,
           });
         });
         // The parsed default line is diagnostic only (recorded inside the
@@ -672,6 +847,16 @@ export function createKimiStreamJsonDriver(
         const turn = activeTurn;
         if (!turn || turn.executionId !== executionId) return;
         turn.cancelling = true;
+        // F4: cover the pending-spawn window. Await the spawn promise so a
+        // process that resolves while/after cancel runs is driven through the
+        // normal cancel teardown below (SIGTERM → exit → user_cancelled
+        // terminal) rather than spawned-and-left-running. A spawn that fails
+        // resolves here and the catch-only path still hits the fallback.
+        const pending = pendingSpawn;
+        if (pending) {
+          await pending.catch(() => undefined);
+          pendingSpawn = null;
+        }
         const proc = activeProcess;
         if (proc) {
           proc.kill("SIGTERM", timeouts.interruptGraceMs);
@@ -705,10 +890,28 @@ export function createKimiStreamJsonDriver(
         if (turn && !turn.settled) {
           turn.cancelling = true;
         }
+        // F4: wait for any pending spawn to resolve so a process spawned-but-
+        // not-yet-supervised is shut down rather than adopted/leaked after
+        // close. The spawn-then handler sees state === "closing" and rejects.
+        const pending = pendingSpawn;
+        if (pending) {
+          await pending
+            .then((spawned) => spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined))
+            .catch(() => undefined);
+          pendingSpawn = null;
+        }
         const proc = activeProcess;
         activeProcess = null;
         if (proc) {
           await proc.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+        }
+        // F5: reap the provider-list probe too — it is not the activeProcess,
+        // so close() would otherwise leave a hung probe (and its watchdog/CLI
+        // processes) behind.
+        const probe = activeProbe;
+        activeProbe = null;
+        if (probe) {
+          await probe.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
         }
         activeTurn = null;
         invalidateSession("close");
@@ -729,7 +932,10 @@ export function createKimiStreamJsonDriver(
      * Run `kimi provider list` (text) as a short-lived supervised probe and
      * parse the `Default model:` line. Returns null defaultModel if the line is
      * absent (the probe still proves OAuth config exists). Throws on non-zero
-     * exit (auth/provider unavailable). Never parses or returns secret fields.
+     * exit (auth/provider unavailable) or on a deadline over the whole command
+     * life (F5: a hung OAuth-interactive probe must not block readiness/close
+     * forever, and the probe handle is reaped by close()). Never parses or
+     * returns secret fields.
      */
     async function runProviderProbe(executable: string): Promise<{
       defaultModel: string | null;
@@ -744,21 +950,50 @@ export function createKimiStreamJsonDriver(
         envInherit: ENV_INHERIT,
         envSet: {},
       });
+      activeProbe = spawned;
       let output = "";
       const ring = createBoundedRing(LIMITS.stderrRingBytes);
       spawned.stdout.on("data", (chunk: Buffer) => {
         output += chunk.toString("utf8");
       });
       spawned.stderr.on("data", (chunk: Buffer) => ring.append(chunk.toString("utf8")));
-      const exitCode = await new Promise<number | null>((resolvePromise) => {
+      // F5: an absolute deadline over the whole probe life reuses ndjson's
+      // withDeadline. handshakeMs already bounds supervision; this bounds the
+      // exit wait so a hung OAuth/interactive probe cannot block indefinitely.
+      const PROBE_DEADLINE_MS = Math.max(timeouts.handshakeMs, 8000);
+      const exited = new Promise<number | null>((resolvePromise) => {
         spawned.events.once("exit", ({ code }: { code: number | null }) => resolvePromise(code));
+        // waitSupervised rejects on a pre-supervision exit; the exit listener
+        // above resolves either way. A supervised-but-hung probe is caught by
+        // the outer deadline.
         spawned.waitSupervised(timeouts.handshakeMs).catch(() => {
-          // timeout: if the process is still alive, the exit handler will still
-          // fire after the shutdown below; resolve via the exit path only.
+          /* handled by deadline / exit path */
         });
-      }).catch(() => null);
-      // Always reap the probe process; never leak a CLI process.
+      });
+      let exitCode: number | null;
+      let timedOut = false;
+      try {
+        exitCode = await withDeadline(
+          exited,
+          PROBE_DEADLINE_MS,
+          () => new Error("HANDSHAKE_TIMEOUT"),
+        );
+      } catch (error) {
+        timedOut = true;
+        exitCode = null;
+        void error;
+      }
+      // F5: always reap the probe process on every path — shutdown before
+      // surfacing the error so a timed-out/hung probe is never leaked.
       await spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+      if (activeProbe === spawned) activeProbe = null;
+      if (timedOut) {
+        // Map an OAuth/interactive hang to HANDSHAKE_TIMEOUT (clean shutdown
+        // already done). Distinguished from an AUTH_REQUIRED exit failure.
+        throw Object.assign(new Error("kimi provider probe timed out (OAuth hang?)"), {
+          runtimeCode: "HANDSHAKE_TIMEOUT",
+        });
+      }
       if (exitCode !== 0) {
         throw Object.assign(new Error(`provider list exited with code ${exitCode ?? "null"}`), {
           runtimeCode: "AUTH_REQUIRED",

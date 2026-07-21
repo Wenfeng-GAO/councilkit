@@ -76,17 +76,39 @@ HTTP Driver and API-key storage remain excluded (ADR-0001).
   carries a model/reroute field, it must be parsed and a mismatch pauses
   (limitation recorded, not hidden).
 
-### Honest toolState: "unknown", never a fabricated "none"
+### toolState from protocol evidence (none / completed / unknown)
 
-`-p` mode makes `kimi` a tooled coding agent; the CLI offers no zero-tools
-switch (E4), and the stream-json protocol carries **no tool telemetry**. A
-dedicated empty-cwd probe (2026-07-22) showed no file writes from a
-discussion-shaped turn under `--skills-dir <empty>` + a `DISCUSSION_CONTRACT`
-instruction — but absence-of-observed-writes is mitigation, not proof. The
-driver therefore reports the honest `toolState: "unknown"` on every terminal,
-never a fabricated `none`. Mitigations: a Participant-dedicated cwd, an empty
-`--skills-dir` (isolating user/project skills), and a `DISCUSSION_CONTRACT`
-instruction prepended only on the first (cold) turn.
+`kimi -p --output-format stream-json` **does** carry tool telemetry (E10 probe
+`/tmp/kimi-probe-tools.out`, 2026-07-22): a tooled turn emits assistant frames
+with a `tool_calls` field and `role:"tool"` frames, and the tool's raw stdout
+leaks onto the stream as bare non-JSON lines (~720 bare lines vs 4 JSON frames
+in the probe). The driver maps the terminal `toolState` from that protocol
+evidence, aligned with the codex semantics (none → active → completed, and
+crash-after-tool → unknown):
+
+- **exit 0, no tool frames AND no off-protocol non-JSON lines → `"none"`** —
+  the protocol proves an assistant `content` frame with no tool activity. This
+  is the only terminal the commit pipeline's `classifyCompleted`
+  (`src/orchestrator/commit-execution.ts`:64-72) admits; a discussion-shaped
+  turn lands here.
+- **exit 0, tool activity present (`tool_calls` / `role:"tool"`) → `"completed"`**
+  — provable tool activity that completed normally; committable, the same as a
+  codex completed-tool turn.
+- **exit 0, no tool frames but off-protocol non-JSON stdout leaked → `"unknown"`**
+  — the stream was polluted in a way that cannot be classified; the commit
+  pipeline discards it (matching codex's crash-into-unknown path), so a polluted
+  turn never silently lands as a committed message.
+- **tool activity seen, then the turn ended abnormally (non-zero exit, timeout,
+  crash, cancel) → `"unknown"`** — the clean tool state can no longer be proven.
+
+This supersedes the earlier "always `unknown`" stance (D2 / review-0 P0,
+2026-07-22): an always-`unknown` terminal was unconditionally discarded by the
+commit pipeline, dropping the real discussion output. Mitigations that keep a
+discussion-shaped turn on the clean `"none"` path are unchanged: a
+Participant-dedicated cwd, an empty `--skills-dir` (isolating user/project
+skills), and a `DISCUSSION_CONTRACT` instruction prepended only on the first
+(cold) turn. The model may still elect to use a tool; that turn honestly
+reports `"completed"` and is committable, matching the codex product semantics.
 
 ### Settlement, resume-miss, cancel, close
 
@@ -112,8 +134,11 @@ prompt over 200KB with a structured `PROTOCOL_LIMIT` / `not_dispatched` failure
 
 ## Residual risks (recorded, not deferred fixes)
 
-- **Tool observability.** The driver cannot prove tools were unused; it reports
-  `unknown` and mitigates with cwd/skills-dir/contract isolation.
+- **Tool observability.** The driver maps `toolState` from protocol evidence
+  (none / completed / unknown — see above). It cannot prove a tool was *unused*
+  from the absence of tool frames alone if off-protocol non-JSON stdout was
+  also absent: it reports `"none"` for that clean case and mitigates with
+  cwd/skills-dir/contract isolation so a discussion-shaped turn stays clean.
 - **Prompt on argv.** Other processes owned by the same macOS user could
   observe argv. The Host threat model does not defend against a same-user
   malicious process; prompts/session ids are never written to logs or

@@ -616,7 +616,7 @@ describe("driver contract: kimi-stream-json (per-turn, final-only)", () => {
     expect(run1.events.filter((e) => e.type === "output.delta")).toHaveLength(0);
     expect(completed1.usage).toBeNull();
     expect(completed1.modelVerdict).toBe("match");
-    expect(completed1.toolState).toBe("unknown");
+    expect(completed1.toolState).toBe("none");
     expect(rig.driver.sessionEpoch).toBe(0);
 
     const run2 = executeCollecting(rig.driver, execInput(kimiScenario, "exec-2", "Two."));
