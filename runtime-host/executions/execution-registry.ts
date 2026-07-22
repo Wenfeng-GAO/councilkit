@@ -88,10 +88,16 @@ export function createExecutionRegistry(_deps: { logger: Logger }): ExecutionReg
       const kept: RuntimeEvent[] = [];
       let preview = "";
       let firstDeltaSeq: number | null = null;
+      let firstDeltaIndex: number | null = null;
       for (const existing of record.events) {
         if (existing.type === "output.delta" || existing.type === "output.snapshot") {
+          if (firstDeltaSeq === null) {
+            // `kept` currently holds only the non-delta events that precede
+            // this delta — exactly the index that preserves seq order.
+            firstDeltaIndex = kept.length;
+            firstDeltaSeq = existing.seq;
+          }
           preview += existing.text;
-          firstDeltaSeq = firstDeltaSeq ?? existing.seq;
           record.bufferedBytes -= eventBytes(existing);
         } else {
           kept.push(existing);
@@ -105,10 +111,20 @@ export function createExecutionRegistry(_deps: { logger: Logger }): ExecutionReg
           type: "output.snapshot",
           text: preview,
         };
-        kept.push(snapshot);
+        kept.splice(firstDeltaIndex ?? 0, 0, snapshot);
         record.bufferedBytes += eventBytes(snapshot);
       }
       record.events = kept;
+      // Invariant: after coalescing, record.events must be in non-decreasing
+      // seq order so follow() can replay in storage order. Splice places the
+      // consolidated snapshot at the first replaced delta's position; verify.
+      for (let i = 1; i < record.events.length; i++) {
+        if (record.events[i].seq < record.events[i - 1].seq) {
+          throw new Error(
+            `ExecutionRegistry coalesce invariant violated: seq ${record.events[i - 1].seq} precedes seq ${record.events[i].seq}`,
+          );
+        }
+      }
       // If even after coalescing the new delta cannot fit, drop the delta
       // itself — the terminal event always carries the authoritative output.
       if (record.bufferedBytes + size > LIMITS.executionBufferBytes) {
