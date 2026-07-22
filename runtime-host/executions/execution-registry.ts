@@ -127,7 +127,11 @@ export function createExecutionRegistry(_deps: { logger: Logger }): ExecutionReg
       }
       // If even after coalescing the new delta cannot fit, drop the delta
       // itself — the terminal event always carries the authoritative output.
+      // The dropped event already consumed a seq (allocated in emit before
+      // bufferEvent was called); advance lastSeq here so the next emit
+      // allocates strictly-next seq and live listeners observe no duplicates.
       if (record.bufferedBytes + size > LIMITS.executionBufferBytes) {
+        record.lastSeq = event.seq;
         return;
       }
     }
