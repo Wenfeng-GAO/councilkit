@@ -25,5 +25,9 @@
   // These two test files span the browser (@/) and host (@host) worlds in one
   // file; their transitive import graphs are checked from here. Neither the
   // app tsconfig (no @host) nor the host tsconfig (no @/) can cover them.
-  "include": ["tests/integration/discussion-runtime.test.ts", "tests/smoke/live-runtime-smoke.ts"]
+  "include": [
+    "tests/integration/discussion-runtime.test.ts",
+    "tests/smoke/live-runtime-smoke.ts",
+    "tests/smoke/live-agent-test-call-smoke.ts"
+  ]
 }

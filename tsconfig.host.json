@@ -25,6 +25,7 @@
   // (@host); they are typechecked by tsconfig.integration.json instead.
   "exclude": [
     "tests/integration/discussion-runtime.test.ts",
-    "tests/smoke/live-runtime-smoke.ts"
+    "tests/smoke/live-runtime-smoke.ts",
+    "tests/smoke/live-agent-test-call-smoke.ts"
   ]
 }

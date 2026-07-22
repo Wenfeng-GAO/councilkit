@@ -1,3 +1,10 @@
+import {
+  AGENT_COLOR_SWATCHES,
+  type AgentColorState,
+  createAgentColorState,
+  resolveAgentColor,
+  selectAgentColor,
+} from "@/components/settings/agent-color-state";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Select } from "@/components/ui/Select";
@@ -34,8 +41,6 @@ interface AgentFormModalProps {
   onSubmit: (values: AgentFormValues) => Promise<string | null>;
 }
 
-const DEFAULT_COLOR = "#4f6ef7";
-
 export function AgentFormModal({
   open,
   mode,
@@ -50,7 +55,9 @@ export function AgentFormModal({
   const [personaPrompt, setPersonaPrompt] = useState("");
   const [executionProfileId, setExecutionProfileId] = useState("");
   const [modelId, setModelId] = useState("");
-  const [color, setColor] = useState(DEFAULT_COLOR);
+  const [colorState, setColorState] = useState<AgentColorState>(() =>
+    createAgentColorState("create", ""),
+  );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -61,10 +68,10 @@ export function AgentFormModal({
     setPersonaPrompt(initial?.personaPrompt ?? "");
     setExecutionProfileId(initial?.executionProfileId ?? profiles[0]?.id ?? "");
     setModelId(initial?.modelId ?? "");
-    setColor(initial?.color ?? DEFAULT_COLOR);
+    setColorState(createAgentColorState(mode, initial?.color ?? ""));
     setError(null);
     setSubmitting(false);
-  }, [open, initial, profiles]);
+  }, [open, initial, profiles, mode]);
 
   const chosenProfile = profiles.find((profile) => profile.id === executionProfileId);
 
@@ -113,6 +120,11 @@ export function AgentFormModal({
     }
     if (modelId.trim().length === 0) {
       setError("请从当前 Driver 目录中选择一个 modelId。");
+      return;
+    }
+    const color = resolveAgentColor(colorState);
+    if (color === null) {
+      setError("请选择一个预设颜色。");
       return;
     }
     if (!isValidHexColor(color)) {
@@ -186,20 +198,41 @@ export function AgentFormModal({
           选择项为 canonical ID；若 Driver 另行声明 alias，alias 与 canonical ID
           不相等，保存与执行都以 canonical ID 为准。
         </p>
-        <div className="flex items-end gap-2">
-          <TextInput
-            label="颜色（#rrggbb）"
-            value={color}
-            onChange={(event) => setColor(event.target.value)}
-            placeholder="#4f6ef7"
-            className="w-32"
-          />
-          <span
-            aria-hidden="true"
-            className="mb-1 inline-block h-6 w-6 rounded-full border border-edge"
-            style={{ backgroundColor: isValidHexColor(color) ? color : "transparent" }}
-          />
-        </div>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-sm text-fg">颜色</legend>
+          <div className="flex flex-wrap gap-2">
+            {AGENT_COLOR_SWATCHES.map((preset) => {
+              const selected =
+                colorState.selected?.value.toLowerCase() === preset.value.toLowerCase();
+              return (
+                <button
+                  key={preset.value}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-label={`${preset.name} ${preset.value}`}
+                  title={`${preset.name} ${preset.value}`}
+                  onClick={() => setColorState((prev) => selectAgentColor(prev, preset))}
+                  className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border-2 transition"
+                  style={{
+                    backgroundColor: preset.value,
+                    borderColor: selected ? "var(--ck-ring, #fff)" : "transparent",
+                  }}
+                >
+                  {selected ? (
+                    <span aria-hidden="true" className="text-xs text-white">
+                      ✓
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          {colorState.mode === "edit" && colorState.selected === null && !colorState.touched ? (
+            <p className="text-xs text-warn">
+              当前为遗留颜色（{colorState.original}），点选后归入预设；不点选则保留原值。
+            </p>
+          ) : null}
+        </fieldset>
         {mode === "edit" ? (
           <p className="text-xs text-muted">
             已加入房间的 Participant 保留加入时的配置快照；保存后 revision +1，只影响之后加入房间的

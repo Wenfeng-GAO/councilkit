@@ -2226,7 +2226,20 @@ async function main(): Promise<void> {
   if (!finalReport.ok) process.exit(1);
 }
 
-main().catch((error) => {
-  console.error(`SMOKE ERROR: ${messageOf(error)}`);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1]?.endsWith("live-runtime-smoke.ts") ?? false;
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error(`SMOKE ERROR: ${messageOf(error)}`);
+    process.exit(1);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// V1.1 复用导出：live-agent-test-call-smoke.ts 通过 import 复用本工具的独占机
+// 检查、会话获取、健康等待与真实 Host rig 组装，避免重复一套进程监管逻辑。
+// 本文件被直接执行（tsx）时 main() 仍按原命令行行为运行；被 import 时
+// main() 因下方 guard 不再自动触发——仅暴露复用能力。
+// ---------------------------------------------------------------------------
+
+export { assertExclusiveMachine, acquireSession, waitForHealth, createRealRig, selectModel };
+export type { Rig };

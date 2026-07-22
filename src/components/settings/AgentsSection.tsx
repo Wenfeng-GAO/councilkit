@@ -4,6 +4,11 @@ import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { exportAgents } from "@/lib/agent-io";
+import {
+  type AgentRealCallErrorCategory,
+  type AgentRealCallResult,
+  runAgentRealCallTest,
+} from "@/lib/agent-real-call";
 import type { DiscussionAgent } from "@/models/discussion/entities";
 import { type ExecutionProfileRecord, toDto } from "@/models/execution-profile";
 import { getAppRuntime } from "@/runtime/bootstrap";
@@ -51,6 +56,72 @@ type AgentTestResult =
   | { ok: true; readiness: ProfileReadiness; cachedAt: string }
   | { ok: false; error: string };
 
+/** 绑定 agent.revision：Agent 编辑后 revision +1，旧结果自动隐藏（不落库）。 */
+interface AgentRealCallRecord {
+  revision: number;
+  result: AgentRealCallResult;
+}
+
+/** 真实调用结果区内容：pill + canonical/effective/modelVerdict/toolState +
+ * 首帧/总耗时 + usage + 输出预览 + 失败分类提示。 */
+function AgentRealCallResultRow({ result }: { result: AgentRealCallResult }) {
+  const pill =
+    result.verdict === "completed"
+      ? { tone: "success" as const, text: "真实调用成功" }
+      : result.verdict === "timeout"
+        ? { tone: "warn" as const, text: "真实调用超时" }
+        : result.verdict === "cancelled"
+          ? { tone: "muted" as const, text: "真实调用已取消" }
+          : { tone: "error" as const, text: "真实调用失败" };
+  return (
+    <>
+      <StatusPill tone={pill.tone} text={pill.text} />
+      <span className="break-words text-xs text-muted">
+        canonical: {result.canonical ?? "未知"} · effective: {result.effective ?? "未知"} ·
+        modelVerdict: {result.modelVerdict ?? "未知"} · toolState: {result.toolState ?? "未知"}
+      </span>
+      <span className="text-xs text-muted">
+        首帧 {result.ttftMs ?? "—"} ms · 总耗时 {result.totalMs} ms
+      </span>
+      <span className="text-xs text-muted">
+        usage：
+        {result.usage && (result.usage.inputTokens !== null || result.usage.outputTokens !== null)
+          ? `input ${result.usage.inputTokens ?? "?"} / output ${result.usage.outputTokens ?? "?"}${result.usage.costUsd !== null && result.usage.costUsd !== undefined ? ` / cost $${result.usage.costUsd}` : ""}`
+          : "Driver 未提供"}
+      </span>
+      {result.outputPreview ? (
+        <span className="break-words whitespace-pre-wrap text-xs text-fg">
+          {result.outputPreview}
+        </span>
+      ) : null}
+      {result.error ? (
+        <span className="break-words text-xs text-error">
+          [{result.error.category}] {result.error.code} · {result.error.message} ·{" "}
+          {realCallHint(result.error.category)}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** 错误分类 → 可操作中文提示（plan-a §4 UI 集成）。 */
+function realCallHint(category: AgentRealCallErrorCategory): string {
+  switch (category) {
+    case "auth":
+      return "请重新登录对应本地 CLI";
+    case "installation":
+      return "请重新验证 Installation / Profile";
+    case "model_unavailable":
+      return "请编辑 Agent 并重新选择目录内模型";
+    case "timeout":
+      return "请检查 provider / 网络后重试";
+    case "quota":
+      return "等待当前讨论结束或释放空闲运行时后重试";
+    default:
+      return "请导出诊断包并重启 Host / CLI";
+  }
+}
+
 /** 行内测试结果区内容：StatusPill + detail + 固定尾注 + cachedAt 相对时间。 */
 function AgentTestResultRow({ result }: { result: AgentTestResult }) {
   if (!result.ok) {
@@ -94,6 +165,8 @@ export function AgentsSection({
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, AgentTestResult>>({});
+  const [realCallId, setRealCallId] = useState<string | null>(null);
+  const [realCallResults, setRealCallResults] = useState<Record<string, AgentRealCallRecord>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const profilesById = useMemo(
@@ -167,6 +240,53 @@ export function AgentsSection({
     }
   };
 
+  // 真实调用测试自接线：发起一次真实模型 turn（一次付费调用），经
+  // agent-real-call helper 驱动 scope→activate→execute→SSE→ack→close；
+  // 结果仅存内存 state，绑定 agent.revision，编辑后自动隐藏。不写 Dexie（Q15）。
+  const handleRealCallTest = async (agent: DiscussionAgent) => {
+    const profile = profilesById.get(agent.executionProfileId);
+    if (!profile) return;
+    setRealCallId(agent.id);
+    try {
+      const result = await runAgentRealCallTest({
+        client,
+        profile: toDto(profile),
+        modelId: agent.modelId,
+        persona: agent.personaPrompt,
+      });
+      setRealCallResults((prev) => ({
+        ...prev,
+        [agent.id]: { revision: agent.revision, result },
+      }));
+    } catch (error) {
+      setRealCallResults((prev) => ({
+        ...prev,
+        [agent.id]: {
+          revision: agent.revision,
+          result: {
+            verdict: "failed",
+            canonical: null,
+            effective: null,
+            modelVerdict: null,
+            toolState: null,
+            ttftMs: null,
+            totalMs: 0,
+            outputPreview: "",
+            usage: null,
+            error: {
+              category: "crash",
+              code: "HELPER_ERROR",
+              message: error instanceof Error ? error.message : "真实调用失败",
+              retryable: false,
+            },
+          },
+        },
+      }));
+    } finally {
+      setRealCallId(null);
+    }
+  };
+
   const handleFileChosen = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     // 重置 input，允许连续选择同一文件再次导入（每次导入 mint 新 id）。
@@ -225,6 +345,10 @@ export function AgentsSection({
           {agents.map((agent) => {
             const unbound = !profilesById.has(agent.executionProfileId);
             const result = testResults[agent.id];
+            const realRecord = realCallResults[agent.id];
+            // 结果绑定 agent.revision：编辑后 revision +1，旧结果自动隐藏。
+            const realCall =
+              realRecord && realRecord.revision === agent.revision ? realRecord.result : null;
             return (
               <li key={agent.id} className="flex flex-col gap-2">
                 <div className="flex items-center gap-2">
@@ -273,6 +397,18 @@ export function AgentsSection({
                       {testingId === agent.id ? "测试中…" : "测试"}
                     </Button>
                     <Button
+                      className="px-2 py-1 text-xs"
+                      disabled={!hostOnline || unbound || realCallId === agent.id}
+                      title={
+                        unbound
+                          ? "待绑定 Profile，无法真实调用"
+                          : "发起一次真实模型调用（授权一次付费调用）"
+                      }
+                      onClick={() => void handleRealCallTest(agent)}
+                    >
+                      {realCallId === agent.id ? "真实调用中…" : "真实调用测试"}
+                    </Button>
+                    <Button
                       variant="ghost"
                       className="px-2 py-1 text-xs"
                       onClick={() => void handleDelete(agent)}
@@ -283,7 +419,14 @@ export function AgentsSection({
                 </div>
                 {result ? (
                   <div className="flex flex-wrap items-center gap-2 rounded border border-edge bg-surface-2 px-3 py-2">
+                    <span className="text-xs font-semibold text-muted">环境测试</span>
                     <AgentTestResultRow result={result} />
+                  </div>
+                ) : null}
+                {realCall ? (
+                  <div className="flex flex-wrap items-center gap-2 rounded border border-edge bg-surface-2 px-3 py-2">
+                    <span className="text-xs font-semibold text-muted">真实调用</span>
+                    <AgentRealCallResultRow result={realCall} />
                   </div>
                 ) : null}
               </li>

@@ -72,6 +72,65 @@ export async function setDriverBehavior(
   await controlPost(page, "/driver", { participantId, behavior });
 }
 
+/** V1.1 真实档：按 driverId 设置默认驱动行为。真实档测试的 scope participantId
+ * 由前端动态生成，e2e 无法预知，故在创建前按 driverId 配置（hangUntilCancel 等），
+ * 新建的 rig 会继承该默认行为。 */
+export async function setDriverDefaultBehavior(
+  page: Page,
+  driverId: "claude-stream-json" | "codex-app-server" | "kimi-stream-json",
+  behavior: DriverBehaviorInput,
+): Promise<void> {
+  await controlPost(page, "/driver-default", { driverId, behavior });
+}
+
+/** 读测试运行期间的所有 ACK 记录（executionId/finalSeq/disposition/ackState）。 */
+export async function ackRecords(page: Page): Promise<
+  Array<{
+    executionId: string;
+    finalSeq: number;
+    disposition: "committed" | "discarded";
+    ackState: string;
+  }>
+> {
+  const response = await page.request.get(`${TEST_API}/acks`);
+  expect(response.ok(), "GET /acks failed").toBeTruthy();
+  const envelope = (await response.json()) as {
+    ok: boolean;
+    data: {
+      acks: Array<{
+        executionId: string;
+        finalSeq: number;
+        disposition: "committed" | "discarded";
+        ackState: string;
+      }>;
+    };
+  };
+  return envelope.data.acks;
+}
+
+/** 读 Host diagnostics（scope/process/execution/SSE 计数），用于真实档泄漏断言。 */
+export async function hostDiagnostics(page: Page): Promise<{
+  activeScopes: number;
+  liveDriverProcesses: number;
+  runningExecutions: number;
+  eventConnections: number;
+}> {
+  const response = await page.request.get("/api/v1/diagnostics");
+  expect(response.ok(), "GET /diagnostics failed").toBeTruthy();
+  const envelope = (await response.json()) as {
+    ok: boolean;
+    data: {
+      scopes: {
+        activeScopes: number;
+        liveDriverProcesses: number;
+        runningExecutions: number;
+        eventConnections: number;
+      };
+    };
+  };
+  return envelope.data.scopes;
+}
+
 /** Per-participant driver counters keyed by participantId. */
 export async function driverCounters(page: Page): Promise<Record<string, DriverCounters>> {
   const response = await page.request.get(`${TEST_API}/counters`);
@@ -178,7 +237,11 @@ export async function createAgent(page: Page, input: CreateAgentInput): Promise<
     exact: true,
   });
   await modelSelect.selectOption(input.modelId);
-  await dialog.getByRole("textbox", { name: "颜色（#rrggbb）", exact: true }).fill(input.color);
+  // V1.1 色板：颜色由 swatch 网格选取（无文本输入）。每个 swatch 的 aria-label
+  // 为 `${name} ${hex}`，pattern 匹配该 hex。
+  const hex = input.color.toLowerCase();
+  const swatch = dialog.getByRole("button", { name: new RegExp(hex) });
+  await swatch.click();
   await dialog.getByRole("button", { name: "创建 Agent" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText(input.name, { exact: true }).first()).toBeVisible();

@@ -191,4 +191,35 @@ describe("RuntimeClient installations / profile readiness (U6)", () => {
     );
     expect(calls[0]?.method).toBe("GET");
   });
+
+  it("execute/ack/close/etc. keep the legacy single-argument signature compatible", async () => {
+    const { fetchFn } = stubFetch(okResponse({ scopeId: "s1", state: "closed" }));
+    const client = makeClient(fetchFn);
+    // closeScope without options must still typecheck and call (legacy path).
+    await expect(
+      client.closeScope("s1", { controllerId: "c1", leaseEpoch: 1 }),
+    ).resolves.toBeDefined();
+  });
+
+  it("an aborted AbortSignal causes fetch to receive an aborted signal", async () => {
+    const seenSignals: AbortSignal[] = [];
+    const fetchFn = vi.fn((_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      if (init?.signal) seenSignals.push(init.signal as AbortSignal);
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true, data: { scopeId: "s", state: "closed" } }), {
+          status: 200,
+        }),
+      );
+    });
+    const client = makeClient(fetchFn as unknown as typeof fetch);
+    const controller = new AbortController();
+    controller.abort();
+    await client.closeScope(
+      "s1",
+      { controllerId: "c1", leaseEpoch: 1 },
+      { signal: controller.signal },
+    );
+    expect(seenSignals).toHaveLength(1);
+    expect(seenSignals[0]?.aborted).toBe(true);
+  });
 });

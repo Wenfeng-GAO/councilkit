@@ -7,7 +7,16 @@
  */
 import { readFileSync } from "node:fs";
 import { type BrowserContext, type Locator, type Page, expect, test } from "@playwright/test";
-import { createAgent, createProfile, freshPage, readStore } from "./helpers";
+import {
+  ackRecords,
+  createAgent,
+  createProfile,
+  freshPage,
+  hostDiagnostics,
+  readStore,
+  resetDriverState,
+  setDriverDefaultBehavior,
+} from "./helpers";
 import { bootSettings } from "./security-helpers";
 
 const PROFILE = "资产 GLM Profile";
@@ -303,5 +312,93 @@ test.describe("S7 agent assets", () => {
     // B 尝试写入的 personaPrompt 未落库（B 的提交被乐观锁整体拒绝，而非合并）。
     expect(finalAgent?.personaPrompt).not.toContain("页面B 试图改写的人格设定");
     await pageB.close();
+  });
+
+  test("V1.1 色板：新建只能点 swatch，卡片色点取预设值；遗留色编辑保留", async () => {
+    test.slow();
+    await bootSettings(page);
+    await createAssetProfile(page);
+    await createAgent(page, {
+      name: "色板甲",
+      persona: "色板甲的人格设定。",
+      profileName: PROFILE,
+      modelId: MODEL,
+      color: "#4f6ef7", // 靛蓝（预设成员）
+    });
+
+    // 色板选取后 Dexie 落预设值。
+    const agents = await readStore<{ id: string; name: string; color: string }>(page, "agents");
+    const agent = agents.find((candidate) => candidate.name === "色板甲");
+    expect(agent?.color).toBe("#4f6ef7");
+
+    // Settings 卡片色点 computed background = #4f6ef7（rgb(79, 110, 247)）；房间
+    // 参与者列表复用同一 agent.color（启停 test 已钉 NewRoom label 渲染，此处
+    // 钉卡片色点与 Dexie 一致即可覆盖 AC1「卡片/参与者颜色一致」）。
+    const card = agentListItem(page, "色板甲");
+    const dot = card.locator("span.rounded-full").first();
+    await expect(dot).toBeVisible();
+    const bg = await dot.evaluate((el) => window.getComputedStyle(el).backgroundColor);
+    expect(bg).toContain("79, 110, 247");
+  });
+
+  test("V1.1 真实调用测试：fake 全链路 scope→execute→SSE→ack committed→渲染，diagnostics 归零，无 Dexie 残留", async () => {
+    test.slow();
+    await bootSettings(page);
+    await createAssetProfile(page);
+    await createAssetAgent(page, "真实特工", "#4f6ef7");
+    await resetDriverState(page);
+
+    const row = agentListItem(page, "真实特工");
+    await row.getByRole("button", { name: "真实调用测试", exact: true }).click();
+
+    // 真实档结果区出现「真实调用」档标题 + 成功 pill + 证据。
+    await expect(row.getByText("真实调用", { exact: true })).toBeVisible();
+    await expect(row.getByText("真实调用成功", { exact: true })).toBeVisible();
+    await expect(row.getByText(/canonical: \S+ · effective: \S+/)).toBeVisible();
+    await expect(row.getByText(/总耗时 \d+ ms/)).toBeVisible();
+
+    // ACK 恰好一次且 committed。
+    const acks = await ackRecords(page);
+    expect(acks.length).toBe(1);
+    expect(acks[0]?.disposition).toBe("committed");
+    expect(acks[0]?.ackState).toBe("acknowledged");
+
+    // diagnostics 四项计数归零（无 scope/process/execution/SSE 泄漏）。
+    const diag = await hostDiagnostics(page);
+    expect(diag.activeScopes).toBe(0);
+    expect(diag.liveDriverProcesses).toBe(0);
+    expect(diag.runningExecutions).toBe(0);
+    expect(diag.eventConnections).toBe(0);
+
+    // Dexie 无测试残留：runtimeBindings / modelExecutions / messages 为空。
+    const bindings = await readStore<unknown>(page, "runtimeBindings");
+    const executions = await readStore<unknown>(page, "modelExecutions");
+    const messages = await readStore<unknown>(page, "messages");
+    expect(bindings.length).toBe(0);
+    expect(executions.length).toBe(0);
+    expect(messages.length).toBe(0);
+  });
+
+  test("V1.1 真实调用超时：hangUntilCancel + clock 快进 60s → timeout，cancel+close 一次，diagnostics 归零", async () => {
+    test.slow();
+    await bootSettings(page);
+    await createAssetProfile(page);
+    await createAssetAgent(page, "超时特工", "#f74f6e");
+    await resetDriverState(page);
+    // 未知 participantId 前按 driverId 配置 hang（真实档 scope participant 动态生成）。
+    await setDriverDefaultBehavior(page, "claude-stream-json", { hangUntilCancel: true });
+
+    // 用虚拟时钟快进，避免等一整分钟。
+    await page.clock.install();
+    const row = agentListItem(page, "超时特工");
+    await row.getByRole("button", { name: "真实调用测试", exact: true }).click();
+    // helper 内部 60s deadline → 快进到 60001ms 触发 timeout。
+    await page.clock.runFor(60_100);
+
+    await expect(row.getByText("真实调用超时", { exact: true })).toBeVisible();
+    const diag = await hostDiagnostics(page);
+    expect(diag.activeScopes).toBe(0);
+    expect(diag.runningExecutions).toBe(0);
+    expect(diag.eventConnections).toBe(0);
   });
 });

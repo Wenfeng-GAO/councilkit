@@ -328,7 +328,11 @@ test.describe("security gates", () => {
     });
     await expect(modelSelect).toContainText(CLAUDE_MODEL);
     await keyboardSelect(page, modelSelect, CLAUDE_MODEL);
-    // Color input keeps its valid default; Tab straight to the submit button.
+    // V1.1 色板：color 由 swatch 选取（无默认值/文本输入）。键盘 Tab 到首个 swatch
+    // 后 Space/Enter 选中，再 Tab 到提交按钮。
+    const swatch = dialog.getByRole("button", { name: "#4f6ef7" });
+    await tabToFocus(page, swatch);
+    await page.keyboard.press("Space");
     await tabToFocus(page, dialog.getByRole("button", { name: "创建 Agent" }));
     await page.keyboard.press("Enter");
     await expect(dialog).toBeHidden();
@@ -358,6 +362,10 @@ test.describe("security gates", () => {
     );
     await expect(modelSelect).toContainText(CODEX_MODEL);
     await keyboardSelect(page, modelSelect, CODEX_MODEL);
+    // V1.1 色板：选第二个预设色（玫红 #f74f6e）。
+    const swatchB = dialog.getByRole("button", { name: "#f74f6e" });
+    await tabToFocus(page, swatchB);
+    await page.keyboard.press("Space");
     await tabToFocus(page, dialog.getByRole("button", { name: "创建 Agent" }));
     await page.keyboard.press("Enter");
     await expect(dialog).toBeHidden();

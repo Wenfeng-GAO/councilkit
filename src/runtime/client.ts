@@ -54,6 +54,15 @@ export interface RuntimeClientConfig {
   fetchFn?: typeof fetch;
 }
 
+/**
+ * Shared optional request params for Host calls. `signal` aborts the HTTP
+ * request itself (create/prewarm/execute/ACK...), not only the event-stream
+ * reader. Trailing-only, so existing single-arg call sites stay compatible.
+ */
+export interface RuntimeRequestOptions {
+  signal?: AbortSignal;
+}
+
 export class RuntimeClientError extends Error {
   constructor(
     readonly status: number,
@@ -88,13 +97,14 @@ export class RuntimeClient {
   private async call<S extends z.ZodType>(
     method: string,
     path: string,
-    options: { body?: unknown; schema: S; auth?: "session" | "mutation" },
+    options: { body?: unknown; schema: S; auth?: "session" | "mutation"; signal?: AbortSignal },
   ): Promise<z.infer<S>> {
     const auth = options.auth ?? "mutation";
     const response = await this.fetchFn(this.url(path), {
       method,
       headers: this.headers(auth),
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal ?? null,
     });
     const envelope = (await response.json()) as {
       ok: boolean;
@@ -174,10 +184,14 @@ export class RuntimeClient {
     });
   }
 
-  createScope(request: CreateScopeRequest): Promise<CreateScopeResponse> {
+  createScope(
+    request: CreateScopeRequest,
+    options?: RuntimeRequestOptions,
+  ): Promise<CreateScopeResponse> {
     return this.call("POST", "/api/v1/scopes", {
       body: request,
       schema: createScopeResponseSchema,
+      signal: options?.signal,
     });
   }
 
@@ -188,10 +202,15 @@ export class RuntimeClient {
     });
   }
 
-  activateScope(scopeId: string, controller: ControllerRequest): Promise<ScopeStatus> {
+  activateScope(
+    scopeId: string,
+    controller: ControllerRequest,
+    options?: RuntimeRequestOptions,
+  ): Promise<ScopeStatus> {
     return this.call("POST", `/api/v1/scopes/${scopeId}/activate`, {
       body: controller,
       schema: scopeStatusSchema,
+      signal: options?.signal,
     });
   }
 
@@ -202,38 +221,65 @@ export class RuntimeClient {
     });
   }
 
-  execute(scopeId: string, request: ExecuteRequest): Promise<ExecuteResponse> {
+  execute(
+    scopeId: string,
+    request: ExecuteRequest,
+    options?: RuntimeRequestOptions,
+  ): Promise<ExecuteResponse> {
     return this.call("POST", `/api/v1/scopes/${scopeId}/executions`, {
       body: request,
       schema: executeResponseSchema,
+      signal: options?.signal,
     });
   }
 
-  getExecution(scopeId: string, executionId: string): Promise<ExecutionStatus> {
+  getExecution(
+    scopeId: string,
+    executionId: string,
+    options?: RuntimeRequestOptions,
+  ): Promise<ExecutionStatus> {
     return this.call("GET", `/api/v1/scopes/${scopeId}/executions/${executionId}`, {
       schema: executionStatusSchema,
       auth: "session",
+      signal: options?.signal,
     });
   }
 
-  ack(scopeId: string, executionId: string, request: AckRequest): Promise<AckResponse> {
+  ack(
+    scopeId: string,
+    executionId: string,
+    request: AckRequest,
+    options?: RuntimeRequestOptions,
+  ): Promise<AckResponse> {
     return this.call("POST", `/api/v1/scopes/${scopeId}/executions/${executionId}/ack`, {
       body: request,
       schema: ackResponseSchema,
+      signal: options?.signal,
     });
   }
 
-  async cancelExecution(scopeId: string, executionId: string, controller: ControllerRequest) {
+  async cancelExecution(
+    scopeId: string,
+    executionId: string,
+    controller: ControllerRequest,
+    options?: RuntimeRequestOptions,
+  ) {
     await this.call("POST", `/api/v1/scopes/${scopeId}/executions/${executionId}/cancel`, {
       body: controller,
       schema: z.object({ executionId: z.string(), state: z.string() }),
+      signal: options?.signal,
     });
   }
 
-  closeScope(scopeId: string, controller: ControllerRequest): Promise<CloseScopeResponse> {
+  closeScope(
+    scopeId: string,
+    controller: ControllerRequest,
+    options?: RuntimeRequestOptions,
+  ): Promise<CloseScopeResponse> {
     return this.call("POST", `/api/v1/scopes/${scopeId}/close`, {
       body: controller,
       schema: closeScopeResponseSchema,
+      signal: options?.signal,
     });
   }
 

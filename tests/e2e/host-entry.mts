@@ -110,6 +110,14 @@ interface DriverCounters {
   cancelCount: number;
 }
 
+/** 记录一次 ACK 的终态处置（disposition）与 ackState。 */
+interface AckRecord {
+  executionId: string;
+  finalSeq: number;
+  disposition: "committed" | "discarded";
+  ackState: string;
+}
+
 interface ParticipantRig {
   behavior: DriverBehavior;
   counters: DriverCounters;
@@ -126,6 +134,12 @@ const DEFAULT_CATALOGS: Record<DriverId, string[]> = {
 };
 
 const rigs = new Map<string, ParticipantRig>();
+/** 默认 driver 行为，按 driverId 索引：在未知 participantId 的 driver 创建前
+ * 即可配置（真实档测试的 scope participantId 由前端动态生成，e2e 无法预知）。
+ * 当一个 participant 没有专属行为时回退到该 driver 的默认行为（创建时合并）。 */
+const defaultBehaviors = new Map<DriverId, DriverBehavior>();
+/** 所有 ACK 调用记录，供 e2e 断言 disposition/ackState。 */
+const ackRecords: AckRecord[] = [];
 
 function rigFor(participantId: string): ParticipantRig {
   let rig = rigs.get(participantId);
@@ -149,6 +163,13 @@ function releaseHolds(rig: ParticipantRig): number {
 
 function createScriptedDriver(driverId: DriverId, participantId: string): ParticipantDriver {
   const rig = rigFor(participantId);
+  // Seed the rig with this driver's default behavior (configured via
+  // /__test__/driver-default before the participantId was known) so the real
+  // call test's dynamically-named participant inherits it.
+  const def = defaultBehaviors.get(driverId);
+  if (def && Object.keys(rig.behavior).length === 0) {
+    rig.behavior = { ...def };
+  }
   let sessionEpoch = 0;
 
   const behavior = (): DriverBehavior => rig.behavior;
@@ -417,6 +438,8 @@ function resetAll(
       rig.pendingCancel = null;
     }
     rigs.clear();
+    defaultBehaviors.clear();
+    ackRecords.length = 0;
     for (const id of Object.keys(FAKE_INSTALLATIONS)) installationStates.set(id, "trusted");
     quotaWindowOffsetMs += 61_000;
     return { reset: true };
@@ -453,6 +476,29 @@ function testRoutes(
         rig.behavior = { ...rig.behavior, ...behavior };
         return { participantId, behavior: rig.behavior };
       },
+    },
+    {
+      // 设置按 driverId 的默认行为：在一个动态 participantId 被创建前即可
+      // 配置（真实档测试的 scope participantId 由前端动态生成）。/reset 清空。
+      method: "POST",
+      pattern: `${TEST_BASE}/driver-default`,
+      auth: "session",
+      bodySchema: z.object({
+        driverId: z.enum(DRIVER_IDS),
+        behavior: z.record(z.string(), z.unknown()),
+      }),
+      handler: ({ body }) => {
+        const { driverId, behavior } = body as { driverId: DriverId; behavior: DriverBehavior };
+        defaultBehaviors.set(driverId, { ...defaultBehaviors.get(driverId), ...behavior });
+        return { driverId, behavior: defaultBehaviors.get(driverId) };
+      },
+    },
+    {
+      // 读取测试运行期间所有 ACK 记录（executionId/finalSeq/disposition/ackState）。
+      method: "GET",
+      pattern: `${TEST_BASE}/acks`,
+      auth: "session",
+      handler: () => ({ acks: [...ackRecords] }),
     },
     {
       method: "GET",
@@ -527,6 +573,35 @@ function withEventStreamTracking(routes: Route[]): Route[] {
   });
 }
 
+/** Wrap the ack route so every ACK is recorded for /__test__/acks assertions. */
+function withAckRecording(routes: Route[]): Route[] {
+  return routes.map((route) => {
+    if (!route.pattern.endsWith("/ack")) return route;
+    return {
+      ...route,
+      handler: async (ctx: Parameters<Route["handler"]>[0]) => {
+        const result = (await route.handler(ctx)) as {
+          executionId: string;
+          ackState: string;
+          disposition: "committed" | "discarded" | null;
+        };
+        const params = ctx.params as { executionId?: string };
+        const body = (ctx.body ?? {}) as { finalSeq?: number };
+        if (result?.executionId) {
+          ackRecords.push({
+            executionId: result.executionId,
+            finalSeq: body.finalSeq ?? 0,
+            disposition: result.disposition ?? "discarded",
+            ackState: result.ackState ?? "unknown",
+          });
+        }
+        void params;
+        return result;
+      },
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Host assembly (mirrors runtime-host/main.ts, minus real CLI processes)
 // ---------------------------------------------------------------------------
@@ -587,7 +662,7 @@ async function main(): Promise<void> {
     ...healthRoutes(services),
     ...installationRoutes(services),
     ...modelRoutes(services),
-    ...withEventStreamTracking(scopeRoutes(services)),
+    ...withAckRecording(withEventStreamTracking(scopeRoutes(services))),
     ...diagnosticsRoutes(services),
     ...testRoutes(scopeManager, executions, profileProbe),
   ];
