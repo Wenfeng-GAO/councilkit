@@ -287,11 +287,16 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
     client: RuntimeClient,
     disposition: AckDisposition,
     finalSeq: number,
+    overrideSignal?: AbortSignal,
   ): Promise<{ ok: boolean; aborted: boolean }> => {
-    // G5: a terminal ACK runs under the main deadline while it has budget; once
-    // the deadline aborted, the shared cleanup signal (same ≤10s budget as the
-    // cancel/observe chain) drives it.
-    const ackSignal: AbortSignal = deadline.aborted ? cleanupOf() : deadline;
+    // G1: a discarded ACK on a cleanup path (ambiguous dispatch / aborted turn)
+    // runs under the shared cleanup signal the caller passes in explicitly —
+    // ackOnce NEVER re-selects the signal on the cleanup path, so an ambiguous-
+    // dispatch ACK cannot fall back to the (possibly far-future) turn deadline
+    // and wait past the shared ≤10s budget. A happy terminal ACK (no override)
+    // runs under the main deadline while it has budget, falling back to the
+    // shared cleanup signal once the deadline already aborted.
+    const ackSignal: AbortSignal = overrideSignal ?? (deadline.aborted ? cleanupOf() : deadline);
     try {
       const resp = await client.ack(
         scopeId,
@@ -384,7 +389,8 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
         scopeId,
         executionId,
         controller,
-        ack: (disposition, finalSeq) => ackOnce(client, disposition, finalSeq),
+        ack: (disposition, finalSeq, ackSignal) =>
+          ackOnce(client, disposition, finalSeq, ackSignal),
         make,
         verdict: baseVerdict,
         verdictError: baseError,
@@ -412,7 +418,8 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
         scopeId,
         executionId,
         controller,
-        ack: (disposition, finalSeq) => ackOnce(client, disposition, finalSeq),
+        ack: (disposition, finalSeq, ackSignal) =>
+          ackOnce(client, disposition, finalSeq, ackSignal),
         make,
         verdict: abortVerdict,
         verdictError: abortError,
@@ -669,6 +676,7 @@ async function handleAbort(input: {
   ack: (
     disposition: AckDisposition,
     finalSeq: number,
+    ackSignal?: AbortSignal,
   ) => Promise<{ ok: boolean; aborted: boolean }>;
   make: (
     verdict: TurnVerdict,
@@ -706,7 +714,10 @@ async function handleAbort(input: {
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
   if (observedSeq !== null) {
-    const ackRes = await ack("discarded", observedSeq);
+    // G1: the discarded ACK on this cleanup path runs under the shared cleanup
+    // signal (≤10s budget), NOT the turn deadline — handleAbort passes the
+    // chainSignal explicitly so ackOnce cannot fall back to the main deadline.
+    const ackRes = await ack("discarded", observedSeq, chainSignal);
     if (!ackRes.ok && !ackRes.aborted) {
       return make("failed", ACK_FAILED_ERROR);
     }

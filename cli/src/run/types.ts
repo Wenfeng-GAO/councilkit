@@ -82,6 +82,11 @@ export interface RunOutcome {
   /** Per-agent resolved installationId (agentId → installationId). */
   installations: Record<string, string>;
   failure: RunFailure | null;
+  /** G4: any local store/report artifact IO failure that drove the exit code
+   * to 5 (canonical report write, --out copy, final transcript rewrite,
+   * INCOMPLETE reconciliation). Present alongside `failure` so both the
+   * primary turn/reporter failure and the artifact IO failure are visible. */
+  artifactIoFailure: RunFailure | null;
   incomplete: boolean;
 }
 

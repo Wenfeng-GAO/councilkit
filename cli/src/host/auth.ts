@@ -26,6 +26,11 @@ export interface AuthFetchOptions {
   fetchFn?: typeof fetch;
   /** Per-request timeout (ms). Default 8_000. */
   timeoutMs?: number;
+  /** G3: caller's bounded signal (e.g. the run-level shared cleanup signal).
+   * When aborted, the in-flight GET / is aborted too, so a cold-rebuild during
+   * a shared cleanup budget cannot out-wait the budget by independently waiting
+   * for the auth timeout. */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -64,6 +69,15 @@ export class AuthClient {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort("auth-timeout"), timeoutMs);
+    // G3: also abort when the caller's bounded signal fires, so a cold-rebuild
+    // during a shared cleanup budget cannot out-wait the budget on its own
+    // 8s timeout. The auth timeout and the caller signal are combined here.
+    const callerSignal = opts.signal;
+    const onCallerAbort = () => controller.abort(callerSignal?.reason ?? "caller-abort");
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort(callerSignal.reason ?? "caller-abort");
+      else callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+    }
     try {
       const response = await this.fetchFn(`${this.baseUrl}/`, {
         headers: { Accept: "text/html" },
@@ -88,6 +102,7 @@ export class AuthClient {
       return { cookie, csrfToken };
     } finally {
       clearTimeout(timer);
+      if (callerSignal) callerSignal.removeEventListener("abort", onCallerAbort);
     }
   }
 }

@@ -23,7 +23,7 @@ import type {
   ResolveProfileResponse,
   ScopeStatus,
 } from "@shared/runtime/schemas";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliError, EXIT } from "../src/errors";
 import type { TerminalEvidence, TurnResult } from "../src/host/execute-turn";
 import { computeParticipantDigest } from "../src/run/context-snapshot";
@@ -35,7 +35,8 @@ import {
   runCouncil,
 } from "../src/run/orchestrator";
 import type { ResolvedAgent, RunInput } from "../src/run/types";
-import { resolvePaths } from "../src/store/paths";
+import * as atomicWriteModule from "../src/store/atomic-write";
+import { type StorePaths, resolvePaths } from "../src/store/paths";
 import type { AgentRecord, DriverSelection } from "../src/store/schemas";
 
 const KIMI: DriverSelection = { driverId: "kimi-stream-json", options: {} };
@@ -86,6 +87,9 @@ interface FakeHostOptions {
   /** F3: closeScope hangs until the passed signal aborts, then rejects (simulates
    * a Host close that never settles on its own). */
   closeHangUntilSignal?: boolean;
+  /** G2: activateScope never settles and ignores the passed signal — only the
+   * orchestrator's raceAbort can break the hang. */
+  activateHangs?: boolean;
 }
 
 function makeFakeHost(
@@ -151,6 +155,11 @@ function makeFakeHost(
     },
     async activateScope(): Promise<ScopeStatus> {
       self.activateCalls += 1;
+      if (opts.activateHangs) {
+        // Never settles and ignores any passed signal — only the orchestrator's
+        // raceAbort can break the hang (G2 convergence contract).
+        return new Promise<ScopeStatus>(() => {});
+      }
       state = "active";
       return {
         scopeId: "scope-1",
@@ -323,6 +332,7 @@ describe("cli orchestrator", () => {
     home = newHome();
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(home, { recursive: true, force: true });
   });
 
@@ -657,5 +667,118 @@ describe("cli orchestrator", () => {
     const report = readReport(home, input.runId);
     expect(report).toContain("INCOMPLETE RUN");
     expect(report).not.toContain("- Status: complete");
+  });
+
+  it("a hanging activateScope + SIGINT converges: close called, partial report, exit 130 (G2)", async () => {
+    const host = makeFakeHost({ activateHangs: true });
+    const controller = new AbortController();
+    const { input, paths } = buildInput(home, { signal: controller.signal });
+    // Abort shortly after runCouncil starts; activate is hanging and ignores
+    // its signal, so only the orchestrator's raceAbort can break the hang.
+    const timer = setTimeout(() => controller.abort("SIGINT"), 20);
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      signal: controller.signal,
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }), // not reached
+    });
+    clearTimeout(timer);
+    expect(outcome.status).toBe("interrupted");
+    expect(outcome.exitCode).toBe(EXIT.interrupted);
+    expect(host.activateCalls).toBe(1);
+    expect(host.closeCalls).toBe(1); // scope was created → closed in finally
+    expect(existsSync(paths.report(input.runId))).toBe(true);
+    const report = readReport(home, input.runId);
+    expect(report).toContain("INCOMPLETE RUN");
+  });
+
+  it("a turn failure followed by a partial-report IO failure → exit 5 with both failures visible (G4)", async () => {
+    const host = makeFakeHost();
+    const { input } = buildInput(home);
+    // Make ONLY the canonical report path unwritable: a regular file sits where
+    // the report's parent dir would be, so atomicWriteFile's mkdir fails. The
+    // transcript path stays normal so the run record still lands.
+    writeFileSync(join(home, "blocked-report-dir"), "i am a file, not a dir");
+    const basePaths = resolvePaths({ ...process.env, COUNCILKIT_HOME: home });
+    const paths: StorePaths = {
+      ...basePaths,
+      report: () => join(home, "blocked-report-dir", "report.md"),
+    };
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      turnDriver: makeDriver(
+        {
+          decide: (round, turnIndex) => (round === 1 && turnIndex === 0 ? "failed" : "completed"),
+        },
+        { count: 0 },
+      ),
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.exitCode).toBe(EXIT.io); // G4: artifact IO dominates exit 4
+    expect(outcome.failure?.phase).toBe("terminal"); // primary turn failure visible
+    expect(outcome.artifactIoFailure?.code).toBe("REPORT_IO"); // IO failure visible
+  });
+
+  it("a final-transcript-write failure after a completed run marks the report INCOMPLETE (G5)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    // Let every atomic write succeed EXCEPT the final transcript rewrite — the
+    // one whose payload includes run.finished (the last status-changing IO).
+    const originalWrite = atomicWriteModule.atomicWriteFile;
+    const writeSpy = vi.spyOn(atomicWriteModule, "atomicWriteFile").mockImplementation(((
+      filePath: string,
+      data: string,
+    ): number => {
+      if (filePath.endsWith("transcript.jsonl") && data.includes('"kind":"run.finished"')) {
+        throw new Error("ENOSPC: final transcript write");
+      }
+      return originalWrite(filePath, data);
+    }) as typeof originalWrite);
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }),
+    });
+    writeSpy.mockRestore();
+    // status flips to failed after the final transcript write fails; the
+    // canonical report (previously "complete") is reconciled to INCOMPLETE
+    // AFTER the last status-changing IO.
+    expect(outcome.status).toBe("failed");
+    expect(outcome.incomplete).toBe(true);
+    expect(outcome.exitCode).toBe(EXIT.io);
+    expect(outcome.artifactIoFailure?.code).toBe("TRANSCRIPT_FINAL");
+    const report = readReport(home, input.runId);
+    expect(report).toContain("INCOMPLETE RUN");
+    expect(report).not.toContain("- Status: complete");
+  });
+
+  it("refreshes the success report Ended timestamp to the final run end after close (G6)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    // Monotonic synthetic clock so startedAt and endedAt are distinct and
+    // deterministic. The success report is first written in the Reporter
+    // persist-before-ACK (an earlier tick); after close it must be re-rendered
+    // with the FINAL endedAt.
+    let ticks = 0;
+    const now = () => new Date(Date.UTC(2026, 6, 22, 12, 0, ticks++));
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      now,
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }),
+    });
+    expect(outcome.status).toBe("completed");
+    expect(outcome.exitCode).toBe(EXIT.ok);
+    const report = readReport(home, input.runId);
+    // The on-disk success report's header reflects the final run-end timestamps
+    // (post-close), matching the RunOutcome — not the Reporter persist moment.
+    expect(report).toContain(`- Started: ${outcome.startedAt}`);
+    expect(report).toContain(`- Ended: ${outcome.endedAt}`);
+    expect(outcome.endedAt).not.toBe(outcome.startedAt);
   });
 });

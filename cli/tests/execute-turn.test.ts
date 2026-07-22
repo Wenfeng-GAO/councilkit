@@ -14,7 +14,12 @@ import type { RuntimeEvent } from "@shared/runtime/events";
 import type { ContextSnapshot, ControllerRequest } from "@shared/runtime/schemas";
 import { describe, expect, it } from "vitest";
 import { CliError, EXIT } from "../src/errors";
-import { type HostLike, type TerminalEvidence, executeTurn } from "../src/host/execute-turn";
+import {
+  type HostLike,
+  type TerminalEvidence,
+  createRunCleanup,
+  executeTurn,
+} from "../src/host/execute-turn";
 
 const CONTROLLER: ControllerRequest = { controllerId: "ctrl", leaseEpoch: 1 };
 const EXECUTION_ID = "exec-aaaaaaaa";
@@ -425,5 +430,45 @@ describe("cli execute-turn", () => {
     expect(res.error?.phase).toBe("io");
     expect(res.error?.code).toBe("TRANSCRIPT_IO");
     expect(c.ackDisposition).toEqual(["discarded"]);
+  });
+
+  it("drives the ambiguous-dispatch discarded ACK under the shared cleanup budget, not the turn deadline (G1)", async () => {
+    const c = counters();
+    const fake = makeFake(
+      {
+        executeThrows: "transport",
+        probe: "dispatched",
+        cancelInterrupts: true,
+        ackHangUntilAbort: true,
+      },
+      c,
+    );
+    // A 50ms shared cleanup budget; a 600s turn deadline the buggy code would
+    // fall back to. The discarded ACK on this cleanup path must converge under
+    // the shared budget, not wait for the turn deadline.
+    const sharedCleanup = createRunCleanup(50);
+    const start = Date.now();
+    const res = await executeTurn({
+      host: fake.host,
+      followEvents: fake.follow,
+      scopeId: "scope-1",
+      controller: CONTROLLER,
+      participantId: PARTICIPANT_ID,
+      executionId: EXECUTION_ID,
+      snapshot: snapshot(),
+      role: "message",
+      timeoutMs: 600_000,
+      persist: fake.persist,
+      sharedCleanup,
+    });
+    const elapsed = Date.now() - start;
+    sharedCleanup.dispose();
+    expect(c.execute).toBe(1); // never re-dispatched
+    expect(c.cancel).toBe(1);
+    expect(c.ackDisposition).toEqual(["discarded"]);
+    expect(res.verdict).toBe("failed"); // execute threw; not a deadline abort
+    // Converged under the ~50ms shared cleanup budget — far short of the 600s
+    // turn deadline the pre-fix discarded ACK fell back to.
+    expect(elapsed).toBeLessThan(2_000);
   });
 });

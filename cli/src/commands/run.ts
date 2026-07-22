@@ -209,6 +209,10 @@ function renderHuman(o: import("../run/types").RunOutcome): string {
   lines.push(`  turns: ${o.turns.length}`);
   if (o.failure)
     lines.push(`  failure: [${o.failure.phase}] ${o.failure.code} — ${o.failure.message}`);
+  if (o.artifactIoFailure)
+    lines.push(
+      `  artifact IO: [${o.artifactIoFailure.phase}] ${o.artifactIoFailure.code} — ${o.artifactIoFailure.message}`,
+    );
   if (o.incomplete) lines.push("  (INCOMPLETE — see report.md)");
   return lines.join("\n");
 }

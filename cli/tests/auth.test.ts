@@ -185,3 +185,106 @@ describe("cli auth against a mock host", () => {
     }
   });
 });
+
+describe("cli auth signal-bound extraction (G3)", () => {
+  it("aborts an in-flight auth extraction by the caller's signal before its own 8s timeout", async () => {
+    // A fetchFn that honors the passed signal and never settles on its own;
+    // only an abort can break the wait. G3 combines the caller's signal with
+    // the auth controller so the extraction cannot independently wait ~8s.
+    const fetchFn = async (_input: string, init?: RequestInit): Promise<Response> => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        throw e;
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            const e = new Error("aborted");
+            e.name = "AbortError";
+            reject(e);
+          },
+          { once: true },
+        );
+      });
+    };
+    const auth = new AuthClient("http://127.0.0.1", { fetchFn: fetchFn as typeof fetch });
+    const cleanup = new AbortController();
+    const timer = setTimeout(() => cleanup.abort("cleanup-deadline"), 50);
+    const start = Date.now();
+    await expect(auth.get({ signal: cleanup.signal })).rejects.toThrow();
+    const elapsed = Date.now() - start;
+    clearTimeout(timer);
+    // Converged under the ~50ms caller signal — not the ~8s auth timeout.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it("does not start a cold-rebuild auth extraction when the caller signal already aborted", async () => {
+    let docCalls = 0;
+    let closeCalls = 0;
+    let abortTrigger: () => void = () => {};
+    const started = await startHost((req, res) => {
+      if (req.url === "/" && req.method === "GET") {
+        docCalls += 1;
+        (res as unknown as { setHeader: (n: string, v: string) => void }).setHeader(
+          "set-cookie",
+          `${SESSION_COOKIE_NAME}=v; Path=/`,
+        );
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(`<meta name="councilkit-csrf" content="c">`);
+        return;
+      }
+      if (
+        req.url?.startsWith("/api/v1/scopes/") &&
+        req.method === "POST" &&
+        req.url.endsWith("/close")
+      ) {
+        closeCalls += 1;
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error: {
+              code: "UNAUTHENTICATED",
+              message: "stale",
+              retryable: false,
+              phase: "security",
+            },
+          }),
+        );
+        // Abort the caller signal right after returning 401, so the cold-rebuild
+        // is attempted only if withAuthRetry fails to re-check the signal.
+        abortTrigger();
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: { code: "NOT_FOUND", message: "x", retryable: false, phase: "bootstrap" },
+        }),
+      );
+    });
+    try {
+      const host = new HostClient({ baseUrl: started.baseUrl });
+      await host.authSnapshot(); // populate the auth cache (one GET /)
+      const cleanup = new AbortController();
+      abortTrigger = () => cleanup.abort("cleanup-deadline");
+      await expect(
+        host.closeScope(
+          "scope-1",
+          { controllerId: "ctrl", leaseEpoch: 1 },
+          { signal: cleanup.signal },
+        ),
+      ).rejects.toThrow();
+      // The cold-rebuild GET / never happened: the shared signal was already
+      // aborted when the 401 returned, so no independent ~8s auth wait.
+      expect(docCalls).toBe(1);
+      expect(closeCalls).toBe(1);
+    } finally {
+      await started.close();
+    }
+  });
+});

@@ -65,9 +65,9 @@ export class HostClient {
     return auth;
   }
 
-  private async client(): Promise<RuntimeClient> {
+  private async client(signal?: AbortSignal): Promise<RuntimeClient> {
     if (this.rt !== null) return this.rt;
-    const auth = await this.auth.get();
+    const auth = await this.auth.get(signal ? { signal } : undefined);
     this.rt = new RuntimeClient({
       baseUrl: this.baseUrl,
       csrfToken: auth.csrfToken,
@@ -77,16 +77,33 @@ export class HostClient {
   }
 
   /** Wrap a single Host call: on a definitive auth rejection, refresh once and
-   * replay. Any other failure propagates unchanged. */
-  private async withAuthRetry<T>(fn: (c: RuntimeClient) => Promise<T>): Promise<T> {
+   * replay. Any other failure propagates unchanged.
+   *
+   * G3: the caller's `options.signal` (e.g. the run-level shared cleanup signal)
+   * is threaded into the cold-rebuild auth extraction and combined with the
+   * auth timeout, and re-checked before replaying — so a 401 at the end of a
+   * cleanup budget cannot trigger an independent ~8s auth wait that out-lasts
+   * the budget. */
+  private async withAuthRetry<T>(
+    fn: (c: RuntimeClient) => Promise<T>,
+    options?: RuntimeRequestOptions,
+  ): Promise<T> {
+    const signal = options?.signal;
     try {
-      return await fn(await this.client());
+      return await fn(await this.client(signal));
     } catch (error) {
       if (!isAuthRejection(error)) throw error;
+      // G3: before cold-rebuilding, bail if the caller already aborted — there
+      // is no budget left for a fresh GET / + replay.
+      if (signal?.aborted) {
+        const err = new Error("aborted before auth cold-rebuild");
+        err.name = "AbortError";
+        throw err;
+      }
       // Re-extract once, then rebuild + replay.
       this.rt = null;
       this.auth.invalidate();
-      return fn(await this.client());
+      return fn(await this.client(signal));
     }
   }
 
@@ -137,11 +154,11 @@ export class HostClient {
     request: CreateScopeRequest,
     options?: RuntimeRequestOptions,
   ): Promise<CreateScopeResponse> {
-    return this.withAuthRetry((c) => c.createScope(request, options));
+    return this.withAuthRetry((c) => c.createScope(request, options), options);
   }
 
   getScopeStatus(scopeId: string, options?: RuntimeRequestOptions): Promise<ScopeStatus> {
-    return this.withAuthRetry((c) => c.getScopeStatus(scopeId, options));
+    return this.withAuthRetry((c) => c.getScopeStatus(scopeId, options), options);
   }
 
   activateScope(
@@ -149,7 +166,7 @@ export class HostClient {
     controller: ControllerRequest,
     options?: RuntimeRequestOptions,
   ): Promise<ScopeStatus> {
-    return this.withAuthRetry((c) => c.activateScope(scopeId, controller, options));
+    return this.withAuthRetry((c) => c.activateScope(scopeId, controller, options), options);
   }
 
   execute(
@@ -157,7 +174,7 @@ export class HostClient {
     request: ExecuteRequest,
     options?: RuntimeRequestOptions,
   ): Promise<ExecuteResponse> {
-    return this.withAuthRetry((c) => c.execute(scopeId, request, options));
+    return this.withAuthRetry((c) => c.execute(scopeId, request, options), options);
   }
 
   getExecution(
@@ -165,7 +182,7 @@ export class HostClient {
     executionId: string,
     options?: RuntimeRequestOptions,
   ): Promise<ExecutionStatus> {
-    return this.withAuthRetry((c) => c.getExecution(scopeId, executionId, options));
+    return this.withAuthRetry((c) => c.getExecution(scopeId, executionId, options), options);
   }
 
   ack(
@@ -174,7 +191,7 @@ export class HostClient {
     request: AckRequest,
     options?: RuntimeRequestOptions,
   ): Promise<AckResponse> {
-    return this.withAuthRetry((c) => c.ack(scopeId, executionId, request, options));
+    return this.withAuthRetry((c) => c.ack(scopeId, executionId, request, options), options);
   }
 
   cancelExecution(
@@ -183,7 +200,10 @@ export class HostClient {
     controller: ControllerRequest,
     options?: RuntimeRequestOptions,
   ): Promise<void> {
-    return this.withAuthRetry((c) => c.cancelExecution(scopeId, executionId, controller, options));
+    return this.withAuthRetry(
+      (c) => c.cancelExecution(scopeId, executionId, controller, options),
+      options,
+    );
   }
 
   closeScope(
@@ -191,7 +211,7 @@ export class HostClient {
     controller: ControllerRequest,
     options?: RuntimeRequestOptions,
   ): Promise<CloseScopeResponse> {
-    return this.withAuthRetry((c) => c.closeScope(scopeId, controller, options));
+    return this.withAuthRetry((c) => c.closeScope(scopeId, controller, options), options);
   }
 }
 

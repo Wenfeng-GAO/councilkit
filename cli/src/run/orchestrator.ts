@@ -98,8 +98,20 @@ export interface OrchestratorHost {
   refreshAuthForStream(): Promise<{ cookie: string; csrfToken: string; origin: string }>;
   listInstallations(): Promise<InstallationsResponse>;
   profileReadiness(profile: ExecutionProfileDto, modelId: string): Promise<ResolveProfileResponse>;
-  createScope(request: CreateScopeRequest): Promise<CreateScopeResponse>;
-  activateScope(scopeId: string, controller: ControllerRequest): Promise<ScopeStatus>;
+  /** G2: accepts the external-abort / shared-cleanup `signal` so a hanging
+   * create cannot block SIGINT cleanup. */
+  createScope(
+    request: CreateScopeRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<CreateScopeResponse>;
+  /** G2: accepts the external-abort / shared-cleanup `signal` so a hanging
+   * activate cannot block SIGINT cleanup (cancel → close → partial report →
+   * exit 130). */
+  activateScope(
+    scopeId: string,
+    controller: ControllerRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ScopeStatus>;
   /** F3: accepts the run-level cleanup `signal` so `getScopeStatus` verification
    * is bounded by the same ≤10s budget as the close. */
   getScopeStatus(scopeId: string, options?: { signal?: AbortSignal }): Promise<ScopeStatus>;
@@ -183,6 +195,12 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
   let scopeRequestId: string | null = null;
   let status: RunStatus = "completed";
   let failure: RunFailure | null = null;
+  // G4: a LOCAL store/report artifact IO failure (canonical report write, --out
+  // copy, final transcript rewrite, INCOMPLETE reconciliation) recorded
+  // separately from the primary `failure`. Any artifact IO failure dominates
+  // the exit code to 5, even when an earlier turn/Reporter failure is the
+  // primary cause (which stays in `failure` as secondary/cause for visibility).
+  let artifactIoFailure: RunFailure | null = null;
   let reporterOutput: string | null = null;
   // F2: the canonical success report is written in the Reporter persist-before-
   // ACK callback (before the committed ACK). Its markdown is captured here so
@@ -233,11 +251,24 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
 
     // --- create + activate scope --------------------------------------------
     scopeRequestId = `ck-run-${runId}-${ids().slice(0, 8)}`;
+    // G2: create/activate accept the external-abort signal so a hanging Host
+    // call cannot block SIGINT cleanup. raceAbort guarantees convergence even
+    // if a Host implementation does not honor the signal on its own — a pending
+    // activate + SIGINT must reach catch/finally (close + partial report + 130).
+    const scopeSignal = deps.signal;
     try {
-      const created = await createScopeIdempotent(deps.host, scopeRequestId, input.agents);
+      const created = await createScopeIdempotent(
+        deps.host,
+        scopeRequestId,
+        input.agents,
+        scopeSignal,
+      );
       scopeId = created.scopeId;
       controller = { controllerId: created.controllerId, leaseEpoch: created.leaseEpoch };
-      await deps.host.activateScope(scopeId, controller);
+      await raceAbort(
+        deps.host.activateScope(scopeId, controller, { signal: scopeSignal }),
+        scopeSignal,
+      );
       if (deps.signal?.aborted) throw abortedBySignal();
     } catch (error) {
       if (deps.signal?.aborted) throw abortedBySignal();
@@ -503,9 +534,26 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
   try {
     if (status === "completed") {
       // F2: the success report was written in the Reporter persist-before-ACK
-      // callback (reporterSuccessMarkdown). Keep it; only re-render defensively
-      // if it was never captured.
-      if (reporterSuccessMarkdown.length > 0) {
+      // callback (reporterSuccessMarkdown) BEFORE the committed ACK + Scope
+      // close. G6: re-render it here with the FINAL endedAt (post-close) and
+      // atomically refresh the canonical report, so the `Ended` header reflects
+      // the real run end, not the Reporter persist moment. The body
+      // (reporterOutput) is unchanged; only the header's timestamp moves. If the
+      // Reporter body was never captured, fall back to the persisted markdown.
+      if (reporterSuccessMarkdown.length > 0 && reporterOutput !== null) {
+        reportMarkdown = renderSuccessReport({
+          runId,
+          startedAt: startedAt.toISOString(),
+          endedAt: endedAt.toISOString(),
+          council: input.council,
+          reporterName: input.reporter.snapshot.name,
+          participantNames: input.agents.map((a) => a.snapshot.name),
+          reporterOutput: reporterOutput ?? "",
+        });
+        assertNonEmptyMarkdown(reportMarkdown);
+        writeCanonicalReport(path.report(runId), reportMarkdown);
+        canonicalIsSuccess = true;
+      } else if (reporterSuccessMarkdown.length > 0) {
         reportMarkdown = reporterSuccessMarkdown;
         canonicalIsSuccess = true;
       } else {
@@ -542,11 +590,15 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     }
     reportOk = true;
   } catch (error) {
-    // report IO/render failure → exit 5, but still finish the transcript + run record.
+    // G4: a canonical report IO/render failure is a local artifact IO failure →
+    // exit 5, recorded separately so it dominates even when an earlier turn
+    // failure is the primary `failure`. Still finish the transcript + run record.
+    const ioFail = toFailure("report", "REPORT_IO", error);
+    artifactIoFailure ??= ioFail;
     reportMarkdown = "";
     status = status === "completed" ? "failed" : status;
     canonicalIsSuccess = false;
-    if (failure === null) failure = toFailure("report", "REPORT_IO", error);
+    if (failure === null) failure = ioFail;
   }
 
   // --out copy (failure makes the command non-zero; canonical preserved).
@@ -554,39 +606,21 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     try {
       writeReportCopy(input.outPath, reportMarkdown);
     } catch (error) {
+      // G4: a --out copy failure is an artifact IO failure → exit 5. Keep the
+      // primary `failure` (turn/reporter) as the cause; do not overwrite it.
+      const ioFail = toFailure("report", "REPORT_OUT_COPY", error);
+      artifactIoFailure ??= ioFail;
       status = "failed";
-      failure = toFailure("report", "REPORT_OUT_COPY", error);
+      if (failure === null) failure = ioFail;
     }
-  }
-
-  // F6: if the run flipped to non-completed AFTER the canonical success report
-  // was written (e.g. a --out copy failure), overwrite the canonical report with
-  // an INCOMPLETE partial report so on-disk state matches the final status.
-  if (status !== "completed" && canonicalIsSuccess) {
-    try {
-      const partial = renderPartialReport({
-        runId,
-        startedAt: startedAt.toISOString(),
-        endedAt: endedAt.toISOString(),
-        council: input.council,
-        reporterName: input.reporter.snapshot.name,
-        participantNames: input.agents.map((a) => a.snapshot.name),
-        completedTurns,
-        failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
-      });
-      writeCanonicalReport(path.report(runId), partial);
-      reportMarkdown = partial;
-    } catch {
-      // best-effort: transcript + exit code already reflect the failure.
-    }
-    canonicalIsSuccess = false;
   }
 
   // --- run.finished + final transcript rewrite -----------------------------
   emit({ type: "run.finishing", status });
-  // F6: compute incomplete from the status so far. The final transcript write
+  // F6/G5: compute incomplete from the status so far. The final transcript write
   // below is the last status-changing IO; `incomplete` is recomputed after it
-  // for the returned outcome.
+  // (and after the canonical INCOMPLETE reconciliation that follows) for the
+  // returned outcome.
   let incomplete = status !== "completed";
   const finishedRec: RunFinishedRecord = {
     kind: "run.finished",
@@ -602,17 +636,54 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
   try {
     rewriteTranscript(path.transcript(runId), transcript);
   } catch (error) {
-    if (failure === null) failure = toFailure("io", "TRANSCRIPT_FINAL", error);
+    // G4: the final transcript rewrite is a local artifact IO failure → exit 5,
+    // recorded separately so it is never masked by an earlier turn failure.
+    const ioFail = toFailure("io", "TRANSCRIPT_FINAL", error);
+    artifactIoFailure ??= ioFail;
+    if (failure === null) failure = ioFail;
     if (status === "completed") {
       status = "failed";
     }
   }
+
+  // G5: canonical INCOMPLETE reconciliation MOVED to after the last status-
+  // changing IO (the final transcript rewrite above). If the run flipped to
+  // non-completed AFTER the canonical success report was written (a --out copy
+  // failure or a final-transcript-write failure), overwrite the canonical
+  // report with an INCOMPLETE partial report so on-disk state matches the final
+  // status. A failure to write the INCOMPLETE reconciliation is itself a report
+  // IO failure (G4 linkage).
+  if (status !== "completed" && canonicalIsSuccess) {
+    try {
+      const partial = renderPartialReport({
+        runId,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        council: input.council,
+        reporterName: input.reporter.snapshot.name,
+        participantNames: input.agents.map((a) => a.snapshot.name),
+        completedTurns,
+        failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
+      });
+      writeCanonicalReport(path.report(runId), partial);
+      reportMarkdown = partial;
+    } catch (error) {
+      artifactIoFailure ??= toFailure("report", "REPORT_INCOMPLETE_RECONCILE", error);
+    }
+    canonicalIsSuccess = false;
+  }
   // F6: recompute incomplete from the FINAL status (after every status-changing
-  // IO: report / --out / final transcript rewrite) so the outcome and run record
-  // never report incomplete=false alongside a failed status / exit 5.
+  // IO: report / --out / final transcript rewrite / INCOMPLETE reconciliation)
+  // so the outcome and run record never report incomplete=false alongside a
+  // failed status / exit 5.
   incomplete = status !== "completed";
 
-  const exitCode = exitCodeForRun(status, failure, deps.signal?.aborted === true);
+  const exitCode = exitCodeForRun(
+    status,
+    failure,
+    deps.signal?.aborted === true,
+    artifactIoFailure,
+  );
   return {
     status,
     exitCode,
@@ -624,6 +695,10 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     turns: turnSummaries,
     installations,
     failure,
+    // G4: any local store/report artifact IO failure that drove the exit code
+    // to 5. Present alongside the primary `failure` so both the turn/reporter
+    // failure and the artifact IO failure are visible to callers.
+    artifactIoFailure,
     incomplete,
   };
 }
@@ -667,6 +742,7 @@ async function createScopeIdempotent(
   host: OrchestratorHost,
   scopeRequestId: string,
   agents: ReadonlyArray<ResolvedAgent>,
+  signal?: AbortSignal,
 ): Promise<CreateScopeResponse> {
   const participants = agents.map((a) => ({
     participantId: a.participantId,
@@ -676,12 +752,12 @@ async function createScopeIdempotent(
   }));
   const request: CreateScopeRequest = { scopeRequestId, participants };
   try {
-    return await host.createScope(request);
+    return await raceAbort(host.createScope(request, { signal }), signal);
   } catch (error) {
     // A transport/5xx may have landed. Retry once with the SAME scopeRequestId:
     // the Host keys Scopes by it, so a retry never creates a second Scope.
-    if (isRetryableTransport(error)) {
-      return await host.createScope(request);
+    if (isRetryableTransport(error) && !signal?.aborted) {
+      return await raceAbort(host.createScope(request, { signal }), signal);
     }
     throw error;
   }
@@ -974,8 +1050,41 @@ function abortedBySignal(): Error {
   return err;
 }
 
-function exitCodeForRun(status: RunStatus, failure: RunFailure | null, aborted: boolean): ExitCode {
+/** G2: reject `p` with an AbortError the moment `signal` aborts, even if the
+ * underlying Host call never settles on its own. Guarantees a hanging create
+ * or activate cannot block SIGINT cleanup — the pending Host call is left to
+ * settle best-effort; the run has already moved to catch/finally. No-op when
+ * no signal is given. */
+function raceAbort<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return p;
+  if (signal.aborted) return Promise.reject(abortedBySignal());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortedBySignal());
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function exitCodeForRun(
+  status: RunStatus,
+  failure: RunFailure | null,
+  aborted: boolean,
+  artifactIoFailure?: RunFailure | null,
+): ExitCode {
   if (aborted && status === "interrupted") return EXIT.interrupted;
+  // G4: any local store/report artifact IO failure dominates the exit code to
+  // 5, even when an earlier turn/Reporter failure (kept in `failure` as cause)
+  // would otherwise map to exit 4. SIGINT (130) stays highest-priority above.
+  if (artifactIoFailure) return EXIT.io;
   if (status === "completed") return EXIT.ok;
   if (failure) {
     if (failure.phase === "io" || failure.phase === "report") return EXIT.io;
