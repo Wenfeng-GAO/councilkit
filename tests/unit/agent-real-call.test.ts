@@ -12,7 +12,7 @@ import type {
   ExecutionStatus,
   ScopeStatus,
 } from "@shared/runtime/schemas";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 /**
  * Agent 真实调用 helper 单测（AC2 / plan-a §3 生命周期 + 错误矩阵）。
@@ -41,6 +41,14 @@ interface FakeHostOptions {
   createFailsWith?: RuntimeClientError;
   activateReadiness?: "ready" | "invalid_binding" | "model_unavailable" | "runtime_unavailable";
   closeFails?: boolean;
+  /** ACK returns a non-acknowledged ackState (F1): simulate ACK conflict / expired. */
+  ackState?: string;
+  /** cancelExecution never settles (F2): helper must still converge via cleanup deadline. */
+  cancelNeverSettles?: boolean;
+  /** closeScope never settles (F2): helper must still converge via cleanup deadline. */
+  closeNeverSettles?: boolean;
+  /** getExecution throws (F1): cancel terminal unobservable → no discarded ACK, no crash. */
+  getExecutionFails?: boolean;
 }
 
 interface FakeExec {
@@ -50,6 +58,7 @@ interface FakeExec {
   state: "running" | "completed" | "failed" | "interrupted";
   events: RuntimeEvent[];
   ackDisposition?: AckRequest["disposition"];
+  ackCount?: number;
 }
 
 function makeCompletedEvent(seq: number, output: string): RuntimeEvent {
@@ -168,6 +177,7 @@ function fakeHost(options: FakeHostOptions = {}) {
     async activateScope(
       scopeId: string,
       _controller: { controllerId: string; leaseEpoch: number },
+      _opts?: { signal?: AbortSignal },
     ): Promise<ScopeStatus> {
       counters.activate += 1;
       const readiness = options.activateReadiness ?? "ready";
@@ -221,7 +231,12 @@ function fakeHost(options: FakeHostOptions = {}) {
         },
       };
     },
-    async getExecution(_scopeId: string, executionId: string): Promise<ExecutionStatus> {
+    async getExecution(
+      _scopeId: string,
+      executionId: string,
+      _opts?: { signal?: AbortSignal },
+    ): Promise<ExecutionStatus> {
+      if (options.getExecutionFails) throw new Error("getExecution unavailable");
       const exec = execs[execs.length - 1];
       return {
         executionId,
@@ -234,30 +249,81 @@ function fakeHost(options: FakeHostOptions = {}) {
       _scopeId: string,
       executionId: string,
       request: AckRequest,
+      _opts?: { signal?: AbortSignal },
     ): Promise<{
       executionId: string;
-      ackState: "acknowledged";
+      ackState: string;
       disposition: AckRequest["disposition"];
     }> {
       counters.ack += 1;
       const exec = execs[execs.length - 1];
-      if (exec) exec.ackDisposition = request.disposition;
-      return { executionId, ackState: "acknowledged", disposition: request.disposition };
+      if (exec) {
+        exec.ackDisposition = request.disposition;
+        exec.ackCount = (exec.ackCount ?? 0) + 1;
+      }
+      return {
+        executionId,
+        ackState: options.ackState ?? "acknowledged",
+        disposition: request.disposition,
+      };
     },
-    async cancelExecution(_scopeId: string, _executionId: string): Promise<void> {
+    async cancelExecution(
+      _scopeId: string,
+      _executionId: string,
+      _controller: { controllerId: string; leaseEpoch: number },
+      opts?: { signal?: AbortSignal },
+    ): Promise<{ executionId: string; state: string }> {
       counters.cancel += 1;
       const exec = execs[execs.length - 1];
       if (exec) {
         exec.state = "interrupted";
-        exec.events.push(makeInterruptedEvent(exec.events.length + 5, "user_cancelled"));
+        const seq = exec.events.length + 5;
+        exec.events.push(makeInterruptedEvent(seq, "user_cancelled"));
+        exec.seq = seq;
       }
+      if (options.cancelNeverSettles) {
+        // Never settles on its own — only rejects when the helper's bounded
+        // cleanup signal aborts, proving the cleanup deadline lets the run
+        // converge instead of blocking forever (F2).
+        return new Promise((_, reject) => {
+          const signal = opts?.signal;
+          if (signal?.aborted) {
+            reject(new RuntimeClientError(499, "ABORTED", "cleanup deadline"));
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => reject(new RuntimeClientError(499, "ABORTED", "cleanup deadline")),
+            { once: true },
+          );
+        });
+      }
+      return { executionId: _executionId, state: "interrupted" };
     },
     async closeScope(
       scopeId: string,
       _controller: { controllerId: string; leaseEpoch: number },
+      opts?: { signal?: AbortSignal },
     ): Promise<{ scopeId: string; state: "closed" }> {
       counters.close += 1;
       if (options.closeFails) throw new RuntimeClientError(500, "INTERNAL", "close failed");
+      if (options.closeNeverSettles) {
+        // Settle only when the cleanup signal aborts (so the cleanup deadline
+        // bounded by newCleanupSignal proves convergence), emulating a hung
+        // close that the helper must not block on forever (F2).
+        return new Promise((_, reject) => {
+          const signal = opts?.signal;
+          if (signal?.aborted) {
+            reject(new RuntimeClientError(499, "ABORTED", "cleanup deadline"));
+            return;
+          }
+          signal?.addEventListener(
+            "abort",
+            () => reject(new RuntimeClientError(499, "ABORTED", "cleanup deadline")),
+            { once: true },
+          );
+        });
+      }
       return { scopeId, state: "closed" };
     },
     eventStreamFetch(input: { scopeId: string; executionId: string; afterSeq: number }) {
@@ -470,6 +536,253 @@ describe("agent-real-call — timeout / cancel / cleanup", () => {
     const host = fakeHost({ behavior: { kind: "completed", output: "ok", usage: null } });
     await run(host);
     expect(host.counters.execute).toBe(1);
+  });
+});
+
+describe("agent-real-call — F1 discarded ACK contract", () => {
+  it("timeout: cancel observes interrupted terminal → discarded ACK", async () => {
+    const host = fakeHost({ behavior: { kind: "hangUntilCancel", usage: null } as never });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "to-ack",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    // cancel produced an interrupted terminal; the helper observed it and sent
+    // exactly one discarded ACK (ackCount==1, disposition discarded on the exec).
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.ack).toBe(1);
+    expect(host.execs[0]?.ackDisposition).toBe("discarded");
+    expect(host.execs[0]?.ackCount).toBe(1);
+    expect(host.counters.close).toBe(1);
+  });
+
+  it("timeout: discarded ACK not acknowledged → degrade to failed + ACK_FAILED", async () => {
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      ackState: "expired" as never,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "to-ack-fail",
+    } as never);
+    // The discarded ACK returned a non-acknowledged state: the verdict degrades
+    // to failed with the explicit ACK_FAILED cause (never silently masked).
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
+  });
+
+  it("failed terminal: discarded ACK not acknowledged → ACK_FAILED (not bare DRIVER_CRASH)", async () => {
+    const host = fakeHost({
+      behavior: { kind: "failed", code: "DRIVER_CRASH", usage: null } as never,
+      ackState: "expired" as never,
+    });
+    const result = await run(host);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
+    expect(host.execs[0]?.ackDisposition).toBe("discarded");
+  });
+
+  it("interrupted terminal: discarded ACK not acknowledged → failed + ACK_FAILED", async () => {
+    const host = fakeHost({
+      behavior: { kind: "interrupted", reason: "supervisor_lost", usage: null } as never,
+      ackState: "expired" as never,
+    });
+    const result = await run(host);
+    // A discarded-ACK conflict on an interrupted terminal must surface, not mask.
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
+  });
+
+  it("empty output: discarded ACK not acknowledged → failed + ACK_FAILED code", async () => {
+    const host = fakeHost({
+      behavior: { kind: "emptyOutput", usage: null } as never,
+      ackState: "expired" as never,
+    });
+    const result = await run(host);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
+  });
+
+  it("timeout: cancel terminal unobservable (getExecution throws) → no discarded ACK, no crash", async () => {
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      getExecutionFails: true,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "to-noobs",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    // No terminal observed → no discarded ACK attempted; helper does not crash.
+    expect(host.counters.ack).toBe(0);
+    expect(host.counters.close).toBe(1);
+  });
+});
+
+describe("agent-real-call — F2 bounded cleanup deadline + close not swallowed", () => {
+  it("cancel never settles: helper still converges (cleanup deadline), close runs", async () => {
+    // The cancel Promise only rejects when the helper's 10s cleanup deadline
+    // aborts its signal — this deliberately takes ~10s (the point of F2: a hung
+    // cleanup request cannot block the helper forever; it converges at the
+    // cleanup deadline).
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      cancelNeverSettles: true,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "to-cancel-hang",
+    } as never);
+    // The cancel Promise never resolves, but the helper's independent bounded
+    // cleanup signal lets the run converge to timeout within the cleanup window.
+    expect(result.verdict).toBe("timeout");
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.close).toBe(1);
+  }, 20_000);
+
+  it("close never settles: helper converges via cleanup deadline, close flagged failed", async () => {
+    // Like the cancel-hang case, close only rejects at the 10s cleanup deadline.
+    const host = fakeHost({
+      behavior: { kind: "completed", output: "ok", usage: null },
+      closeNeverSettles: true,
+    });
+    const result = await run(host);
+    // close hangs until the cleanup signal aborts → close did NOT succeed → the
+    // completed verdict downgrades to failed with SCOPE_CLOSE_FAILED (F2: not
+    // swallowed; the helper cannot block forever).
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("SCOPE_CLOSE_FAILED");
+  }, 20_000);
+
+  it("close failure downgrades failed/interrupted verdicts too (any verdict)", async () => {
+    const host = fakeHost({
+      behavior: { kind: "failed", code: "DRIVER_CRASH", usage: null } as never,
+      closeFails: true,
+    });
+    const result = await run(host);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("SCOPE_CLOSE_FAILED");
+  });
+});
+
+describe("agent-real-call — F5 ttftMs from execute dispatch", () => {
+  it("ttftMs excludes create/activate latency (measured from execute)", async () => {
+    // Deterministic clock: create at 0, activate at 1000, execute dispatched at
+    // 3000, first output.delta fires at 3100 → ttftMs must be 100 (3100-3000),
+    // NOT 3100 (which would include create+activate). totalMs uses helper start.
+    let clock = 0;
+    const host = fakeHost({ behavior: { kind: "completed", output: "ok", usage: null } });
+    // Wrap createScope/activateScope to advance the clock so the helper's
+    // executeStartedAtMs differs materially from startedAtMs.
+    const realCreate = host.client.createScope.bind(host.client);
+    const realActivate = host.client.activateScope.bind(host.client);
+    const realExecute = host.client.execute.bind(host.client);
+    host.client.createScope = (async (req: CreateScopeRequest, opts?: { signal?: AbortSignal }) => {
+      clock = 1000;
+      return realCreate(req, opts);
+    }) as typeof host.client.createScope;
+    host.client.activateScope = (async (
+      scopeId: string,
+      controller: { controllerId: string; leaseEpoch: number },
+      opts?: { signal?: AbortSignal },
+    ) => {
+      clock = 3000;
+      return realActivate(scopeId, controller, opts);
+    }) as typeof host.client.activateScope;
+    host.client.execute = (async (
+      scopeId: string,
+      request: ExecuteRequest,
+      opts?: { signal?: AbortSignal },
+    ) => {
+      // executeStartedAtMs captured here (clock=3000); first delta fires after.
+      const res = realExecute(scopeId, request, opts);
+      clock = 3100;
+      return res;
+    }) as typeof host.client.execute;
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 5_000,
+      now: () => clock,
+      followEvents: host.followEvents as never,
+      idFactory: () => "ttft-id",
+    } as never);
+    expect(result.verdict).toBe("completed");
+    // The first output.delta arrives at clock=3100, dispatched at 3000 → 100ms.
+    expect(result.ttftMs).toBe(100);
+  });
+});
+
+describe("agent-real-call — F6 abort source + listener cleanup", () => {
+  it("external abort → cancelled (not failed), no listener leak", async () => {
+    const host = fakeHost({ behavior: { kind: "hangUntilCancel", usage: null } as never });
+    const controller = new AbortController();
+    // Spy that the external listener is removed after the run.
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const promise = runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 30_000,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      signal: controller.signal,
+      idFactory: () => "ca-src",
+    } as never);
+    controller.abort();
+    const result = await promise;
+    expect(result.verdict).toBe("cancelled");
+    expect(host.counters.close).toBe(1);
+    // The helper registered an external-abort listener and removed it in finally.
+    expect(addSpy).toHaveBeenCalled();
+    expect(removeSpy).toHaveBeenCalled();
+  });
+
+  it("already-aborted external signal → cancelled, listener attached+removed", async () => {
+    const host = fakeHost({ behavior: { kind: "hangUntilCancel", usage: null } as never });
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 30_000,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      signal: controller.signal,
+      idFactory: () => "ca-pre",
+    } as never);
+    // Pre-aborted: verdict is cancelled (not failed), create recovery runs, no crash.
+    expect(result.verdict).toBe("cancelled");
   });
 });
 

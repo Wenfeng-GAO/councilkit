@@ -103,6 +103,7 @@ import {
 import { type Logger, createLogger } from "@host/logging";
 import { createProcessSupervisor } from "@host/process/process-supervisor";
 import { createProfileProbe } from "@host/profiles/probe";
+import { diagnosticsRoutes } from "@host/routes/diagnostics";
 import { installationRoutes } from "@host/routes/installations";
 import { modelRoutes } from "@host/routes/models";
 import { scopeRoutes } from "@host/routes/scopes";
@@ -533,6 +534,12 @@ async function assembleHost(input: {
       ...installationRoutes(services),
       ...modelRoutes(services),
       ...scopeRoutes(services),
+      // F4 (live-agent-test-call-smoke): expose the diagnostics route so the
+      // agent-test-call smoke can assert activeScopes/liveDriverProcesses/
+      // runningExecutions/eventConnections are zero per driver (and finally).
+      // This mirrors the production Host (runtime-host/main.ts) and is additive —
+      // no existing smoke behavior changes; the route is read-only/session-auth.
+      ...diagnosticsRoutes(services),
     ],
   });
   return { host, scopeManager };

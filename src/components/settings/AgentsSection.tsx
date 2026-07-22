@@ -13,7 +13,14 @@ import type { DiscussionAgent } from "@/models/discussion/entities";
 import { type ExecutionProfileRecord, toDto } from "@/models/execution-profile";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { ProfileReadiness } from "@shared/runtime/schemas";
-import { type ChangeEvent, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type Dispatch,
+  type SetStateAction,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { AgentFormModal, type AgentFormValues } from "./AgentFormModal";
 import { formatCheckedAgo, profileReadinessView } from "./view-model";
 
@@ -163,11 +170,27 @@ export function AgentsSection({
   const [deleteBlockReason, setDeleteBlockReason] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [importMessage, setImportMessage] = useState<string | null>(null);
-  const [testingId, setTestingId] = useState<string | null>(null);
+  // F3: loading state is a Set per call kind, keyed by agentId. A single-value
+  // id let a row B's click wipe row A's in-flight flag and re-enable A, allowing
+  // accidental concurrent paid calls. Now finally removes ONLY the current id,
+  // and each button is disabled only while its own agentId is running for that
+  // kind (readiness and real-call stay independent).
+  const [testingIds, setTestingIds] = useState<Set<string>>(new Set());
   const [testResults, setTestResults] = useState<Record<string, AgentTestResult>>({});
-  const [realCallId, setRealCallId] = useState<string | null>(null);
+  const [realCallIds, setRealCallIds] = useState<Set<string>>(new Set());
   const [realCallResults, setRealCallResults] = useState<Record<string, AgentRealCallRecord>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // F3: a ref mirrors the real-call in-flight set so the entry guard never reads
+  // a stale closure value (a re-render hasn't happened yet when a rapid double
+  // click lands). The state Set still drives the disabled-button UI.
+  const realCallIdsRef = useRef<Set<string>>(new Set());
+
+  const markRunning = (setter: Dispatch<SetStateAction<Set<string>>>, id: string): void => {
+    setter((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  };
+  const clearRunning = (setter: Dispatch<SetStateAction<Set<string>>>, id: string): void => {
+    setter((prev) => (prev.has(id) ? new Set([...prev].filter((value) => value !== id)) : prev));
+  };
 
   const profilesById = useMemo(
     () => new Map(profiles.map((profile) => [profile.id, profile])),
@@ -220,7 +243,7 @@ export function AgentsSection({
   const handleTest = async (agent: DiscussionAgent) => {
     const profile = profilesById.get(agent.executionProfileId);
     if (!profile) return;
-    setTestingId(agent.id);
+    markRunning(setTestingIds, agent.id);
     try {
       const data = await client.profileReadiness(toDto(profile), agent.modelId, { refresh: true });
       setTestResults((prev) => ({
@@ -236,17 +259,28 @@ export function AgentsSection({
         },
       }));
     } finally {
-      setTestingId(null);
+      // F3: remove ONLY this agent's id so a concurrently-running row keeps its
+      // loading flag (and disabled button) until its own call settles.
+      clearRunning(setTestingIds, agent.id);
     }
   };
 
   // 真实调用测试自接线：发起一次真实模型 turn（一次付费调用），经
   // agent-real-call helper 驱动 scope→activate→execute→SSE→ack→close；
   // 结果仅存内存 state，绑定 agent.revision，编辑后自动隐藏。不写 Dexie（Q15）。
+  // F3: loading 按 agentId 记录（Set），入口对同一 agentId 已在运行时直接
+  // 返回，避免重复付费调用；结果写入时校验 revision 仍为发起时的值，防止
+  // 早完成请求按完成顺序错序覆盖最新点击的证据。
   const handleRealCallTest = async (agent: DiscussionAgent) => {
     const profile = profilesById.get(agent.executionProfileId);
     if (!profile) return;
-    setRealCallId(agent.id);
+    // Entry guard: a real call for this agentId already in flight → ignore the
+    // second click rather than launching a duplicate paid call. The ref is read
+    // live so a rapid double-click before re-render cannot slip through.
+    if (realCallIdsRef.current.has(agent.id)) return;
+    const startedRevision = agent.revision;
+    realCallIdsRef.current = new Set(realCallIdsRef.current).add(agent.id);
+    markRunning(setRealCallIds, agent.id);
     try {
       const result = await runAgentRealCallTest({
         client,
@@ -254,36 +288,48 @@ export function AgentsSection({
         modelId: agent.modelId,
         persona: agent.personaPrompt,
       });
-      setRealCallResults((prev) => ({
-        ...prev,
-        [agent.id]: { revision: agent.revision, result },
-      }));
+      setRealCallResults((prev) => {
+        const existing = prev[agent.id];
+        // Only commit if no newer click/results for this agentId superseded us
+        // (revision unchanged since dispatch). An earlier completer never
+        // overwrites a later click's slot.
+        if (existing && existing.revision !== startedRevision) return prev;
+        return { ...prev, [agent.id]: { revision: startedRevision, result } };
+      });
     } catch (error) {
-      setRealCallResults((prev) => ({
-        ...prev,
-        [agent.id]: {
-          revision: agent.revision,
-          result: {
-            verdict: "failed",
-            canonical: null,
-            effective: null,
-            modelVerdict: null,
-            toolState: null,
-            ttftMs: null,
-            totalMs: 0,
-            outputPreview: "",
-            usage: null,
-            error: {
-              category: "crash",
-              code: "HELPER_ERROR",
-              message: error instanceof Error ? error.message : "真实调用失败",
-              retryable: false,
+      setRealCallResults((prev) => {
+        const existing = prev[agent.id];
+        if (existing && existing.revision !== startedRevision) return prev;
+        return {
+          ...prev,
+          [agent.id]: {
+            revision: startedRevision,
+            result: {
+              verdict: "failed",
+              canonical: null,
+              effective: null,
+              modelVerdict: null,
+              toolState: null,
+              ttftMs: null,
+              totalMs: 0,
+              outputPreview: "",
+              usage: null,
+              error: {
+                category: "crash",
+                code: "HELPER_ERROR",
+                message: error instanceof Error ? error.message : "真实调用失败",
+                retryable: false,
+              },
             },
           },
-        },
-      }));
+        };
+      });
     } finally {
-      setRealCallId(null);
+      // F3: remove ONLY this agent's id — another row's in-flight real call keeps
+      // its loading flag and disabled button until it settles on its own.
+      const next = new Set([...realCallIdsRef.current].filter((value) => value !== agent.id));
+      realCallIdsRef.current = next;
+      clearRunning(setRealCallIds, agent.id);
     }
   };
 
@@ -390,15 +436,15 @@ export function AgentsSection({
                     <Button
                       variant="ghost"
                       className="px-2 py-1 text-xs"
-                      disabled={!hostOnline || unbound || testingId === agent.id}
+                      disabled={!hostOnline || unbound || testingIds.has(agent.id)}
                       title={unbound ? "待绑定 Profile，无法测试" : undefined}
                       onClick={() => void handleTest(agent)}
                     >
-                      {testingId === agent.id ? "测试中…" : "测试"}
+                      {testingIds.has(agent.id) ? "测试中…" : "测试"}
                     </Button>
                     <Button
                       className="px-2 py-1 text-xs"
-                      disabled={!hostOnline || unbound || realCallId === agent.id}
+                      disabled={!hostOnline || unbound || realCallIds.has(agent.id)}
                       title={
                         unbound
                           ? "待绑定 Profile，无法真实调用"
@@ -406,7 +452,7 @@ export function AgentsSection({
                       }
                       onClick={() => void handleRealCallTest(agent)}
                     >
-                      {realCallId === agent.id ? "真实调用中…" : "真实调用测试"}
+                      {realCallIds.has(agent.id) ? "真实调用中…" : "真实调用测试"}
                     </Button>
                     <Button
                       variant="ghost"
