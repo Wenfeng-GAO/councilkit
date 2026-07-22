@@ -8,6 +8,7 @@ import {
   updateAgentWithRevisionCheck,
 } from "@/app/pages/SettingsPage";
 import type { AgentFormValues } from "@/components/settings/AgentFormModal";
+import { shouldCommitRealCallResult } from "@/components/settings/AgentsSection";
 import { CouncilKitRuntimeDB } from "@/lib/runtime-db";
 import type { DiscussionAgent } from "@/models/discussion/entities";
 import { TransactionError, createDiscussionAgent } from "@/models/discussion/factories";
@@ -71,6 +72,52 @@ describe("pickEnabledAgents", () => {
     const b = { ...createDiscussionAgent({ ...VALUES, name: "B" }), enabled: false };
     const c = { ...createDiscussionAgent({ ...VALUES, name: "C" }), enabled: true };
     expect(pickEnabledAgents([a, b, c]).map((agent) => agent.name)).toEqual(["A", "C"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G4: 真实调用结果的 commit 守卫按单调 callToken 判断，而非 agent.revision。
+// ---------------------------------------------------------------------------
+
+describe("shouldCommitRealCallResult (G4 call-token guard)", () => {
+  const record = (revision: number, callToken: number) =>
+    ({
+      revision,
+      callToken,
+      result: {
+        verdict: "completed",
+        canonical: "m",
+        effective: "m",
+        modelVerdict: "match",
+        toolState: "none",
+        ttftMs: 10,
+        totalMs: 20,
+        outputPreview: "ok",
+        usage: null,
+        error: null,
+      },
+    }) as never;
+
+  it("G4 钉：编辑 Agent 升 revision 后再调用 → 新结果仍写入（不被 revision 守卫误拒）", () => {
+    // 编辑前一次调用：revision=1, callToken=1 已落记录。
+    const existing = record(1, 1);
+    // 编辑使 agent.revision 升到 2，之后再调用分配 callToken=2。
+    expect(shouldCommitRealCallResult(existing, 2)).toBe(true);
+  });
+
+  it("首次调用（无既有记录）→ 写入", () => {
+    expect(shouldCommitRealCallResult(undefined, 1)).toBe(true);
+  });
+
+  it("更早完成者（token 小于既有记录 token）→ 不覆盖晚请求槽位", () => {
+    // 晚请求 token=2 先落记录，更早的 token=1 完成 → 不覆盖。
+    const existing = record(2, 2);
+    expect(shouldCommitRealCallResult(existing, 1)).toBe(false);
+  });
+
+  it("同一调用重入（token 相等）→ 仍写入（首创即最新）", () => {
+    const existing = record(2, 2);
+    expect(shouldCommitRealCallResult(existing, 2)).toBe(true);
   });
 });
 

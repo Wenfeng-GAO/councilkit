@@ -401,4 +401,38 @@ test.describe("S7 agent assets", () => {
     expect(diag.runningExecutions).toBe(0);
     expect(diag.eventConnections).toBe(0);
   });
+
+  test("V1.1 真实调用编辑后重召：revision=1 结果 → 编辑升 revision → revision=2 新结果可见（G4）", async () => {
+    test.slow();
+    await bootSettings(page);
+    await createAssetProfile(page);
+    await createAssetAgent(page, "重召特工", "#4f6ef7");
+    await resetDriverState(page);
+
+    const row = agentListItem(page, "重召特工");
+
+    // revision=1：发起真实调用，结果可见。
+    await row.getByRole("button", { name: "真实调用测试", exact: true }).click();
+    await expect(row.getByText("真实调用成功", { exact: true })).toBeVisible();
+
+    // 编辑升 revision：改名保存 → agent.revision 1→2，旧结果自动隐藏。
+    await row.getByRole("button", { name: "编辑", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    const nameInput = dialog.getByRole("textbox", { name: "名称", exact: true });
+    await expect(nameInput).toHaveValue("重召特工");
+    await nameInput.fill("重召特工改");
+    await dialog.getByRole("button", { name: "保存修改" }).click();
+    await expect(dialog).toBeHidden();
+    const renamedRow = agentListItem(page, "重召特工改");
+    // 旧 revision=1 结果已隐藏：成功 pill 不再可见。
+    await expect(renamedRow.getByText("真实调用成功", { exact: true })).toHaveCount(0);
+
+    // G4 钉：编辑后再发起真实调用（revision=2），新结果必须可见——修复前会被
+    // revision 守卫误判为过期结果而丢弃，界面无可见证据。
+    await renamedRow.getByRole("button", { name: "真实调用测试", exact: true }).click();
+    await expect(renamedRow.getByText("真实调用成功", { exact: true })).toBeVisible();
+    const diag = await hostDiagnostics(page);
+    expect(diag.activeScopes).toBe(0);
+    expect(diag.runningExecutions).toBe(0);
+  });
 });

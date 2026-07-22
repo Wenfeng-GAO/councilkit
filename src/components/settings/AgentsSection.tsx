@@ -63,10 +63,39 @@ type AgentTestResult =
   | { ok: true; readiness: ProfileReadiness; cachedAt: string }
   | { ok: false; error: string };
 
-/** 绑定 agent.revision：Agent 编辑后 revision +1，旧结果自动隐藏（不落库）。 */
-interface AgentRealCallRecord {
+/** 真实调用结果记录（行内展示区；局部 state，不进 TanStack）。
+ *
+ * G4: 每条记录绑定一个单调递增的 callToken（每 agent 独立计数，发起调用时分配），
+ * 而非 agent.revision。Agent 编辑后 revision 会 +1，旧方案用 revision 守卫会把
+ * 编辑后新发起的调用结果（startedRevision 与现有记录 revision 不同）误判为过期
+ * 结果而拒绝写入，导致界面无可见结果。改为按 callToken 判断：只有当一个更晚的
+ * 请求（更大 token）已落记录时，才拒绝更早完成者的覆盖；编辑后再调用分配更大的
+ * token，可直接覆盖旧 revision 记录展示。展示层仍按 agent.revision 隐藏编辑前的
+ * 旧结果（编辑后 revision +1，旧记录的 revision 自动失效隐藏，无需落库）。 */
+export interface AgentRealCallRecord {
   revision: number;
+  callToken: number;
   result: AgentRealCallResult;
+}
+
+/**
+ * G4: pure commit predicate for a real-call result. Returns true when a
+ * completer carrying `token` is still the latest dispatch for this agent (no
+ * existing record, or the existing record's callToken is not strictly greater
+ * than this one). Editing an agent bumps its revision but does NOT allocate a
+ * call token, so a fresh post-edit dispatch always commits and overwrites the
+ * stale record — the bug where a completed post-edit result was silently
+ * dropped because `existing.revision !== startedRevision` no longer occurs.
+ *
+ * An earlier completer (token < existing.callToken) is suppressed so it cannot
+ * overwrite a later dispatch's slot out of completion order.
+ */
+export function shouldCommitRealCallResult(
+  existing: AgentRealCallRecord | undefined,
+  token: number,
+): boolean {
+  if (!existing) return true;
+  return token >= existing.callToken;
 }
 
 /** 真实调用结果区内容：pill + canonical/effective/modelVerdict/toolState +
@@ -184,6 +213,12 @@ export function AgentsSection({
   // a stale closure value (a re-render hasn't happened yet when a rapid double
   // click lands). The state Set still drives the disabled-button UI.
   const realCallIdsRef = useRef<Set<string>>(new Set());
+  // G4: monotonic per-agent call token. Each dispatched real call gets the next
+  // token; the result is committed only if no LATER token (a newer dispatch for
+  // this agent) has already committed its result. This replaces the buggy
+  // revision-mismatch guard that rejected a fresh result written after an edit
+  // bumped agent.revision.
+  const realCallTokenRef = useRef<Record<string, number>>({});
 
   const markRunning = (setter: Dispatch<SetStateAction<Set<string>>>, id: string): void => {
     setter((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -269,8 +304,9 @@ export function AgentsSection({
   // agent-real-call helper 驱动 scope→activate→execute→SSE→ack→close；
   // 结果仅存内存 state，绑定 agent.revision，编辑后自动隐藏。不写 Dexie（Q15）。
   // F3: loading 按 agentId 记录（Set），入口对同一 agentId 已在运行时直接
-  // 返回，避免重复付费调用；结果写入时校验 revision 仍为发起时的值，防止
-  // 早完成请求按完成顺序错序覆盖最新点击的证据。
+  // 返回，避免重复付费调用。G4: 结果写入按单调 callToken 判断是否最新请求
+  // （同 agent 已串行，编辑后新调用分配更大 token，可直接覆盖旧 revision 记录）；
+  // 早完成请求仅在更晚请求尚未落记录时才覆盖（防错序）。
   const handleRealCallTest = async (agent: DiscussionAgent) => {
     const profile = profilesById.get(agent.executionProfileId);
     if (!profile) return;
@@ -279,8 +315,18 @@ export function AgentsSection({
     // live so a rapid double-click before re-render cannot slip through.
     if (realCallIdsRef.current.has(agent.id)) return;
     const startedRevision = agent.revision;
+    // G4: allocate a monotonic per-agent call token BEFORE dispatch so a later
+    // dispatch (e.g. edit-then-recall) always exceeds an in-flight earlier call.
+    const token = (realCallTokenRef.current[agent.id] ?? 0) + 1;
+    realCallTokenRef.current[agent.id] = token;
     realCallIdsRef.current = new Set(realCallIdsRef.current).add(agent.id);
     markRunning(setRealCallIds, agent.id);
+    // G4: commit predicate — only a LATER dispatch (strictly greater token) that
+    // has already written its record blocks this completer. Editing bumps
+    // agent.revision but does NOT allocate a token, so a fresh post-edit call
+    // (its own larger token) always commits and overwrites the stale record.
+    const shouldCommit = (prev: Record<string, AgentRealCallRecord>): boolean =>
+      shouldCommitRealCallResult(prev[agent.id], token);
     try {
       const result = await runAgentRealCallTest({
         client,
@@ -289,21 +335,17 @@ export function AgentsSection({
         persona: agent.personaPrompt,
       });
       setRealCallResults((prev) => {
-        const existing = prev[agent.id];
-        // Only commit if no newer click/results for this agentId superseded us
-        // (revision unchanged since dispatch). An earlier completer never
-        // overwrites a later click's slot.
-        if (existing && existing.revision !== startedRevision) return prev;
-        return { ...prev, [agent.id]: { revision: startedRevision, result } };
+        if (!shouldCommit(prev)) return prev;
+        return { ...prev, [agent.id]: { revision: startedRevision, callToken: token, result } };
       });
     } catch (error) {
       setRealCallResults((prev) => {
-        const existing = prev[agent.id];
-        if (existing && existing.revision !== startedRevision) return prev;
+        if (!shouldCommit(prev)) return prev;
         return {
           ...prev,
           [agent.id]: {
             revision: startedRevision,
+            callToken: token,
             result: {
               verdict: "failed",
               canonical: null,

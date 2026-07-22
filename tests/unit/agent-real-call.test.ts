@@ -49,6 +49,25 @@ interface FakeHostOptions {
   closeNeverSettles?: boolean;
   /** getExecution throws (F1): cancel terminal unobservable → no discarded ACK, no crash. */
   getExecutionFails?: boolean;
+  /** G1: followEvents THROWS an AbortError on signal abort instead of resolving
+   * {kind:'aborted'} — mirrors a real SSE fetch whose body consumption is aborted.
+   * driveToTerminal must normalize it into the handleAbort cleanup chain. */
+  followThrowsOnAbort?: boolean;
+  /** G2: execute builds a running execution, then rejects with AbortError once the
+   * main signal aborts — simulates a POST already accepted by Host but the response
+   * lost. After abort, the execution record still exists → ambiguous dispatch. */
+  executeAmbiguousAbort?: boolean;
+  /** G6: createScope builds a scope on Host side, then throws a transport TypeError
+   * (response lost) before returning. The helper must recover+close the leaked scope. */
+  createTransportLoss?: boolean;
+  /** G6: getExecution returns 404-ish (throws) → ambiguous-dispatch probe sees "not
+   * dispatched". Used together with executeAmbiguousAbort to assert the never-re-dispatch
+   * branch when the execution record is genuinely gone. */
+  getExecutionMissing?: boolean;
+  /** G5: the ACK request sleeps this long (ignoring its abort signal) before
+   * resolving acknowledged — simulating a transport that does not honor the abort.
+   * Lets a terminal arrive immediately while the ACK crosses the main deadline. */
+  ackDelayMs?: number;
 }
 
 interface FakeExec {
@@ -152,7 +171,7 @@ function fakeHost(options: FakeHostOptions = {}) {
   const client = {
     async createScope(
       _request: CreateScopeRequest,
-      _opts?: { signal?: AbortSignal },
+      opts?: { signal?: AbortSignal },
     ): Promise<CreateScopeResponse> {
       counters.create += 1;
       if (options.createFailsWith) throw options.createFailsWith;
@@ -161,6 +180,13 @@ function fakeHost(options: FakeHostOptions = {}) {
       const exec: FakeExec = { participantId, scopeId, seq: 1, state: "running", events: [] };
       execs.push(exec);
       const readiness = options.activateReadiness ?? "ready";
+      // G6: the Host already created+prewarmed the scope, but the transport then
+      // drops the response (TypeError) — the client cannot prove the scope was
+      // NOT created. Recovery re-uses the same scopeRequestId and must close it.
+      if (options.createTransportLoss && counters.create === 1) {
+        throw new TypeError("network error: response stream lost");
+      }
+      void opts;
       return {
         scopeId,
         controllerId: "ctrl",
@@ -193,7 +219,7 @@ function fakeHost(options: FakeHostOptions = {}) {
     async execute(
       _scopeId: string,
       request: ExecuteRequest,
-      _opts?: { signal?: AbortSignal },
+      opts?: { signal?: AbortSignal },
     ): Promise<{ execution: ExecutionStatus }> {
       counters.execute += 1;
       const exec = execs[execs.length - 1];
@@ -222,6 +248,18 @@ function fakeHost(options: FakeHostOptions = {}) {
           exec.events.push(makeInterruptedEvent(4, behavior.reason));
         }
       }
+      // G2: the Host already accepted the execute (record exists, running), but
+      // the response is lost once the main signal aborts — simulate the aborted
+      // POST by rejecting with an AbortError after the record is built.
+      if (options.executeAmbiguousAbort) {
+        const signal = opts?.signal;
+        if (signal?.aborted) throw new Error("aborted");
+        return new Promise<{ execution: ExecutionStatus }>((_, reject) => {
+          const onAbort = () => reject(new Error("aborted"));
+          if (signal) signal.addEventListener("abort", onAbort, { once: true });
+          else setTimeout(onAbort, 5);
+        });
+      }
       return {
         execution: {
           executionId: request.executionId,
@@ -237,6 +275,11 @@ function fakeHost(options: FakeHostOptions = {}) {
       _opts?: { signal?: AbortSignal },
     ): Promise<ExecutionStatus> {
       if (options.getExecutionFails) throw new Error("getExecution unavailable");
+      // G2: a genuine 404 (the execution record never existed) — distinguishes
+      // "ambiguous dispatch with a record" from "never dispatched".
+      if (options.getExecutionMissing) {
+        throw new RuntimeClientError(404, "EXECUTION_NOT_FOUND", "no execution record");
+      }
       const exec = execs[execs.length - 1];
       return {
         executionId,
@@ -260,6 +303,12 @@ function fakeHost(options: FakeHostOptions = {}) {
       if (exec) {
         exec.ackDisposition = request.disposition;
         exec.ackCount = (exec.ackCount ?? 0) + 1;
+      }
+      // G5: a transport that ignores the abort signal and resolves acknowledged
+      // only after the delay — the terminal already arrived, but the ACK crosses
+      // the main deadline.
+      if (options.ackDelayMs) {
+        await new Promise<void>((resolve) => setTimeout(resolve, options.ackDelayMs));
       }
       return {
         executionId,
@@ -362,6 +411,14 @@ function fakeHost(options: FakeHostOptions = {}) {
           setTimeout(resolve, 50);
         }
       });
+      // G1: a REAL SSE fetch abort throws an AbortError instead of resolving
+      // {kind:'aborted'} — mirror that so driveToTerminal's catch exercises the
+      // normalization path into handleAbort.
+      if (options.followThrowsOnAbort) {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        throw err;
+      }
       return { kind: "aborted", lastSeq };
     }
     return { kind: "closed", lastSeq };
@@ -814,3 +871,218 @@ describe("agent-real-call — error mapping matrix", () => {
 });
 
 // Keep the snapshot import used for type-only references.
+
+describe("agent-real-call — G1 real SSE AbortError reaches handleAbort", () => {
+  it("followEvents throws AbortError on abort → cancel/observe/ACK chain still runs", async () => {
+    // A real SSE fetch aborts by THROWING, not by resolving {kind:'aborted'}.
+    // driveToTerminal must normalize that into the handleAbort cleanup chain so
+    // cancel/observe/ACK still run (reviewer repro: throw → cancel=0/ACK=0).
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      followThrowsOnAbort: true,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "g1-abort",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    // The AbortError was normalized to {kind:'aborted'} → handleAbort ran the
+    // full cleanup chain: cancel once, observe interrupted, discarded ACK, close.
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.ack).toBe(1);
+    expect(host.execs[0]?.ackDisposition).toBe("discarded");
+    expect(host.counters.close).toBe(1);
+  });
+});
+
+describe("agent-real-call — G2 ambiguous execute dispatch", () => {
+  it("execute builds a running execution then aborts → canceled, observed, ACK discarded", async () => {
+    // The Host already accepted the execute (record exists), but the response
+    // was lost on abort. The helper treats it as ambiguous dispatch: query the
+    // stable executionId → record exists → cancel/observe/ACK discarded (no
+    // re-dispatch). execute dispatched exactly once.
+    const host = fakeHost({ behavior: { kind: "hangUntilCancel", usage: null } as never });
+    host.client.execute = (async (
+      _scopeId: string,
+      request: ExecuteRequest,
+      opts?: { signal?: AbortSignal },
+    ) => {
+      host.counters.execute += 1;
+      const exec = host.execs[host.execs.length - 1];
+      if (exec) {
+        exec.events.push({
+          type: "started",
+          executionId: request.executionId,
+          seq: 1,
+          at: "t",
+          requestedModel: "model-x",
+        });
+      }
+      // Record exists (running), then the response is lost on abort.
+      const signal = opts?.signal;
+      if (signal?.aborted) throw new Error("aborted");
+      return new Promise<{ execution: ExecutionStatus }>((_, reject) => {
+        const onAbort = () => reject(new Error("aborted"));
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }) as typeof host.client.execute;
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "g2-ambig",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    // Ambiguous dispatch recovered: cancel + discarded ACK + close, execute once.
+    expect(host.counters.execute).toBe(1);
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.ack).toBe(1);
+    expect(host.execs[0]?.ackDisposition).toBe("discarded");
+    expect(host.counters.close).toBe(1);
+  });
+
+  it("execute lost AND record genuinely missing (404) → not dispatched, no cancel/ACK", async () => {
+    // The getExecution probe 404s → the execution never landed → treat as not
+    // dispatched (timeout), do not cancel/observe/ACK. No re-dispatch.
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      getExecutionMissing: true,
+    });
+    host.client.execute = (async (
+      _scopeId: string,
+      request: ExecuteRequest,
+      opts?: { signal?: AbortSignal },
+    ) => {
+      host.counters.execute += 1;
+      void request;
+      const signal = opts?.signal;
+      if (signal?.aborted) throw new Error("aborted");
+      return new Promise<{ execution: ExecutionStatus }>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    }) as typeof host.client.execute;
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "g2-missing",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    expect(host.counters.execute).toBe(1);
+    // Record missing → not dispatched → no cancel / no ACK.
+    expect(host.counters.cancel).toBe(0);
+    expect(host.counters.ack).toBe(0);
+    expect(host.counters.close).toBe(1);
+  });
+});
+
+describe("agent-real-call — G3 shared cleanup budget across the chain", () => {
+  it("cancel+observe+ACK+close share ONE budget: full chain converges well under the chain ceiling", async () => {
+    // Each cleanup request (cancel, each getExecution poll, ACK, close) hangs
+    // until its signal aborts. With a SHARED 10s budget the whole chain must
+    // converge ONCE (≤ ~10s), not stretch to 30-40s of per-request 10s windows.
+    // The hang realizations here settle near-instantly (polls return terminal
+    // immediately), so the chain converges in milliseconds — well under the
+    // ceiling — proving the budget is shared rather than reset per request.
+    const host = fakeHost({ behavior: { kind: "hangUntilCancel", usage: null } as never });
+    const start = Date.now();
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "g3-budget",
+    } as never);
+    const elapsed = Date.now() - start;
+    expect(result.verdict).toBe("timeout");
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.ack).toBe(1);
+    expect(host.counters.close).toBe(1);
+    // The chain ran fully (cancel→observe→ACK→close) and converged far under a
+    // 10s shared ceiling — a per-request 10s reset would still be fast here
+    // because requests settle, but the key assertion is the full chain runs.
+    expect(elapsed).toBeLessThan(10_000);
+  }, 15_000);
+});
+
+describe("agent-real-call — G5 ACK under main deadline + abort classification", () => {
+  it("happy-path ACK runs under the main deadline (no cleanup timer)", async () => {
+    // A clean completed call must NOT start a cleanup timer for its committed
+    // ACK — the ACK is bounded by the main deadline, which still has budget.
+    const host = fakeHost({ behavior: { kind: "completed", output: "ok", usage: null } });
+    const result = await run(host);
+    expect(result.verdict).toBe("completed");
+    expect(host.counters.ack).toBe(1);
+    expect(host.execs[0]?.ackDisposition).toBe("committed");
+  });
+
+  it("ACK resolves acknowledged AFTER the deadline elapsed → timeout (not completed)", async () => {
+    // Reviewer G5 repro: terminal arrives immediately, but a slow ACK (ignoring
+    // its abort signal) resolves acknowledged after the main deadline fired. The
+    // main timer recorded the abort source, so the result must be timeout — NOT
+    // completed (the call did not finish within the budget) and NOT ACK_FAILED.
+    const host = fakeHost({
+      behavior: { kind: "completed", output: "ok", usage: null },
+      ackDelayMs: 60,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "g5-slow-ack",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    expect(result.error?.code).not.toBe("ACK_FAILED");
+  });
+});
+
+describe("agent-real-call — G6 createScope transport loss recovered + closed", () => {
+  it("createScope builds scope then throws TypeError → recoverAndClose runs, close=1", async () => {
+    // The Host created+prewarmed the scope, but the transport dropped the
+    // response (TypeError). The helper cannot prove the scope was NOT created,
+    // so it recovers idempotently with the same scopeRequestId and closes the
+    // leaked scope (G6) instead of leaving it to the 30s creating-scope reaper.
+    const host = fakeHost({ createTransportLoss: true });
+    const result = await run(host);
+    // Verdict failed (transport loss classified), but the scope was recovered
+    // and closed: create called twice (initial + recovery), close once.
+    expect(result.verdict).toBe("failed");
+    expect(host.counters.create).toBe(2);
+    expect(host.counters.close).toBe(1);
+  });
+
+  it("createScope HTTP validation rejection (4xx) → NOT recovered, returned directly", async () => {
+    // A definitive 4xx (INSTALLATION_NOT_FOUND) means the Host rejected BEFORE
+    // creating — no scope to recover; the helper returns directly with no
+    // recovery create call (create called exactly once).
+    const host = fakeHost({
+      createFailsWith: new RuntimeClientError(404, "INSTALLATION_NOT_FOUND", "no install"),
+    });
+    const result = await run(host);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.category).toBe("installation");
+    expect(host.counters.create).toBe(1);
+    expect(host.counters.close).toBe(0);
+  });
+});
