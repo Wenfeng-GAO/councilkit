@@ -408,3 +408,4 @@ Codex 兼容性：
 - [ADR-0010：讨论模式即指令模板（盲审推迟）](./adr/0010-discussion-modes-as-instruction-templates-blind-review-deferred.md)
 - [ADR-0011：机械收敛规则](./adr/0011-mechanical-convergence-rule.md)
 - [ADR-0012：新增 cfuse route 与 kimi CLI driver](./adr/0012-add-cfuse-route-and-kimi-cli-driver.md)
+- [ADR-0013：CLI 自编排与独立数据世界](./adr/0013-cli-as-orchestrator-with-separate-data-world.md)

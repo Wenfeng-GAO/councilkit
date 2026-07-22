@@ -24,6 +24,22 @@ _Avoid_: Runtime Driver、Execution Profile、arbitrary executable
 用户可选择的无秘密执行配置，基于一个 **Runtime Driver**，引用一个 **Runtime Installation**，并只包含 Driver 声明的类型化选项。Profile 不保存模型；模型只由 **Agent** 的 `modelId` 指定。
 _Avoid_: Runtime、Gateway、Provider account、model selection
 
+**Driver Selection**:
+CLI 侧 Agent 对模型执行能力的无秘密引用：一个 **Runtime Driver** 的标识与其类型化选项（如 cld route），不引用具体 **Runtime Installation**——Installation 由 Runtime Host 在每次运行时动态解析。它不是 Execution Profile；CLI 上下文不创建或持久化 Execution Profile。
+_Avoid_: Execution Profile、profile、installationId binding
+
+**Council**:
+CLI 侧保存的可复用静态讨论配置：topic、background、目标输出、agent 组合与轮次配置。它只是配置，不是讨论实例；`run` 执行一场讨论时才产生讨论实例。Council 与浏览器的 Room 数据不互通。
+_Avoid_: Room、room、template
+
+**Reporter**:
+CLI 上下文中 Council 显式指定、负责在固定轮次结束后做一次最终总结调用的 agent。CLI 讨论没有每轮摘要与提前收敛，因此 Reporter 不是浏览器的 Facilitator。
+_Avoid_: Facilitator、summarizer
+
+**Run**:
+CLI 执行一个 **Council** 产生的一场讨论实例：有序消息记录（transcript）与最终报告，由 CLI 持久化在本地存储。Run 与浏览器的 Room 实例语义对应，但数据不互通。
+_Avoid_: Room、session、execution
+
 **Credential Source**:
 Runtime Installation 获得认证能力的方式；秘密内容不属于 Profile 或讨论数据。V1 只支持 `installation-managed`：Codex 复用本地 Codex 登录，`cld` 自行读取其本地配置，Runtime Host 不读取或转存凭据。
 _Avoid_: API key field、local-cli-login、Execution Profile、Agent
@@ -49,7 +65,7 @@ Discussion Orchestrator 提交给 Runtime Host 的一次模型调用，由全局
 _Avoid_: Round、Message、Execution Session
 
 **Agent**:
-本地保存、可跨房间复用的讨论角色，组合了人格定义、一个 **Execution Profile** 和一个 `modelId`；相同人格绑定不同 Profile 或模型时，视为不同 Agent。Agent 不是房间成员关系或执行会话；Driver 是否提供工具能力不属于 Agent 身份。
+本地保存、可跨房间复用的讨论角色，组合了人格定义、一个 **Execution Profile** 和一个 `modelId`；相同人格绑定不同 Profile 或模型时，视为不同 Agent。Agent 不是房间成员关系或执行会话；Driver 是否提供工具能力不属于 Agent 身份。CLI 上下文中 Agent 的执行绑定是 **Driver Selection** 而非 Execution Profile，两者数据不互通。
 _Avoid_: Participant、session、process、Execution Profile
 
 **Participant**:
