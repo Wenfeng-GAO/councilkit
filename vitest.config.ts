@@ -4,7 +4,12 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/unit/**/*.test.ts", "tests/host/**/*.test.ts", "tests/integration/**/*.test.ts"],
+    include: [
+      "tests/unit/**/*.test.ts",
+      "tests/host/**/*.test.ts",
+      "tests/integration/**/*.test.ts",
+      "cli/tests/**/*.test.ts",
+    ],
     globals: true,
     testTimeout: 30000,
     hookTimeout: 30000,

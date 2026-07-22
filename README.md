@@ -60,6 +60,72 @@ lsof -nP -iTCP:43127 -sTCP:LISTEN
 
 结束占用进程后重新 `pnpm start`。
 
+## CLI（命令行，浏览器关闭时也能用）
+
+`councilkit` CLI 让 coding agent 或脚本在**浏览器关闭**时也能查看模型、管理 Agent/Council、发起多 Agent 多轮讨论并拿到 Markdown 报告。CLI 与浏览器**数据不互通**：它有自己的本地存储（`~/.config/councilkit/`），不读写浏览器的 Dexie 数据。
+
+### 构建与安装
+
+CLI 是 `cli/` workspace 包，bin 是 `cli/bin/councilkit.mjs` thin launcher → 构建产物 `cli/dist/main.mjs`。`pnpm install` 后需构建一次：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build:cli           # 单独构建 CLI（根 pnpm build 也会构建它）
+pnpm exec councilkit --help
+```
+
+### Host 必须运行，浏览器可关
+
+CLI 不 spawn Runtime Host，也不直连模型供应商——所有执行仍经过本机前台运行的 Runtime Host（与浏览器共用同一个 `http://127.0.0.1:43127`）。所以先 `pnpm start`（或 `pnpm dev`）让 Host 跑起来，再开 CLI；浏览器可以关。Host 不可达时 `doctor`/`run` 以退出码 3 失败，CLI 永不自动拉起 Host。CLI 只保证与**同 checkout** 的 Host 互通（版本绑定）。
+
+### 命令
+
+```bash
+councilkit doctor [--json]                              # Host 可达性 + installations + catalog 摘要
+councilkit models [--json]                             # 当前可用 driver/route/model 闭集（实时 catalog）
+councilkit agent create \
+  --name <name> --persona-prompt <text> \
+  --driver-id <claude-stream-json|codex-app-server|kimi-stream-json> \
+  --options '<json>' --model-id <id> --color <#rrggbb> [--disabled] [--json]
+councilkit agent list|show <name|id>|delete <name|id> [--json]
+
+councilkit council create \
+  --name <name> --topic <text> [--background <text>] [--target-output <text>] \
+  --agents '<["ref1","ref2"]>' --rounds <N> --reporter <ref> [--json]
+councilkit council list|show <name|id>|delete <name|id> [--json]
+
+councilkit run --council <name|id> [--rounds N] [--out path] [--json]
+councilkit run --agents '<["ref1","ref2"]>' --topic <text> --reporter <ref> \
+  [--background <text>] [--target-output <text>] [--rounds N] [--out path] [--json]
+```
+
+- `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
+- **Reporter 必填**：Council 必须显式指定一个 reporter agent（且在 agents 中），不静默 fallback。
+- 讨论固定 N 轮（`council.rounds`，`--rounds` 覆盖），每轮各 agent 按序发言一次；N 轮后 Reporter 做一次最终总结调用，产出九段 Markdown 报告（与浏览器报告同章节集）。
+- `--json`：进度/诊断全走 stderr，stdout 只出一个最终 JSON 文档。
+
+### 报告位置与凭据生命周期
+
+- 报告与 transcript 默认在 `runs/<run-id>/`（`report.md` + `transcript.jsonl`）；`--out` 再原子复制一份到用户路径。`report.md` 始终保留（部分报告在 run 失败时也写盘并标注 `INCOMPLETE`）。
+- 凭据（session cookie + CSRF）只存活于 CLI 进程内存，Host 重启后自动重取一次；**不落盘**、不出现在 `agents.json`/`councils.json`/transcript/报告/日志/`--json` 输出中。
+- `agents.json`/`councils.json` 不含 `installationId`/凭据——installation 每次 run/doctor/models 实时从 Host 解析（`state=trusted` 且 driverId 匹配；多个时取 Host 顺序第一个）。
+
+### 退出码
+
+| 码 | 含义 |
+|---|---|
+| 0 | 成功 |
+| 2 | 用法 / schema / 引用 / 校验（reporter 必填、悬空引用等） |
+| 3 | Run 开始前 Host 不可达 / 认证 / installation / readiness 不可用 |
+| 4 | Run 执行失败（turn / Reporter / ACK / SSE / Host 重启 / cleanup） |
+| 5 | 本地 store / report IO |
+| 7 | Host 配额拒绝 |
+| 130 | SIGINT（先做有界 cleanup，再退出） |
+
+### 端口独占
+
+`run` 的 live smoke 与浏览器/Host 共用 43127，且要求独占串行（不可与 vitest/playwright 并发）。端口被占用时用 `lsof -nP -iTCP:43127 -sTCP:LISTEN` 定位；CLI 不 kill 任何非自身进程。
+
 ## 后台托管（launchd，macOS）
 
 前台 `pnpm start` 之外，可以把 Runtime Host 交给 launchd 托管：登录后自动启动、崩溃自动拉起（KeepAlive，限频 10 秒）。先确保已 `pnpm build`（托管入口是 `dist-host/main.mjs`），然后：
