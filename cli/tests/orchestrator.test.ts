@@ -90,6 +90,13 @@ interface FakeHostOptions {
   /** G2: activateScope never settles and ignores the passed signal — only the
    * orchestrator's raceAbort can break the hang. */
   activateHangs?: boolean;
+  /** H1: abort the given controller the moment closeScope is entered (simulates a
+   * SIGINT arriving during the close stage, after all turns + Reporter succeeded). */
+  abortOnCloseStart?: AbortController;
+  /** H2: the FIRST createScope "lands" on the Host but its response is lost —
+   * the returned promise never settles. The orchestrator's raceAbort rejects on
+   * the caller abort; the idempotent recovery re-create (2nd call) resolves. */
+  createHangsUntilAbort?: boolean;
 }
 
 function makeFakeHost(
@@ -140,6 +147,12 @@ function makeFakeHost(
     async createScope(): Promise<CreateScopeResponse> {
       self.createCalls += 1;
       if (opts.createScopeThrows) throw new Error("host gone");
+      if (opts.createHangsUntilAbort && self.createCalls === 1) {
+        // H2: the real create "lands" on the Host but the response is lost —
+        // never settle. The orchestrator's raceAbort rejects on the caller
+        // abort; the idempotent recovery re-create (2nd call) resolves normally.
+        return new Promise<CreateScopeResponse>(() => {});
+      }
       return {
         scopeId: "scope-1",
         controllerId: "ctrl-1",
@@ -188,6 +201,9 @@ function makeFakeHost(
     ): Promise<CloseScopeResponse> {
       self.closeCalls += 1;
       if (opts.closeThrows) throw new Error("close rejected");
+      // H1: a SIGINT arriving during the close stage — abort the external
+      // controller the moment close is entered (after all turns succeeded).
+      opts.abortOnCloseStart?.abort("SIGINT");
       if (opts.closeHangUntilSignal) {
         const sig = options?.signal;
         if (sig?.aborted) throw new Error("close aborted");
@@ -780,5 +796,126 @@ describe("cli orchestrator", () => {
     expect(report).toContain(`- Started: ${outcome.startedAt}`);
     expect(report).toContain(`- Ended: ${outcome.endedAt}`);
     expect(outcome.endedAt).not.toBe(outcome.startedAt);
+  });
+
+  it("a SIGINT during the close stage that still succeeds → interrupted/130, not completed/0 (H1a)", async () => {
+    const controller = new AbortController();
+    const host = makeFakeHost({ abortOnCloseStart: controller });
+    const { input, paths } = buildInput(home, { signal: controller.signal });
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      signal: controller.signal,
+      // All turns + Reporter succeed; the external signal aborts only when
+      // closeScope is entered (abortOnCloseStart). close then succeeds.
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }),
+    });
+    // Pre-fix this stayed completed/0 because the finally never re-checked the
+    // external signal after a successful close. H1: interrupted/130 instead.
+    expect(outcome.status).toBe("interrupted");
+    expect(outcome.exitCode).toBe(EXIT.interrupted);
+    expect(host.closeCalls).toBe(1); // closed exactly once
+    expect(existsSync(paths.report(input.runId))).toBe(true);
+    const report = readReport(home, input.runId);
+    expect(report).toContain("INCOMPLETE RUN");
+  });
+
+  it("a SIGINT during a hanging close that the cleanup budget aborts → interrupted/130, not failed/4 (H1b)", async () => {
+    const controller = new AbortController();
+    const host = makeFakeHost({
+      abortOnCloseStart: controller,
+      closeHangUntilSignal: true,
+    });
+    const { input, paths } = buildInput(home, { signal: controller.signal });
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      signal: controller.signal,
+      cleanupBudgetMs: 50,
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }),
+    });
+    // The external signal aborts at close start; the hanging close is then
+    // aborted by the shared ≤50ms cleanup budget. Pre-fix the catch flipped a
+    // completed run to failed/4. H1: interrupted/130 instead.
+    expect(outcome.status).toBe("interrupted");
+    expect(outcome.exitCode).toBe(EXIT.interrupted);
+    expect(host.closeCalls).toBe(1);
+    expect(existsSync(paths.report(input.runId))).toBe(true);
+    const report = readReport(home, input.runId);
+    expect(report).toContain("INCOMPLETE RUN");
+  });
+
+  it("recovers+ closes a scope whose create response was lost after a caller abort (H2)", async () => {
+    const controller = new AbortController();
+    const host = makeFakeHost({ createHangsUntilAbort: true });
+    const { input, paths } = buildInput(home, { signal: controller.signal });
+    // Abort shortly after runCouncil starts: create has "landed" on the Host but
+    // its response never resolves, so raceAbort rejects on the caller abort and
+    // the lost scope is recovered+closed idempotently (not left for the 30s
+    // creating-reaper).
+    const timer = setTimeout(() => controller.abort("SIGINT"), 20);
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      signal: controller.signal,
+      cleanupBudgetMs: 2000,
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }), // not reached
+    });
+    clearTimeout(timer);
+    expect(outcome.status).toBe("interrupted");
+    expect(outcome.exitCode).toBe(EXIT.interrupted);
+    // Two create calls: the lost real create + the idempotent recovery re-create.
+    expect(host.createCalls).toBe(2);
+    // The recovered scope was closed under the shared cleanup budget — the
+    // run-level finally does NOT double-close (scopeId never left the create
+    // failure path).
+    expect(host.closeCalls).toBe(1);
+  });
+
+  it("reconciles a stale success report to INCOMPLETE after a transient post-close refresh IO failure (H4)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    // The Reporter persist-before-ACK writes the success report (write #1,
+    // succeeds → reporterSuccessMarkdown captured, report.md = "Status: complete"
+    // on disk). The G6 post-close refresh is the 2nd report.md write — fail ONLY
+    // that one; subsequent IO (the final INCOMPLETE reconcile) recovers. H4:
+    // canonicalIsSuccess must keep tracking the known-on-disk success report so
+    // the final reconcile runs and brings report.md in line with the failed
+    // status, instead of leaving a stale "complete" report.
+    const originalWrite = atomicWriteModule.atomicWriteFile;
+    let reportWrites = 0;
+    const writeSpy = vi.spyOn(atomicWriteModule, "atomicWriteFile").mockImplementation(((
+      filePath: string,
+      data: string,
+    ): number => {
+      if (filePath.endsWith("report.md")) {
+        reportWrites += 1;
+        if (reportWrites === 2) {
+          // The G6 post-close success-report refresh fails (transient IO).
+          throw new Error("ENOSPC: G6 refresh write");
+        }
+      }
+      return originalWrite(filePath, data);
+    }) as typeof originalWrite);
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }),
+    });
+    writeSpy.mockRestore();
+    // The G6 refresh IO failure flipped status to failed / exit 5...
+    expect(outcome.status).toBe("failed");
+    expect(outcome.exitCode).toBe(EXIT.io);
+    expect(outcome.artifactIoFailure?.code).toBe("REPORT_IO");
+    // ...and the final INCOMPLETE reconcile ran (canonicalIsSuccess stayed true
+    // through the overwrite failure), so report.md matches the failed outcome
+    // instead of retaining the stale "complete" report.
+    const report = readReport(home, input.runId);
+    expect(report).toContain("INCOMPLETE RUN");
+    expect(report).not.toContain("- Status: complete");
   });
 });

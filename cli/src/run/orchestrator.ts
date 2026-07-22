@@ -95,7 +95,9 @@ import type {
 
 export interface OrchestratorHost {
   rawClient(): Promise<unknown>;
-  refreshAuthForStream(): Promise<{ cookie: string; csrfToken: string; origin: string }>;
+  refreshAuthForStream(
+    signal?: AbortSignal,
+  ): Promise<{ cookie: string; csrfToken: string; origin: string }>;
   listInstallations(): Promise<InstallationsResponse>;
   profileReadiness(profile: ExecutionProfileDto, modelId: string): Promise<ResolveProfileResponse>;
   /** G2: accepts the external-abort / shared-cleanup `signal` so a hanging
@@ -262,6 +264,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         scopeRequestId,
         input.agents,
         scopeSignal,
+        runCleanup,
       );
       scopeId = created.scopeId;
       controller = { controllerId: created.controllerId, leaseEpoch: created.leaseEpoch };
@@ -503,24 +506,41 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     // (SIGINT cleanup), close continues on the SAME remaining ≤10s window;
     // otherwise (happy path) a fresh window starts here. A hung close can no
     // longer block the partial report + exit 130.
+    let closeFailure: RunFailure | null = null;
     if (scopeId !== null && controller !== null) {
       runCleanup.arm();
       try {
         await closeScopeBounded(deps.host, scopeId, controller, runCleanup.signal);
       } catch (error) {
         // close failure overrides a completed status to non-success, but
-        // transcript/report artifacts are preserved.
-        if (status === "completed") {
-          status = "failed";
-          failure = toFailure("cleanup", "CLOSE_FAILED", error);
-        } else if (failure === null) {
-          failure = toFailure("cleanup", "CLOSE_FAILED", error);
-        }
+        // transcript/report artifacts are preserved. Recorded as a secondary
+        // here; H1 below decides whether the external abort outranks it.
+        closeFailure = toFailure("cleanup", "CLOSE_FAILED", error);
       }
     }
     // Always release the shared cleanup timer so it cannot outlive the run
     // (the cancel → observe → ACK → close chain has ended).
     runCleanup.dispose();
+    // H1: re-check the EXTERNAL abort signal AFTER close + disposal. A SIGINT
+    // arriving during the close stage MUST resolve to interrupted / exit 130 —
+    // whether close then succeeded (pre-fix it stayed completed/0) or was aborted
+    // by the shared cleanup budget (pre-fix the catch flipped it to failed/4).
+    // The external-abort verdict outranks a close failure for the exit code
+    // (exitCodeForRun checks 130 before any artifact IO): an earlier non-abort
+    // failure is kept as the cause, otherwise INTERRUPTED is the honest verdict.
+    // A close failure with NO signal abort keeps the completed→failed override
+    // (exit 4) below, so a real close rejection is never masked.
+    if (deps.signal?.aborted) {
+      status = "interrupted";
+      failure = failure ?? abortedFailure();
+    } else if (closeFailure !== null) {
+      if (status === "completed") {
+        status = "failed";
+        failure = closeFailure;
+      } else if (failure === null) {
+        failure = closeFailure;
+      }
+    }
   }
 
   // --- report (F2/F6) -------------------------------------------------------
@@ -528,9 +548,16 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
   emit({ type: "report.writing", runId });
   let reportMarkdown = "";
   let reportOk = false;
-  // Whether the canonical report.md currently on disk holds the success report
-  // (written persist-before-ACK) vs. an INCOMPLETE partial report.
-  let canonicalIsSuccess = false;
+  // H4: whether the canonical report.md currently on disk holds the success
+  // report (written persist-before-ACK by the Reporter) vs. an INCOMPLETE
+  // partial report. This tracks KNOWN disk state, not intent: initialize it to
+  // whether the Reporter already wrote a success report to disk
+  // (reporterSuccessMarkdown is captured only after that write landed). A later
+  // OVERWRITE failure (G6 refresh / partial first-write) MUST NOT flip this to
+  // false — the disk still holds the prior report, so leaving it true lets the
+  // final INCOMPLETE reconcile (below) retry and reconcile report.md with the
+  // final status. Only a SUCCESSFUL partial write moves it to false.
+  let canonicalIsSuccess = reporterSuccessMarkdown.length > 0;
   try {
     if (status === "completed") {
       // F2: the success report was written in the Reporter persist-before-ACK
@@ -597,7 +624,13 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     artifactIoFailure ??= ioFail;
     reportMarkdown = "";
     status = status === "completed" ? "failed" : status;
-    canonicalIsSuccess = false;
+    // H4: do NOT reset canonicalIsSuccess here. This catch covers an OVERWRITE
+    // failure (the G6 post-close refresh, or a partial-report first write) —
+    // the disk still holds whatever report was there before (the Reporter's
+    // persist-before-ACK success report when one landed). Leaving
+    // canonicalIsSuccess at its known-disk value lets the final INCOMPLETE
+    // reconcile below retry and bring report.md in line with the now-failed
+    // status instead of leaving a stale "complete" report on disk.
     if (failure === null) failure = ioFail;
   }
 
@@ -742,7 +775,8 @@ async function createScopeIdempotent(
   host: OrchestratorHost,
   scopeRequestId: string,
   agents: ReadonlyArray<ResolvedAgent>,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  cleanup: RunCleanup,
 ): Promise<CreateScopeResponse> {
   const participants = agents.map((a) => ({
     participantId: a.participantId,
@@ -754,12 +788,67 @@ async function createScopeIdempotent(
   try {
     return await raceAbort(host.createScope(request, { signal }), signal);
   } catch (error) {
-    // A transport/5xx may have landed. Retry once with the SAME scopeRequestId:
-    // the Host keys Scopes by it, so a retry never creates a second Scope.
-    if (isRetryableTransport(error) && !signal?.aborted) {
-      return await raceAbort(host.createScope(request, { signal }), signal);
+    // H2: the create RESPONSE may be lost while the Host already created (and
+    // prewarmed) a scope keyed by scopeRequestId. Two forms converge here:
+    //   - raceAbort rejected first because `signal` aborted on a pending
+    //     (delayed-resolve) create — scopeId is still null, so the run-level
+    //     finally cannot close it.
+    //   - a transport loss (TypeError) where the request's fate is unknown.
+    // In both, recover the maybe-created scope idempotently with the SAME
+    // scopeRequestId under the SHARED cleanup budget, obtain its fencing token,
+    // and close — so it does not occupy a driver seat until the 30s
+    // creating-scope reaper. A definitive 4xx RuntimeClientError (Host rejected
+    // before creating) needs no recovery and falls through. Mirrors
+    // src/lib/agent-real-call.ts recoverAndClose. Never throws — the caller maps
+    // the ORIGINAL error onto the verdict.
+    if (signal?.aborted) {
+      await recoverAndCloseCreate(host, request, cleanup);
+      throw error;
+    }
+    if (isRetryableTransport(error)) {
+      // A non-abort transport error: retry once with the same scopeRequestId
+      // (the Host keys scopes by it, so a retry never creates a second scope) to
+      // try to recover a successful response.
+      try {
+        return await raceAbort(host.createScope(request, { signal }), signal);
+      } catch (retryError) {
+        // H2: the retry also failed (or was aborted mid-retry) — the scope may
+        // exist on the Host. Recover+close before surfacing the failure.
+        await recoverAndCloseCreate(host, request, cleanup);
+        throw retryError;
+      }
     }
     throw error;
+  }
+}
+
+/** H2: best-effort idempotent recovery of a scope whose create response was
+ * lost. Re-POST create with the SAME scopeRequestId (idempotent: returns the
+ * existing scope if one was already created), then close it under the shared
+ * cleanup budget. Arms the shared cleanup timer so a hung recovery create/close
+ * converges within the ≤10s budget instead of blocking the partial report +
+ * exit 130. Never throws; the caller owns the original verdict. */
+async function recoverAndCloseCreate(
+  host: OrchestratorHost,
+  request: CreateScopeRequest,
+  cleanup: RunCleanup,
+): Promise<void> {
+  cleanup.arm();
+  try {
+    const recovered = await host.createScope(request, { signal: cleanup.signal });
+    try {
+      await host.closeScope(
+        recovered.scopeId,
+        { controllerId: recovered.controllerId, leaseEpoch: recovered.leaseEpoch },
+        { signal: cleanup.signal },
+      );
+    } catch {
+      // close failed — Host reaper is the last resort; do not mask the original
+      // create error. The run-level finally will not double-close (scopeId never
+      // left the createScopeIdempotent failure path).
+    }
+  } catch {
+    // create never landed / Host gone — nothing to close.
   }
 }
 

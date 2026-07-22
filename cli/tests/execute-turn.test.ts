@@ -471,4 +471,91 @@ describe("cli execute-turn", () => {
     // turn deadline the pre-fix discarded ACK fell back to.
     expect(elapsed).toBeLessThan(2_000);
   });
+
+  it("aborts an SSE 401 cold-rebuild GET / within the shared budget, not after the 8s auth timeout (H3)", async () => {
+    // SSE reports 401 → the cold-rebuild refreshAuthForStream GET / "hangs".
+    // Pre-fix refreshAuthForStream() took no signal, so it would wait out its own
+    // 8s auth timeout and only THEN enter the 10s cancel/observe/ACK cleanup
+    // (~18s total). H3: the turn deadline signal is threaded in, so an external
+    // abort converges the auth immediately within the shared budget.
+    let followCalls = 0;
+    const authError = new Error("event stream auth rejected") as Error & {
+      status?: number;
+    };
+    authError.name = "EventStreamError";
+    authError.status = 401;
+
+    const fakeClient = {
+      async execute() {
+        return {
+          execution: {
+            executionId: EXECUTION_ID,
+            participantId: PARTICIPANT_ID,
+            state: "running",
+            lastSeq: 0,
+          },
+        };
+      },
+      eventStreamFetch(input: { afterSeq: number }) {
+        return { url: `http://fake/events?afterSeq=${input.afterSeq}`, headers: {} };
+      },
+    };
+
+    const host: HostLike = {
+      rawClient: async () => fakeClient as unknown as never,
+      refreshAuthForStream: (signal?: AbortSignal) =>
+        new Promise<{ cookie: string; csrfToken: string; origin: string }>((_resolve, reject) => {
+          // The cold-rebuild GET / "hangs" for 8s on its own timeout — UNLESS the
+          // caller signal aborts (H3), in which case it rejects at once.
+          const timer = setTimeout(() => {
+            _resolve({
+              cookie: "councilkit_session=z",
+              csrfToken: "c",
+              origin: "http://127.0.0.1:43127",
+            });
+          }, 8_000);
+          const onAbort = () => {
+            clearTimeout(timer);
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+          };
+          if (signal) {
+            if (signal.aborted) onAbort();
+            else signal.addEventListener("abort", onAbort, { once: true });
+          }
+        }),
+    };
+
+    const follow = async (_fopts: FollowEventsOptions): Promise<FollowOutcome> => {
+      followCalls += 1;
+      // First follow() surfaces the SSE 401 the auth path must cold-rebuild from.
+      if (followCalls === 1) throw authError;
+      return { kind: "terminal", event: completedEvent(3, "hi") };
+    };
+
+    const external = new AbortController();
+    const timer = setTimeout(() => external.abort("SIGINT"), 30);
+    const start = Date.now();
+    const res = await executeTurn({
+      host,
+      followEvents: follow,
+      scopeId: "scope-1",
+      controller: CONTROLLER,
+      participantId: PARTICIPANT_ID,
+      executionId: EXECUTION_ID,
+      snapshot: snapshot(),
+      role: "message",
+      timeoutMs: 5_000,
+      signal: external.signal,
+      persist: async () => {},
+    });
+    const elapsed = Date.now() - start;
+    clearTimeout(timer);
+    // Converged under the shared budget (~30ms + jitter), far short of the 8s
+    // auth self-timeout the pre-fix code waited out.
+    expect(elapsed).toBeLessThan(2_000);
+    expect(res.verdict).toBe("cancelled"); // external abort, not a deadline timeout
+    expect(res.error?.phase).toBe("cleanup");
+  });
 });

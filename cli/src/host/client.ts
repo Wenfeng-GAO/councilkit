@@ -115,8 +115,15 @@ export class HostClient {
     return this.client();
   }
 
-  async refreshAuthForStream(): Promise<{ cookie: string; csrfToken: string; origin: string }> {
-    const auth = await this.refreshAuth();
+  async refreshAuthForStream(
+    signal?: AbortSignal,
+  ): Promise<{ cookie: string; csrfToken: string; origin: string }> {
+    // H3: thread the caller's bounded signal (the turn deadline / shared cleanup
+    // signal) into the cold-rebuild so a SIGINT during the auth GET / aborts it
+    // within the shared budget rather than waiting out the auth's own 8s
+    // timeout. AuthClient.extract already combines this signal with its timeout
+    // (G3).
+    const auth = await this.refreshAuth(signal ? { signal } : undefined);
     return { cookie: auth.cookie, csrfToken: auth.csrfToken, origin: CANONICAL_ORIGIN };
   }
 

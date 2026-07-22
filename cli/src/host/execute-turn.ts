@@ -51,7 +51,13 @@ import { CliError, EXIT } from "../errors";
  * satisfies this; tests pass a stub returning a mock `RuntimeClient`. */
 export interface HostLike {
   rawClient(): Promise<RuntimeClient>;
-  refreshAuthForStream(): Promise<{ cookie: string; csrfToken: string; origin: string }>;
+  /** H3: accepts the turn deadline signal so a SIGINT during the SSE 401
+   * cold-rebuild's GET / aborts the auth re-extraction within the shared
+   * cleanup budget, instead of waiting out the auth's own 8s timeout and only
+   * then starting the 10s cancel/observe/ACK cleanup. */
+  refreshAuthForStream(
+    signal?: AbortSignal,
+  ): Promise<{ cookie: string; csrfToken: string; origin: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -593,7 +599,15 @@ async function driveToTerminal(input: {
       // fetch input, and reconnect WITHOUT re-dispatching execute. The refreshed
       // outcome then falls through to the normal post-follow handling below.
       if (isEventStreamAuthError(error) && !deadlineSignal.aborted) {
-        await host.refreshAuthForStream();
+        // H3: thread the turn deadline signal into the cold-rebuild so a SIGINT
+        // during the auth GET / aborts it within the shared cleanup budget (the
+        // AuthClient combines this signal with its own 8s timeout — G3), instead
+        // of letting the auth wait out 8s and only then entering the 10s
+        // cancel/observe/ACK cleanup (an ~18s convergence that breaks the shared
+        // ≤10s window). Then re-check the abort BEFORE reconnecting so a signal
+        // that fired during/right after the refresh converges immediately.
+        await host.refreshAuthForStream(deadlineSignal);
+        if (deadlineSignal.aborted) return { kind: "aborted" };
         const refreshed = await host.rawClient();
         fetchInput = refreshed.eventStreamFetch({ scopeId, executionId, afterSeq: resumeAt });
         try {
