@@ -45,6 +45,7 @@ import type {
   Usage,
 } from "@shared/runtime/events";
 import type { ContextSnapshot, ControllerRequest } from "@shared/runtime/schemas";
+import { CliError, EXIT } from "../errors";
 
 /** Minimal Host surface execute-turn needs. The real `HostClient` (client.ts)
  * satisfies this; tests pass a stub returning a mock `RuntimeClient`. */
@@ -60,7 +61,7 @@ export interface HostLike {
 export type TurnVerdict = "completed" | "failed" | "interrupted" | "timeout" | "cancelled";
 
 export interface TurnError {
-  phase: "dispatch" | "stream" | "commit" | "ack" | "cleanup" | "deadline" | "terminal";
+  phase: "dispatch" | "stream" | "commit" | "ack" | "cleanup" | "deadline" | "terminal" | "io";
   code: string;
   message: string;
   retryable: boolean;
@@ -112,6 +113,13 @@ export interface ExecuteTurnInput {
   now?: () => number;
   /** Injected SSE follower (tests substitute a mock). */
   followEvents?: typeof followExecutionEvents;
+  /** Optional run-level shared cleanup budget (F3). When provided, the turn's
+   * cancel → observe → discarded-ACK cleanup draws from this controller's
+   * `signal` (and `arm()`s its ≤10s timer on first use) instead of allocating a
+   * private one, so the orchestrator's later `closeScope` continues on the SAME
+   * remaining budget. The orchestrator owns `dispose()`; executeTurn never
+   * disposes a shared cleanup. */
+  sharedCleanup?: RunCleanup;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +155,46 @@ function newSharedCleanup(): SharedCleanup {
     signal: controller.signal,
     dispose: () => {
       clearTimeout(timer);
+      if (!controller.signal.aborted) controller.abort("cleanup-disposed");
+    },
+  };
+}
+
+/**
+ * Run-level shared cleanup budget (F3). The orchestrator owns ONE of these per
+ * run; a turn's cancel → observe → discarded-ACK cleanup AND the orchestrator's
+ * `closeScope` both draw from the same `signal`, so the whole SIGINT cleanup
+ * chain converges within a single ≤10s window (no per-request 10s reset, no
+ * unbounded `closeScope`).
+ *
+ * `arm()` starts the 10s timer the first time it is called (idempotent) — so a
+ * happy-path run that never needs cleanup never starts a timer, and a happy-path
+ * `closeScope` gets a fresh 10s window when the finally arms it. The owner calls
+ * `dispose()` once the chain (turn cleanup + close) has ended. */
+export interface RunCleanup {
+  signal: AbortSignal;
+  arm(): void;
+  dispose(): void;
+}
+
+export function createRunCleanup(budgetMs: number = CLEANUP_BUDGET_MS): RunCleanup {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    signal: controller.signal,
+    arm() {
+      if (timer !== null) return;
+      timer = setTimeout(() => controller.abort("cleanup-deadline"), budgetMs);
+      if (
+        typeof timer === "object" &&
+        typeof (timer as { unref?: () => void }).unref === "function"
+      ) {
+        (timer as { unref: () => void }).unref();
+      }
+    },
+    dispose() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
       if (!controller.signal.aborted) controller.abort("cleanup-disposed");
     },
   };
@@ -213,6 +261,13 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
 
   const cleanupHolder: { current: SharedCleanup | null } = { current: null };
   const cleanupOf = (): AbortSignal => {
+    // F3: when the run shares a cleanup budget, draw from it (arming the ≤10s
+    // timer on first use) instead of a private controller, so cancel → observe →
+    // ACK-discard and the orchestrator's close share ONE remaining budget.
+    if (params.sharedCleanup) {
+      params.sharedCleanup.arm();
+      return params.sharedCleanup.signal;
+    }
     if (!cleanupHolder.current) cleanupHolder.current = newSharedCleanup();
     return cleanupHolder.current.signal;
   };
@@ -220,33 +275,42 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
   let dispatchState: DispatchState = "not_dispatched";
   let ackResult: TurnResult["ack"] = "skipped";
   let ackDefinitiveConflict = false;
-  let committedPersisted = false;
+  // F1: a committed/discard ACK that is itself aborted mid-flight (the deadline
+  // or external/cleanup signal fired while the ACK was pending) is NOT a clean
+  // completion and NOT a definitive ACK conflict. Recorded so the run-level
+  // remap downgrades the verdict to timeout/cancelled instead of leaving a stale
+  // `completed` (the persist-before-ACK already landed on disk) or masking an
+  // ACK conflict.
+  let ackAborted = false;
 
   const ackOnce = async (
     client: RuntimeClient,
     disposition: AckDisposition,
     finalSeq: number,
   ): Promise<{ ok: boolean; aborted: boolean }> => {
+    // G5: a terminal ACK runs under the main deadline while it has budget; once
+    // the deadline aborted, the shared cleanup signal (same ≤10s budget as the
+    // cancel/observe chain) drives it.
+    const ackSignal: AbortSignal = deadline.aborted ? cleanupOf() : deadline;
     try {
       const resp = await client.ack(
         scopeId,
         executionId,
         { ...controller, finalSeq: Math.max(1, finalSeq), disposition },
-        { signal: deadline.aborted ? cleanupOf() : deadline },
+        { signal: ackSignal },
       );
       const acknowledged = resp.ackState === "acknowledged";
       if (!acknowledged) ackDefinitiveConflict = true;
       ackResult = acknowledged ? "acknowledged" : "conflict";
       return { ok: acknowledged, aborted: false };
     } catch (error) {
-      if (deadline.aborted || (deadline.aborted === false && isAbortError(error))) {
-        return { ok: false, aborted: true };
-      }
-      // Distinguish a real ACK rejection (cleanup signal aborted during ack on the
-      // abort path) from an abort mid-ACK: if either the deadline or the cleanup
-      // signal that drove the ACK aborted, it is not a definitive conflict.
-      const sigUsed = deadline.aborted ? cleanupOf() : deadline;
-      if (sigUsed.aborted) {
+      // An abort during the ACK — the deadline, the external signal, or the
+      // cleanup-deadline firing on the signal that drove the ACK — is NOT an ACK
+      // conflict. Record it so the run-level remap maps the result to
+      // timeout/cancelled. Any OTHER throw is a definitive non-acknowledged ACK
+      // (expired / conflicting state) → keep ACK_FAILED (F1).
+      if (deadline.aborted || ackSignal.aborted || isAbortError(error)) {
+        ackAborted = true;
         return { ok: false, aborted: true };
       }
       ackDefinitiveConflict = true;
@@ -269,6 +333,22 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
     ack: ackResult,
     error,
   });
+
+  /** F1: apply the post-ACK abort downgrade to a terminal-ACK result. Only an
+   * `acknowledged` ACK that completed before any abort permits a
+   * `completed`/`interrupted`/`failed` terminal verdict. If the deadline or the
+   * ACK itself was aborted by a signal (ackAborted), downgrade to
+   * timeout/cancelled — even when persist-before-ACK already landed on disk. A
+   * definitive ACK conflict (expired / non-acknowledged response, not an abort
+   * artifact) keeps ACK_FAILED. This MUST be applied at the `return` site so the
+   * returned value reflects the downgrade; a `finally`-block reassignment would
+   * not affect an already-captured return value. */
+  const remapIfAborted = (r: TurnResult): TurnResult => {
+    if (!ackDefinitiveConflict && (deadline.aborted || ackAborted)) {
+      return make(abortVerdict(), abortError(), { terminal: r.terminal });
+    }
+    return r;
+  };
 
   let result: TurnResult | undefined;
   const client = await host.rawClient();
@@ -372,7 +452,7 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
             { ...ACK_FAILED_ERROR, message: "EMPTY_OUTPUT + ACK not acknowledged" },
             { terminal: evidence },
           );
-          return result;
+          return remapIfAborted(result);
         }
         result = make(
           "failed",
@@ -384,39 +464,45 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
           },
           { terminal: evidence },
         );
-        return result;
+        return remapIfAborted(result);
       }
       // persist BEFORE committed ACK.
       try {
         await params.persist(evidence);
-        committedPersisted = true;
       } catch (persistError) {
         // persisted failed → commit-phase failure. ACK discarded (output not durable),
-        // surface a commit error that maps to exit 5 at the run boundary.
+        // surface a commit error. F5: a local-transcript IO failure (CliError io)
+        // is classified phase=io so the run boundary maps it to exit 5, not exit 4.
         const ackRes = await ackOnce(client, "discarded", completed.seq);
         const message = persistError instanceof Error ? persistError.message : "persist failed";
+        const isIo = persistError instanceof CliError && persistError.exitCode === EXIT.io;
         if (!ackRes.ok && !ackRes.aborted) {
           result = make(
             "failed",
             { ...ACK_FAILED_ERROR, message: `commit failed + ACK not acknowledged: ${message}` },
             { terminal: evidence },
           );
-          return result;
+          return remapIfAborted(result);
         }
         result = make(
           "failed",
-          { phase: "commit", code: "PERSIST_FAILED", message, retryable: false },
+          {
+            phase: isIo ? "io" : "commit",
+            code: isIo ? "TRANSCRIPT_IO" : "PERSIST_FAILED",
+            message,
+            retryable: false,
+          },
           { terminal: evidence },
         );
-        return result;
+        return remapIfAborted(result);
       }
       const ackRes = await ackOnce(client, "committed", completed.seq);
       if (!ackRes.ok && !ackRes.aborted) {
         result = make("failed", ACK_FAILED_ERROR, { terminal: evidence });
-        return result;
+        return remapIfAborted(result);
       }
       result = make("completed", null, { terminal: evidence });
-      return result;
+      return remapIfAborted(result);
     }
 
     if (event.type === "failed") {
@@ -426,10 +512,10 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
       const terminalErr = classifyTerminalError(failed.error);
       if (!ackRes.ok && !ackRes.aborted) {
         result = make("failed", ACK_FAILED_ERROR);
-        return result;
+        return remapIfAborted(result);
       }
       result = make("failed", terminalErr);
-      return result;
+      return remapIfAborted(result);
     }
 
     // interrupted
@@ -439,10 +525,10 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
     const interruptErr = classifyInterrupt(interrupted);
     if (!ackRes.ok && !ackRes.aborted) {
       result = make("failed", ACK_FAILED_ERROR);
-      return result;
+      return remapIfAborted(result);
     }
     result = make("interrupted", interruptErr);
-    return result;
+    return remapIfAborted(result);
   } catch (error) {
     // Defensive catch-all (H2): a genuine non-abort failure is reported as
     // itself, not masked by a racing deadline abort.
@@ -455,14 +541,10 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
   } finally {
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", onExternalAbort);
-    // If a completed terminal arrived past the deadline (committed ACK not yet
-    // sent and nothing persisted), do NOT claim completion: keep the abort
-    // verdict authoritative. A definitive ACK conflict still wins.
-    if (!ackDefinitiveConflict && deadline.aborted && committedPersisted === false) {
-      if (result?.verdict === "completed") {
-        result = make(abortVerdict(), abortError(), { terminal: result.terminal });
-      }
-    }
+    // F1: the abort downgrade (ackDone/ackAborted) is applied at each terminal
+    // `return` site via remapIfAborted — NOT here, because a `finally`-block
+    // reassignment of `result` would not affect an already-captured return
+    // value. This block only tears down timers / the shared cleanup controller.
     cleanupHolder.current?.dispose();
   }
 }

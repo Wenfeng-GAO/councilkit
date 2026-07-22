@@ -14,7 +14,7 @@
  *  - SIGINT mid-run → interrupted, exit 130, partial report.
  *  - no duplicate execute (the driver is called once per scheduled turn).
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -83,6 +83,9 @@ interface FakeHostOptions {
   createScopeThrows?: boolean;
   closeThrows?: boolean;
   scopeStateAfterClose?: ScopeStatus["state"];
+  /** F3: closeScope hangs until the passed signal aborts, then rejects (simulates
+   * a Host close that never settles on its own). */
+  closeHangUntilSignal?: boolean;
 }
 
 function makeFakeHost(
@@ -157,7 +160,10 @@ function makeFakeHost(
         participants: [],
       };
     },
-    async getScopeStatus(): Promise<ScopeStatus> {
+    async getScopeStatus(
+      _scopeId: string,
+      _options?: { signal?: AbortSignal },
+    ): Promise<ScopeStatus> {
       return {
         scopeId: "scope-1",
         state,
@@ -166,9 +172,24 @@ function makeFakeHost(
         participants: [],
       };
     },
-    async closeScope(): Promise<CloseScopeResponse> {
+    async closeScope(
+      _scopeId: string,
+      _controller: { controllerId: string; leaseEpoch: number },
+      options?: { signal?: AbortSignal },
+    ): Promise<CloseScopeResponse> {
       self.closeCalls += 1;
       if (opts.closeThrows) throw new Error("close rejected");
+      if (opts.closeHangUntilSignal) {
+        const sig = options?.signal;
+        if (sig?.aborted) throw new Error("close aborted");
+        await new Promise<void>((_resolve, reject) => {
+          sig?.addEventListener("abort", () => reject(new Error("close aborted")), {
+            once: true,
+          });
+        });
+        // Unreachable in practice: the listener rejects.
+        throw new Error("close aborted");
+      }
       state = opts.scopeStateAfterClose ?? "closed";
       return { scopeId: "scope-1", state };
     },
@@ -524,5 +545,117 @@ describe("cli orchestrator", () => {
     });
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.quota);
+  });
+
+  it("bounds a hanging closeScope by the shared cleanup budget and still exits (F3)", async () => {
+    const host = makeFakeHost({ closeHangUntilSignal: true });
+    const controller = new AbortController();
+    const { input, paths } = buildInput(home, { signal: controller.signal });
+    let abortedOnce = false;
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      signal: controller.signal,
+      cleanupBudgetMs: 50,
+      turnDriver: makeDriver(
+        {
+          decide: () => "completed",
+          onTurnDone: () => {
+            if (!abortedOnce) {
+              abortedOnce = true;
+              controller.abort("SIGINT");
+            }
+          },
+        },
+        { count: 0 },
+      ),
+    });
+    // The run terminates despite a closeScope that never settles on its own —
+    // the shared ≤50ms cleanup budget aborts it. Never a hang.
+    expect([EXIT.interrupted, EXIT.runFailed]).toContain(outcome.exitCode);
+    expect(host.closeCalls).toBe(1);
+    expect(existsSync(paths.report(input.runId))).toBe(true);
+  });
+
+  it("writes the canonical report BEFORE the Reporter committed ACK (F2)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    let reportOnDiskAtAck = "<not-captured>";
+    const driver: TurnDriver = async (req) => {
+      await req.persist(evidence("reporter body"));
+      // By the time the (fake) committed ACK would happen — i.e. right after
+      // persist returned — the canonical report must already be on disk.
+      if (req.role === "report") {
+        reportOnDiskAtAck = existsSync(paths.report(input.runId))
+          ? readFileSync(paths.report(input.runId), "utf8")
+          : "<missing>";
+      }
+      return completedResult(req.executionId, `out ${req.role}`);
+    };
+    await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      turnDriver: driver,
+    });
+    expect(reportOnDiskAtAck).not.toBe("<missing>");
+    expect(reportOnDiskAtAck).toContain("- Status: complete");
+  });
+
+  it("maps a transcript IO turn failure (phase=io) to exit 5 (F5)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    // Simulate what executeTurn now produces when the transcript write fails
+    // mid-persist: a turn failure classified phase=io. The run boundary must map
+    // that to exit 5, not exit 4.
+    const driver: TurnDriver = async (req) => {
+      if (req.role === "message" && req.round === 1 && req.turnIndex === 0) {
+        return {
+          verdict: "failed",
+          executionId: req.executionId,
+          participantId: "p",
+          dispatchState: "accepted",
+          terminal: null,
+          durationMs: 1,
+          ack: "skipped",
+          error: { phase: "io", code: "TRANSCRIPT_IO", message: "ENOSPC", retryable: false },
+        };
+      }
+      await req.persist(evidence("ok"));
+      return completedResult(req.executionId, "ok");
+    };
+    const outcome = await runCouncil(input, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      turnDriver: driver,
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.exitCode).toBe(EXIT.io);
+    expect(outcome.failure?.phase).toBe("io");
+  });
+
+  it("recomputes incomplete after a --out copy failure flips status to failed (F6)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    // `sub` is a regular FILE, so writing `${home}/sub/report.md` cannot create
+    // the parent dir → the --out copy fails (atomicWriteFile throws).
+    writeFileSync(join(home, "sub"), "i am a file, not a directory");
+    const runInput: RunInput = { ...input, outPath: join(home, "sub", "report.md") };
+    const outcome = await runCouncil(runInput, {
+      host,
+      paths,
+      env: { ...process.env, COUNCILKIT_HOME: home },
+      turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }),
+    });
+    // All turns succeeded, but the --out copy failed → failed / exit 5, and the
+    // outcome + canonical report reflect the FINAL failed status (not complete).
+    expect(outcome.status).toBe("failed");
+    expect(outcome.exitCode).toBe(EXIT.io);
+    expect(outcome.incomplete).toBe(true);
+    const report = readReport(home, input.runId);
+    expect(report).toContain("INCOMPLETE RUN");
+    expect(report).not.toContain("- Status: complete");
   });
 });

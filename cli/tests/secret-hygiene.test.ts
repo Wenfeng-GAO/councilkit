@@ -10,7 +10,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { errors } from "../src/errors";
 import { createOutput, renderErrorHuman } from "../src/output";
-import { REDACT_PLACEHOLDER, containsSecret, redact } from "../src/store/../redact";
+import {
+  REDACT_PLACEHOLDER,
+  clearSecrets,
+  containsSecret,
+  redact,
+  registerSecrets,
+} from "../src/store/../redact";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -97,5 +103,56 @@ describe("cli secret hygiene across emission paths", () => {
     const human = renderErrorHuman(err);
     expect(containsSecret(human, CANARY_COOKIE)).toBe(false);
     expect(containsSecret(human, "CANARY-CSRF-67890")).toBe(false);
+  });
+});
+
+describe("cli bare CSRF token redaction (F8, no cookie present)", () => {
+  // Independent of the cookie pair pattern: these must hold even when no
+  // `councilkit_session=...` pair is present to over-consume the line.
+  const BARE_CSRF = "BARE-CSRF-ONLY-999";
+
+  afterEach(() => {
+    clearSecrets();
+  });
+
+  it("replaces a csrfToken structural value wholesale", () => {
+    const out = redact({ csrfToken: BARE_CSRF, rounds: 2 }) as {
+      csrfToken: string;
+      rounds: number;
+    };
+    expect(out.csrfToken).toBe(REDACT_PLACEHOLDER);
+    expect(out.rounds).toBe(2);
+  });
+
+  it("keeps --json stdout free of a bare csrfToken value", () => {
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const out = createOutput(true);
+      out.finish({ status: "ok", csrfToken: BARE_CSRF });
+      const emitted = spy.mock.calls.map((c) => String(c[0])).join("");
+      expect(emitted).not.toContain(BARE_CSRF);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("scrubs a bare csrf value from stderr once registered as a live secret", () => {
+    registerSecrets({ cookie: "", csrfToken: BARE_CSRF });
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const out = createOutput(true);
+      out.progress(`progress with csrf=${BARE_CSRF} embedded`);
+      const emitted = spy.mock.calls.map((c) => String(c[0])).join("");
+      expect(emitted).not.toContain(BARE_CSRF);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("renders an error detail carrying a bare csrfToken (no cookie in message)", () => {
+    const err = errors.runFailed("host rejected the request", { csrfToken: BARE_CSRF });
+    const human = renderErrorHuman(err);
+    expect(human).not.toContain(BARE_CSRF);
+    expect(human).toContain(REDACT_PLACEHOLDER);
   });
 });

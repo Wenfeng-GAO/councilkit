@@ -156,6 +156,62 @@ describe("cli store", () => {
     expect(err.message).toMatch(/corrupt/);
   });
 
+  it("reports an unreadable agents.json as an IO error, not an empty list (F4)", () => {
+    const store = makeStore(home);
+    store.createAgent({
+      name: "a",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#000001",
+      driverSelection: KIMI,
+    });
+    const paths = resolvePaths(env(home));
+    chmodSync(paths.agents, 0o000);
+    try {
+      // A present-but-unreadable file must surface as a diagnostic IO error,
+      // NOT a silent empty array that the next create would overwrite.
+      const err = captureError(() => makeStore(home).listAgents());
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(EXIT.io);
+    } finally {
+      chmodSync(paths.agents, 0o600);
+    }
+  });
+
+  it("does not overwrite an unreadable agents.json on a later create (F4)", () => {
+    const store = makeStore(home);
+    store.createAgent({
+      name: "a",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#000001",
+      driverSelection: KIMI,
+    });
+    const paths = resolvePaths(env(home));
+    const before = readFileSync(paths.agents, "utf8");
+    chmodSync(paths.agents, 0o000);
+    try {
+      const err = captureError(() =>
+        makeStore(home).createAgent({
+          name: "b",
+          personaPrompt: "p",
+          modelId: "m",
+          color: "#000002",
+          driverSelection: KIMI,
+        }),
+      );
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(EXIT.io);
+    } finally {
+      chmodSync(paths.agents, 0o600);
+    }
+    // The unreadable file was NOT silently replaced with a single-agent file.
+    const after = readFileSync(paths.agents, "utf8");
+    expect(after).toBe(before);
+    // Survivor still resolvable.
+    expect(makeStore(home).getAgent("a").name).toBe("a");
+  });
+
   it("requires the reporter and validates membership/enabled/existence", () => {
     const store = makeStore(home);
     const a = store.createAgent({

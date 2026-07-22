@@ -65,11 +65,18 @@ export function parseJsonFlag<T>(
   return parsed.data;
 }
 
-/** Parse a positive-integer flag. */
+/** Parse a positive-integer flag. Strict: the raw string must be a bare
+ * decimal positive integer (no trailing garbage, no decimals, no sign), then it
+ * is coerced via `Number` and verified as a safe integer. `Number.parseInt`
+ * silently accepted `2oops`→2 and `1.9`→1, which would run a different number
+ * of rounds than requested. */
 export function parseIntFlag(raw: string | undefined, fieldName: string): number {
   if (raw === undefined) throw errors.usage(`--${fieldName} is required (a positive integer)`);
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n <= 0) {
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw errors.usage(`--${fieldName} must be a positive integer, got "${raw}"`);
+  }
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) {
     throw errors.usage(`--${fieldName} must be a positive integer, got "${raw}"`);
   }
   return n;

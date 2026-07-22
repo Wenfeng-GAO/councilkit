@@ -76,6 +76,22 @@ describe("cli parse", () => {
     expect(() => parseIntFlag("0", "rounds")).toThrow(CliError);
     expect(() => parseIntFlag("x", "rounds")).toThrow(CliError);
   });
+
+  it("rejects trailing garbage and decimals (strict positive-integer, F9)", () => {
+    expect(() => parseIntFlag("2oops", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag("1.9", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag("-3", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag("01", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag(" 3", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag("3 ", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag("0x3", "rounds")).toThrow(CliError);
+    expect(() => parseIntFlag("1e3", "rounds")).toThrow(CliError);
+  });
+
+  it("accepts a bare decimal positive integer (strict, F9)", () => {
+    expect(parseIntFlag("3", "rounds")).toBe(3);
+    expect(parseIntFlag("12", "rounds")).toBe(12);
+  });
 });
 
 function jsonArray() {

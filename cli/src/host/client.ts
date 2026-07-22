@@ -140,8 +140,8 @@ export class HostClient {
     return this.withAuthRetry((c) => c.createScope(request, options));
   }
 
-  getScopeStatus(scopeId: string): Promise<ScopeStatus> {
-    return this.withAuthRetry((c) => c.getScopeStatus(scopeId));
+  getScopeStatus(scopeId: string, options?: RuntimeRequestOptions): Promise<ScopeStatus> {
+    return this.withAuthRetry((c) => c.getScopeStatus(scopeId, options));
   }
 
   activateScope(

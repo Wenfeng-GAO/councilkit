@@ -13,6 +13,7 @@
  * result — never a guess.
  */
 import { CANONICAL_ORIGIN, CSRF_HEADER_NAME, SESSION_COOKIE_NAME } from "@shared/runtime/contracts";
+import { registerSecrets } from "../redact";
 
 export interface HostAuth {
   /** Raw session cookie pair, e.g. `councilkit_session=<value>`. In-memory only. */
@@ -80,6 +81,10 @@ export class AuthClient {
       if (csrfToken.length === 0) {
         throw new Error("document carried no councilkit-csrf meta tag");
       }
+      // F8: register the live cookie pair + CSRF token value so the redactor
+      // scrubs the bare token anywhere it appears in a string leaf, not just
+      // under a known structural key.
+      registerSecrets({ cookie, csrfToken });
       return { cookie, csrfToken };
     } finally {
       clearTimeout(timer);

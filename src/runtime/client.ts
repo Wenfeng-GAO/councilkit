@@ -195,10 +195,11 @@ export class RuntimeClient {
     });
   }
 
-  getScopeStatus(scopeId: string): Promise<ScopeStatus> {
+  getScopeStatus(scopeId: string, options?: RuntimeRequestOptions): Promise<ScopeStatus> {
     return this.call("GET", `/api/v1/scopes/${scopeId}`, {
       schema: scopeStatusSchema,
       auth: "session",
+      signal: options?.signal,
     });
   }
 

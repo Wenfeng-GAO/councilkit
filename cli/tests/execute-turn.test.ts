@@ -13,6 +13,7 @@ import type { RuntimeError, RuntimeErrorCode } from "@shared/runtime/errors";
 import type { RuntimeEvent } from "@shared/runtime/events";
 import type { ContextSnapshot, ControllerRequest } from "@shared/runtime/schemas";
 import { describe, expect, it } from "vitest";
+import { CliError, EXIT } from "../src/errors";
 import { type HostLike, type TerminalEvidence, executeTurn } from "../src/host/execute-turn";
 
 const CONTROLLER: ControllerRequest = { controllerId: "ctrl", leaseEpoch: 1 };
@@ -74,6 +75,8 @@ interface FakeClientOptions {
   cancelInterrupts?: boolean;
   /** getExecution state for the observe-loop / reconnect path. */
   observeState?: "running" | "interrupted" | "completed";
+  /** ACK hangs until the driving signal aborts, then throws AbortError (F1). */
+  ackHangUntilAbort?: boolean;
 }
 
 interface Counters {
@@ -155,10 +158,30 @@ function makeFake(
       _s: string,
       _e: string,
       req: { disposition: string },
+      options?: { signal?: AbortSignal },
     ): Promise<{ executionId: string; ackState: string; disposition: string | null }> {
       counters.ack += 1;
       counters.ackDisposition.push(req.disposition);
       counters.log.push(`ack:${req.disposition}`);
+      if (opts.ackHangUntilAbort) {
+        const sig = options?.signal;
+        if (sig?.aborted) {
+          const err = new Error("aborted");
+          err.name = "AbortError";
+          throw err;
+        }
+        await new Promise<void>((_resolve, reject) => {
+          sig?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("aborted");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      }
       return {
         executionId: EXECUTION_ID,
         ackState: opts.ackState ?? "acknowledged",
@@ -342,6 +365,20 @@ describe("cli execute-turn", () => {
     expect(c.ackDisposition).toEqual(["discarded"]);
   });
 
+  it("downgrades to timeout when the deadline aborts during the committed ACK (F1)", async () => {
+    const c = counters();
+    // Persist lands, then the committed ACK hangs until the 40ms deadline fires.
+    // Pre-fix this returned `completed`; it must downgrade to timeout/cancelled.
+    const res = await run({ terminal: completedEvent(3, "hi"), ackHangUntilAbort: true }, c, {
+      timeoutMs: 40,
+    });
+    expect(res.verdict).not.toBe("completed");
+    expect(res.verdict).toBe("timeout");
+    expect(res.ack).not.toBe("acknowledged");
+    expect(c.persist).toBe(1);
+    expect(c.ackDisposition).toEqual(["committed"]);
+  });
+
   it("treats a persist failure as a commit-phase failure with a discarded ACK", async () => {
     const c = counters();
     const fake = makeFake({ terminal: completedEvent(3, "hi") }, c);
@@ -360,6 +397,33 @@ describe("cli execute-turn", () => {
     });
     expect(res.verdict).toBe("failed");
     expect(res.error?.phase).toBe("commit");
+    expect(c.ackDisposition).toEqual(["discarded"]);
+  });
+
+  it("classifies a transcript IO persist failure as phase=io (F5)", async () => {
+    const c = counters();
+    const fake = makeFake({ terminal: completedEvent(3, "hi") }, c);
+    // A persist that fails with a CliError(io) — the shape makePersist's
+    // rewriteTranscript now throws on an ENOSPC/EACCES transcript write. The turn
+    // must surface phase=io (→ exit 5 at the run boundary), not phase=commit.
+    const ioPersist = async () => {
+      throw new CliError({ code: EXIT.io, message: "transcript ENOSPC" });
+    };
+    const res = await executeTurn({
+      host: fake.host,
+      followEvents: fake.follow,
+      scopeId: "scope-1",
+      controller: CONTROLLER,
+      participantId: PARTICIPANT_ID,
+      executionId: EXECUTION_ID,
+      snapshot: snapshot(),
+      role: "report",
+      timeoutMs: 5_000,
+      persist: ioPersist,
+    });
+    expect(res.verdict).toBe("failed");
+    expect(res.error?.phase).toBe("io");
+    expect(res.error?.code).toBe("TRANSCRIPT_IO");
     expect(c.ackDisposition).toEqual(["discarded"]);
   });
 });

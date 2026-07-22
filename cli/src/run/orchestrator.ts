@@ -46,7 +46,13 @@ import type {
   ScopeStatus,
 } from "@shared/runtime/schemas";
 import { EXIT, type ExitCode, errors, exitCodeForHostCode } from "../errors";
-import { type TerminalEvidence, type TurnResult, executeTurn } from "../host/execute-turn";
+import {
+  type RunCleanup,
+  type TerminalEvidence,
+  type TurnResult,
+  createRunCleanup,
+  executeTurn,
+} from "../host/execute-turn";
 import { resolveInstallations } from "../host/installations";
 import { reporterInstruction } from "../report/instruction";
 import {
@@ -94,8 +100,16 @@ export interface OrchestratorHost {
   profileReadiness(profile: ExecutionProfileDto, modelId: string): Promise<ResolveProfileResponse>;
   createScope(request: CreateScopeRequest): Promise<CreateScopeResponse>;
   activateScope(scopeId: string, controller: ControllerRequest): Promise<ScopeStatus>;
-  getScopeStatus(scopeId: string): Promise<ScopeStatus>;
-  closeScope(scopeId: string, controller: ControllerRequest): Promise<CloseScopeResponse>;
+  /** F3: accepts the run-level cleanup `signal` so `getScopeStatus` verification
+   * is bounded by the same ≤10s budget as the close. */
+  getScopeStatus(scopeId: string, options?: { signal?: AbortSignal }): Promise<ScopeStatus>;
+  /** F3: accepts the run-level cleanup `signal` so `closeScope` cannot hang past
+   * the shared cleanup budget. */
+  closeScope(
+    scopeId: string,
+    controller: ControllerRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<CloseScopeResponse>;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +149,10 @@ export interface OrchestratorDeps {
   turnTimeoutMs?: number;
   /** Injectable turn driver (tests). Defaults to the real executeTurn wiring. */
   turnDriver?: TurnDriver;
+  /** F3: shared cleanup budget (ms) for the SIGINT cancel → observe → ACK → close
+   * chain. Default 10s. Exposed mainly so bounded-close tests don't wait the full
+   * budget on a hanging Host stub. */
+  cleanupBudgetMs?: number;
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 600_000;
@@ -166,7 +184,17 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
   let status: RunStatus = "completed";
   let failure: RunFailure | null = null;
   let reporterOutput: string | null = null;
-  let closeOk = true;
+  // F2: the canonical success report is written in the Reporter persist-before-
+  // ACK callback (before the committed ACK). Its markdown is captured here so
+  // the post-close report phase can decide whether to keep it (completed run) or
+  // overwrite it with an INCOMPLETE partial report.
+  let reporterSuccessMarkdown = "";
+
+  // F3: ONE run-level cleanup budget. The in-flight turn's cancel → observe →
+  // discarded-ACK cleanup and the orchestrator's closeScope both draw from this
+  // signal, so SIGINT cleanup converges in a single ≤10s window and no pending
+  // close can block the partial report + exit 130.
+  const runCleanup: RunCleanup = createRunCleanup(deps.cleanupBudgetMs);
 
   const emit = (ev: RunProgressEvent) => deps.onProgress?.(ev);
 
@@ -193,7 +221,14 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
       installations,
     };
     transcript.push(startedRec);
-    rewriteTranscript(path.transcript(runId), transcript);
+    // F5: the initial transcript write is a local IO failure → exit 5, not exit 4.
+    try {
+      rewriteTranscript(path.transcript(runId), transcript);
+    } catch (error) {
+      status = "failed";
+      failure = toFailure("io", "TRANSCRIPT_INIT", error);
+      throw new StopRun(status, failure);
+    }
     emit({ type: "run.starting", runId, council: input.council.name });
 
     // --- create + activate scope --------------------------------------------
@@ -213,7 +248,8 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
 
     // --- ordinary turns -----------------------------------------------------
     const driver =
-      deps.turnDriver ?? makeRealTurnDriver(deps.host, scopeId, controller, turnTimeoutMs);
+      deps.turnDriver ??
+      makeRealTurnDriver(deps.host, scopeId, controller, turnTimeoutMs, runCleanup);
     let seq = 0;
     let stopped = false;
     for (let round = 1; round <= input.rounds && !stopped; round += 1) {
@@ -273,7 +309,17 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         });
         recordSummary(turnSummaries, "message", round, turnIndex, agent, result);
         if (result.verdict === "completed" && result.terminal !== null) {
-          patchLastTurnDuration(runId, path, transcript, result.durationMs, executionId);
+          // F5: a duration-patch transcript rewrite failure is a local IO
+          // failure → exit 5, and the run must stop (the transcript is the
+          // durable record).
+          try {
+            patchLastTurnDuration(runId, path, transcript, result.durationMs, executionId);
+          } catch (error) {
+            stopped = true;
+            status = "failed";
+            failure = toFailure("io", "TRANSCRIPT_DURATION", error);
+            break;
+          }
         }
         emit({
           type: "turn.done",
@@ -350,16 +396,36 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         executionId,
         snapshot,
         signal: deps.signal,
-        persist: makeReporterPersist(runId, path, transcript, {
-          round: input.rounds,
-          turnIndex: input.agents.length,
-          agent: reporter,
-          executionId,
-        }),
+        persist: makeReporterPersist(
+          runId,
+          path,
+          transcript,
+          {
+            round: input.rounds,
+            turnIndex: input.agents.length,
+            agent: reporter,
+            executionId,
+          },
+          {
+            startedAt: startedAt.toISOString(),
+            council: input.council,
+            reporterName: input.reporter.snapshot.name,
+            participantNames: input.agents.map((a) => a.snapshot.name),
+            onSuccess: (markdown: string) => {
+              reporterSuccessMarkdown = markdown;
+            },
+          },
+        ),
       });
       recordSummary(turnSummaries, "report", input.rounds, input.agents.length, reporter, result);
       if (result.verdict === "completed" && result.terminal !== null) {
-        patchLastTurnDuration(runId, path, transcript, result.durationMs, executionId);
+        // F5: duration-patch transcript rewrite failure → exit 5.
+        try {
+          patchLastTurnDuration(runId, path, transcript, result.durationMs, executionId);
+        } catch (error) {
+          status = "failed";
+          failure = toFailure("io", "TRANSCRIPT_DURATION", error);
+        }
       }
       emit({
         type: "turn.done",
@@ -401,12 +467,16 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
       failure = toFailure("run", "RUN_ERROR", error);
     }
   } finally {
-    // --- close scope exactly once ------------------------------------------
+    // --- close scope exactly once, bounded by the run-level cleanup budget (F3).
+    // arm() is idempotent: if the in-flight turn already armed the shared budget
+    // (SIGINT cleanup), close continues on the SAME remaining ≤10s window;
+    // otherwise (happy path) a fresh window starts here. A hung close can no
+    // longer block the partial report + exit 130.
     if (scopeId !== null && controller !== null) {
+      runCleanup.arm();
       try {
-        await closeScopeBounded(deps.host, scopeId, controller);
+        await closeScopeBounded(deps.host, scopeId, controller, runCleanup.signal);
       } catch (error) {
-        closeOk = false;
         // close failure overrides a completed status to non-success, but
         // transcript/report artifacts are preserved.
         if (status === "completed") {
@@ -416,29 +486,46 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
           failure = toFailure("cleanup", "CLOSE_FAILED", error);
         }
       }
-    } else if (!closeOk) {
-      // no-op
     }
+    // Always release the shared cleanup timer so it cannot outlive the run
+    // (the cancel → observe → ACK → close chain has ended).
+    runCleanup.dispose();
   }
 
-  // --- report ---------------------------------------------------------------
+  // --- report (F2/F6) -------------------------------------------------------
   const endedAt = now();
-  const incomplete = status !== "completed";
   emit({ type: "report.writing", runId });
   let reportMarkdown = "";
   let reportOk = false;
+  // Whether the canonical report.md currently on disk holds the success report
+  // (written persist-before-ACK) vs. an INCOMPLETE partial report.
+  let canonicalIsSuccess = false;
   try {
-    if (status === "completed" && reporterOutput !== null) {
-      reportMarkdown = renderSuccessReport({
-        runId,
-        startedAt: startedAt.toISOString(),
-        endedAt: endedAt.toISOString(),
-        council: input.council,
-        reporterName: input.reporter.snapshot.name,
-        participantNames: input.agents.map((a) => a.snapshot.name),
-        reporterOutput,
-      });
+    if (status === "completed") {
+      // F2: the success report was written in the Reporter persist-before-ACK
+      // callback (reporterSuccessMarkdown). Keep it; only re-render defensively
+      // if it was never captured.
+      if (reporterSuccessMarkdown.length > 0) {
+        reportMarkdown = reporterSuccessMarkdown;
+        canonicalIsSuccess = true;
+      } else {
+        reportMarkdown = renderSuccessReport({
+          runId,
+          startedAt: startedAt.toISOString(),
+          endedAt: endedAt.toISOString(),
+          council: input.council,
+          reporterName: input.reporter.snapshot.name,
+          participantNames: input.agents.map((a) => a.snapshot.name),
+          reporterOutput: reporterOutput ?? "",
+        });
+        assertNonEmptyMarkdown(reportMarkdown);
+        writeCanonicalReport(path.report(runId), reportMarkdown);
+        canonicalIsSuccess = true;
+      }
     } else {
+      // F2: a non-completed run (close failure / signal / turn failure) gets an
+      // INCOMPLETE partial report, overwriting any success report the Reporter
+      // persisted before a later failure.
       reportMarkdown = renderPartialReport({
         runId,
         startedAt: startedAt.toISOString(),
@@ -449,14 +536,16 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         completedTurns,
         failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
       });
+      assertNonEmptyMarkdown(reportMarkdown);
+      writeCanonicalReport(path.report(runId), reportMarkdown);
+      canonicalIsSuccess = false;
     }
-    assertNonEmptyMarkdown(reportMarkdown);
-    writeCanonicalReport(path.report(runId), reportMarkdown);
     reportOk = true;
   } catch (error) {
     // report IO/render failure → exit 5, but still finish the transcript + run record.
     reportMarkdown = "";
     status = status === "completed" ? "failed" : status;
+    canonicalIsSuccess = false;
     if (failure === null) failure = toFailure("report", "REPORT_IO", error);
   }
 
@@ -470,8 +559,35 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     }
   }
 
+  // F6: if the run flipped to non-completed AFTER the canonical success report
+  // was written (e.g. a --out copy failure), overwrite the canonical report with
+  // an INCOMPLETE partial report so on-disk state matches the final status.
+  if (status !== "completed" && canonicalIsSuccess) {
+    try {
+      const partial = renderPartialReport({
+        runId,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+        council: input.council,
+        reporterName: input.reporter.snapshot.name,
+        participantNames: input.agents.map((a) => a.snapshot.name),
+        completedTurns,
+        failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
+      });
+      writeCanonicalReport(path.report(runId), partial);
+      reportMarkdown = partial;
+    } catch {
+      // best-effort: transcript + exit code already reflect the failure.
+    }
+    canonicalIsSuccess = false;
+  }
+
   // --- run.finished + final transcript rewrite -----------------------------
   emit({ type: "run.finishing", status });
+  // F6: compute incomplete from the status so far. The final transcript write
+  // below is the last status-changing IO; `incomplete` is recomputed after it
+  // for the returned outcome.
+  let incomplete = status !== "completed";
   const finishedRec: RunFinishedRecord = {
     kind: "run.finished",
     status,
@@ -491,6 +607,10 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
       status = "failed";
     }
   }
+  // F6: recompute incomplete from the FINAL status (after every status-changing
+  // IO: report / --out / final transcript rewrite) so the outcome and run record
+  // never report incomplete=false alongside a failed status / exit 5.
+  incomplete = status !== "completed";
 
   const exitCode = exitCodeForRun(status, failure, deps.signal?.aborted === true);
   return {
@@ -588,6 +708,7 @@ function makeRealTurnDriver(
   scopeId: string,
   controller: ControllerRequest,
   timeoutMs: number,
+  runCleanup: RunCleanup,
 ): TurnDriver {
   return async (request) => {
     return executeTurn({
@@ -601,6 +722,9 @@ function makeRealTurnDriver(
       timeoutMs,
       signal: request.signal,
       persist: request.persist,
+      // F3: share the run-level cleanup budget so this turn's cancel → observe →
+      // ACK cleanup and the orchestrator's close converge in one ≤10s window.
+      sharedCleanup: runCleanup,
     });
   };
 }
@@ -658,9 +782,12 @@ function makePersist(
   };
 }
 
-/** Reporter persist = append transcript record (role report) BEFORE the
- * committed ACK. The canonical report.md (with the deterministic header) is
- * rendered after the Reporter ACKs, from this persisted output. */
+/** Reporter persist = append transcript record (role report) AND write the
+ * canonical success report BEFORE the committed ACK (F2). Both artifacts must be
+ * durable before the ACK releases the terminal payload to the Host; if either
+ * write fails the persist callback throws (→ executeTurn commit failure → the
+ * run stops non-zero) so a crash after the ACK never leaves a run dir with a
+ * transcript but no report. */
 function makeReporterPersist(
   runId: string,
   path: StorePaths,
@@ -670,6 +797,13 @@ function makeReporterPersist(
     turnIndex: number;
     agent: ResolvedAgent;
     executionId: string;
+  },
+  reportCtx: {
+    startedAt: string;
+    council: RunInput["council"];
+    reporterName: string;
+    participantNames: ReadonlyArray<string>;
+    onSuccess: (markdown: string) => void;
   },
 ): (evidence: TerminalEvidence) => Promise<void> {
   return async (evidence) => {
@@ -694,7 +828,24 @@ function makeReporterPersist(
       usage: evidence.usage,
     };
     transcript.push(record);
+    // F5: transcript write failure throws a CliError(io) → persist fails →
+    // executeTurn commit phase → exit 5 at the run boundary.
     rewriteTranscript(path.transcript(runId), transcript);
+    // F2: write the canonical success report BEFORE the committed ACK so a crash
+    // after the ACK never leaves a transcript-only run dir.
+    const endedAtIso = new Date().toISOString();
+    const markdown = renderSuccessReport({
+      runId,
+      startedAt: reportCtx.startedAt,
+      endedAt: endedAtIso,
+      council: reportCtx.council,
+      reporterName: reportCtx.reporterName,
+      participantNames: reportCtx.participantNames,
+      reporterOutput: evidence.output,
+    });
+    assertNonEmptyMarkdown(markdown);
+    writeCanonicalReport(path.report(runId), markdown);
+    reportCtx.onSuccess(markdown);
   };
 }
 
@@ -723,7 +874,14 @@ function patchLastTurnDuration(
 
 function rewriteTranscript(transcriptPath: string, records: TranscriptRecord[]): void {
   const lines = records.map((r) => JSON.stringify(r)).join("\n");
-  atomicWriteFile(transcriptPath, `${lines}\n`);
+  try {
+    atomicWriteFile(transcriptPath, `${lines}\n`);
+  } catch (cause) {
+    // F5: a transcript write failure is a local IO failure → exit 5. The caller
+    // (initial write / persist / duration patch / final rewrite) maps this to a
+    // phase=io failure so the run boundary reports exit 5, not exit 4.
+    throw errors.io(`failed to write transcript: ${ioName(cause)}`, { cause: ioName(cause) });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -761,14 +919,17 @@ async function closeScopeBounded(
   host: OrchestratorHost,
   scopeId: string,
   controller: ControllerRequest,
+  signal: AbortSignal,
 ): Promise<void> {
-  // Single bounded attempt; the Host's close is the durable signal. A failure
-  // here makes the Run non-success (override at the boundary).
-  await host.closeScope(scopeId, controller);
-  // Verify the scope actually reached a closed state.
+  // Single bounded attempt under the run-level cleanup signal (F3); the Host's
+  // close is the durable signal. A failure here makes the Run non-success
+  // (override at the boundary). The signal bounds a hanging close so it cannot
+  // block the partial report + exit 130.
+  await host.closeScope(scopeId, controller, { signal });
+  // Verify the scope actually reached a closed state (bounded by the same signal).
   let status: ScopeStatus;
   try {
-    status = await host.getScopeStatus(scopeId);
+    status = await host.getScopeStatus(scopeId, { signal });
   } catch {
     return; // best-effort verification; the close call itself succeeded.
   }
@@ -926,6 +1087,12 @@ export function buildProfile(
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** A short diagnostic name for an IO failure cause (used in wrapped messages). */
+function ioName(cause: unknown): string {
+  if (cause instanceof Error) return cause.name;
+  return "IOFailure";
 }
 
 // Re-exports used by the command layer.
