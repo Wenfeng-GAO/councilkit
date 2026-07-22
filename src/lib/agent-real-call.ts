@@ -239,6 +239,15 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
   // acknowledged degrades the result to an explicit cleanup/ACK error so a
   // missing-or-conflicting ACK is surfaced rather than masked by closeScope.
   let ackAborted = false;
+  // H4: a DEFINITIVE ACK conflict — the Host returned an explicit
+  // non-acknowledged ACK response (expired / conflicting state), which is NOT
+  // an abort artifact. Such a result MUST keep ACK_FAILED (F1 contract) even if
+  // the deadline/external abort fired around the same time. Only an ACK that was
+  // acknowledged late, or that was itself aborted mid-flight, is remapped to the
+  // abort verdict by the run-level remap block. The abort-path discarded ACK
+  // (handleAbort) also sets this on an explicit expired → ACK_FAILED is preserved
+  // there directly (handleAbort owns its verdict, no run-level remap touches it).
+  let ackConflict = false;
   const ackOnce = async (
     disposition: "committed" | "discarded",
     finalSeq: number,
@@ -261,19 +270,25 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
       // G5: a COMPLETED ACK response — even after the deadline aborted — is a
       // real ACK result. A non-acknowledged state (e.g. expired) is a genuine
       // ACK conflict that MUST surface as ACK_FAILED (F1), NOT be masked as an
-      // abort outcome. Only an ACK that was ITSELF aborted (throw, signal
-      // aborted → no response reached) is classified as aborted below.
-      return { ok: resp.ackState === "acknowledged", aborted: false };
+      // abort outcome. H4: record the definitive conflict so the run-level remap
+      // block does NOT overwrite ACK_FAILED with timeout/cancelled. Only an ACK
+      // that was ITSELF aborted (throw, signal aborted → no response reached) is
+      // classified as aborted below.
+      const acknowledged = resp.ackState === "acknowledged";
+      if (!acknowledged) ackConflict = true;
+      return { ok: acknowledged, aborted: false };
     } catch {
       // G5: an abort during the ACK (deadline/external/cleanup-deadline) is NOT
       // an ACK conflict. Record it so the caller maps the result to
       // timeout/cancelled instead of degrading to ACK_FAILED. Other failures
       // (real ACK rejection / non-acknowledged) surface as ok:false,aborted:false
-      // → caller degrades per F1.
+      // → caller degrades per F1. H4: a throw that is NOT abort-related is a
+      // definitive conflict (the Host rejected / errored the ACK) → keep ACK_FAILED.
       if (deadline.aborted || signal.aborted) {
         ackAborted = true;
         return { ok: false, aborted: true };
       }
+      ackConflict = true;
       return { ok: false, aborted: false };
     }
   };
@@ -412,40 +427,66 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
       );
       dispatched = true;
     } catch (error) {
-      // G2: a failed execute response is ambiguous — the Host may have
-      // accepted/dispatched the turn before the response was lost. Treat it as
-      // ambiguous dispatch: with the STABLE executionId, do a bounded query
-      // against the shared cleanup budget. A record (any state) → it was
-      // dispatched: cancel/observe terminal/ACK discarded via handleAbort (no
-      // re-dispatch). A 404/missing record only → treat as never dispatched and
-      // classify as failed/timeout. The deadline-abort verdict is preserved.
-      if (deadline.aborted) {
-        const dispatchedAsAmbiguous = await checkAmbiguousDispatch({
+      // H1/G2: a failed execute response is AMBIGUOUS — the Host may have
+      // accepted/dispatched the turn before the response was lost, regardless
+      // of WHY the response was lost (deadline abort, TypeError, response-parse
+      // error, 5xx, …). All of these route through ambiguous-dispatch handling,
+      // not just the deadline-abort branch. With the STABLE executionId, probe
+      // the Host once (bounded by the shared cleanup budget):
+      //   - "dispatched": a record exists → cancel/observe/ACK-discarded cleanup.
+      //   - "notDispatched": a definitive 404 EXECUTION_NOT_FOUND → the turn
+      //     never landed → classify directly, NO cleanup, NO re-dispatch.
+      //   - "unknown": the probe could not tell (transient network/5xx/cleanup
+      //     abort) → conservatively run ONE cancel/observe cleanup (the turn may
+      //     have landed) WITHOUT re-dispatching.
+      // The ORIGINAL verdict is PRESERVED through the cleanup chain: a deadline
+      // abort maps to timeout/cancelled; a non-abort execute fault stays failed.
+      // A definitive ACK conflict (expired) still surfaces ACK_FAILED (F1).
+      //
+      // The original verdict/error this lost-execute resolves to. For a deadline
+      // abort it is the abort verdict; for a non-abort execute fault it is a
+      // failed DISPATCH classification — preserved through the cleanup chain.
+      const baseVerdict = (): "timeout" | "cancelled" | "failed" =>
+        deadline.aborted ? abortVerdict() : "failed";
+      const baseError = (): AgentRealCallError =>
+        deadline.aborted ? abortError() : classifyClientError(error, { dispatch: true });
+
+      const probe = await checkAmbiguousDispatch({
+        client,
+        scopeId: created.scopeId,
+        executionId,
+        signal: cleanupOf(),
+      });
+
+      if (probe === "notDispatched") {
+        // Definitively never dispatched (404 EXECUTION_NOT_FOUND): nothing to
+        // cancel, observe, or ACK. Keep the original verdict; never re-dispatch.
+        result = make(baseVerdict(), baseError(), { canonical });
+      } else {
+        // "dispatched" (record exists) OR "unknown" (cannot prove it didn't
+        // land): the turn MAY be running on the Host. Run ONE bounded
+        // cancel/observe/ACK-discarded cleanup with the SHARED budget — execute
+        // is NEVER re-sent. The original verdict is preserved by passing
+        // baseVerdict/baseError to the cleanup chain (handleAbort honors the
+        // passed verdict functions); only a definitive ACK conflict overrides it
+        // to ACK_FAILED (F1).
+        dispatched = true;
+        result = await handleAbort({
           client,
           scopeId: created.scopeId,
           executionId,
-          signal: cleanupOf(),
+          dispatched,
+          token,
+          ack: ackOnce,
+          make,
+          // H1: preserve the ORIGINAL verdict (timeout/cancelled/failed) rather
+          // than always mapping to the abort verdict. A definitive ACK conflict
+          // still wins (handleAbort returns ACK_FAILED before reaching here).
+          verdict: baseVerdict,
+          verdictError: baseError,
+          canonical,
+          cleanupSignal: cleanupOf(),
         });
-        if (dispatchedAsAmbiguous) {
-          dispatched = true;
-          result = await handleAbort({
-            client,
-            scopeId: created.scopeId,
-            executionId,
-            dispatched,
-            token,
-            ack: ackOnce,
-            make,
-            abortVerdict,
-            abortError,
-            canonical,
-            cleanupSignal: cleanupOf(),
-          });
-        } else {
-          result = make(abortVerdict(), abortError(), { canonical });
-        }
-      } else {
-        result = make("failed", classifyClientError(error, { dispatch: true }), { canonical });
       }
       return result;
     }
@@ -480,12 +521,18 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
         token,
         ack: ackOnce,
         make,
-        abortVerdict,
-        abortError,
+        // A streaming/blocking abort surfaces the abort verdict (timeout if the
+        // internal deadline fired, cancelled for an external abort).
+        verdict: abortVerdict,
+        verdictError: abortError,
         canonical,
-        // G3: pass the shared cleanup signal; if none exists yet handleAbort
-        // materializes one. Either way the chain shares one budget.
-        cleanupSignal: cleanupHolder.current?.signal,
+        // H3/G3: pass cleanupOf() (NOT the possibly-undefined holder signal) so
+        // the run holder owns the single shared controller and cancel → close
+        // all share ONE remaining budget. If the holder had no controller yet
+        // this materializes it here; the run's finally disposes it. Either way
+        // the full chain converges within a single ≤10s window — never two
+        // serial 10s windows (handleAbort-private + finally-close-private).
+        cleanupSignal: cleanupOf(),
       });
       return result;
     }
@@ -511,7 +558,12 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
     // `failed` terminal delivered past the budget is NOT a clean completion. Map
     // to the abort verdict so a slow ACK after timeout is never reported completed,
     // and an external abort during ACK is `cancelled` (never ACK_FAILED either).
-    if (deadline.aborted || ackAborted) {
+    // H4: a DEFINITIVE ACK conflict (ackConflict — the Host returned an explicit
+    // non-acknowledged ACK, e.g. expired) must keep ACK_FAILED per F1. Only an
+    // acknowledged ACK that arrived late, or an ACK aborted mid-flight, is remapped.
+    // Without this guard, an expired ACK that races a timeout would be masked as
+    // timeout/cancelled, hiding a genuine cleanup/ACK failure.
+    if (!ackConflict && (deadline.aborted || ackAborted)) {
       result = make(abortVerdict(), abortError(), {
         canonical: result.canonical,
         effective: result.effective,
@@ -520,12 +572,18 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
     }
     return result;
   } catch (error) {
-    // Defensive catch-all: classify and let finally close. A deadline abort here
-    // is a timeout; anything else is a crash.
-    result = make(
-      deadline.aborted ? abortVerdict() : "failed",
-      deadline.aborted ? abortError() : classifyClientError(error),
-    );
+    // Defensive catch-all: classify and let finally close. H2: a genuine
+    // non-abort exception (EventStreamError / SyntaxError / ZodError / TypeError
+    // / a real protocol fault) that races a deadline/external abort MUST be
+    // reported as its own failure (failed crash), NOT masked as timeout/
+    // cancelled — only a real AbortError maps to the abort verdict. This keeps
+    // the SSE/parse fault visible instead of being swallowed by the abort
+    // classification when both race the same deadline.
+    if (isErrorAbort(error)) {
+      result = make(abortVerdict(), abortError());
+    } else {
+      result = make("failed", classifyClientError(error));
+    }
     return result;
   } finally {
     clearTimeout(timeoutTimer);
@@ -731,12 +789,20 @@ async function handleAbort(input: {
     error: AgentRealCallError | null,
     partial?: Partial<AgentRealCallResult>,
   ) => AgentRealCallResult;
-  abortVerdict: () => "timeout" | "cancelled";
-  abortError: () => AgentRealCallError;
+  /** The verdict surfaced for the non-ACK-conflict branch of this cleanup
+   * chain. For a streaming/blocking abort this is the abort verdict
+   * (timeout/cancelled); for an ambiguous-dispatch execute fault it is the
+   * preserved ORIGINAL verdict (timeout/cancelled if the deadline aborted,
+   * `failed` for a non-abort execute fault). A definitive ACK conflict still
+   * overrides this to ACK_FAILED (F1). */
+  verdict: () => AgentRealCallVerdict;
+  /** The error surfaced alongside `verdict` for the non-ACK-conflict branch. */
+  verdictError: () => AgentRealCallError;
   canonical: string | null;
-  /** G3: the shared cleanup signal covering the whole cleanup chain. If
+  /** G3/H3: the shared cleanup signal covering the whole cleanup chain. If
    * omitted (defensive), a fresh shared controller is created for this chain
-   * so the chain still has a bounded aggregate budget. */
+   * so the chain still has a bounded aggregate budget — and is disposed via
+   * try/finally on every exit (H3). */
   cleanupSignal?: AbortSignal;
 }): Promise<AgentRealCallResult> {
   const {
@@ -747,8 +813,12 @@ async function handleAbort(input: {
     token,
     ack,
     make,
-    abortVerdict,
-    abortError,
+    // H1: renamed from abortVerdict/abortError → verdict/verdictError. For a
+    // streaming/blocking abort the caller passes the abort verdict; for an
+    // ambiguous-dispatch execute fault the caller passes the PRESERVED original
+    // verdict (may be `failed`). A definitive ACK conflict still wins (F1).
+    verdict: baseVerdict,
+    verdictError: baseError,
     canonical,
     cleanupSignal,
   } = input;
@@ -763,58 +833,70 @@ async function handleAbort(input: {
         ownDispose = c.dispose;
         return c.signal;
       })();
-  if (dispatched) {
-    // Cancel with the shared cleanup signal (G3): a hung cancel cannot keep the
-    // helper pending; execute is NEVER re-sent. The cancel draws from the SAME
-    // shared budget as observe/ACK (no per-request 10s reset).
-    try {
-      await client.cancelExecution(scopeId, executionId, token(), {
-        signal: chainSignal,
-      });
-    } catch {
-      // Best-effort: a failed cancel still proceeds to observe the terminal;
-      // the cleanup-failure accounting happens below via the ACK validation.
-    }
-    // Observe the interrupted terminal the cancel produced, bounded by the
-    // shared cleanup signal. Only read the record (getExecution) — never
-    // re-dispatch.
-    let observedSeq: number | null = null;
-    for (let attempt = 0; attempt < 5 && !chainSignal.aborted; attempt += 1) {
+  // H3: the defensive self-created controller (ownDispose !== null) MUST be
+  // disposed on EVERY exit path — including the ACK_FAILED early return and
+  // any thrown exception — so no leftover cleanup timer outlives the chain.
+  // The caller-provided controller is owned by runInternal's finally, so it is
+  // not disposed here. A try/finally around the dispatched block guarantees the
+  // self-created timer is always cleared (G3 reviewer: ACK_FAILED early return
+  // previously skipped ownDispose).
+  try {
+    if (dispatched) {
+      // Cancel with the shared cleanup signal (G3): a hung cancel cannot keep the
+      // helper pending; execute is NEVER re-sent. The cancel draws from the SAME
+      // shared budget as observe/ACK (no per-request 10s reset).
       try {
-        const status = await client.getExecution(scopeId, executionId, {
+        await client.cancelExecution(scopeId, executionId, token(), {
           signal: chainSignal,
         });
-        if (
-          status.state === "interrupted" ||
-          status.state === "failed" ||
-          status.state === "completed"
-        ) {
-          observedSeq = status.lastSeq ?? 0;
-          break;
-        }
       } catch {
-        break; // Host unreachable / gone — cannot observe; fall through.
+        // Best-effort: a failed cancel still proceeds to observe the terminal;
+        // the cleanup-failure accounting happens below via the ACK validation.
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    }
-    if (observedSeq !== null) {
-      // F1: observed a terminal → send discarded ACK and validate ackState.
-      // A discarded ACK that is not acknowledged normally degrades the verdict
-      // to failed + the explicit ACK error (never silently mask an ACK gap).
-      // G5: but if the ACK was itself aborted (deadline/external/cleanup-deadline
-      // firing during the ACK), that is NOT an ACK conflict — fall through to the
-      // abort verdict instead of misreporting ACK_FAILED.
-      const ackRes = await ack("discarded", Math.max(1, observedSeq));
-      if (!ackRes.ok && !ackRes.aborted) {
-        return make("failed", ACK_FAILED_ERROR, { canonical });
+      // Observe the interrupted terminal the cancel produced, bounded by the
+      // shared cleanup signal. Only read the record (getExecution) — never
+      // re-dispatch.
+      let observedSeq: number | null = null;
+      for (let attempt = 0; attempt < 5 && !chainSignal.aborted; attempt += 1) {
+        try {
+          const status = await client.getExecution(scopeId, executionId, {
+            signal: chainSignal,
+          });
+          if (
+            status.state === "interrupted" ||
+            status.state === "failed" ||
+            status.state === "completed"
+          ) {
+            observedSeq = status.lastSeq ?? 0;
+            break;
+          }
+        } catch {
+          break; // Host unreachable / gone — cannot observe; fall through.
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
+      if (observedSeq !== null) {
+        // F1: observed a terminal → send discarded ACK and validate ackState.
+        // A discarded ACK that is not acknowledged normally degrades the verdict
+        // to failed + the explicit ACK error (never silently mask an ACK gap).
+        // G5: but if the ACK was itself aborted (deadline/external/cleanup-deadline
+        // firing during the ACK), that is NOT an ACK conflict — fall through to the
+        // abort verdict instead of misreporting ACK_FAILED.
+        const ackRes = await ack("discarded", Math.max(1, observedSeq));
+        if (!ackRes.ok && !ackRes.aborted) {
+          return make("failed", ACK_FAILED_ERROR, { canonical });
+        }
+      }
+      // No observable terminal (cancel didn't settle in the cleanup window), or
+      // the ACK was aborted mid-way: surface the caller-provided verdict (abort
+      // verdict for a streaming/blocking abort; preserved original verdict for
+      // an ambiguous-dispatch execute fault). close failure (if any) is still
+      // accounted in the unified finally (F2).
     }
-    // No observable terminal (cancel didn't settle in the cleanup window), or
-    // the ACK was aborted mid-way: the verdict is the abort verdict surface;
-    // close failure (if any) is still accounted in the unified finally (F2).
+    return make(baseVerdict(), baseError(), { canonical });
+  } finally {
+    ownDispose?.();
   }
-  ownDispose?.();
-  return make(abortVerdict(), abortError(), { canonical });
 }
 
 // ---------------------------------------------------------------------------
@@ -847,12 +929,16 @@ async function driveToTerminal(input: {
     // consumption is aborted), not by resolving {kind:'aborted'}. If the
     // deadline signal has aborted, normalize that to {kind:'aborted'} so the
     // run enters the unified handleAbort cleanup chain (cancel/observe/ACK).
-    // A non-abort SSE error (HTTP failure, parse error) is propagated as-is.
+    // H2: ONLY normalize when the thrown exception is genuinely an AbortError —
+    // a real protocol/parse failure (EventStreamError, SyntaxError, ZodError,
+    // TypeError, …) MUST propagate as-is to the original error classification.
+    // Otherwise an HTTP/SSE error that races a deadline abort would be masked as
+    // timeout/cancelled and silently discard the real fault.
     let outcome: FollowOutcome;
     try {
       outcome = await follow(options);
     } catch (error) {
-      if (deadlineSignal.aborted) return { kind: "aborted" };
+      if (deadlineSignal.aborted && isErrorAbort(error)) return { kind: "aborted" };
       throw error;
     }
     if (outcome.kind === "terminal") return { kind: "terminal", event: outcome.event };
@@ -935,26 +1021,51 @@ function isCreateTransportLoss(error: unknown): boolean {
   return true;
 }
 
-/** G2: probe whether an execute whose response was lost actually landed on the
- * Host. A record (any state, incl. running) → it WAS dispatched (ambiguous). A
- * thrown getExecution (404/transport) → treat as NOT dispatched. Never
- * re-dispatches execute. Bounded by the shared cleanup signal (G3). */
+/** G2/H1: probe whether an execute whose response was lost actually landed on
+ * the Host. Returns THREE states so the caller can distinguish a definitive
+ * "never dispatched" from a "cannot tell" (be conservative) case:
+ * - "dispatched": a record exists (any state, incl. running) → the execution
+ *   WAS accepted by the Host before the response was lost.
+ * - "notDispatched": a definitive RuntimeClientError(404, EXECUTION_NOT_FOUND)
+ *   → the execution record genuinely never existed. NOTHING else qualifies — a
+ *   5xx / transport error / cleanup-abort means we cannot prove absence.
+ * - "unknown": the probe could not determine the fate (transient network/5xx,
+ *   cleanup-deadline abort, any non-404 throw). The caller conservatively runs
+ *   ONE cancel/observe cleanup (the turn may have landed) WITHOUT re-dispatching.
+ * Never re-dispatches execute. Bounded by the shared cleanup signal (G3). */
+type DispatchProbe = "dispatched" | "notDispatched" | "unknown";
 async function checkAmbiguousDispatch(input: {
   client: RuntimeClient;
   scopeId: string;
   executionId: string;
   signal: AbortSignal;
-}): Promise<boolean> {
+}): Promise<DispatchProbe> {
   const { client, scopeId, executionId, signal } = input;
   try {
     await client.getExecution(scopeId, executionId, { signal });
     // A record exists → the execution WAS accepted by the Host before the
     // response was lost. Treat as dispatched (ambiguous dispatch).
-    return true;
-  } catch {
-    // 404 / Host gone / transport: no provable record → not dispatched.
-    return false;
+    return "dispatched";
+  } catch (error) {
+    // H1: ONLY a definitive 404 EXECUTION_NOT_FOUND proves the execution never
+    // landed. A 5xx / transport / cleanup-abort / any other throw is "unknown"
+    // — the request's fate cannot be proven absent, so the caller conserves.
+    if (isExecutionNotFound(error)) return "notDispatched";
+    return "unknown";
   }
+}
+
+/** H1: a definitive "the execution record does not exist" verdict — only an
+ * explicit Host 404 with code EXECUTION_NOT_FOUND. Anything else (5xx, network
+ * TypeError, cleanup-deadline abort, zod parse error) means the client cannot
+ * prove the execution was never created, so it must NOT be treated as
+ * "not dispatched". */
+function isExecutionNotFound(error: unknown): boolean {
+  return (
+    error instanceof RuntimeClientError &&
+    error.status === 404 &&
+    error.code === "EXECUTION_NOT_FOUND"
+  );
 }
 
 async function recoverAndClose(input: {
@@ -1230,6 +1341,17 @@ function truncatePreview(text: string): string {
 function errorMessageOf(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+/** H2: determine whether a thrown exception is a genuine AbortError — the
+ * platform fetch/body-abort error — so an SSE/parse failure that races a
+ * deadline abort is NOT mis-normalized into a timeout/cancel outcome. A browser
+ * fetch abort throws a DOMException whose `name` is "AbortError"; Node and the
+ * abortcontroller polyfill throw an Error with name "AbortError". Both qualify
+ * by name. Real faults (EventStreamError, SyntaxError, ZodError, TypeError, …)
+ * fall through and propagate as-is for the original error classification. */
+function isErrorAbort(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function buildProbeSnapshot(input: { participantId: string; persona: string }): ContextSnapshot {

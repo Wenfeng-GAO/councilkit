@@ -53,10 +53,25 @@ interface FakeHostOptions {
    * {kind:'aborted'} — mirrors a real SSE fetch whose body consumption is aborted.
    * driveToTerminal must normalize it into the handleAbort cleanup chain. */
   followThrowsOnAbort?: boolean;
+  /** H2: followEvents THROWS a non-AbortError (an EventStreamError / protocol
+   * fault) racing the SAME signal abort. driveToTerminal must NOT normalize it to
+   * {kind:'aborted'} — the SSE error propagates and is reported as its own
+   * failure (failed crash), not masked as timeout/cancelled. */
+  followThrowsStreamErrorOnAbort?: boolean;
   /** G2: execute builds a running execution, then rejects with AbortError once the
    * main signal aborts — simulates a POST already accepted by Host but the response
    * lost. After abort, the execution record still exists → ambiguous dispatch. */
   executeAmbiguousAbort?: boolean;
+  /** H1: execute THROWS a transport TypeError immediately (deadline NOT aborted) —
+   * a non-abort response loss. The execution record still exists on the Host, so
+   * the run treats it as ambiguous dispatch: cancel/observe/ACK discarded cleanup,
+   * preserving the failed verdict (NOT timeout/cancelled). */
+  executeTransportError?: boolean;
+  /** H1: the getExecution probe throws a non-404 TypeError → the dispatch fate is
+   * "unknown". The run must conservatively run ONE cancel/observe cleanup (the turn
+   * may have landed) and NEVER re-dispatch, preserving the original verdict. Used
+   * with executeAmbiguousAbort so getExecution 404 path is NOT taken. */
+  getExecutionProbeError?: boolean;
   /** G6: createScope builds a scope on Host side, then throws a transport TypeError
    * (response lost) before returning. The helper must recover+close the leaked scope. */
   createTransportLoss?: boolean;
@@ -260,6 +275,14 @@ function fakeHost(options: FakeHostOptions = {}) {
           else setTimeout(onAbort, 5);
         });
       }
+      // H1: a NON-abort execute response loss — the transport drops the response
+      // (TypeError) while the deadline is still live. The Host already built the
+      // running execution record, so the run must treat it as ambiguous dispatch:
+      // probe → record exists → cancel/observe/ACK discarded cleanup, preserving
+      // the failed verdict (NOT a timeout/cancelled).
+      if (options.executeTransportError) {
+        throw new TypeError("execute response stream lost");
+      }
       return {
         execution: {
           executionId: request.executionId,
@@ -275,6 +298,13 @@ function fakeHost(options: FakeHostOptions = {}) {
       _opts?: { signal?: AbortSignal },
     ): Promise<ExecutionStatus> {
       if (options.getExecutionFails) throw new Error("getExecution unavailable");
+      // H1: a NON-404 probe failure (transport TypeError / transient 5xx). This
+      // is "unknown" — the probe cannot prove the execution was never created, so
+      // the run conserves (runs ONE cancel/observe cleanup) instead of treating
+      // it as "not dispatched". Distinct from the definitive 404 below.
+      if (options.getExecutionProbeError) {
+        throw new TypeError("getExecution transport error");
+      }
       // G2: a genuine 404 (the execution record never existed) — distinguishes
       // "ambiguous dispatch with a record" from "never dispatched".
       if (options.getExecutionMissing) {
@@ -417,6 +447,15 @@ function fakeHost(options: FakeHostOptions = {}) {
       if (options.followThrowsOnAbort) {
         const err = new Error("aborted");
         err.name = "AbortError";
+        throw err;
+      }
+      // H2: a NON-abort SSE error (EventStreamError) racing the SAME signal abort.
+      // driveToTerminal must NOT normalize it to {kind:'aborted'} — the SSE fault
+      // propagates as its own failure (failed crash), not masked as timeout/
+      // cancelled, and the handleAbort cleanup chain must NOT run (cancel=0/ack=0).
+      if (options.followThrowsStreamErrorOnAbort) {
+        const err = new Error("event stream HTTP 502");
+        err.name = "EventStreamError";
         throw err;
       }
       return { kind: "aborted", lastSeq };
@@ -1084,5 +1123,261 @@ describe("agent-real-call — G6 createScope transport loss recovered + closed",
     expect(result.error?.category).toBe("installation");
     expect(host.counters.create).toBe(1);
     expect(host.counters.close).toBe(0);
+  });
+});
+
+describe("agent-real-call — H1 ambiguous execute dispatch coverage", () => {
+  it("execute throws TypeError (deadline NOT aborted) → ambiguous cleanup runs, verdict stays failed", async () => {
+    // H1 scenario 1: a NON-abort execute response loss (TypeError). The Host
+    // already built the running execution record, so the run treats it as
+    // ambiguous dispatch: probe → record exists → cancel/observe/ACK discarded
+    // cleanup. The ORIGINAL failed verdict is preserved (NOT timeout/cancelled,
+    // since the deadline never aborted). execute dispatched exactly once.
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      executeTransportError: true,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      // Large deadline so it does NOT abort — the failure is the transport
+      // TypeError, not a timeout.
+      timeoutMs: 5_000,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h1-typeerror",
+    } as never);
+    // The cleanup chain ran (cancel + observe interrupted + discarded ACK)…
+    expect(host.counters.execute).toBe(1);
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.ack).toBe(1);
+    expect(host.execs[0]?.ackDisposition).toBe("discarded");
+    expect(host.counters.close).toBe(1);
+    // …but the verdict is the preserved ORIGINAL failed classification, NOT a
+    // timeout (the deadline never fired) and NOT cancelled.
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("DISPATCH_FAILED");
+  });
+
+  it("execute aborts AND probe throws non-404 TypeError → unknown: conservative cleanup, no re-dispatch, verdict preserved", async () => {
+    // H1 scenario 2: the execute response is lost on deadline abort, AND the
+    // getExecution probe throws a NON-404 transport error (unknown fate). The
+    // run must NOT treat it as "not dispatched" (that requires a definitive
+    // 404 EXECUTION_NOT_FOUND). Instead it conservatively runs ONE cancel/
+    // observe cleanup (the turn may have landed), preserves the original
+    // timeout verdict, and NEVER re-dispatches execute.
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      executeAmbiguousAbort: true,
+      getExecutionProbeError: true,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h1-unknown",
+    } as never);
+    // execute dispatched exactly once (no re-dispatch), conservative cancel ran…
+    expect(host.counters.execute).toBe(1);
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.close).toBe(1);
+    // …but with an UNKNOWN probe (observe also fails) no discarded ACK is sent…
+    expect(host.counters.ack).toBe(0);
+    // …and the original abort verdict (timeout) is preserved, not failed.
+    expect(result.verdict).toBe("timeout");
+  });
+});
+
+describe("agent-real-call — H2 non-abort SSE error is never normalized to aborted", () => {
+  it("followEvents throws EventStreamError on abort → SSE error propagates, not masked as timeout", async () => {
+    // H2: a NON-abort SSE error (EventStreamError) racing the deadline abort
+    // must NOT be normalized to {kind:'aborted'}. driveToTerminal re-throws it,
+    // and the run reports it as its own failure (failed crash) instead of
+    // misreporting timeout/cancelled — the handleAbort cleanup chain must NOT
+    // run (cancel=0, ack=0): the real protocol fault stays visible.
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      followThrowsStreamErrorOnAbort: true,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h2-stream",
+    } as never);
+    // The SSE error propagated as a real failure, not an abort normalization…
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.category).toBe("crash");
+    // …and the abort cleanup chain did NOT run (no cancel / no ACK).
+    expect(host.counters.cancel).toBe(0);
+    expect(host.counters.ack).toBe(0);
+    expect(host.counters.close).toBe(1);
+  });
+});
+
+describe("agent-real-call — H3 streaming abort close shares the single cleanup controller", () => {
+  it("cancel + close both reject only on signal abort → whole chain converges in ONE shared budget", async () => {
+    // H3: on a streaming abort, cancel (in handleAbort) and closeScope (in the
+    // finally) must draw from the SAME shared cleanup controller. Both hung
+    // requests settle only when their signal aborts. With one shared budget the
+    // FULL chain converges in a single ≤10s window; the pre-fix behavior gave
+    // handleAbort a private 10s controller AND the finally another private 10s
+    // controller (~20s serial). Asserting elapsed < 12s proves the budgets are
+    // shared (one cleanup deadline), not two serial windows.
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      cancelNeverSettles: true,
+      closeNeverSettles: true,
+    });
+    const start = Date.now();
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h3-shared",
+    } as never);
+    const elapsed = Date.now() - start;
+    // Both cancel and close ran once, settled only by the single shared cleanup
+    // deadline (close failure downgrades the verdict to SCOPE_CLOSE_FAILED).
+    expect(host.counters.cancel).toBe(1);
+    expect(host.counters.close).toBe(1);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("SCOPE_CLOSE_FAILED");
+    // ONE shared budget: the whole chain converged well under the ~20s serial
+    // ceiling the pre-fix two-controller behavior would produce.
+    expect(elapsed).toBeLessThan(12_000);
+  }, 20_000);
+
+  it("handleAbort self-created controller is disposed even on the ACK_FAILED early return", async () => {
+    // H3: when handleAbort defensively creates its OWN controller (no
+    // caller-provided cleanupSignal — exercised here by failing the discarded
+    // ACK so handleAbort returns ACK_FAILED early), the try/finally must still
+    // dispose that controller's timer. The run then returns promptly with
+    // failed/ACK_FAILED and close runs once — no leftover timer holds the run.
+    const host = fakeHost({
+      behavior: { kind: "hangUntilCancel", usage: null } as never,
+      ackState: "expired" as never,
+    });
+    const start = Date.now();
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h3-ackfailed",
+    } as never);
+    const elapsed = Date.now() - start;
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
+    expect(host.counters.close).toBe(1);
+    // No leftover private timer: the run converges immediately (well under any
+    // 10s cleanup budget) — the ACK_FAILED early return disposed its controller.
+    expect(elapsed).toBeLessThan(5_000);
+  }, 15_000);
+});
+
+describe("agent-real-call — H4 definitive ACK conflict survives abort remap", () => {
+  it("completed + ACK returns expired after the deadline → failed/ACK_FAILED (not remapped to timeout)", async () => {
+    // H4: a terminal arrives immediately, but the ACK (ignoring its abort
+    // signal) resolves ackState='expired' AFTER the main deadline elapsed. The
+    // expired response is a DEFINITIVE non-acknowledged ACK conflict — it MUST
+    // keep ACK_FAILED (F1), NOT be remapped to timeout by the deadline-abort
+    // remap block. Only an acknowledged-late ACK (or an aborted-mid-flight ACK)
+    // is remapped.
+    const host = fakeHost({
+      behavior: { kind: "completed", output: "ok", usage: null },
+      ackState: "expired" as never,
+      ackDelayMs: 60,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h4-expired",
+    } as never);
+    // The definitive ACK conflict is preserved as ACK_FAILED, not masked as the
+    // timeout the deadline-abort remap would otherwise produce.
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
+    expect(result.error?.code).not.toBe("DEADLINE_TIMEOUT");
+  });
+
+  it("completed + ACK acknowledged after the deadline → timeout (late acknowledged remap still applies)", async () => {
+    // H4 guard rail: only a NON-acknowledged ACK keeps ACK_FAILED. An
+    // acknowledged ACK that resolves AFTER the deadline is STILL remapped to
+    // timeout (G5 contract preserved) — the committed call did not finish
+    // within the budget. This proves the ackConflict guard is scoped to true
+    // conflicts only and does not regress G5's late-acknowledged remap.
+    const host = fakeHost({
+      behavior: { kind: "completed", output: "ok", usage: null },
+      ackDelayMs: 60,
+    });
+    const result = await runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 20,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      idFactory: () => "h4-lateack",
+    } as never);
+    expect(result.verdict).toBe("timeout");
+    expect(result.error?.code).toBe("DEADLINE_TIMEOUT");
+    expect(result.error?.code).not.toBe("ACK_FAILED");
+  });
+
+  it("external abort during a definitive expired ACK conflict → ACK_FAILED still preserved (not cancelled)", async () => {
+    // H4: an external abort racing a definitive expired ACK conflict must also
+    // preserve ACK_FAILED — the abort remap (which would map to cancelled) is
+    // suppressed for any definitive non-acknowledged ACK response, not only
+    // deadline timeouts. The terminal is processed before the abort fires, so
+    // the run reaches the ACK stage; the delayed external abort races the
+    // slow (expired) ACK, and the definitive conflict wins over the remap.
+    const host = fakeHost({
+      behavior: { kind: "completed", output: "ok", usage: null },
+      ackState: "expired" as never,
+      ackDelayMs: 80,
+    });
+    const controller = new AbortController();
+    const promise = runAgentRealCallTest({
+      client: host.client as never,
+      profile: PROFILE,
+      modelId: "model-x",
+      persona: "p",
+      timeoutMs: 30_000,
+      now: () => Date.now(),
+      followEvents: host.followEvents as never,
+      signal: controller.signal,
+      idFactory: () => "h4-external",
+    } as never);
+    // Fire external abort only after the terminal is processed and the ACK is
+    // mid-flight (well within ackDelayMs), so the run reaches the ACK-conflict
+    // path rather than the create/execute-abort path.
+    setTimeout(() => controller.abort(), 40);
+    const result = await promise;
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("ACK_FAILED");
   });
 });
