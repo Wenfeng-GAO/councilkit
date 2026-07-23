@@ -813,7 +813,11 @@ export function createKimiStreamJsonDriver(
             // (streamIdleMs) does not apply here; the turnMs absolute timer
             // is the only turn bound.
             turn.turnTimer = setTimeout(() => {
-              if (activeTurn === turn && !turn.settled) {
+              // CK-RS-002: a turnMs armed after a pending spawn (or a callback
+              // already queued on the event loop) must NOT preempt an in-flight
+              // cancel()/close() — both set turn.cancelling, which owns the
+              // user_cancelled terminal.
+              if (activeTurn === turn && !turn.settled && !turn.cancelling) {
                 // F3: synchronously invalidate the session BEFORE the terminal so
                 // the next turn cold-rebases — the timed-out process may have
                 // already accepted/persisted an unknown incremental prompt.
@@ -984,6 +988,10 @@ export function createKimiStreamJsonDriver(
         const turn = activeTurn;
         if (!turn || turn.executionId !== executionId) return;
         turn.cancelling = true;
+        // CK-RS-002: clear the turnMs timer before awaiting the spawn / sending
+        // SIGTERM, so a slow-exiting process cannot let the absolute turn timer
+        // fire inside the cancel window and steal user_cancelled with a timeout.
+        clearTurnTimers(turn);
         // F4: cover the pending-spawn window. Await the spawn promise so a
         // process that resolves while/after cancel runs is driven through the
         // normal cancel teardown below (SIGTERM → exit → user_cancelled

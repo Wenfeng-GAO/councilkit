@@ -1268,4 +1268,147 @@ describe("kimi-stream-json driver", () => {
     expect(terminal.retryable).toBe(true);
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
   });
+
+  it("cancel wins when turnMs expires while SIGTERM exit is pending (CK-RS-002)", async () => {
+    // Turn 1 runs REAL (fake-kimi) and establishes a valid session so the
+    // cancel-time invalidateSession surfaces a kimi.session_invalidated
+    // diagnostic whose reason we can assert. Turn 2 is doubled at the
+    // DriverProcess seam: kill() records the signal but SIGTERM does NOT drive
+    // an exit (the process is modelled as ignoring it and slowly exiting), and
+    // the exit EventEmitter is hand-controlled. With a short turnMs, after the
+    // adoption gate arms the turn timer we call driver.cancel("exec-2"); the
+    // un-patched driver would let turnMs fire inside the cancel window and steal
+    // user_cancelled with a timeout. The two guards (cancel() clears the timer;
+    // the timer callback skips a cancelling turn) keep the terminal
+    // user_cancelled. We then hand-emit the exit so settleOnExit's cancelling
+    // branch resolves the turn.
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+
+    // Turn 1 (real fake-kimi) runs under the DEFAULT turnMs so it completes
+    // deterministically; we shrink turnMs to a short value only for the turn-2
+    // cancel race. The driver reads timeouts.turnMs lazily at timer-arm time, so
+    // mutating the shared object between turns is visible to turn 2 only.
+    const timeouts: DriverTimeouts = { ...BASE_TIMEOUTS };
+    const turnMs = 60;
+
+    const turnStdout = new Readable({ read() {} });
+    const turnStderr = new Readable({ read() {} });
+    turnStderr.push(null);
+    const turnEvents = new EventEmitter();
+    const killSignals: Array<{ signal: string; graceMs?: number }> = [];
+    const stuckProcess: DriverProcess = {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin: new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+      stdout: turnStdout,
+      stderr: turnStderr,
+      events: turnEvents,
+      waitSupervised: () => Promise.resolve(),
+      kill: (signal, graceMs) => {
+        killSignals.push({ signal: signal as string, graceMs });
+      },
+      closeStdin: () => {},
+      shutdown: () => Promise.resolve(),
+      __testInjectControlLine: () => {},
+    };
+    let turnSpawnCount = 0;
+    const seamSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        // Turn spawns carry `-p`; the provider-list probe does not. Double the
+        // SECOND turn spawn only — everything else runs on the real supervisor.
+        if (spec.argv.includes("-p")) {
+          turnSpawnCount += 1;
+          if (turnSpawnCount === 2) return Promise.resolve(stuckProcess);
+        }
+        return realSupervisor.spawnDriver(spec);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: seamSupervisor,
+      logger,
+      timeouts,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, { reply: "Seed turn establishes the session." });
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+
+    // Turn 1 (real): establishes the session, epoch stays 0.
+    const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
+    await run1.done;
+    expect(terminalOf(run1.events).type).toBe("completed");
+    expect(driver.sessionEpoch).toBe(0);
+
+    // Shrink the turn bound for the turn-2 cancel race window only.
+    timeouts.turnMs = turnMs;
+
+    // Turn 2 (doubled): hangs at the seam — no frames, no exit until we say so.
+    const run2 = executeCollecting(driver, execInput("exec-2", "Cancel late."));
+    await waitFor(() => turnSpawnCount === 2, 2000);
+    // Let the driver's spawn-then handler adopt the process and arm the turn
+    // timer. This sleep stays under turnMs so the timer is still pending when we
+    // cancel (it gets cleared by the fix, or would fire into the cancel window).
+    await new Promise((r) => setTimeout(r, 40));
+
+    const cancelPromise = driver.cancel("exec-2");
+    // Wait past the (short) turnMs deadline: with the fix the timer was cleared
+    // on cancel and never fires; without the fix, turnMs fires here and steals
+    // the terminal with a timeout. Either way we then hand-drive the exit.
+    await new Promise((r) => setTimeout(r, turnMs + 60));
+    // SIGTERM was sent but ignored — hand-emit the exit (stdout EOF first so the
+    // drain settles synchronously) so settleOnExit's cancelling branch fires the
+    // user_cancelled terminal.
+    turnStdout.push(null);
+    turnEvents.emit("exit", { code: null, signal: "SIGTERM" });
+    await cancelPromise;
+    await run2.done;
+
+    // Exactly one terminal, and it is the cancel terminal (not a timeout).
+    const terminals = run2.events.filter(
+      (event): event is Terminal =>
+        event.type === "completed" || event.type === "failed" || event.type === "interrupted",
+    );
+    expect(terminals).toHaveLength(1);
+    const terminal = terminals[0];
+    if (!terminal) throw new Error("unreachable");
+    expect(terminal.type).toBe("interrupted");
+    if (terminal.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+
+    // The cancel teardown sent SIGTERM (the slow-exit window we exercised).
+    expect(killSignals.some((k) => k.signal === "SIGTERM")).toBe(true);
+
+    // The session was invalidated as user_cancelled, NOT turn_timeout: the turnMs
+    // callback did not run (cleared by cancel) and did not settle (cancelling
+    // guard). The orchestrator's clean-discard path keys on user_cancelled.
+    const invalidations = logger.diagnostics().filter((d) => d.kind === "kimi.session_invalidated");
+    expect(invalidations.length).toBeGreaterThanOrEqual(1);
+    expect(invalidations[invalidations.length - 1].message).toBe("user_cancelled");
+    expect(invalidations.filter((d) => d.message === "turn_timeout")).toHaveLength(0);
+    expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+  });
 });
