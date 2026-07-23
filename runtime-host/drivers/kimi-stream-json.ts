@@ -148,7 +148,6 @@ interface ActiveTurn {
   dispatchState: "not_dispatched" | "accepted" | "unknown";
   cancelling: boolean;
   settled: boolean;
-  idleTimer?: NodeJS.Timeout;
   turnTimer?: NodeJS.Timeout;
   resolve(): void;
 }
@@ -192,7 +191,6 @@ export function createKimiStreamJsonDriver(
     }
 
     function clearTurnTimers(turn: ActiveTurn) {
-      if (turn.idleTimer) clearTimeout(turn.idleTimer);
       if (turn.turnTimer) clearTimeout(turn.turnTimer);
     }
 
@@ -243,27 +241,6 @@ export function createKimiStreamJsonDriver(
       sessionEpoch += 1;
     }
 
-    function armIdleTimer(turn: ActiveTurn) {
-      if (turn.idleTimer) clearTimeout(turn.idleTimer);
-      turn.idleTimer = setTimeout(() => {
-        // F3: synchronously invalidate the session BEFORE the terminal — a
-        // hung turn may have silently accepted a prompt into a session whose
-        // state can no longer be trusted, so the next turn cold-rebases. The
-        // invalidation happens exactly once here (emitTerminal clears the turn).
-        invalidateSession("stream_idle_timeout");
-        failTurn(
-          turn,
-          makeError("STREAM_IDLE_TIMEOUT", "stream", "No protocol frames within the idle limit.", {
-            driverId: "kimi-stream-json",
-            executionId: turn.executionId,
-            participantId,
-          }),
-        );
-        // Reap the process group so the timed-out turn is not left running.
-        void reapActiveProcess("idle_timeout");
-      }, timeouts.streamIdleMs);
-    }
-
     let activeProcess: DriverProcess | null = null;
     /**
      * F4: the in-flight spawnDriver promise. cancel()/close() cover and await this
@@ -298,7 +275,6 @@ export function createKimiStreamJsonDriver(
 
     function onFrame(turn: ActiveTurn, message: Record<string, unknown>) {
       if (turn.settled) return;
-      armIdleTimer(turn); // any frame resets the idle window
       const role = typeof message.role === "string" ? message.role : "";
       if (role === "assistant") {
         // A tooled turn emits assistant frames carrying only `tool_calls`
@@ -830,8 +806,12 @@ export function createKimiStreamJsonDriver(
             // until the assistant frame arrives.
             if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
 
-            // Turn + idle timers (armed after spawn so a never-supervised spawn
-            // still times out rather than hanging the execute promise).
+            // Turn timer (armed after spawn so a never-supervised spawn
+            // still times out rather than hanging the execute promise). The
+            // kimi protocol is final-only — it emits NO frames during
+            // generation, so the streaming-style per-frame idle watchdog
+            // (streamIdleMs) does not apply here; the turnMs absolute timer
+            // is the only turn bound.
             turn.turnTimer = setTimeout(() => {
               if (activeTurn === turn && !turn.settled) {
                 // F3: synchronously invalidate the session BEFORE the terminal so
@@ -842,7 +822,6 @@ export function createKimiStreamJsonDriver(
                 void reapActiveProcess("turn_timeout");
               }
             }, timeouts.turnMs);
-            armIdleTimer(turn);
           })
           .catch((error: unknown) => {
             pendingSpawn = null;

@@ -162,7 +162,10 @@ function makeInstallation(): InstallationRecord {
   };
 }
 
-async function createDriver(config: Record<string, unknown> = {}): Promise<ParticipantDriver> {
+async function createDriver(
+  config: Record<string, unknown> = {},
+  timeouts: DriverTimeouts = BASE_TIMEOUTS,
+): Promise<ParticipantDriver> {
   const participantId = "p-1";
   const config2: HostConfig = {
     mode: "production",
@@ -179,7 +182,7 @@ async function createDriver(config: Record<string, unknown> = {}): Promise<Parti
   const deps: DriverDeps = {
     supervisor,
     logger,
-    timeouts: BASE_TIMEOUTS,
+    timeouts,
     workRoot: join(tempRoot, "work"),
   };
   const driver = createKimiStreamJsonDriver(deps)(participantId);
@@ -418,14 +421,18 @@ describe("kimi-stream-json driver", () => {
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
   });
 
-  it("idle hang -> STREAM_IDLE_TIMEOUT", async () => {
-    const driver = await createDriver({ hang: true });
+  it("silent turn (final-only protocol) -> turnMs timeout, NOT stream-idle", async () => {
+    // The kimi protocol emits NO frames during generation: a long generation
+    // must not be killed by a per-frame idle watchdog. The only bound is the
+    // turnMs absolute timer (interruptTurn "timeout" + session invalidation).
+    const driver = await createDriver({ hang: true }, { ...BASE_TIMEOUTS, turnMs: 3000 });
     const run = executeCollecting(driver, execInput("exec-1", "Hang."));
     await run.done;
     const terminal = terminalOf(run.events);
-    expect(terminal.type).toBe("failed");
-    if (terminal.type !== "failed") throw new Error("unreachable");
-    expect(terminal.error.code).toBe("STREAM_IDLE_TIMEOUT");
+    expect(terminal.type).toBe("interrupted");
+    if (terminal.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("timeout");
+    expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
   });
 
   it("malformed JSON line is off-protocol: turn completes with toolState=unknown (discardable, F6)", async () => {
@@ -678,12 +685,13 @@ describe("kimi-stream-json driver", () => {
     expect(terminal.toolState).toBe("none");
   });
 
-  it("F3: a successful first turn establishes a sid; a resume turn that hangs idles out and the NEXT turn is a full coldStart with no -S", async () => {
+  it("F3: a successful first turn establishes a sid; a resume turn that hangs times out and the NEXT turn is a full coldStart with no -S", async () => {
     // Turn 1 succeeds and captures a resume hint (clean, toolState=none).
-    // Turn 2 is a resume turn that emits nothing and hangs (idle timeout). It
-    // must fail AND the sessionEpoch must bump synchronously so turn 3 is a
+    // Turn 2 is a resume turn that emits nothing and hangs (turnMs timeout —
+    // the final-only protocol has no per-frame idle watchdog). It must be
+    // interrupted AND the sessionEpoch must bump synchronously so turn 3 is a
     // cold rebase (full prompt, no -S) rather than an incremental resume.
-    const driver = await createDriver({ reply: "First cold." });
+    const driver = await createDriver({ reply: "First cold." }, { ...BASE_TIMEOUTS, turnMs: 3000 });
     const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
     await run1.done;
     expect(terminalOf(run1.events).type).toBe("completed");
@@ -694,9 +702,9 @@ describe("kimi-stream-json driver", () => {
     const run2 = executeCollecting(driver, execInput("exec-2", "Hang on resume."));
     await run2.done;
     const t2 = terminalOf(run2.events);
-    expect(t2.type).toBe("failed");
-    if (t2.type !== "failed") throw new Error("unreachable");
-    expect(t2.error.code).toBe("STREAM_IDLE_TIMEOUT");
+    expect(t2.type).toBe("interrupted");
+    if (t2.type !== "interrupted") throw new Error("unreachable");
+    expect(t2.reason).toBe("timeout");
     // F3: the timeout invalidated the session synchronously (before the
     // terminal), bumping the epoch.
     expect(driver.sessionEpoch).toBeGreaterThan(epochAfterTurn1);
