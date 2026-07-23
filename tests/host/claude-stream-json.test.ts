@@ -635,6 +635,7 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     participantId: string,
     events: EventEmitter,
     onShutdown?: () => void,
+    stdinLines?: string[],
   ): DriverProcess {
     return {
       participantId,
@@ -642,7 +643,12 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
       pgid: -1,
       watchdogPid: -1,
       stdin: new Writable({
-        write(_chunk, _encoding, callback) {
+        write(chunk, _encoding, callback) {
+          if (stdinLines) {
+            for (const line of chunk.toString("utf8").split("\n")) {
+              if (line.length > 0) stdinLines.push(line);
+            }
+          }
           callback();
         },
       }),
@@ -663,6 +669,7 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
   async function buildSeamDriver(
     fakeProcess: DriverProcess,
     onSpawn: () => void,
+    spawnImpl?: () => Promise<DriverProcess>,
   ): Promise<{ participantId: string; driver: ParticipantDriver }> {
     const participantId = "p-1";
     const config: HostConfig = {
@@ -681,7 +688,7 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
       ...realSupervisor,
       spawnDriver: () => {
         onSpawn();
-        return Promise.resolve(fakeProcess);
+        return spawnImpl ? spawnImpl() : Promise.resolve(fakeProcess);
       },
     };
     const deps: DriverDeps = {
@@ -706,15 +713,21 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     // no timer race.
     let shutdownCalls = 0;
     const events = new EventEmitter();
-    const fakeProcess = makeFakeProcess("p-1", events, () => {
-      shutdownCalls += 1;
-      // The first (and only) shutdown comes from close() and drives the
-      // SIGTERM exit the in-flight initialize is parked behind; idempotent —
-      // afterEach's close() finds process=null and reaps nothing.
-      if (shutdownCalls === 1) {
-        events.emit("exit", { code: null, signal: "SIGTERM" });
-      }
-    });
+    const stdinLines: string[] = [];
+    const fakeProcess = makeFakeProcess(
+      "p-1",
+      events,
+      () => {
+        shutdownCalls += 1;
+        // The first (and only) shutdown comes from close() and drives the
+        // SIGTERM exit the in-flight initialize is parked behind; idempotent —
+        // afterEach's close() finds process=null and reaps nothing.
+        if (shutdownCalls === 1) {
+          events.emit("exit", { code: null, signal: "SIGTERM" });
+        }
+      },
+      stdinLines,
+    );
     let spawnCount = 0;
     const { participantId, driver } = await buildSeamDriver(fakeProcess, () => {
       spawnCount += 1;
@@ -733,8 +746,10 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
         (error: unknown) => ({ ok: false as const, error }),
       );
     await waitFor(() => spawnCount === 1, 2000);
-    // Let the driver register the in-flight initialize control before close().
-    await new Promise((r) => setTimeout(r, 30));
+    // Deterministic sync: wait until the `initialize` control frame is written
+    // to stdin, which is exactly when the in-flight control is registered and
+    // parked (no fixed sleep).
+    await waitFor(() => stdinLines.some((line) => line.includes('"subtype":"initialize"')), 2000);
 
     // close() while initialize is in flight.
     await driver.close();
@@ -747,6 +762,65 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     }
     expect(driver.capabilityState()).toBe("checking"); // closed — never ready
     expect(shutdownCalls).toBeGreaterThanOrEqual(1);
+    expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
+  });
+
+  it("AC1c: close() during a pending spawn shuts the late process down and rejects CANCELLED without adopting (P1)", async () => {
+    // P1: close() during the spawn await (process===null, nothing pending to
+    // fail) previously closed the driver outright; the late spawn then resolved
+    // and was adopted into the closed driver — a leak the catch fallback
+    // masked. The pendingSpawn track + post-spawn guard must shut the late
+    // process down, reject CANCELLED, and never adopt it (capabilityState stays
+    // checking, never ready). Gated in-memory seam: the spawn resolves only
+    // when close() has already set state='closing' and parked on pendingSpawn.
+    let shutdownCalls = 0;
+    const events = new EventEmitter();
+    const fakeProcess = makeFakeProcess("p-1", events, () => {
+      shutdownCalls += 1;
+    });
+    let releaseSpawn: () => void = () => {};
+    const spawnGate = new Promise<DriverProcess>((resolveSpawn) => {
+      releaseSpawn = () => resolveSpawn(fakeProcess);
+    });
+    let spawnCount = 0;
+    const { participantId, driver } = await buildSeamDriver(
+      fakeProcess,
+      () => {
+        spawnCount += 1;
+      },
+      () => spawnGate,
+    );
+
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    // prewarm parks inside the gated spawn await (pendingSpawn registered).
+    await waitFor(() => spawnCount === 1, 2000);
+
+    // close() while the spawn is pending (process===null). close() sets
+    // state='closing' synchronously, then awaits pendingSpawn.
+    const closePromise = driver.close();
+    // Release the gate: the spawn resolves, the post-spawn guard sees closing,
+    // shuts the late process down and rejects CANCELLED, and close() completes.
+    releaseSpawn();
+    await closePromise;
+
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
+    }
+    // The late process was reaped by the guard, never adopted (the driver never
+    // reached ready — process was never assigned).
+    expect(shutdownCalls).toBeGreaterThanOrEqual(1);
+    expect(driver.capabilityState()).toBe("checking");
     expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
   });
 

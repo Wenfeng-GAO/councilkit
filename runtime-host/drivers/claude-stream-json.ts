@@ -147,6 +147,12 @@ export function createClaudeStreamJsonDriver(
   return (participantId: string): ParticipantDriver => {
     let state: DriverState = "cold";
     let process: DriverProcess | null = null;
+    // H4/F4 (CK-RS-001 port): track the in-flight spawn so close() can await it
+    // (kimi pendingSpawn pattern). A process that resolves while/after close()
+    // ran is shut down by the post-spawn guard below, never adopted into a
+    // closing driver — closing the P1 leak window (close() during the spawn
+    // await, process===null, nothing pending to fail).
+    let pendingSpawn: Promise<DriverProcess> | null = null;
     let sessionEpoch = 0;
     let canonicalModel: string | null = null;
     let catalog: string[] = [];
@@ -568,7 +574,7 @@ export function createClaudeStreamJsonDriver(
       const spec = installationRecordToSpec(installation);
       const cwd = join(workRoot, participantId);
       await mkdir(cwd, { recursive: true });
-      const spawned = await supervisor.spawnDriver({
+      const spawnPromise = supervisor.spawnDriver({
         participantId,
         executable: installation.realpath ?? spec,
         argv: buildArgv(persona),
@@ -576,6 +582,26 @@ export function createClaudeStreamJsonDriver(
         envInherit: ENV_INHERIT,
         envSet,
       });
+      // F4 (kimi pendingSpawn pattern): register the in-flight spawn BEFORE
+      // awaiting so close() can cover the spawn window. The post-spawn guard
+      // below shuts a late process down rather than adopting it into a closing
+      // driver (P1: close() during the spawn await left process===null, so
+      // close() finished outright and the late spawn was adopted to a closed
+      // driver — a leak the catch fallback then masked).
+      pendingSpawn = spawnPromise;
+      const spawned = await spawnPromise.finally(() => {
+        if (pendingSpawn === spawnPromise) pendingSpawn = null;
+      });
+      // G2: close() ran while the spawn was pending. Never adopt the process —
+      // shut it down immediately and fail the prewarm CANCELLED so the scope
+      // short-circuits to prewarm_cancelled (H4), instead of leaking an
+      // adopted-to-closed driver (P1).
+      if (isClosingOrClosed()) {
+        await spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+        throw Object.assign(new Error("claude driver closed during prewarm"), {
+          runtimeCode: "CANCELLED",
+        });
+      }
       process = spawned;
       await attachHandshakeStreams(spawned);
 
@@ -797,16 +823,14 @@ export function createClaudeStreamJsonDriver(
         } catch (error) {
           // H4 (CK-RS-001 port): a handshake rejected because close() shut the
           // probe down is a lifecycle cancellation, not a readiness failure.
-          // Surface CANCELLED and leave the state transition to close() (never
-          // write back cold on the close path — that would race close()'s
-          // closing→closed flip and mislabel the scope. A genuine handshake
-          // failure with no concurrent close keeps the existing cold + throw).
+          // The source guards already label close-caught errors CANCELLED (the
+          // post-spawn guard for the spawn window; onProcessExit's
+          // failAllPendingControls for the in-flight initialize window), so just
+          // rethrow on the close path — never write back cold there (that would
+          // race close()'s closing→closed flip and mislabel the scope). A
+          // genuine handshake failure with no concurrent close keeps cold + throw.
           if (isClosingOrClosed()) {
-            const code = (error as { runtimeCode?: string }).runtimeCode;
-            if (code === "CANCELLED") throw error;
-            throw Object.assign(new Error("claude driver closed during prewarm"), {
-              runtimeCode: "CANCELLED",
-            });
+            throw error;
           }
           state = "cold";
           throw error;
@@ -903,6 +927,15 @@ export function createClaudeStreamJsonDriver(
           } catch {
             // best effort
           }
+        }
+        // F4 (kimi cancel pattern): wait for any pending spawn to resolve so a
+        // process spawned-but-not-yet-adopted is handled by the post-spawn guard
+        // (shut down + CANCELLED) rather than adopted into this closing driver
+        // and leaked (P1).
+        const pending = pendingSpawn;
+        if (pending) {
+          await pending.catch(() => undefined);
+          pendingSpawn = null;
         }
         const current = process;
         process = null;
