@@ -96,6 +96,14 @@ export function createCodexAppServerDriver(
       pending.clear();
     }
 
+    // H4 (CK-RS-001 port): close() flips `state` to "closing" then "closed"
+    // asynchronously across `await`s; every close-sensitive check goes through
+    // this indirection so inline `state === "closing"` narrowing after an await
+    // does not lie (mirrors kimi-stream-json L180).
+    function isClosingOrClosed(): boolean {
+      return state === "closing" || state === "closed";
+    }
+
     function sendRequest(method: string, params: unknown): Promise<unknown> {
       if (!process) return Promise.reject(new Error("app-server not running"));
       const id = `ck-${participantId}-${++requestCounter}`;
@@ -400,7 +408,19 @@ export function createCodexAppServerDriver(
         sessionEpoch += 1;
         state = "cold";
       }
-      failAllPending(new Error("app-server exited"));
+      // H4 (CK-RS-001 port): an exit during an intentional close() is a
+      // lifecycle cancellation, NOT a crash — label the close-caught rejection
+      // CANCELLED so scope-manager.prewarmParticipant short-circuits to cold/
+      // readiness-null + scope.prewarm_cancelled instead of poisoning the
+      // closing scope with runtime_unavailable + scope.prewarm_failed. A
+      // genuine crash (no concurrent close) keeps the plain 'app-server exited'.
+      failAllPending(
+        isClosingOrClosed()
+          ? Object.assign(new Error("codex app-server closed during prewarm"), {
+              runtimeCode: "CANCELLED",
+            })
+          : new Error("app-server exited"),
+      );
       const turn = activeTurn;
       if (turn) {
         // Ephemeral thread is gone. If any tool activity was seen, the tool
@@ -596,6 +616,19 @@ export function createCodexAppServerDriver(
           await spawnProcess(input.installation);
           await handshake(input.spec.modelId);
         } catch (error) {
+          // H4 (CK-RS-001 port): a handshake rejected because close() shut the
+          // app-server down is a lifecycle cancellation, not a readiness
+          // failure. Surface CANCELLED and leave the state transition to
+          // close() (never write back cold on the close path — that would race
+          // close()'s closing→closed flip. A genuine failure with no concurrent
+          // close keeps the existing cold + throw).
+          if (isClosingOrClosed()) {
+            const code = (error as { runtimeCode?: string }).runtimeCode;
+            if (code === "CANCELLED") throw error;
+            throw Object.assign(new Error("codex app-server closed during prewarm"), {
+              runtimeCode: "CANCELLED",
+            });
+          }
           state = "cold";
           throw error;
         }

@@ -170,6 +170,15 @@ export function createClaudeStreamJsonDriver(
       pendingControls.clear();
     }
 
+    // H4 (CK-RS-001 port): close() flips `state` to "closing" then "closed"
+    // asynchronously across `await`s. Inline `state === "closing"` comparisons
+    // after an earlier narrowing would fail typecheck even though close() CAN
+    // flip the state concurrently, so every close-sensitive check goes through
+    // this indirection to stay honest (mirrors kimi-stream-json L180).
+    function isClosingOrClosed(): boolean {
+      return state === "closing" || state === "closed";
+    }
+
     function sendControl(request: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (!process) return Promise.reject(new Error("driver process not running"));
       const requestId = `ck-${participantId}-${++requestCounter}`;
@@ -448,7 +457,23 @@ export function createClaudeStreamJsonDriver(
         state = "cold";
       }
       initVerified = false;
-      failAllPendingControls(new Error("driver process exited"));
+      // H4 (CK-RS-001 port): an exit during an intentional close() (controller-
+      // close / host closeAll / creating-TTL sweeper → closeScopeInternal →
+      // driver.close() → shutdown SIGTERMs the in-flight handshake) is a
+      // lifecycle cancellation, NOT a crash. Label the close-caught rejection
+      // CANCELLED so scope-manager.prewarmParticipant short-circuits to entry
+      // runtime='cold' + binding/readiness null + scope.prewarm_cancelled,
+      // instead of poisoning the closing scope with readiness.runtime_unavailable
+      // + scope.prewarm_failed. A genuine crash (no concurrent close) keeps the
+      // plain runtimeCode-less 'driver process exited' unchanged — failAllPending*
+      // also serves real crashes, so it must NOT be globally relabelled.
+      failAllPendingControls(
+        isClosingOrClosed()
+          ? Object.assign(new Error("claude driver closed during prewarm"), {
+              runtimeCode: "CANCELLED",
+            })
+          : new Error("driver process exited"),
+      );
       const turn = activeTurn;
       if (turn) {
         terminateTurn(
@@ -770,6 +795,19 @@ export function createClaudeStreamJsonDriver(
         try {
           await spawnAndHandshake(input.installation);
         } catch (error) {
+          // H4 (CK-RS-001 port): a handshake rejected because close() shut the
+          // probe down is a lifecycle cancellation, not a readiness failure.
+          // Surface CANCELLED and leave the state transition to close() (never
+          // write back cold on the close path — that would race close()'s
+          // closing→closed flip and mislabel the scope. A genuine handshake
+          // failure with no concurrent close keeps the existing cold + throw).
+          if (isClosingOrClosed()) {
+            const code = (error as { runtimeCode?: string }).runtimeCode;
+            if (code === "CANCELLED") throw error;
+            throw Object.assign(new Error("claude driver closed during prewarm"), {
+              runtimeCode: "CANCELLED",
+            });
+          }
           state = "cold";
           throw error;
         }

@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type { HostConfig } from "@host/config";
 import { createCodexAppServerDriver } from "@host/drivers/codex-app-server";
@@ -15,7 +17,11 @@ import type {
 } from "@host/drivers/types";
 import type { InstallationRecord } from "@host/installations/registry";
 import { type Logger, createLogger } from "@host/logging";
-import { type ProcessSupervisor, createProcessSupervisor } from "@host/process/process-supervisor";
+import {
+  type DriverProcess,
+  type ProcessSupervisor,
+  createProcessSupervisor,
+} from "@host/process/process-supervisor";
 import type { ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -349,5 +355,172 @@ describe("codex-app-server driver protocol", () => {
     expect(terminal2.retryable).toBe(true);
     expect(aggregateStats().counts.turnStarts).toBe(1);
     expect(aggregateStats().pids).toHaveLength(1);
+  });
+});
+
+/**
+ * H4 (CK-RS-001 port) — close()-caught prewarm handshake shutdowns must carry
+ * runtimeCode CANCELLED. These tests exercise the driver layer directly with an
+ * in-memory DriverProcess seam: the `initialize` RPC is held in flight (no
+ * response is ever emitted, so withDeadline stays suspended — no timer race),
+ * then close() (or a bare exit) drives onProcessExit. The scope-manager
+ * CANCELLED branch itself is already covered by the CK-RS-001 integration suite
+ * (tests/integration/runtime-host.test.ts:1291), so proving the driver emits
+ * runtimeCode CANCELLED here is sufficient.
+ */
+describe("codex-app-server driver H4 close()-caught handshake", () => {
+  function makeFakeProcess(
+    participantId: string,
+    events: EventEmitter,
+    onShutdown?: () => void,
+  ): DriverProcess {
+    return {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin: new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+      stdout: new Readable({ read() {} }),
+      stderr: new Readable({ read() {} }),
+      events,
+      waitSupervised: () => Promise.resolve(),
+      kill: () => {},
+      closeStdin: () => {},
+      shutdown: () => {
+        onShutdown?.();
+        return Promise.resolve();
+      },
+      __testInjectControlLine: () => {},
+    };
+  }
+
+  async function buildSeamDriver(
+    fakeProcess: DriverProcess,
+    onSpawn: () => void,
+  ): Promise<{ participantId: string; driver: ParticipantDriver }> {
+    const participantId = "p-1";
+    const config: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config, logger });
+    supervisors.push(realSupervisor);
+    const seamSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: () => {
+        onSpawn();
+        return Promise.resolve(fakeProcess);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: seamSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createCodexAppServerDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, {});
+    return { participantId, driver };
+  }
+
+  it("AC1b: close() during an in-flight initialize rejects CANCELLED, not the plain crash label", async () => {
+    // closeScopeInternal (controller-close / host closeAll / 30s creating-TTL
+    // sweeper) → driver.close() SIGTERMs the app-server while the `initialize`
+    // RPC is in flight. onProcessExit runs with state='closing', so the
+    // isClosingOrClosed() guard must label the close-caught rejection CANCELLED
+    // (H4), never the plain 'app-server exited'. In-memory seam: no exit is
+    // emitted until shutdown, so withDeadline is suspended — no timer race.
+    let shutdownCalls = 0;
+    const events = new EventEmitter();
+    const fakeProcess = makeFakeProcess("p-1", events, () => {
+      shutdownCalls += 1;
+      // The first (and only) shutdown comes from close() and drives the
+      // SIGTERM exit the in-flight initialize is parked behind; idempotent —
+      // afterEach's close() finds process=null and reaps nothing.
+      if (shutdownCalls === 1) {
+        events.emit("exit", { code: null, signal: "SIGTERM" });
+      }
+    });
+    let spawnCount = 0;
+    const { participantId, driver } = await buildSeamDriver(fakeProcess, () => {
+      spawnCount += 1;
+    });
+
+    // prewarm parks at sendRequest('initialize'); no RPC result is ever
+    // emitted, so withDeadline stays suspended — no timer race.
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await waitFor(() => spawnCount === 1, 2000);
+    // Let the driver register the in-flight initialize request before close().
+    await new Promise((r) => setTimeout(r, 30));
+
+    // close() while initialize is in flight.
+    await driver.close();
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
+      // NOT the plain crash label that the unguarded path emits.
+      expect((outcome.error as Error).message).not.toBe("app-server exited");
+    }
+    expect(driver.capabilityState()).toBe("checking"); // closed — never ready
+    expect(shutdownCalls).toBeGreaterThanOrEqual(1);
+    expect(pgrepCount("fake-codex-app-server[.]mjs")).toBe(0);
+  });
+
+  it("AC2: a process exit without close() rejects with the plain 'app-server exited' (no CANCELLED regression)", async () => {
+    // A genuine crash during the handshake (no concurrent close) keeps the
+    // existing non-CANCELLED path: onProcessExit runs with state='starting', so
+    // the isClosingOrClosed() guard is false, failAllPending keeps the plain
+    // crash label, and prewarm writes back cold.
+    const events = new EventEmitter();
+    const fakeProcess = makeFakeProcess("p-1", events);
+    let spawnCount = 0;
+    const { participantId, driver } = await buildSeamDriver(fakeProcess, () => {
+      spawnCount += 1;
+    });
+
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await waitFor(() => spawnCount === 1, 2000);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // A genuine exit with no concurrent close(): the process dies on its own.
+    events.emit("exit", { code: 1, signal: null });
+
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBeUndefined();
+      expect((outcome.error as Error).message).toBe("app-server exited");
+    }
+    expect(pgrepCount("fake-codex-app-server[.]mjs")).toBe(0);
   });
 });
