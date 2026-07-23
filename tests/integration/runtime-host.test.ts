@@ -49,10 +49,21 @@ function createFakeDriver(
      * (preserves all existing tests). >0 = setTimeout-based delay (real timer,
      * consistent with V3 real-clock style). */
     prewarmDelayMs?: number;
+    /** CK-RS-001 AC3/AC4: reject prewarm immediately with this error (e.g. an
+     * AUTH_REQUIRED-shaped error) — models a genuine provider-auth failure with
+     * no concurrent close. */
+    prewarmError?: Error;
+    /** CK-RS-001 AC3: suspend prewarm until close() runs, then reject with this
+     * error — models a close()-during-prewarm (CANCELLED) lifecycle shutdown
+     * where the driver's close path rejects the in-flight prewarm. */
+    prewarmRejectOnClose?: Error;
   } = {},
 ): FakeDriver {
   const reply = options.reply ?? `answer-from-${participantId}`;
   let savedEmit: Emit | null = null;
+  // Captured reject for a prewarm suspended via prewarmRejectOnClose; close()
+  // fires it to model a close()-driven prewarm cancellation.
+  let pendingPrewarmReject: ((error: Error) => void) | null = null;
   const fake: FakeDriver = {
     participantId,
     driverId: "codex-app-server",
@@ -69,6 +80,13 @@ function createFakeDriver(
         capability: { protocol: "fake" },
         catalog: [input.spec.modelId],
       };
+      if (options.prewarmError) return Promise.reject(options.prewarmError);
+      if (options.prewarmRejectOnClose) {
+        // Suspend until close() rejects the in-flight prewarm.
+        return new Promise<PrewarmResult>((_resolve, reject) => {
+          pendingPrewarmReject = (error: Error) => reject(error);
+        });
+      }
       const delay = options.prewarmDelayMs ?? 0;
       if (delay <= 0) return Promise.resolve(result);
       return new Promise((resolve) => setTimeout(() => resolve(result), delay));
@@ -144,6 +162,13 @@ function createFakeDriver(
               finalSeq: 0,
             });
           }
+          // CK-RS-001 AC3: a close()-driven prewarm cancellation rejects the
+          // suspended prewarm (driver owns the close path) before close returns.
+          if (options.prewarmRejectOnClose && pendingPrewarmReject) {
+            const reject = pendingPrewarmReject;
+            pendingPrewarmReject = null;
+            reject(options.prewarmRejectOnClose);
+          }
           fake.closeCount += 1;
           fake.sessionEpoch += 1;
           resolvePromise();
@@ -203,6 +228,9 @@ interface Rig {
   host: TestHost;
   scopeManager: ScopeManager;
   drivers: Map<string, FakeDriver>;
+  /** CK-RS-001: scope-manager logger event names (info/warn) in emission order;
+   * populated only when the rig is built with `captureLog: true`. */
+  logEvents?: string[];
 }
 
 async function createRig(
@@ -211,7 +239,15 @@ async function createRig(
     /** V3: per-participant driver options (e.g. lateTerminalOnClose) applied
      * at factory time so the created FakeDriver owns its own closeCount + the
      * emit captured during execute (a second driver would read neither). */
-    driverOptions?: Record<string, { lateTerminalOnClose?: string; prewarmDelayMs?: number }>;
+    driverOptions?: Record<
+      string,
+      {
+        lateTerminalOnClose?: string;
+        prewarmDelayMs?: number;
+        prewarmError?: Error;
+        prewarmRejectOnClose?: Error;
+      }
+    >;
     /** rot-runtime-host-scopes-001: override the creating-scope TTL to a short
      * value so the sweeper can fire within a test. Falls back to the 30s
      * production default (TIMEOUTS.creatingScopeTtlMs) when omitted. */
@@ -219,12 +255,31 @@ async function createRig(
     /** Injectable clock used by checkScopeCreateRate + scopeCreateTimestamps.
      * Only affects rate-gating; real setTimeout/setInterval still use wall-clock. */
     now?: () => number;
+    /** CK-RS-001: capture scope-manager logger event names onto `rig.logEvents`
+     * so tests can assert scope.prewarm_cancelled / scope.prewarm_failed. */
+    captureLog?: boolean;
   } = {},
 ): Promise<Rig> {
   const drivers = new Map<string, FakeDriver>();
   const installations = fakeInstallationRegistry();
   const executions = createExecutionRegistry({ logger: nullLogger });
   const reconciler = createSessionReconciler();
+  const logEvents: string[] | undefined = options.captureLog ? [] : undefined;
+  const scopeLogger: import("@host/logging").Logger = logEvents
+    ? {
+        info: (event: string) => logEvents.push(event),
+        warn: (event: string) => logEvents.push(event),
+        error: (event: string) => logEvents.push(event),
+        diagnostic: () => ({
+          diagnosticId: "",
+          at: "",
+          kind: "",
+          message: "",
+        }),
+        diagnostics: () => [],
+        recentProblems: () => [],
+      }
+    : nullLogger;
   const scopeManager = createScopeManager({
     installations,
     executions,
@@ -236,7 +291,7 @@ async function createRig(
         return driver;
       },
     },
-    logger: nullLogger,
+    logger: scopeLogger,
     hostInstanceId: "integration-host",
     idleScopeTtlMs: options.idleScopeTtlMs,
     creatingScopeTtlMs: options.creatingScopeTtlMs,
@@ -251,7 +306,7 @@ async function createRig(
     },
     routesFactory: (services) => [...installationRoutes(services), ...scopeRoutes(services)],
   });
-  return { host, scopeManager, drivers };
+  return { host, scopeManager, drivers, logEvents };
 }
 
 const nullLogger = {
@@ -1230,5 +1285,108 @@ describe("scope-manager creating-TTL × prewarm race (rot-runtime-host-scopes-00
 
     // Closed scopes remain in the map (裁决:不做 scopes.delete).
     expect(scopeManager._scopes.size).toBe(N);
+  });
+});
+
+describe("scope-manager CANCELLED vs AUTH_REQUIRED prewarm (CK-RS-001)", () => {
+  // CK-RS-001: a close()-during-prewarm must surface CANCELLED (H4 lifecycle
+  // label) and leave the participant cold/null/null with a scope.prewarm_cancelled
+  // log — never runtime_unavailable / scope.prewarm_failed (which would poison
+  // teardown diagnostics with a spurious auth failure). A genuine provider-auth
+  // failure (no concurrent close) must keep the existing failed / runtime_unavailable
+  // / scope.prewarm_failed semantics unchanged.
+
+  it("CANCELLED prewarm: closeAll during a hung prewarm leaves the participant cold/null/null + scope.prewarm_cancelled (no prewarm_failed)", async () => {
+    const rig = await createRig({
+      captureLog: true,
+      driverOptions: {
+        "p-cancel-1": {
+          // The driver's close path rejects the in-flight prewarm with the
+          // CANCELLED lifecycle label.
+          prewarmRejectOnClose: Object.assign(new Error("kimi driver closed during prewarm"), {
+            runtimeCode: "CANCELLED",
+          }),
+        },
+      },
+    });
+    rigs.push(rig);
+
+    // Fire createScope but do NOT await it — prewarm is suspended
+    // (prewarmRejectOnClose) so createScope parks inside Promise.all(prewarm).
+    const createPromise = rig.scopeManager.createScope({
+      scopeRequestId: "req-cancel-prewarm-0001",
+      participants: [spec("p-cancel-1")],
+    });
+    // Let createScope register the scope and reach the prewarm await.
+    await new Promise((r) => setTimeout(r, 20));
+    const scope = [...rig.scopeManager._scopes.values()].find(
+      (s) => s.scopeRequestId === "req-cancel-prewarm-0001",
+    );
+    expect(scope).toBeDefined();
+    expect(scope?.participants.get("p-cancel-1")?.runtime).toBe("prewarming");
+
+    // closeAll during the in-flight prewarm: closeScopeInternal closes the
+    // driver, which rejects the suspended prewarm CANCELLED.
+    await rig.scopeManager.closeAll("test-close-during-prewarm");
+    // createScope resolves once prewarmParticipant's catch handles CANCELLED
+    // (it does not rethrow).
+    await createPromise;
+
+    expect(scope?.state).toBe("closed");
+    const entry = scope?.participants.get("p-cancel-1");
+    expect(entry?.runtime).toBe("cold");
+    expect(entry?.binding).toBeNull();
+    expect(entry?.readiness).toBeNull();
+
+    const events = rig.logEvents ?? [];
+    expect(events).toContain("scope.prewarm_cancelled");
+    expect(events).not.toContain("scope.prewarm_failed");
+
+    const driver = rig.drivers.get("p-cancel-1") as FakeDriver;
+    expect(driver.prewarmCount).toBe(1);
+    // Only closeScopeInternal closed the driver; the CANCELLED branch does NOT
+    // re-invoke driver.close() (the driver already owns the close path).
+    expect(driver.closeCount).toBe(1);
+    const counts = rig.scopeManager.counts();
+    expect(counts.liveDriverProcesses).toBe(0);
+  });
+
+  it("AUTH_REQUIRED prewarm: an immediate genuine auth failure leaves the participant failed + runtime_unavailable + scope.prewarm_failed (no prewarm_cancelled)", async () => {
+    const rig = await createRig({
+      captureLog: true,
+      driverOptions: {
+        "p-auth-1": {
+          prewarmError: Object.assign(new Error("provider list exited with code 7"), {
+            runtimeCode: "AUTH_REQUIRED",
+          }),
+        },
+      },
+    });
+    rigs.push(rig);
+
+    // A genuine provider-auth failure: prewarm rejects immediately (no
+    // concurrent close), so the existing failed / runtime_unavailable /
+    // scope.prewarm_failed semantics must hold — no regression from the new
+    // CANCELLED branch.
+    await rig.scopeManager.createScope({
+      scopeRequestId: "req-auth-prewarm-0001",
+      participants: [spec("p-auth-1")],
+    });
+
+    const scope = [...rig.scopeManager._scopes.values()].find(
+      (s) => s.scopeRequestId === "req-auth-prewarm-0001",
+    );
+    const entry = scope?.participants.get("p-auth-1");
+    expect(entry?.runtime).toBe("failed");
+    expect(entry?.readiness?.state).toBe("runtime_unavailable");
+
+    const events = rig.logEvents ?? [];
+    expect(events).toContain("scope.prewarm_failed");
+    expect(events).not.toContain("scope.prewarm_cancelled");
+
+    const driver = rig.drivers.get("p-auth-1") as FakeDriver;
+    expect(driver.prewarmCount).toBe(1);
+    // A prewarm failure never closes the driver (no close during this scope).
+    expect(driver.closeCount).toBe(0);
   });
 });

@@ -1171,6 +1171,16 @@ export function createKimiStreamJsonDriver(
           runtimeCode: "HANDSHAKE_TIMEOUT",
         });
       }
+      // H4: a close()-caused probe termination (creating-TTL sweep /
+      // controller-close / host closeAll) SIGTERMs the in-flight probe, yielding
+      // exitCode=null and landing here. It must be labelled CANCELLED, never
+      // AUTH_REQUIRED, so teardown diagnostics/readiness are not poisoned with a
+      // spurious auth failure. Mirrors the spawn-side guard (L1124-1129).
+      if (isClosingOrClosed()) {
+        throw Object.assign(new Error("kimi driver closed during the provider probe"), {
+          runtimeCode: "CANCELLED", // H4: lifecycle label, not an auth failure
+        });
+      }
       if (exitCode !== 0) {
         throw Object.assign(new Error(`provider list exited with code ${exitCode ?? "null"}`), {
           runtimeCode: "AUTH_REQUIRED",

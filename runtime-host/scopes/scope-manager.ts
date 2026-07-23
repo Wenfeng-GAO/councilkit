@@ -275,8 +275,24 @@ export function createScopeManager(deps: ScopeManagerDeps) {
       entry.readiness = resolved.readiness;
       entry.runtime = resolved.binding ? "ready" : "failed";
     } catch (error) {
-      entry.runtime = "failed";
       const runtimeCode = (error as { runtimeCode?: string }).runtimeCode;
+      // H4: a prewarm rejected because close() shut down the probe (CANCELLED)
+      // is a lifecycle cancellation, not a failure. Do NOT land a readiness on
+      // the closing/closed scope and do NOT emit scope.prewarm_failed — that
+      // would poison teardown diagnostics with a spurious auth failure. The
+      // driver already owns the close path, so close() is not re-invoked here.
+      if (runtimeCode === "CANCELLED") {
+        entry.runtime = "cold";
+        entry.binding = null;
+        entry.readiness = null;
+        logger.info("scope.prewarm_cancelled", {
+          scopeId: scope.scopeId,
+          participantId: spec.participantId,
+          scopeState: scope.state,
+        });
+        return;
+      }
+      entry.runtime = "failed";
       entry.readiness = {
         state:
           runtimeCode === "AUTH_REQUIRED" || runtimeCode === "INCOMPATIBLE_DRIVER"

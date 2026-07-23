@@ -762,6 +762,128 @@ describe("kimi-stream-json driver", () => {
     expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
   });
 
+  it("AC1: close() during provider probe awaiting exit rejects CANCELLED, not AUTH_REQUIRED", async () => {
+    // Targeted at the runProviderProbe exit-wait window: the probe has spawned,
+    // activeProbe is set, and runProviderProbe is suspended in `withDeadline`
+    // awaiting the probe `exit` event. A concurrent close() sets state=closing
+    // and reaps the probe (SIGTERM → exit code null), so control reaches the
+    // `exitCode !== 0` branch on a closing driver. The isClosingOrClosed()
+    // guard there must label it CANCELLED (H4), never AUTH_REQUIRED. Uses an
+    // in-memory DriverProcess at the seam: no exit is emitted until shutdown,
+    // so there is no timer race — withDeadline stays suspended.
+    const participantId = "p-1";
+    const config2: HostConfig = {
+      mode: "production",
+      hostname: "127.0.0.1",
+      port: 0,
+      hostHeader: "127.0.0.1",
+      distDir: tempRoot,
+      watchdogProgram: WATCHDOG_PROGRAM,
+      driverWorkRoot: join(tempRoot, "work"),
+    };
+    const logger = createLogger({ sink: () => {} });
+    const realSupervisor = createProcessSupervisor({ config: config2, logger });
+    supervisors.push(realSupervisor);
+
+    const probeEvents = new EventEmitter();
+    const probeStdout = new Readable({ read() {} });
+    const probeStderr = new Readable({ read() {} });
+    let shutdownCalls = 0;
+    const probeProcess: DriverProcess = {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin: new Writable({
+        write(_chunk, _encoding, callback) {
+          callback();
+        },
+      }),
+      stdout: probeStdout,
+      stderr: probeStderr,
+      events: probeEvents,
+      waitSupervised: () => Promise.resolve(),
+      kill: () => {},
+      closeStdin: () => {},
+      shutdown: () => {
+        shutdownCalls += 1;
+        // The first shutdown (from close()) drives the SIGTERM exit the probe is
+        // awaiting; the probe-reap shutdown (runProviderProbe line 1165) is
+        // idempotent and must NOT re-emit exit.
+        if (shutdownCalls === 1) {
+          probeEvents.emit("exit", { code: null, signal: "SIGTERM" });
+        }
+        return Promise.resolve();
+      },
+      __testInjectControlLine: () => {},
+    };
+    let probeSpawns = 0;
+    const seamSupervisor: ProcessSupervisor = {
+      ...realSupervisor,
+      spawnDriver: (spec) => {
+        if (spec.argv.includes("provider")) {
+          probeSpawns += 1;
+          return Promise.resolve(probeProcess);
+        }
+        return realSupervisor.spawnDriver(spec);
+      },
+    };
+    const deps: DriverDeps = {
+      supervisor: seamSupervisor,
+      logger,
+      timeouts: BASE_TIMEOUTS,
+      workRoot: join(tempRoot, "work"),
+    };
+    const driver = createKimiStreamJsonDriver(deps)(participantId);
+    drivers.push(driver);
+    await writeFixtureConfig(participantId, {});
+
+    // prewarm parks inside runProviderProbe awaiting the probe exit. No exit is
+    // emitted, so withDeadline is suspended — deterministically no timer race.
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await waitFor(() => probeSpawns === 1, 2000);
+    // Let the driver's post-spawn handler set activeProbe and enter the exit
+    // wait before close() runs (so close() finds and reaps the live probe).
+    await new Promise((r) => setTimeout(r, 30));
+
+    // close() while the probe is awaiting exit.
+    await driver.close();
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
+    }
+    expect(driver.capabilityState()).toBe("checking"); // closed — never ready again
+    // The probe was reaped through the close path.
+    expect(shutdownCalls).toBeGreaterThanOrEqual(1);
+    expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
+    expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
+  });
+
+  it("AC2: non-zero provider probe exit (no concurrent close) still rejects AUTH_REQUIRED", async () => {
+    // A genuine provider-auth failure: the probe exits non-zero on its own with
+    // no concurrent close(), so isClosingOrClosed() is false and the existing
+    // AUTH_REQUIRED branch must fire unchanged (no regression from the guard).
+    await expect(createDriver({ providerExit: 7 })).rejects.toMatchObject({
+      runtimeCode: "AUTH_REQUIRED",
+    });
+    await waitFor(
+      () => pgrepCount("fake-kimi[.]mjs") === 0 && pgrepCount("watchdog-child[.]mjs") === 0,
+      5000,
+    ).catch(() => undefined);
+    expect(pgrepCount("fake-kimi[.]mjs")).toBe(0);
+    expect(pgrepCount("watchdog-child[.]mjs")).toBe(0);
+  });
+
   it("G2: close() during a pending probe spawn waits for it, reaps the late probe, and never resurrects ready", async () => {
     // A gated supervisor blocks the probe spawn mid-window (the promise
     // between `supervisor.spawnDriver(...)` being called and resolving). close()
