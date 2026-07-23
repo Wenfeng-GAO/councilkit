@@ -636,6 +636,7 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     events: EventEmitter,
     onShutdown?: () => void,
     stdinLines?: string[],
+    waitSupervisedImpl?: () => Promise<void>,
   ): DriverProcess {
     return {
       participantId,
@@ -655,13 +656,20 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
       stdout: new Readable({ read() {} }),
       stderr: new Readable({ read() {} }),
       events,
-      waitSupervised: () => Promise.resolve(),
+      waitSupervised: waitSupervisedImpl ?? (() => Promise.resolve()),
       kill: () => {},
       closeStdin: () => {},
-      shutdown: () => {
-        onShutdown?.();
-        return Promise.resolve();
-      },
+      // F3 (fix-2): shutdown is async (deferred to the next tick) to reflect
+      // production teardown — a real SIGTERM/shutdown resolves across event-loop
+      // turns, not synchronously. close() awaits this, so the exit it emits
+      // lands deterministically before close returns.
+      shutdown: () =>
+        new Promise<void>((resolveShutdown) => {
+          setTimeout(() => {
+            onShutdown?.();
+            resolveShutdown();
+          }, 0);
+        }),
       __testInjectControlLine: () => {},
     };
   }
@@ -832,7 +840,8 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     // INCOMPATIBLE_DRIVER handshake failure is already covered above at L513;
     // this seam covers the crash-exit axis directly.)
     const events = new EventEmitter();
-    const fakeProcess = makeFakeProcess("p-1", events);
+    const stdinLines: string[] = [];
+    const fakeProcess = makeFakeProcess("p-1", events, undefined, stdinLines);
     let spawnCount = 0;
     const { participantId, driver } = await buildSeamDriver(fakeProcess, () => {
       spawnCount += 1;
@@ -849,7 +858,11 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
         (error: unknown) => ({ ok: false as const, error }),
       );
     await waitFor(() => spawnCount === 1, 2000);
-    await new Promise((r) => setTimeout(r, 30));
+    // F3 (fix-2): deterministic frame sync (no fixed sleep) — wait until the
+    // `initialize` control frame is written to stdin, which is exactly when the
+    // in-flight control is registered and parked. The exit below then rejects
+    // that pending control via onProcessExit.
+    await waitFor(() => stdinLines.some((line) => line.includes('"subtype":"initialize"')), 2000);
 
     // A genuine exit with no concurrent close(): the process dies on its own.
     events.emit("exit", { code: 1, signal: null });
@@ -860,6 +873,110 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
       expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBeUndefined();
       expect((outcome.error as Error).message).toBe("driver process exited");
     }
+    expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
+  });
+
+  it("AC3: close() during waitSupervised rejects CANCELLED (F1 — no pending control covers that window)", async () => {
+    // F1: waitSupervised sits between the adopt and the initialize control —
+    // `process` is set and the exit handler is registered, BUT nothing is
+    // pending. close() SIGTERMs the process here; onProcessExit's
+    // failAllPendingControls(CANCELLED) has nothing to reject, so without the
+    // waitSupervised close-guard the plain supervised-spawn error would poison
+    // the closing scope with runtime_unavailable + prewarm_failed. The guard
+    // must relabel it CANCELLED (H4).
+    let shutdownCalls = 0;
+    let waitSupervisedCalled = false;
+    const events = new EventEmitter();
+    const fakeProcess = makeFakeProcess(
+      "p-1",
+      events,
+      () => {
+        shutdownCalls += 1;
+        // close()'s shutdown drives the SIGTERM exit the parked waitSupervised
+        // is behind (idempotent — afterEach's close() finds process=null).
+        if (shutdownCalls === 1) {
+          events.emit("exit", { code: null, signal: "SIGTERM" });
+        }
+      },
+      undefined,
+      () => {
+        waitSupervisedCalled = true;
+        // Park until the exit event — a real supervised spawn rejects on exit.
+        return new Promise<void>((_resolve, reject) => {
+          events.once("exit", () => reject(new Error("supervised spawn failed")));
+        });
+      },
+    );
+    let spawnCount = 0;
+    const { participantId, driver } = await buildSeamDriver(fakeProcess, () => {
+      spawnCount += 1;
+    });
+
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    await waitFor(() => spawnCount === 1, 2000);
+    // Deterministic sync: wait until waitSupervised has actually been entered
+    // — the adopt→initialize window F1 targets (no fixed sleep).
+    await waitFor(() => waitSupervisedCalled, 2000);
+
+    await driver.close();
+    const outcome = await prewarmOutcome;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
+    }
+    expect(shutdownCalls).toBeGreaterThanOrEqual(1);
+    expect(driver.capabilityState()).toBe("checking");
+    expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
+  });
+
+  it("AC4: close() during the pre-spawn (mkdir) window rejects CANCELLED and never spawns (F2a)", async () => {
+    // F2a: pre-spawn had no closing guard — close() completing during the mkdir
+    // await left the driver to spawn on a closed driver (late process adopted).
+    // The post-mkdir guard must reject CANCELLED before spawnDriver is ever
+    // called. Deterministic: prewarm's first suspension is the mkdir await, and
+    // close() has no await when process===null && pendingSpawn===null, so the
+    // close() CALL expression itself flips state to "closed" before mkdir's
+    // microtask resolves.
+    const events = new EventEmitter();
+    const fakeProcess = makeFakeProcess("p-1", events);
+    let spawnCount = 0;
+    const { participantId, driver } = await buildSeamDriver(fakeProcess, () => {
+      spawnCount += 1;
+    });
+
+    const prewarmOutcome = driver
+      .prewarm({
+        participantId,
+        spec: makeSpec(participantId),
+        installation: makeInstallation(),
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    // prewarm is parked at the mkdir await; spawnDriver has NOT been called yet.
+    expect(spawnCount).toBe(0);
+    // Synchronously flip state to "closed" (no process, no pendingSpawn → no
+    // await in close). The returned promise is awaited after prewarm settles.
+    const closePromise = driver.close();
+    const outcome = await prewarmOutcome;
+    await closePromise;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect((outcome.error as { runtimeCode?: string }).runtimeCode).toBe("CANCELLED");
+    }
+    // The spawn was never reached — no process adopted, no leak (P1/F2a).
+    expect(spawnCount).toBe(0);
+    expect(driver.capabilityState()).toBe("checking");
     expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
   });
 });

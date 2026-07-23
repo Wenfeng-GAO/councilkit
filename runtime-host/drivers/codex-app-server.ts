@@ -454,6 +454,18 @@ export function createCodexAppServerDriver(
       }
       const cwd = join(workRoot, participantId);
       await mkdir(cwd, { recursive: true });
+      // H3 (kimi pre-spawn guard, fix-2): the LAST lifecycle check before
+      // spawning. close() can complete during the mkdir await above (or before
+      // prewarm reached this point); without this guard the spawn would proceed
+      // on a closing/closed driver and the late process would be adopted into it
+      // (P1/F2a). CANCELLED is the lifecycle label (H4). There is no await
+      // between this check and the pendingSpawn registration below, so close()
+      // can never return and then have a process spawn behind its back.
+      if (isClosingOrClosed()) {
+        throw Object.assign(new Error("codex app-server closed during prewarm"), {
+          runtimeCode: "CANCELLED",
+        });
+      }
       const spawnPromise = supervisor.spawnDriver({
         participantId,
         executable: installation.realpath,
@@ -462,26 +474,29 @@ export function createCodexAppServerDriver(
         envInherit: ENV_INHERIT,
         envSet: {},
       });
-      // F4 (kimi pendingSpawn pattern): register the in-flight spawn BEFORE
-      // awaiting so close() can cover the spawn window. The post-spawn guard
-      // below shuts a late process down rather than adopting it into a closing
-      // driver (P1: close() during the spawn await left process===null, so
-      // close() finished outright and the late spawn was adopted to a closed
-      // driver — a leak the catch fallback then masked).
-      pendingSpawn = spawnPromise;
-      const spawned = await spawnPromise.finally(() => {
-        if (pendingSpawn === spawnPromise) pendingSpawn = null;
+      // F2b (fix-2): pendingSpawn tracks the FULL spawn→post-spawn-guard
+      // continuation (spawn + the guard's late-process shutdown), not the raw
+      // spawn promise, so close() awaiting pendingSpawn waits for a late process
+      // to be FULLY reaped before close returns (F2b). The guard executes once;
+      // a spawn reject propagates and does not hang close() (caught + swallowed).
+      const spawnContinuation = (async (): Promise<DriverProcess> => {
+        const spawned = await spawnPromise;
+        // G2: close() ran while the spawn was pending. Never adopt the process —
+        // shut it down immediately and reject CANCELLED so the scope short-
+        // circuits to prewarm_cancelled (H4), instead of leaking an adopted-to-
+        // closed driver (P1).
+        if (isClosingOrClosed()) {
+          await spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
+          throw Object.assign(new Error("codex app-server closed during prewarm"), {
+            runtimeCode: "CANCELLED",
+          });
+        }
+        return spawned;
+      })();
+      pendingSpawn = spawnContinuation;
+      const spawned = await spawnContinuation.finally(() => {
+        if (pendingSpawn === spawnContinuation) pendingSpawn = null;
       });
-      // G2: close() ran while the spawn was pending. Never adopt the process —
-      // shut it down immediately and fail the prewarm CANCELLED so the scope
-      // short-circuits to prewarm_cancelled (H4), instead of leaking an
-      // adopted-to-closed driver (P1).
-      if (isClosingOrClosed()) {
-        await spawned.shutdown(timeouts.shutdownGraceMs).catch(() => undefined);
-        throw Object.assign(new Error("codex app-server closed during prewarm"), {
-          runtimeCode: "CANCELLED",
-        });
-      }
       process = spawned;
       spawned.events.on(
         "exit",
@@ -517,7 +532,24 @@ export function createCodexAppServerDriver(
           // process exit handler covers state
         },
       });
-      await spawned.waitSupervised(timeouts.handshakeMs);
+      // F1 (fix-2): waitSupervised straddles the adopt→initialize window —
+      // `process` is set and the exit handler is registered, but no RPC is
+      // pending yet (initialize is sent in handshake() after this resolves). So
+      // a close()-SIGTERM here makes onProcessExit's failAllPending(CANCELLED) a
+      // no-op and waitSupervised rejects with a plain error the narrowed prewarm
+      // catch would rethrow verbatim — poisoning the closing scope. Relabel
+      // CANCELLED on the close path (H4); a genuine supervised-spawn failure
+      // keeps its plain error.
+      try {
+        await spawned.waitSupervised(timeouts.handshakeMs);
+      } catch (err) {
+        if (isClosingOrClosed()) {
+          throw Object.assign(new Error("codex app-server closed during prewarm"), {
+            runtimeCode: "CANCELLED",
+          });
+        }
+        throw err;
+      }
     }
 
     async function handshake(modelId: string): Promise<void> {
@@ -821,9 +853,12 @@ export function createCodexAppServerDriver(
             sendRequest("turn/interrupt", { threadId, turnId: turn.turnId }).catch(() => undefined);
           }
         }
-        // F4 (kimi cancel pattern): wait for a pending spawn so the post-spawn guard
-        // (not adoption) handles a process that resolves while/after close() ran
-        // — preventing an adopted-to-closed leak (P1).
+        // F2b (fix-2): pendingSpawn is the full spawn→post-spawn-guard continuation,
+        // so awaiting it waits for a late process to be FULLY reaped (the guard's
+        // shutdown) before close returns — not just the raw spawn promise. A
+        // process spawned-but-not-yet-adopted is shut down by the guard
+        // (CANCELLED) rather than adopted into this closing driver and leaked
+        // (P1). The guard runs once; a spawn reject is swallowed here.
         const pending = pendingSpawn;
         if (pending) {
           await pending.catch(() => undefined);
