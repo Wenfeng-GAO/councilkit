@@ -26,25 +26,31 @@ function incompleteBanner(input: ReviewReportInput): string {
       "raw deliverable in the appendix; no consensus is fabricated."
     );
   }
-  // status === "failed": distinguish every-Attempt-failed (no Aggregator ran)
-  // from an Aggregator that ran but produced no usable output.
+  // status === "failed": first distinguish "stopped before the Aggregator
+  // could start" (run-level cause, e.g. transcript IO) — this must come BEFORE
+  // the every-Attempt-failed check, because a mid-run failure can leave some
+  // Attempts never started and none succeeded, without the cause being
+  // "every Attempt failed" (reviewer finding: banner misreported coverage).
+  if (
+    input.aggregation === null &&
+    input.failurePhase !== "aggregation" &&
+    input.failurePhase !== "attempts"
+  ) {
+    return (
+      "> INCOMPLETE — the run stopped before the Aggregator could start " +
+      `(${input.reason?.trim() || "see transcript"}). What follows is the ` +
+      "deterministic header plus each Attempt's raw deliverable in the appendix; " +
+      "no consensus is fabricated."
+    );
+  }
+  // Distinguish every-Attempt-failed (no Aggregator ran) from an Aggregator
+  // that ran but produced no usable output.
   const anySuccess = input.attempts.some((a) => a.status === "success");
   if (!anySuccess) {
     return (
       "> INCOMPLETE — every Attempt failed, so no Aggregator was run. What " +
       "follows is the deterministic header plus each Attempt's failure in the " +
       "appendix; no consensus is fabricated."
-    );
-  }
-  // Successful Attempts exist but the Aggregator never started (the run stopped
-  // earlier, e.g. a transcript IO failure): do NOT claim the Aggregator failed
-  // (reviewer finding: banner contradicted the header's real cause).
-  if (input.aggregation === null && input.failurePhase !== "aggregation") {
-    return (
-      "> INCOMPLETE — the run stopped before the Aggregator could start " +
-      `(${input.reason?.trim() || "see transcript"}). What follows is the ` +
-      "deterministic header plus each Attempt's raw deliverable in the appendix; " +
-      "no consensus is fabricated."
     );
   }
   return (

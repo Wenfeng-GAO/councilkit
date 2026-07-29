@@ -545,7 +545,15 @@ function stderrTail(stderr: string): string {
   // transcript/report (reviewer finding). \r is stripped too: it can overwrite
   // a terminal line or smuggle raw control into the Markdown report.
   const cleaned = stderr
+    // CSI sequences (ESC [ … letter)
     .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
+    // OSC/DCS/SOS/PM/APC (ESC ] P X ^ _ … terminated by BEL or ST): drop the
+    // WHOLE sequence including its printable payload — an OSC payload can carry
+    // ";"-separated text that would otherwise survive and break credential
+    // redaction (reviewer finding: only CSI was removed).
+    .replace(/\u001b[\]PX^_][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    // Any remaining two-byte escape (ESC + one char)
+    .replace(/\u001b./g, "")
     // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars and DEL (except \n and \t) from untrusted stderr
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\u009f]/g, "");
   const redacted = redact(cleaned) as string;

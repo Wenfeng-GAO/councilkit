@@ -431,7 +431,7 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
   it("redacts secrets and strips control chars in the EXIT failure stderr tail", async () => {
     const spawnImpl: SpawnImpl = async () => ({
       stdout: "",
-      stderr: "boom \u0007\u001b[31m councilkit_session=secret-token-xyz \u001b[0m tail",
+      stderr: "boom \u0007\u001b[31m councilkit_session=secret-token-xyz \u001b[0m \u001b]8;;http://evil.example\u0007hyperlink",
       exitCode: 1,
       timedOut: false,
       aborted: false,
@@ -444,6 +444,8 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
     // No ANSI escape introducer or C0 control chars survive into the message.
     // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting control chars are stripped
     expect(message).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1b\x7f]/);
+    expect(message).not.toContain("evil.example");
+    expect(message).not.toContain("hyperlink");
   });
 
   it("truncates stdout past the 8MB cap keeping head + tail with a marker", async () => {
