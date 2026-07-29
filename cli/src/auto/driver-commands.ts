@@ -231,6 +231,10 @@ export function extractFinalOutput(
 export class FinalEventLineCollector {
   private buf = "";
   private readonly decoder = new StringDecoder("utf8");
+  /** True while dropping the remainder of an over-cap physical line: after an
+   * overflow, everything up to the next newline is the SAME line and must not
+   * be parsed as a fresh event (reviewer finding). */
+  private discarding = false;
   lastLine: string | null = null;
 
   constructor(
@@ -249,12 +253,21 @@ export class FinalEventLineCollector {
     while (idx >= 0) {
       const line = this.buf.slice(0, idx);
       this.buf = this.buf.slice(idx + 1);
-      this.consider(line);
+      if (this.discarding) {
+        // The newline ends the over-cap physical line — resume parsing.
+        this.discarding = false;
+      } else {
+        this.consider(line);
+      }
       idx = this.buf.indexOf("\n");
     }
     // A single line longer than the cap with no newline yet is unrecoverable;
-    // drop the buffered prefix so we never hold more than `lineCap` bytes.
-    if (this.buf.length > this.lineCap) this.buf = "";
+    // drop the buffered prefix (memory bound) and mark the rest of this
+    // physical line for discarding — its tail must not be parsed as a new line.
+    if (this.buf.length > this.lineCap) {
+      this.buf = "";
+      this.discarding = true;
+    }
   }
 
   /** Flush the trailing bytes at EOF: the final NDJSON line may not end with a
@@ -263,6 +276,11 @@ export class FinalEventLineCollector {
   end(): void {
     const rest = this.buf + this.decoder.end();
     this.buf = "";
+    if (this.discarding) {
+      // EOF inside an over-cap physical line: its tail is not an event.
+      this.discarding = false;
+      return;
+    }
     if (rest.length > 0 && rest.length <= this.lineCap) {
       this.consider(rest);
     }

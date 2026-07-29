@@ -388,6 +388,11 @@ export function defaultSpawn(
 
     const killGroup = (reason: "timeout" | "abort" | "stream"): void => {
       if (settled) return;
+      // Re-entry guard: only the FIRST kill sequence runs. A second entry
+      // (e.g. abort after timeout) must not replace or confuse the in-flight
+      // TERM→grace→KILL promise — and in particular must not SIGTERM again,
+      // get ESRCH, and leave the stale SIGKILL aimed at a reused PGID.
+      if (killInitiated) return;
       killReason = reason;
       killInitiated = true;
       try {
@@ -536,9 +541,9 @@ function formatExitFailure(exitCode: number | null, stderr?: string): string {
 function stderrTail(stderr: string): string {
   const redacted = redact(stderr) as string;
   const cleaned = redacted
-    .replace(/\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
     // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars except \n and \t from untrusted stderr
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\u009f]/g, "");
   const trimmed = cleaned.trim();
   if (trimmed.length === 0) return "";
   if (trimmed.length <= STDERR_TAIL_BYTES) return trimmed;

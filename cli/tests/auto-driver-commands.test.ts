@@ -367,6 +367,16 @@ describe("cli auto driver-commands", () => {
       expect(extractFinalOutput("kimi-stream-json", "", undefined, coll.lastLine)).toBe("final");
     });
 
+    it("an over-cap physical line's tail is discarded, not parsed as a new event", () => {
+      const valid = JSON.stringify({ role: "assistant", content: "valid" });
+      const coll = new FinalEventLineCollector("kimi-stream-json", 16);
+      // One physical line longer than the cap, split across feeds; its JSON-ish
+      // tail must not be considered; the NEXT physical line parses normally.
+      coll.feed(Buffer.from(`{"role":"assistant","content":"${"x".repeat(32)}`, "utf8"));
+      coll.feed(Buffer.from(`trailer"}\n${valid}\n`, "utf8"));
+      expect(coll.lastLine).toBe(valid);
+    });
+
     it("a kimi assistant line with multibyte content split mid-buffer", () => {
       const text = "审查通过 ✓";
       const line = JSON.stringify({ role: "assistant", content: text });

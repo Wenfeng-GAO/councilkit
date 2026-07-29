@@ -259,9 +259,10 @@ export async function runReview(
   }
 
   // A signal that arrived only during the final flush (executeReview already
-  // completed un-aborted) is still an interruption: report 130, never a
-  // silent 0. Runs already aborted inside executeReview carry 130 themselves.
-  const exitCode = signaled && outcome.exitCode === EXIT.ok ? EXIT.interrupted : outcome.exitCode;
+  // completed un-aborted) is still an interruption: report 130 — never a
+  // silent 0, and never let an earlier 4/5 mask the signal (POSIX: death by
+  // SIGINT is 130). Runs already aborted inside executeReview carry 130.
+  const exitCode = signaled ? EXIT.interrupted : outcome.exitCode;
   throw new ReviewExit(exitCode);
 }
 
@@ -286,12 +287,17 @@ interface ExecuteParams {
 }
 
 async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
+  // Track results as they finish so a mid-run callback failure can still
+  // finalize a report with the Attempts that DID complete (reviewer finding:
+  // finalizing with [] wrote a false "no attempts ran" report).
+  const completed: AttemptResult[] = [];
   const runnerOpts = {
     timeoutMs: p.timeoutMs,
     concurrency: p.concurrency,
     signal: p.signal,
     spawnImpl: p.spawnImpl,
     onAttemptFinish: (r: AttemptResult) => {
+      completed.push(r);
       const rec: AttemptFinishedRecord = {
         kind: "attempt.finished",
         version: 1,
@@ -329,14 +335,14 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     // Aborted runs keep the interrupted/130 semantics.
     const message = error instanceof Error ? error.message : String(error);
     if (p.signal.aborted) {
-      return finalize(p, new Date().toISOString(), [], null, {
+      return finalize(p, new Date().toISOString(), completed, null, {
         status: "interrupted",
         exitCode: EXIT.interrupted,
         incomplete: true,
         failure: { phase: "review", code: "ABORTED", message: "run aborted by signal" },
       });
     }
-    return finalize(p, new Date().toISOString(), [], null, {
+    return finalize(p, new Date().toISOString(), completed, null, {
       status: "failed",
       exitCode: EXIT.io,
       incomplete: true,
