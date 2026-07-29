@@ -36,6 +36,17 @@ function incompleteBanner(input: ReviewReportInput): string {
       "appendix; no consensus is fabricated."
     );
   }
+  // Successful Attempts exist but the Aggregator never started (the run stopped
+  // earlier, e.g. a transcript IO failure): do NOT claim the Aggregator failed
+  // (reviewer finding: banner contradicted the header's real cause).
+  if (input.aggregation === null && input.failurePhase !== "aggregation") {
+    return (
+      "> INCOMPLETE — the run stopped before the Aggregator could start " +
+      `(${input.reason?.trim() || "see transcript"}). What follows is the ` +
+      "deterministic header plus each Attempt's raw deliverable in the appendix; " +
+      "no consensus is fabricated."
+    );
+  }
   return (
     "> INCOMPLETE — the Aggregator failed to produce a synthesis. What follows " +
     "is the deterministic header plus each Attempt's raw deliverable in the " +
@@ -66,6 +77,9 @@ export interface ReviewReportInput {
   incomplete: boolean;
   /** Why the run is interrupted/failed (printed as a Reason line in the header). */
   reason?: string;
+  /** The failure phase (attempts / aggregation / transcript / …) — lets the
+   * banner distinguish "Aggregator ran and failed" from "never started". */
+  failurePhase?: string;
 }
 
 /** Render the full Markdown report. */

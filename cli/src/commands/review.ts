@@ -484,6 +484,7 @@ async function finalize(
     status: spec.status,
     incomplete: spec.incomplete,
     reason,
+    failurePhase: spec.failure?.phase,
   });
 
   // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then
@@ -524,7 +525,15 @@ async function finalize(
   // (nothing durable exists to contradict it). review.finished is persisted
   // with these same fields so the on-disk record and the ReviewOutcome agree.
   const computeOutcome = (io: typeof ioFailure) => {
-    const exitCode = io !== undefined ? EXIT.io : spec.exitCode;
+    // Interrupted (130) outranks artifact-IO (5): an aborted run must keep its
+    // signal exit code even when the best-effort finalize also hit an IO error
+    // (reviewer finding: artifact IO unconditionally overrode 130 with 5).
+    const exitCode =
+      spec.exitCode === EXIT.interrupted
+        ? EXIT.interrupted
+        : io !== undefined
+          ? EXIT.io
+          : spec.exitCode;
     const status: FinalizeSpec["status"] =
       io !== undefined && io.phase === "report" ? "failed" : spec.status;
     const incomplete = spec.incomplete || io !== undefined;

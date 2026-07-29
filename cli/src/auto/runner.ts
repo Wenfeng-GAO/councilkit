@@ -539,12 +539,17 @@ function formatExitFailure(exitCode: number | null, stderr?: string): string {
  * strings or terminal escape sequences that would otherwise land on disk or
  * corrupt the Markdown report structure (reviewer finding). */
 function stderrTail(stderr: string): string {
-  const redacted = redact(stderr) as string;
-  const cleaned = redacted
+  // Strip ANSI/control chars FIRST (an escape sequence could split a credential
+  // so redact cannot see it), THEN redact the reassembled text — otherwise a
+  // credential hidden as "councilkit<ESC>[31m_session=…" would survive into
+  // transcript/report (reviewer finding). \r is stripped too: it can overwrite
+  // a terminal line or smuggle raw control into the Markdown report.
+  const cleaned = stderr
     .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars except \n and \t from untrusted stderr
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\u009f]/g, "");
-  const trimmed = cleaned.trim();
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars and DEL (except \n and \t) from untrusted stderr
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\u009f]/g, "");
+  const redacted = redact(cleaned) as string;
+  const trimmed = redacted.trim();
   if (trimmed.length === 0) return "";
   if (trimmed.length <= STDERR_TAIL_BYTES) return trimmed;
   return `…${trimmed.slice(trimmed.length - STDERR_TAIL_BYTES)}`;
