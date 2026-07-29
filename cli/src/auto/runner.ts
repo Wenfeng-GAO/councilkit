@@ -560,7 +560,7 @@ function stderrTail(stderr: string): string {
     // otherwise the introducer/terminator are stripped by the C1 class below
     // while the printable payload survives and can split a credential
     // (reviewer finding).
-    .replace(/[\u0090\u0098\u009d\u009e\u009f][\s\S]*?(?:\u0007|\u009c)/g, "")
+    .replace(/[\u0090\u0098\u009d\u009e\u009f][\s\S]*?(?:\u0007|\u009c|\u001b\\)/g, "")
     // C1 single-byte CSI (U+009B + same parameter/intermediate/final shape):
     // without this the introducer is stripped by the C1 class below while its
     // parameter bytes stay printable and can split a credential (reviewer
