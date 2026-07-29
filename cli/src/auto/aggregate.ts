@@ -1,0 +1,121 @@
+import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from "../report/render";
+/**
+ * review report rendering (DESIGN §4, plan §"文件清单"/§"ReviewOutcome"). The
+ * canonical `runs/<run-id>/report.md` is a deterministic header → aggregation
+ * body → `## Appendix: per-attempt outputs`. Failed Attempts appear in the
+ * appendix as `failed: <reason>` and are never cited in the aggregation body.
+ *
+ * Reuses `report/render.ts` write/assert helpers (unchanged) for the canonical
+ * write + `--out` copy, so durability semantics match the `run` command.
+ */
+import type { AttemptResult } from "./runner";
+import type { ReviewTask } from "./templates/review";
+
+const INCOMPLETE_BANNER =
+  "> INCOMPLETE — the Aggregator failed to produce a synthesis. " +
+  "What follows is the deterministic header plus each Attempt's raw deliverable " +
+  "in the appendix; no consensus is fabricated.";
+
+export interface ReviewReportMeta {
+  attemptId: string;
+  agentId: string;
+  agentName: string;
+  driverId: string;
+  modelId: string;
+}
+
+export interface ReviewReportInput {
+  runId: string;
+  startedAt: string;
+  endedAt: string;
+  task: ReviewTask;
+  /** All Attempt results, in order. */
+  attempts: ReadonlyArray<AttemptResult>;
+  aggregator: ReviewReportMeta;
+  /** The Aggregator spawn's result (null if aggregation was skipped). */
+  aggregation: AttemptResult | null;
+  incomplete: boolean;
+  /** Why the report is incomplete (e.g. aggregation failed / all attempts failed). */
+  partialReason?: string;
+}
+
+/** Render the full Markdown report. */
+export function renderReviewReport(input: ReviewReportInput): string {
+  const head = renderHeader(input);
+  const body =
+    input.aggregation?.status === "success" && input.aggregation.output.trim().length > 0
+      ? input.aggregation.output.trim()
+      : "";
+  const sections: string[] = [head];
+  if (body.length > 0) {
+    sections.push("---", "", body, "");
+  } else {
+    sections.push(INCOMPLETE_BANNER, "");
+    if (input.partialReason) {
+      sections.push(`> Reason: ${input.partialReason}`, "");
+    }
+  }
+  sections.push(renderAppendix(input));
+  return sections.join("\n");
+}
+
+function renderHeader(input: ReviewReportInput): string {
+  const lines: string[] = [];
+  lines.push("# Autonomous Review Report", "");
+  lines.push(`- Run: ${input.runId}`);
+  lines.push(`- Task: ${taskLine(input.task)}`);
+  const focus = input.task.focus?.trim();
+  if (focus && focus.length > 0) lines.push(`- Focus: ${focus}`);
+  lines.push(
+    `- Aggregator: ${input.aggregator.agentName} (${input.aggregator.driverId}/${input.aggregator.modelId})`,
+  );
+  lines.push("- Attempts:");
+  for (const a of input.attempts) {
+    const mark = a.status === "success" ? "ok" : `failed:${a.failure?.code ?? "unknown"}`;
+    lines.push(
+      `  - ${a.agentName} (${a.driverId}/${a.modelId}) — ${mark} — exit ${a.exitCode ?? "n/a"} — ${a.durationMs}ms`,
+    );
+  }
+  lines.push(`- Status: ${input.incomplete ? "incomplete" : "complete"}`);
+  lines.push(`- Started: ${input.startedAt}`);
+  lines.push(`- Ended: ${input.endedAt}`);
+  lines.push("");
+  return lines.join("\n");
+}
+
+function renderAppendix(input: ReviewReportInput): string {
+  const lines: string[] = ["## Appendix: per-attempt outputs", ""];
+  if (input.attempts.length === 0) {
+    lines.push("_(no attempts ran.)_", "");
+    return lines.join("\n");
+  }
+  for (const a of input.attempts) {
+    lines.push(`### ${a.agentName} (${a.driverId}/${a.modelId})`, "");
+    if (a.status === "success" && a.output.trim().length > 0) {
+      lines.push(a.output.trim(), "");
+    } else {
+      lines.push(
+        `failed: ${a.failure?.code ?? "unknown"} — ${a.failure?.message ?? "no output"}`,
+        "",
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+function taskLine(task: ReviewTask): string {
+  if (task.pr && task.pr.trim().length > 0) return `review PR ${task.pr.trim()}`;
+  if (task.task && task.task.trim().length > 0) return task.task.trim();
+  return "(unspecified)";
+}
+
+/** Validate + write the canonical report.md. */
+export function writeCanonicalReviewReport(path: string, markdown: string): void {
+  assertNonEmptyMarkdown(markdown);
+  writeCanonicalReport(path, markdown);
+}
+
+/** Atomic copy to `--out`; the canonical artifact is already preserved. */
+export function writeReviewReportCopy(outPath: string, markdown: string): void {
+  writeReportCopy(outPath, markdown);
+}

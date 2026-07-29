@@ -97,12 +97,27 @@ councilkit council list|show <name|id>|delete <name|id> [--json]
 councilkit run --council <name|id> [--rounds N] [--out path] [--json]
 councilkit run --agents '<["ref1","ref2"]>' --topic <text> --reporter <ref> \
   [--background <text>] [--target-output <text>] [--rounds N] [--out path] [--json]
+
+councilkit review --agents '<["ref1","ref2"]>' --aggregator <ref> \
+  (--pr <url|number> | --task "<text>") [--focus "<text>"] \
+  [--timeout 30m] [--concurrency 3] [--out path] [--json]
+councilkit review --council <name|id> \
+  (--pr <url|number> | --task "<text>") [--focus "<text>"] [--timeout 30m] [--concurrency 3] [--out path] [--json]
 ```
 
 - `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
 - **Reporter 必填**：Council 必须显式指定一个 reporter agent（且在 agents 中），不静默 fallback。
 - 讨论固定 N 轮（`council.rounds`，`--rounds` 覆盖），每轮各 agent 按序发言一次；N 轮后 Reporter 做一次最终总结调用，产出九段 Markdown 报告（与浏览器报告同章节集）。
 - `--json`：进度/诊断全走 stderr，stdout 只出一个最终 JSON 文档。
+
+#### `councilkit review` — 自主并行审查（不经 Host）
+
+同一任务由 N 个全能力 agent（Attempt）在**隔离空 cwd**（`runs/<run-id>/workspaces/<attemptId>/`）中独立并行做一遍，再由 Aggregator 对比汇总，产出 `report.md`（确定性头部 + 五章节聚合正文 + `## Appendix: per-attempt outputs`）+ `transcript.jsonl`。
+
+- **不经 Runtime Host**：CLI 直接按 PATH 解析 `cld`/`kimi`/`codex` 并 spawn，绕过 scope/SSE/ACK。claude 仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）；kimi 用 `-p`（无 `--auto`，自主权限由 config 提供）；codex 用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`。
+- **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
+- `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
+- 失败 tolerate：单 Attempt 失败不重试，进入 `attemptFailures`，其余继续、聚合照常；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 形如 `30m|600s|1h|5000ms`，`--concurrency` 默认 `min(3, N)`。
 
 ### 报告位置与凭据生命周期
 

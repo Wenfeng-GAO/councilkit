@@ -7,6 +7,7 @@ import { runCouncilCmd } from "./commands/council";
  */
 import { runDoctor } from "./commands/doctor";
 import { runModels } from "./commands/models";
+import { runReview } from "./commands/review";
 import { runRun } from "./commands/run";
 import { errors } from "./errors";
 import type { OutputSink } from "./output";
@@ -23,6 +24,8 @@ export async function dispatch(command: string, args: string[], out: OutputSink)
       return runCouncilCmd(args, out);
     case "run":
       return runRun(args, out);
+    case "review":
+      return runReview(args, out);
     default:
       throw errors.usage(
         command === undefined

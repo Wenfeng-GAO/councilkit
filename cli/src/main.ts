@@ -1,4 +1,5 @@
 import { dispatch } from "./cli";
+import { ReviewExit } from "./commands/review";
 import { RunExit } from "./commands/run";
 /**
  * CouncilKit CLI entrypoint (bundled to dist/main.mjs).
@@ -30,6 +31,9 @@ Commands:
   council create|list|show|delete     Manage councils (topic, agents, rounds, reporter).
   run --council <name|id>             Run a fixed-N-round discussion; emit Markdown report.
   run --agents '<json-array>'         One-shot run without a stored council.
+  review --agents '<json-array>'      N autonomous agents independently review one task,
+      --aggregator <id>               then one synthesizes a report. Bypasses the Host.
+  review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
 
 Global flags:
   --json     Machine-readable output: progress/diagnostics on stderr, one final JSON on stdout.
@@ -92,6 +96,9 @@ function main(argv: string[]): void {
     })
     .catch((error: unknown) => {
       if (error instanceof RunExit) {
+        process.exit(error.exitCode);
+      }
+      if (error instanceof ReviewExit) {
         process.exit(error.exitCode);
       }
       if (error instanceof CliError) {
