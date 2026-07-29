@@ -77,7 +77,7 @@ export async function runReview(
     argv,
   );
 
-  // --- task (mutually exclusive, one required) ----------------------------
+  // --- task (mutually exclusive, one required, non-blank) -----------------
   const hasPr = values.pr !== undefined;
   const hasTask = values.task !== undefined;
   if (hasPr && hasTask) {
@@ -86,9 +86,15 @@ export async function runReview(
   if (!hasPr && !hasTask) {
     throw errors.usage("one of --pr or --task is required");
   }
+  if (hasPr && (values.pr as string).trim().length === 0) {
+    throw errors.usage("--pr must not be empty or whitespace");
+  }
+  if (hasTask && (values.task as string).trim().length === 0) {
+    throw errors.usage("--task must not be empty or whitespace");
+  }
   const task: ReviewTask = {
-    pr: hasPr ? (values.pr as string) : undefined,
-    task: hasTask ? (values.task as string) : undefined,
+    pr: hasPr ? (values.pr as string).trim() : undefined,
+    task: hasTask ? (values.task as string).trim() : undefined,
     focus: values.focus !== undefined ? (values.focus as string) : undefined,
     councilTopic: undefined,
   };
@@ -129,6 +135,15 @@ export async function runReview(
   for (const a of attemptAgents) {
     if (seenIds.has(a.id)) throw errors.usage(`agent "${a.name}" is listed more than once`);
     seenIds.add(a.id);
+  }
+
+  // Reject disabled agents before any cost is incurred (mirrors the run path:
+  // a disabled agent cannot participate). Checked after resolution but before
+  // workspace creation / spawning.
+  for (const a of attemptAgents) {
+    if (!a.enabled) {
+      throw errors.usage(`agent "${a.name}" is disabled; cannot participate in a review`);
+    }
   }
 
   // --- options ------------------------------------------------------------
@@ -402,8 +417,9 @@ async function finalize(
   aggregation: AttemptResult | null,
   spec: FinalizeSpec,
 ): Promise<ReviewOutcome> {
-  const partialReason =
-    aggregation === null && spec.status !== "interrupted" ? spec.failure?.message : undefined;
+  // Surface the failure reason (interrupt cause / failure cause) in the report
+  // header so an interrupted or failed run is labelled — not just "incomplete".
+  const reason = spec.failure?.message;
 
   const markdown = renderReviewReport({
     runId: p.runId,
@@ -419,14 +435,17 @@ async function finalize(
       modelId: p.aggregatorAgent.modelId,
     },
     aggregation,
+    status: spec.status,
     incomplete: spec.incomplete,
-    partialReason,
+    reason,
   });
 
-  // Persist the canonical report first; a copy-IO failure must never undermines
+  // Persist the canonical report first; a copy-IO failure must never undermine
   // the canonical artifact's completeness claim (the header already reflects the
-  // true run status). Both IO failures surface as exit 5 but still produce a full
-  // ReviewOutcome and a review.finished transcript record.
+  // true run status). Any artifact-IO failure — canonical report, --out copy, or
+  // the final transcript rewrite — surfaces as exit 5 and is recorded in
+  // ReviewOutcome.failure (reviewer finding: transcript rewrite failures were
+  // silently swallowed after exitCode/status were already computed).
   let ioFailure: { phase: string; code: string; message: string } | undefined;
   try {
     writeCanonicalReviewReport(p.reportPath, markdown);
@@ -466,13 +485,22 @@ async function finalize(
   p.transcript.push(finished);
   try {
     flushTranscript(p.transcriptPath, p.transcript);
-  } catch {
-    // Best-effort: the canonical report (if written) is the durable artifact.
+  } catch (error) {
+    // The final transcript rewrite is itself an artifact-IO failure: map it to
+    // exit 5 and surface it in the outcome (the canonical report, if written,
+    // remains the durable artifact). Only set when no earlier IO failure won.
+    if (ioFailure === undefined) {
+      ioFailure = {
+        phase: "transcript",
+        code: "IO_TRANSCRIPT",
+        message: error instanceof Error ? error.message : "transcript write failed",
+      };
+    }
   }
 
   return {
     status,
-    exitCode,
+    exitCode: ioFailure !== undefined ? EXIT.io : exitCode,
     runId: p.runId,
     reportPath: p.reportPath,
     transcriptPath: p.transcriptPath,
@@ -486,7 +514,7 @@ async function finalize(
         message: r.failure?.message ?? "no output",
       })),
     incomplete: spec.incomplete,
-    failure,
+    failure: ioFailure ?? failure,
   };
 }
 

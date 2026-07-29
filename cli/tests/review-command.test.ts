@@ -155,6 +155,28 @@ describe("cli review command — argument matrix", () => {
     const sink = makeSink();
     await expect(dispatch("review", ["--agents", "[]"], sink)).rejects.toBeInstanceOf(CliError);
   });
+
+  it("rejects a disabled agent before any cost is incurred", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "Off",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: ds,
+      enabled: false,
+    });
+    await expectUsage(["--agents", `["Off"]`, "--aggregator", "Off", "--task", "x"], "disabled");
+  });
+
+  it("rejects blank --task (whitespace only)", async () => {
+    await expectUsage(["--agents", "[]", "--task", "   "], "empty or whitespace");
+  });
+
+  it("rejects blank --pr (whitespace only)", async () => {
+    await expectUsage(["--agents", "[]", "--pr", "  "], "empty or whitespace");
+  });
 });
 
 describe("cli review command — end-to-end (fake spawn)", () => {
@@ -326,7 +348,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(130);
     const report = readFileSync(outcome.reportPath, "utf8");
-    expect(report).toContain("incomplete");
+    expect(report).toContain("interrupted");
+    expect(report).toContain("Reason:");
     expect(report).not.toContain("## Overview");
     const transcriptLines = readFileSync(outcome.transcriptPath, "utf8").trim().split("\n");
     const last = JSON.parse(transcriptLines[transcriptLines.length - 1] ?? "") as Record<

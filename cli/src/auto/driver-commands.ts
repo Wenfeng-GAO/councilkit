@@ -181,18 +181,37 @@ export function buildSpawnSpec(
   }
 }
 
+/** Upper bound on a single final-event line retained by `FinalEventLineCollector`.
+ * Generous vs the stdout head+tail cap so a large single-event NDJSON line (the
+ * common claude `{"type":"result"}` / kimi `{"role":"assistant"}` delivery) is
+ * captured whole instead of being split across the head/tail boundary. */
+export const FINAL_EVENT_LINE_CAP = 16 * 1024 * 1024;
+
 /** Extract the final delivered text from a completed subprocess. Returns null
  * when no valid final output is present (the caller treats that as an Attempt
- * failure). Non-JSON / unrecognized lines are skipped, never thrown on. */
+ * failure). Non-JSON / unrecognized lines are skipped, never thrown on.
+ *
+ * `capturedFinalLine`, when present, is a complete final-event line captured by
+ * `FinalEventLineCollector` during streaming — it bypasses the stdout head+tail
+ * cap so a single oversized final event is not destroyed at the truncation
+ * boundary (reviewer finding: head+tail split made both halves invalid JSON →
+ * spurious NO_OUTPUT). */
 export function extractFinalOutput(
   driverId: string,
   stdout: string,
   lastMessageFile?: string,
+  capturedFinalLine?: string | null,
 ): string | null {
   switch (driverId) {
     case "claude-stream-json":
+      if (capturedFinalLine !== undefined && capturedFinalLine !== null) {
+        return extractClaudeLine(capturedFinalLine);
+      }
       return extractClaude(stdout);
     case "kimi-stream-json":
+      if (capturedFinalLine !== undefined && capturedFinalLine !== null) {
+        return extractKimiLine(capturedFinalLine);
+      }
       return extractKimi(stdout);
     case "codex-app-server":
       return extractCodex(stdout, lastMessageFile);
@@ -201,19 +220,67 @@ export function extractFinalOutput(
   }
 }
 
+/** Streaming line scanner retained by `defaultSpawn`. Holds the last complete
+ * final-event line emitted by claude (`{"type":"result"}`) or kimi
+ * (`{"role":"assistant"}`) without imposing the stdout head+tail cap, so the
+ * final deliverable — which lives at the end of the stream — survives even when
+ * it alone exceeds the cap. A single line longer than `lineCap` is dropped
+ * (unrecoverable) and the in-flight buffer is bounded so memory never grows
+ * unbounded on a runaway line. */
+export class FinalEventLineCollector {
+  private buf = "";
+  lastLine: string | null = null;
+
+  constructor(
+    private readonly driverId: string,
+    private readonly lineCap: number = FINAL_EVENT_LINE_CAP,
+  ) {}
+
+  feed(chunk: Buffer): void {
+    this.buf += chunk.toString("utf8");
+    let idx = this.buf.indexOf("\n");
+    while (idx >= 0) {
+      const line = this.buf.slice(0, idx);
+      this.buf = this.buf.slice(idx + 1);
+      this.consider(line);
+      idx = this.buf.indexOf("\n");
+    }
+    // A single line longer than the cap with no newline yet is unrecoverable;
+    // drop the buffered prefix so we never hold more than `lineCap` bytes.
+    if (this.buf.length > this.lineCap) this.buf = "";
+  }
+
+  private consider(line: string): void {
+    if (line.length === 0 || line.length > this.lineCap) return;
+    const obj = parseJsonLine(line);
+    if (obj === null) return;
+    if (this.driverId === "claude-stream-json" && obj.type === "result") {
+      this.lastLine = line;
+    } else if (this.driverId === "kimi-stream-json" && obj.role === "assistant") {
+      this.lastLine = line;
+    }
+  }
+}
+
 /** Last `{"type":"result"}` with subtype "success" and is_error != true →
  * `.result`. */
 function extractClaude(stdout: string): string | null {
   let last: string | null = null;
   for (const line of splitLines(stdout)) {
-    const obj = parseJsonLine(line);
-    if (obj === null) continue;
-    if (obj.type !== "result") continue;
-    if (obj.subtype !== "success") continue;
-    if (obj.is_error === true) continue;
-    last = asText(obj.result);
+    last = extractClaudeLine(line) ?? last;
   }
   return last;
+}
+
+/** Extract `.result` from a single captured claude result line (null if the line
+ * is not a success result). */
+function extractClaudeLine(line: string): string | null {
+  const obj = parseJsonLine(line);
+  if (obj === null) return null;
+  if (obj.type !== "result") return null;
+  if (obj.subtype !== "success") return null;
+  if (obj.is_error === true) return null;
+  return asText(obj.result);
 }
 
 /** Last `{"role":"assistant"}` object's `.content`; `role:"meta"` resume lines
@@ -221,13 +288,19 @@ function extractClaude(stdout: string): string | null {
 function extractKimi(stdout: string): string | null {
   let last: string | null = null;
   for (const line of splitLines(stdout)) {
-    const obj = parseJsonLine(line);
-    if (obj === null) continue;
-    if (obj.role !== "assistant") continue;
-    const text = asText(obj.content);
+    const text = extractKimiLine(line);
     if (text !== null) last = text;
   }
   return last;
+}
+
+/** Extract `.content` from a single captured kimi assistant line (null if the
+ * line is not an assistant message or has no text). */
+function extractKimiLine(line: string): string | null {
+  const obj = parseJsonLine(line);
+  if (obj === null) return null;
+  if (obj.role !== "assistant") return null;
+  return asText(obj.content);
 }
 
 /** codex: prefer the `-o` last-message file; fall back to stdout. Both must be

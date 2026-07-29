@@ -296,8 +296,12 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
     expect(seen).toEqual([ws]);
   });
 
-  it("kills the group on timeout and resolves with timedOut", async () => {
+  it("kills the group on timeout: SIGTERM then SIGKILL to -pid, then resolves timedOut", async () => {
     const child = new FakeChild();
+    const kills: Array<{ target: number; signal: string }> = [];
+    const killFn = (target: number, signal: NodeJS.Signals): void => {
+      kills.push({ target, signal: String(signal) });
+    };
     const start = Date.now();
     const out = await defaultSpawn(
       {
@@ -310,15 +314,29 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
         signal: NEVER_ABORT,
       },
       fakeSpawnFn(child),
+      killFn,
     );
     const elapsed = Date.now() - start;
     expect(out.timedOut).toBe(true);
+    // The SIGKILL upgrade window was awaited before resolving (fire-and-forget
+    // would have let process.exit cancel the 2s timer).
+    expect(elapsed).toBeGreaterThanOrEqual(1500);
     expect(elapsed).toBeLessThan(5000);
+    // Both signals reached the whole process group (negative pid), in order,
+    // without ever calling the real process.kill.
+    expect(kills).toEqual([
+      { target: -child.pid, signal: "SIGTERM" },
+      { target: -child.pid, signal: "SIGKILL" },
+    ]);
   });
 
-  it("kills the group on abort (SIGINT semantics) and resolves with aborted", async () => {
+  it("kills the group on abort (SIGINT): SIGTERM then SIGKILL to -pid, resolves aborted", async () => {
     const ac = new AbortController();
     const child = new FakeChild();
+    const kills: Array<{ target: number; signal: string }> = [];
+    const killFn = (target: number, signal: NodeJS.Signals): void => {
+      kills.push({ target, signal: String(signal) });
+    };
     const p = defaultSpawn(
       {
         executable: "x",
@@ -330,6 +348,7 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
         signal: ac.signal,
       },
       fakeSpawnFn(child),
+      killFn,
     );
     setTimeout(() => ac.abort(), 30);
     const start = Date.now();
@@ -337,6 +356,10 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
     const elapsed = Date.now() - start;
     expect(out.aborted).toBe(true);
     expect(elapsed).toBeLessThan(5000);
+    expect(kills).toEqual([
+      { target: -child.pid, signal: "SIGTERM" },
+      { target: -child.pid, signal: "SIGKILL" },
+    ]);
   });
 
   it("truncates stdout past the 8MB cap keeping head + tail with a marker", async () => {
@@ -388,6 +411,61 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
       fakeSpawnFn(child),
     );
     expect(out.stderr).toContain("E!");
+  });
+
+  it("captures an oversized final-event line whole despite the stdout head+tail cap", async () => {
+    const child = new FakeChild();
+    child.emitSpawn();
+    // A single claude result line (~5MB) preceded by ~4.8MB of junk pushes total
+    // stdout past the 8MB cap, so head+tail splits the event line and neither
+    // half is valid JSON. The streaming collector must capture the event whole.
+    const resultText = "x".repeat(5 * 1024 * 1024);
+    const envelope = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: resultText,
+    });
+    const prefix = "junk-prefix-line\n".repeat(280 * 1024); // ~4.8MB
+    setImmediate(() => {
+      child.stdout.write(prefix);
+      child.stdout.write(envelope);
+      child.stdout.write("\n");
+      child.stdout.end();
+      setImmediate(() => child.emit("close", 0));
+    });
+    const out = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 30000,
+        signal: NEVER_ABORT,
+        driverId: "claude-stream-json",
+      },
+      fakeSpawnFn(child),
+    );
+    // The head+tail stdout is truncated and the event line is destroyed there.
+    expect(out.stdout).toContain("[truncated ");
+    // ...but the streaming-captured line survived, so the extractor recovers it
+    // (no spurious NO_OUTPUT).
+    expect(out.finalEventLine).not.toBeNull();
+    const r: AttemptResult = await spawnOnce(
+      { ...spec("0", ws), driverId: "claude-stream-json" },
+      {
+        spawnImpl: async () => ({
+          stdout: out.stdout,
+          finalEventLine: out.finalEventLine,
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+        }),
+      },
+    );
+    expect(r.status).toBe("success");
+    expect(r.output).toBe(resultText);
   });
 
   it("delivers the prompt via stdin when promptStdin", async () => {

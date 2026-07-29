@@ -119,6 +119,9 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
   const taskLines: string[] = ["", "## 原始任务", "", taskStatement(input.task)];
   const focus = input.task.focus?.trim();
   if (focus && focus.length > 0) taskLines.push("", "审查重点：", focus);
+  if (input.task.councilTopic && input.task.councilTopic.trim().length > 0) {
+    taskLines.push("", "上下文议题：", input.task.councilTopic.trim());
+  }
   const taskBlock = taskLines.join("\n");
 
   const failuresBlock =

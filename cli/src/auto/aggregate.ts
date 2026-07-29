@@ -34,9 +34,11 @@ export interface ReviewReportInput {
   aggregator: ReviewReportMeta;
   /** The Aggregator spawn's result (null if aggregation was skipped). */
   aggregation: AttemptResult | null;
+  /** Run status — drives the report's Status line (completed/partial/failed/interrupted). */
+  status: "completed" | "failed" | "interrupted";
   incomplete: boolean;
-  /** Why the report is incomplete (e.g. aggregation failed / all attempts failed). */
-  partialReason?: string;
+  /** Why the run is interrupted/failed (printed as a Reason line in the header). */
+  reason?: string;
 }
 
 /** Render the full Markdown report. */
@@ -51,9 +53,6 @@ export function renderReviewReport(input: ReviewReportInput): string {
     sections.push("---", "", body, "");
   } else {
     sections.push(INCOMPLETE_BANNER, "");
-    if (input.partialReason) {
-      sections.push(`> Reason: ${input.partialReason}`, "");
-    }
   }
   sections.push(renderAppendix(input));
   return sections.join("\n");
@@ -76,11 +75,22 @@ function renderHeader(input: ReviewReportInput): string {
       `  - ${a.agentName} (${a.driverId}/${a.modelId}) — ${mark} — exit ${a.exitCode ?? "n/a"} — ${a.durationMs}ms`,
     );
   }
-  lines.push(`- Status: ${input.incomplete ? "incomplete" : "complete"}`);
+  lines.push(`- Status: ${statusLabel(input)}`);
+  if (input.reason && input.reason.trim().length > 0) {
+    lines.push(`- Reason: ${input.reason.trim()}`);
+  }
   lines.push(`- Started: ${input.startedAt}`);
   lines.push(`- Ended: ${input.endedAt}`);
   lines.push("");
   return lines.join("\n");
+}
+
+/** Distinguish completed / partial (incomplete success) / failed / interrupted
+ * in the report header — an interrupted run must not read as merely "incomplete". */
+function statusLabel(input: ReviewReportInput): string {
+  if (input.status === "interrupted") return "interrupted";
+  if (input.status === "failed") return "failed";
+  return input.incomplete ? "partial" : "complete";
 }
 
 function renderAppendix(input: ReviewReportInput): string {

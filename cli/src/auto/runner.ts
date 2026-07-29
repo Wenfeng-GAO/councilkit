@@ -9,11 +9,15 @@
  * processes.
  */
 import { spawn } from "node:child_process";
-import { type AttemptSpec, extractFinalOutput } from "./driver-commands";
+import { type AttemptSpec, FinalEventLineCollector, extractFinalOutput } from "./driver-commands";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const STDOUT_CAP = 8 * 1024 * 1024;
 const STDERR_CAP = 1 * 1024 * 1024;
+/** Grace window between SIGTERM and the SIGKILL upgrade. The run path awaits this
+ * window before resolving so the upgrade is actually delivered (or proven
+ * unnecessary by ESRCH) — otherwise a fire-and-forget timer can be cancelled by
+ * an earlier process.exit, leaving process-group descendants alive. */
 const KILL_GRACE_MS = 2000;
 
 /** A never-aborting signal for callers that don't pass one. */
@@ -50,6 +54,9 @@ export interface SpawnInput {
   promptStdin: boolean;
   timeoutMs: number;
   signal: AbortSignal;
+  /** Driver id; when claude/kimi, `defaultSpawn` streams stdout line-by-line to
+   * capture the final-event line whole (bypassing the head+tail cap). */
+  driverId?: string;
 }
 
 export interface SpawnOutput {
@@ -61,6 +68,17 @@ export interface SpawnOutput {
   aborted: boolean;
   /** Set when the child could not be spawned at all (e.g. executable vanished). */
   error?: string;
+  /** Last complete final-event line captured during streaming (claude/kimi).
+   * Present only when `defaultSpawn` ran a line collector; absent for fakes. */
+  finalEventLine?: string | null;
+}
+
+/** Injectable process-group kill (defaults to `process.kill(-pid, signal)`). */
+export type KillProcessGroup = (negativePid: number, signal: NodeJS.Signals) => void;
+
+/** Default kill: signal the whole process group via the negative pid. */
+function defaultKillProcessGroup(negativePid: number, signal: NodeJS.Signals): void {
+  process.kill(negativePid, signal);
 }
 
 /** Test injection point: a fake spawn replaces the real child_process spawn. */
@@ -151,10 +169,13 @@ export async function runAttempts(
   }
 
   // Any spec never claimed (because the run was aborted) is a cancelled failure.
+  // These still get an onAttemptFinish callback so the transcript carries a
+  // record for every attempt — including the never-started cancelled ones
+  // (reviewer finding: cancelled attempts had no transcript entry).
   for (let i = 0; i < specs.length; i++) {
     if (results[i] === undefined) {
       const spec = specs[i];
-      results[i] = {
+      const cancelled: AttemptResult = {
         attemptId: spec.attemptId,
         agentId: spec.agentId,
         agentName: spec.agentName,
@@ -167,6 +188,11 @@ export async function runAttempts(
         workspace: spec.cwd,
         failure: { code: "CANCELLED", message: "run aborted before this attempt started" },
       };
+      results[i] = cancelled;
+      // Mirror worker semantics: a finish-callback failure (e.g. transcript IO)
+      // propagates so the caller surfaces it. The run is already aborted; there
+      // is nothing left to kill.
+      opts.onAttemptFinish?.(cancelled);
     }
   }
   return { results: results as AttemptResult[], aborted };
@@ -198,13 +224,14 @@ async function runOne(
     promptStdin: spec.promptStdin,
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
+    driverId: spec.driverId,
   });
   const durationMs = Date.now() - started;
 
   const extracted =
     out.error !== undefined
       ? null
-      : extractFinalOutput(spec.driverId, out.stdout, spec.lastMessageFile);
+      : extractFinalOutput(spec.driverId, out.stdout, spec.lastMessageFile, out.finalEventLine);
 
   let failure: AttemptFailure | undefined;
   if (out.error !== undefined) {
@@ -300,18 +327,27 @@ class CappedCollector {
 }
 
 /** Default real spawn: detached process group, stdin prompt delivery, stdout
- * capped at 8MB (head+tail), stderr drained to a 1MB cap (head+tail) so the pipe
- * never blocks, timeout + abort both kill the group (SIGTERM → grace → SIGKILL).
- * The optional `spawnFn` lets tests drive this path with a fake ChildProcess. */
+ * capped at 8MB (head+tail) plus a streaming final-event line collector for
+ * claude/kimi, stderr drained to a 1MB cap (head+tail) so the pipe never blocks,
+ * timeout + abort both kill the group (SIGTERM → grace → SIGKILL). The optional
+ * `spawnFn` lets tests drive this path with a fake ChildProcess; `killFn` lets
+ * tests assert the kill sequence without touching the real `process.kill`. */
 export function defaultSpawn(
   input: SpawnInput,
   spawnFn: typeof spawn = spawn,
+  killFn: KillProcessGroup = defaultKillProcessGroup,
 ): Promise<SpawnOutput> {
   return new Promise((resolveOutput) => {
     let settled = false;
     let killReason: "timeout" | "abort" | null = null;
+    let killInitiated = false;
+    let killPromise: Promise<void> = Promise.resolve();
     const stdoutColl = new CappedCollector(STDOUT_CAP, STDOUT_CAP / 2, STDOUT_CAP / 2);
     const stderrColl = new CappedCollector(STDERR_CAP, STDERR_CAP / 2, STDERR_CAP / 2);
+    const lineColl =
+      input.driverId === "claude-stream-json" || input.driverId === "kimi-stream-json"
+        ? new FinalEventLineCollector(input.driverId)
+        : null;
 
     let child: ReturnType<typeof spawn>;
     try {
@@ -334,38 +370,50 @@ export function defaultSpawn(
       return;
     }
 
+    // Resolve only after the kill upgrade window has elapsed (when a kill was
+    // initiated), so the SIGKILL is actually delivered — or proven unnecessary
+    // by ESRCH — before the caller can process.exit and cancel the pending timer.
     const finish = (out: SpawnOutput): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
       input.signal.removeEventListener("abort", onAbort);
-      resolveOutput(out);
+      if (killInitiated) {
+        killPromise.then(() => resolveOutput(out));
+      } else {
+        resolveOutput(out);
+      }
     };
 
     const killGroup = (reason: "timeout" | "abort"): void => {
       if (settled) return;
       killReason = reason;
+      killInitiated = true;
       try {
         child.stdin?.destroy();
       } catch {
         // stdin already gone — best effort.
       }
       if (child.pid !== undefined) {
+        const pid = child.pid;
         try {
-          process.kill(-child.pid, "SIGTERM");
+          killFn(-pid, "SIGTERM");
         } catch (error) {
           if (!isESRCH(error)) throw error;
         }
-        const pid = child.pid;
-        setTimeout(() => {
-          try {
-            process.kill(-pid, "SIGKILL");
-          } catch (error) {
-            if (!isESRCH(error)) {
-              // Process gone — nothing more to do.
+        killPromise = new Promise<void>((resolveKill) => {
+          setTimeout(() => {
+            try {
+              killFn(-pid, "SIGKILL");
+            } catch (error) {
+              if (!isESRCH(error)) {
+                // Unexpected — nothing more we can do; best effort.
+              }
+            } finally {
+              resolveKill();
             }
-          }
-        }, KILL_GRACE_MS);
+          }, KILL_GRACE_MS);
+        });
       }
     };
 
@@ -373,16 +421,41 @@ export function defaultSpawn(
     const timeoutTimer = setTimeout(() => killGroup("timeout"), input.timeoutMs);
     input.signal.addEventListener("abort", onAbort, { once: true });
 
+    // A stream error (e.g. EPIPE when the child died before we finished writing
+    // the prompt) must never crash the CLI as an unhandled 'error' on stdin /
+    // stdout / stderr. Treat it as a spawn-level failure and clean up normally.
+    const onStreamError = (error: Error): void => {
+      finish({
+        stdout: stdoutColl.toString(),
+        stderr: stderrColl.toString(),
+        exitCode: null,
+        timedOut: killReason === "timeout",
+        aborted: killReason === "abort",
+        error: errMsg(error),
+      });
+    };
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
+    child.stdin?.on("error", onStreamError);
+
     // Drain BOTH pipes. stderr is collected (capped) but never left unread — an
     // unread pipe fills its kernel buffer and the child blocks on its next write.
-    child.stdout?.on("data", (chunk: Buffer) => stdoutColl.feed(chunk));
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutColl.feed(chunk);
+      lineColl?.feed(chunk);
+    });
     child.stderr?.on("data", (chunk: Buffer) => stderrColl.feed(chunk));
 
     child.on("spawn", () => {
       // If the abort fired before the child existed, kill it now.
       if (input.signal.aborted) killGroup("abort");
       if (input.promptStdin && input.prompt.length > 0) {
-        child.stdin?.write(input.prompt);
+        try {
+          child.stdin?.write(input.prompt);
+        } catch (error) {
+          onStreamError(error as Error);
+          return;
+        }
       }
       child.stdin?.end();
     });
@@ -402,6 +475,7 @@ export function defaultSpawn(
       finish({
         stdout: stdoutColl.toString(),
         stderr: stderrColl.toString(),
+        finalEventLine: lineColl?.lastLine ?? undefined,
         exitCode: code ?? null,
         timedOut: killReason === "timeout",
         aborted: killReason === "abort",
