@@ -11,10 +11,37 @@ import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from ".
 import type { AttemptResult } from "./runner";
 import type { ReviewTask } from "./templates/review";
 
-const INCOMPLETE_BANNER =
-  "> INCOMPLETE — the Aggregator failed to produce a synthesis. " +
-  "What follows is the deterministic header plus each Attempt's raw deliverable " +
-  "in the appendix; no consensus is fabricated.";
+/** Render the no-synthesis banner by the REAL reason synthesis is absent, so
+ * the body never contradicts the header. The header already labels the run
+ * (interrupted / failed / complete); the banner must agree: an interrupted run
+ * was never finished, an all-attempts-failed run never started an Aggregator,
+ * and only an aggregation-failed run actually had the Aggregator fail (reviewer
+ * finding: the banner always said "Aggregator failed" even when SIGINT fired
+ * during Attempts or every Attempt failed and no Aggregator ever ran). */
+function incompleteBanner(input: ReviewReportInput): string {
+  if (input.status === "interrupted") {
+    return (
+      "> INCOMPLETE — the run was interrupted before a synthesis could be " +
+      "produced. What follows is the deterministic header plus each Attempt's " +
+      "raw deliverable in the appendix; no consensus is fabricated."
+    );
+  }
+  // status === "failed": distinguish every-Attempt-failed (no Aggregator ran)
+  // from an Aggregator that ran but produced no usable output.
+  const anySuccess = input.attempts.some((a) => a.status === "success");
+  if (!anySuccess) {
+    return (
+      "> INCOMPLETE — every Attempt failed, so no Aggregator was run. What " +
+      "follows is the deterministic header plus each Attempt's failure in the " +
+      "appendix; no consensus is fabricated."
+    );
+  }
+  return (
+    "> INCOMPLETE — the Aggregator failed to produce a synthesis. What follows " +
+    "is the deterministic header plus each Attempt's raw deliverable in the " +
+    "appendix; no consensus is fabricated."
+  );
+}
 
 export interface ReviewReportMeta {
   attemptId: string;
@@ -52,7 +79,7 @@ export function renderReviewReport(input: ReviewReportInput): string {
   if (body.length > 0) {
     sections.push("---", "", body, "");
   } else {
-    sections.push(INCOMPLETE_BANNER, "");
+    sections.push(incompleteBanner(input), "");
   }
   sections.push(renderAppendix(input));
   return sections.join("\n");

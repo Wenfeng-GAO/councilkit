@@ -76,7 +76,9 @@ pnpm exec councilkit --help
 
 ### Host 必须运行，浏览器可关
 
-CLI 不 spawn Runtime Host，也不直连模型供应商——所有执行仍经过本机前台运行的 Runtime Host（与浏览器共用同一个 `http://127.0.0.1:43127`）。所以先 `pnpm start`（或 `pnpm dev`）让 Host 跑起来，再开 CLI；浏览器可以关。Host 不可达时 `doctor`/`run` 以退出码 3 失败，CLI 永不自动拉起 Host。CLI 只保证与**同 checkout** 的 Host 互通（版本绑定）。
+CLI 不 spawn Runtime Host，也不直连模型供应商——除 `review` 外，所有执行仍经过本机前台运行的 Runtime Host（与浏览器共用同一个 `http://127.0.0.1:43127`）。所以先 `pnpm start`（或 `pnpm dev`）让 Host 跑起来，再开 CLI；浏览器可以关。Host 不可达时 `doctor`/`run` 以退出码 3 失败，CLI 永不自动拉起 Host。CLI 只保证与**同 checkout** 的 Host 互通（版本绑定）。
+
+**例外：`councilkit review` 不经 Host**——它直接按 PATH 解析 `cld`/`kimi`/`codex` 并 spawn（见下「自主并行审查」），因此跑 `review` 不需要 Host 运行，也不受退出码 3 约束。
 
 ### 命令
 

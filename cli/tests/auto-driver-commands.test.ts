@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AttemptSpec,
+  FinalEventLineCollector,
   buildSpawnSpec,
   extractFinalOutput,
   resolveExecutable,
@@ -299,6 +300,72 @@ describe("cli auto driver-commands", () => {
 
     it("unknown driver → null", () => {
       expect(extractFinalOutput("unknown-driver", "anything")).toBeNull();
+    });
+  });
+
+  describe("FinalEventLineCollector — incremental UTF-8 across chunk boundaries", () => {
+    it("a 3-byte CJK char split across chunks decodes without U+FFFD", () => {
+      const text = "中"; // E4 B8 AD
+      const line = JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: text,
+      });
+      const buf = Buffer.from(`${line}\n`, "utf8");
+      const e4 = buf.indexOf(0xe4);
+      expect(e4).toBeGreaterThan(0);
+      const coll = new FinalEventLineCollector("claude-stream-json");
+      coll.feed(buf.subarray(0, e4 + 1)); // only the first byte of 中
+      coll.feed(buf.subarray(e4 + 1)); // remaining two bytes + newline
+      expect(coll.lastLine).not.toBeNull();
+      expect(extractFinalOutput("claude-stream-json", "", undefined, coll.lastLine)).toBe(text);
+    });
+
+    it("a 4-byte emoji split across chunks decodes without U+FFFD", () => {
+      const text = "🎉"; // F0 9F 8E 89
+      const line = JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: `review ${text} done`,
+      });
+      const buf = Buffer.from(`${line}\n`, "utf8");
+      const f0 = buf.indexOf(0xf0);
+      expect(f0).toBeGreaterThan(0);
+      const coll = new FinalEventLineCollector("claude-stream-json");
+      coll.feed(buf.subarray(0, f0 + 2)); // two bytes of the 4-byte emoji
+      coll.feed(buf.subarray(f0 + 2)); // remaining two bytes + rest
+      expect(coll.lastLine).not.toBeNull();
+      expect(extractFinalOutput("claude-stream-json", "", undefined, coll.lastLine)).toBe(
+        `review ${text} done`,
+      );
+    });
+
+    it("feeding the whole buffer at once still works (no regression)", () => {
+      const text = "结论：通过";
+      const line = JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: text,
+      });
+      const coll = new FinalEventLineCollector("claude-stream-json");
+      coll.feed(Buffer.from(`${line}\n`, "utf8"));
+      expect(coll.lastLine).not.toBeNull();
+      expect(extractFinalOutput("claude-stream-json", "", undefined, coll.lastLine)).toBe(text);
+    });
+
+    it("a kimi assistant line with multibyte content split mid-buffer", () => {
+      const text = "审查通过 ✓";
+      const line = JSON.stringify({ role: "assistant", content: text });
+      const buf = Buffer.from(`${line}\n`, "utf8");
+      const mid = Math.floor(buf.length / 2);
+      const coll = new FinalEventLineCollector("kimi-stream-json");
+      coll.feed(buf.subarray(0, mid));
+      coll.feed(buf.subarray(mid));
+      expect(coll.lastLine).not.toBeNull();
+      expect(extractFinalOutput("kimi-stream-json", "", undefined, coll.lastLine)).toBe(text);
     });
   });
 

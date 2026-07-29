@@ -252,7 +252,11 @@ export async function runReview(
     process.off("SIGTERM", onSignal);
   }
 
-  out.finish(outcome, (d) => renderHuman(d as ReviewOutcome));
+  // Await stdout flush of the final document before throwing the exit sentinel
+  // — main() process.exit()s on ReviewExit, which would truncate a large
+  // ReviewOutcome still buffered in stdout under backpressure (reviewer finding).
+  // The run command keeps its existing fire-and-forget finish (unchanged).
+  await out.finish(outcome, (d) => renderHuman(d as ReviewOutcome));
   throw new ReviewExit(outcome.exitCode);
 }
 
@@ -300,6 +304,12 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
       p.out.progress(
         `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${r.durationMs}ms)`,
       );
+      // Surface the failure reason (incl. the driver's stderr tail carried on
+      // the EXIT failure message) as a human-mode diagnostic (reviewer finding:
+      // stderr was collected but never shown).
+      if (r.status === "failure" && r.failure) {
+        p.out.progress(`    failure [${r.failure.code}]: ${r.failure.message}`);
+      }
     },
   };
 
@@ -440,12 +450,14 @@ async function finalize(
     reason,
   });
 
-  // Persist the canonical report first; a copy-IO failure must never undermine
-  // the canonical artifact's completeness claim (the header already reflects the
-  // true run status). Any artifact-IO failure — canonical report, --out copy, or
-  // the final transcript rewrite — surfaces as exit 5 and is recorded in
-  // ReviewOutcome.failure (reviewer finding: transcript rewrite failures were
-  // silently swallowed after exitCode/status were already computed).
+  // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then
+  // the final transcript rewrite), THEN compute status/incomplete/exitCode in
+  // one place. Previously these were derived from only the report/--out results
+  // before the transcript rewrite was attempted, so a --out or transcript IO
+  // failure returned status="completed"/exit 5/incomplete=false and the
+  // persisted review.finished record disagreed with the ReviewOutcome (reviewer
+  // finding: artifact-IO status computed before the final transcript write,
+  // incomplete never recomputed).
   let ioFailure: { phase: string; code: string; message: string } | undefined;
   try {
     writeCanonicalReviewReport(p.reportPath, markdown);
@@ -468,19 +480,35 @@ async function finalize(
     }
   }
 
-  const exitCode = ioFailure !== undefined ? EXIT.io : spec.exitCode;
-  const status: FinalizeSpec["status"] =
-    ioFailure !== undefined && ioFailure.phase === "report" ? "failed" : spec.status;
-  const failure = ioFailure ?? spec.failure;
+  // The canonical report was rendered with the run's logical status/incomplete
+  // (spec.*), so the ReviewOutcome declares the SAME run status — artifact-IO
+  // failures surface via exitCode (5) + `failure`, not by mutating the run
+  // status — keeping the canonical report and ReviewOutcome consistent. A
+  // failure of a CANONICAL artifact (report/transcript) marks the durable
+  // record incomplete; the non-canonical --out copy does not (the canonical
+  // report is intact, matching the report's own incomplete banner).
+  const computeOutcome = (io: typeof ioFailure) => {
+    const exitCode = io !== undefined ? EXIT.io : spec.exitCode;
+    const status: FinalizeSpec["status"] = spec.status;
+    const incomplete = spec.incomplete || (io !== undefined && io.phase !== "out");
+    const failure = io ?? spec.failure;
+    return { exitCode, status, incomplete, failure };
+  };
 
+  let outcomeFields = computeOutcome(ioFailure);
+
+  // The review.finished record is persisted with these fields. If the flush
+  // below then fails, that record is NOT on disk (the atomic rewrite failed),
+  // so the on-disk record always matches a successful flush; the returned
+  // ReviewOutcome is recomputed below to include the transcript failure.
   const finished: ReviewFinishedRecord = {
     kind: "review.finished",
     version: 1,
-    status,
+    status: outcomeFields.status,
     endedAt,
-    incomplete: spec.incomplete,
+    incomplete: outcomeFields.incomplete,
     reportPath: p.reportPath,
-    failure,
+    failure: outcomeFields.failure,
   };
   p.transcript.push(finished);
   try {
@@ -488,19 +516,21 @@ async function finalize(
   } catch (error) {
     // The final transcript rewrite is itself an artifact-IO failure: map it to
     // exit 5 and surface it in the outcome (the canonical report, if written,
-    // remains the durable artifact). Only set when no earlier IO failure won.
+    // remains the durable artifact). Recompute the outcome so the transcript
+    // failure is reflected in incomplete/exitCode/failure.
     if (ioFailure === undefined) {
       ioFailure = {
         phase: "transcript",
         code: "IO_TRANSCRIPT",
         message: error instanceof Error ? error.message : "transcript write failed",
       };
+      outcomeFields = computeOutcome(ioFailure);
     }
   }
 
   return {
-    status,
-    exitCode: ioFailure !== undefined ? EXIT.io : exitCode,
+    status: outcomeFields.status,
+    exitCode: outcomeFields.exitCode,
     runId: p.runId,
     reportPath: p.reportPath,
     transcriptPath: p.transcriptPath,
@@ -513,8 +543,8 @@ async function finalize(
         code: r.failure?.code ?? "unknown",
         message: r.failure?.message ?? "no output",
       })),
-    incomplete: spec.incomplete,
-    failure: ioFailure ?? failure,
+    incomplete: outcomeFields.incomplete,
+    failure: outcomeFields.failure,
   };
 }
 

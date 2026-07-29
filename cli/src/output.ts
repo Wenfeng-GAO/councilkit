@@ -15,8 +15,10 @@ export interface OutputSink {
   /** Diagnostic line, always stderr (even in human mode it is a side-channel). */
   diag(message: string): void;
   /** Emit the final result document. JSON mode → stdout (single JSON object);
-   * human mode → stdout as readable text. */
-  finish(data: unknown, humanRender?: (data: unknown) => string): void;
+   * human mode → stdout as readable text. Resolves once stdout has flushed the
+   * document so a caller that process.exit()s immediately cannot truncate it
+   * under backpressure. */
+  finish(data: unknown, humanRender?: (data: unknown) => string): Promise<void>;
 }
 
 export function createOutput(json: boolean): OutputSink {
@@ -30,13 +32,23 @@ export function createOutput(json: boolean): OutputSink {
       process.stderr.write(`${redact(message)}\n`);
     },
     finish(data, humanRender) {
-      if (json) {
-        // Single JSON document on stdout (cleared of secrets).
-        process.stdout.write(`${JSON.stringify(redact(data))}\n`);
-      } else {
-        const text = humanRender ? humanRender(data) : JSON.stringify(data, null, 2);
-        process.stdout.write(`${redact(text)}\n`);
-      }
+      const payload = json
+        ? `${JSON.stringify(redact(data))}\n`
+        : `${redact(humanRender ? humanRender(data) : JSON.stringify(data, null, 2))}\n`;
+      return new Promise<void>((resolve) => {
+        // Resolve only once the OS has flushed the bytes. A fire-and-forget
+        // write can be truncated by an imminent process.exit when stdout is
+        // under backpressure (reviewer finding: review --json truncated a large
+        // ReviewOutcome). The write callback fires on flush — including after a
+        // drain when write() returned false — so awaiting it gates process.exit.
+        // An 'error' on stdout (abnormal) also resolves so we never hang.
+        const done = (): void => resolve();
+        process.stdout.once("error", done);
+        process.stdout.write(payload, () => {
+          process.stdout.removeListener("error", done);
+          done();
+        });
+      });
     },
   };
 }

@@ -156,6 +156,42 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(results[0].failure?.code).toBe("NO_OUTPUT");
   });
 
+  it("EXIT failure carries the collected stderr tail in the failure message", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "x",
+      }),
+      stderr: "Error: boom at foo:1\n  at bar:2\n",
+      exitCode: 1,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce(spec("0"), { spawnImpl: spawn });
+    expect(r.status).toBe("failure");
+    expect(r.failure?.code).toBe("EXIT");
+    expect(r.failure?.message).toContain("non-zero exit 1");
+    expect(r.failure?.message).toContain("boom");
+  });
+
+  it("EXIT failure trims the stderr tail to the last ≤2KB", async () => {
+    const big = "E!".repeat(4000); // 8KB
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "x" }),
+      stderr: big,
+      exitCode: 2,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce(spec("0"), { spawnImpl: spawn });
+    expect(r.failure?.code).toBe("EXIT");
+    // 2KB tail + the "…" marker; far smaller than the full 8KB.
+    expect(r.failure?.message.length).toBeLessThan(big.length);
+    expect(r.failure?.message).toContain("…");
+  });
+
   it("aborted before start → cancelled failures, spawn never called", async () => {
     let calls = 0;
     const spawn: SpawnImpl = async () => {
@@ -411,6 +447,44 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
       fakeSpawnFn(child),
     );
     expect(out.stderr).toContain("E!");
+  });
+
+  it("a stream error kills the process group (SIGTERM→SIGKILL) before settling", async () => {
+    const child = new FakeChild();
+    const kills: Array<{ target: number; signal: string }> = [];
+    const killFn = (target: number, signal: NodeJS.Signals): void => {
+      kills.push({ target, signal: String(signal) });
+    };
+    const p = defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 60000,
+        signal: NEVER_ABORT,
+      },
+      fakeSpawnFn(child),
+      killFn,
+    );
+    // Emit a stream error on stdout while the child is still "running" (no
+    // close yet) — the pipe is gone but the process group must be killed.
+    setImmediate(() => child.stdout.emit("error", new Error("read ECONNRESET")));
+    const start = Date.now();
+    const out = await p;
+    const elapsed = Date.now() - start;
+    expect(out.error).toContain("ECONNRESET");
+    expect(out.timedOut).toBe(false);
+    expect(out.aborted).toBe(false);
+    // The TERM→grace→KILL upgrade window was awaited before resolving so the
+    // group is actually signaled (orphan prevention), not left running.
+    expect(elapsed).toBeGreaterThanOrEqual(1500);
+    expect(elapsed).toBeLessThan(5000);
+    expect(kills).toEqual([
+      { target: -child.pid, signal: "SIGTERM" },
+      { target: -child.pid, signal: "SIGKILL" },
+    ]);
   });
 
   it("captures an oversized final-event line whole despite the stdout head+tail cap", async () => {

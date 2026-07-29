@@ -241,7 +241,7 @@ async function runOne(
   } else if (out.aborted) {
     failure = { code: "ABORTED", message: "aborted by cancellation signal" };
   } else if (out.exitCode !== 0) {
-    failure = { code: "EXIT", message: `non-zero exit ${out.exitCode}` };
+    failure = { code: "EXIT", message: formatExitFailure(out.exitCode, out.stderr) };
   } else if (extracted === null || extracted.trim().length === 0) {
     failure = { code: "NO_OUTPUT", message: "no final output extracted from driver" };
   }
@@ -339,7 +339,7 @@ export function defaultSpawn(
 ): Promise<SpawnOutput> {
   return new Promise((resolveOutput) => {
     let settled = false;
-    let killReason: "timeout" | "abort" | null = null;
+    let killReason: "timeout" | "abort" | "stream" | null = null;
     let killInitiated = false;
     let killPromise: Promise<void> = Promise.resolve();
     const stdoutColl = new CappedCollector(STDOUT_CAP, STDOUT_CAP / 2, STDOUT_CAP / 2);
@@ -385,7 +385,7 @@ export function defaultSpawn(
       }
     };
 
-    const killGroup = (reason: "timeout" | "abort"): void => {
+    const killGroup = (reason: "timeout" | "abort" | "stream"): void => {
       if (settled) return;
       killReason = reason;
       killInitiated = true;
@@ -425,6 +425,14 @@ export function defaultSpawn(
     // the prompt) must never crash the CLI as an unhandled 'error' on stdin /
     // stdout / stderr. Treat it as a spawn-level failure and clean up normally.
     const onStreamError = (error: Error): void => {
+      // A stream error (e.g. EPIPE when the child died before we finished
+      // writing the prompt) means the pipe is gone but the child may still be
+      // running. Kill the whole process group via the same TERM→grace→KILL
+      // path as timeout/abort BEFORE settling — otherwise the child outlives
+      // its pipes and becomes an orphan (reviewer finding: a stream-error
+      // finish cleaned the listeners but never signaled the group). killGroup
+      // is a no-op when already settled (e.g. a late error after close).
+      killGroup("stream");
       finish({
         stdout: stdoutColl.toString(),
         stderr: stderrColl.toString(),
@@ -493,4 +501,25 @@ function errMsg(error: unknown): string {
   // Surface node's system-error code when available (e.g. ENOENT from spawn).
   const code = (error as { code?: string })?.code;
   return code ?? String(error);
+}
+
+/** Max stderr bytes attached to an EXIT failure message. Keeps the transcript
+ * and outcome readable while surfacing the real error instead of just
+ * "non-zero exit N" — the driver's stderr is the only durable diagnostic for a
+ * crash/usage failure (reviewer finding: runOne discarded the collected stderr). */
+const STDERR_TAIL_BYTES = 2 * 1024;
+
+function formatExitFailure(exitCode: number | null, stderr?: string): string {
+  const base = `non-zero exit ${exitCode}`;
+  if (stderr === undefined) return base;
+  const tail = stderrTail(stderr);
+  return tail.length === 0 ? base : `${base}\n${tail}`;
+}
+
+/** Last ≤2KB of stderr (trimmed), prefixed with an ellipsis when truncated. */
+function stderrTail(stderr: string): string {
+  const trimmed = stderr.trim();
+  if (trimmed.length === 0) return "";
+  if (trimmed.length <= STDERR_TAIL_BYTES) return trimmed;
+  return `…${trimmed.slice(trimmed.length - STDERR_TAIL_BYTES)}`;
 }

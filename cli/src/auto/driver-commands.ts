@@ -18,6 +18,7 @@
 import { Buffer } from "node:buffer";
 import { constants, accessSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 
@@ -229,6 +230,7 @@ export function extractFinalOutput(
  * unbounded on a runaway line. */
 export class FinalEventLineCollector {
   private buf = "";
+  private readonly decoder = new StringDecoder("utf8");
   lastLine: string | null = null;
 
   constructor(
@@ -237,7 +239,12 @@ export class FinalEventLineCollector {
   ) {}
 
   feed(chunk: Buffer): void {
-    this.buf += chunk.toString("utf8");
+    // Incremental UTF-8 decode: decoding each chunk independently with
+    // toString("utf8") replaces a multi-byte character split across chunks with
+    // U+FFFD, corrupting capturedFinalLine. StringDecoder buffers the incomplete
+    // trailing bytes until the next chunk completes the character (reviewer
+    // finding: cross-chunk multibyte corruption of the captured final line).
+    this.buf += this.decoder.write(chunk);
     let idx = this.buf.indexOf("\n");
     while (idx >= 0) {
       const line = this.buf.slice(0, idx);
