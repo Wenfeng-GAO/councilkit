@@ -206,12 +206,16 @@ export function extractFinalOutput(
   switch (driverId) {
     case "claude-stream-json":
       if (capturedFinalLine !== undefined && capturedFinalLine !== null) {
-        return extractClaudeLine(capturedFinalLine);
+        // A captured line that yields no usable text (error subtype, non-string
+        // result) must NOT shadow the stream: fall back to scanning stdout —
+        // otherwise a trailing unusable event flips a good run to NO_OUTPUT
+        // (reviewer finding).
+        return extractClaudeLine(capturedFinalLine) ?? extractClaude(stdout);
       }
       return extractClaude(stdout);
     case "kimi-stream-json":
       if (capturedFinalLine !== undefined && capturedFinalLine !== null) {
-        return extractKimiLine(capturedFinalLine);
+        return extractKimiLine(capturedFinalLine) ?? extractKimi(stdout);
       }
       return extractKimi(stdout);
     case "codex-app-server":

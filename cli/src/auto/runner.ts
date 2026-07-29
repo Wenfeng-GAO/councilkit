@@ -555,6 +555,11 @@ function stderrTail(stderr: string): string {
     // ";"-separated text that would otherwise survive and break credential
     // redaction (reviewer finding: only CSI was removed).
     .replace(/\u001b[\]PX^_][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    // C1 single-byte CSI (U+009B + same parameter/intermediate/final shape):
+    // without this the introducer is stripped by the C1 class below while its
+    // parameter bytes stay printable and can split a credential (reviewer
+    // finding).
+    .replace(/\u009b[0-?]*[ -/]*[@-~]/g, "")
     // Any remaining two-byte escape (ESC + one char)
     .replace(/\u001b./g, "")
     // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars and DEL (except \n and \t) from untrusted stderr
