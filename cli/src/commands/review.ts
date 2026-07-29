@@ -410,7 +410,29 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     failure: aggregation.failure ?? null,
   };
   p.transcript.push(aggRec);
-  flushTranscript(p.transcriptPath, p.transcript);
+  try {
+    flushTranscript(p.transcriptPath, p.transcript);
+  } catch (error) {
+    // Persisting aggregation.finished failed: route through finalize so the run
+    // still produces an INCOMPLETE report + ReviewOutcome (exit 5; 130 if the
+    // abort already fired) instead of escaping as a bare CliError (reviewer
+    // finding).
+    const message = error instanceof Error ? error.message : String(error);
+    if (p.signal.aborted) {
+      return finalize(p, new Date().toISOString(), results, aggregation, {
+        status: "interrupted",
+        exitCode: EXIT.interrupted,
+        incomplete: true,
+        failure: { phase: "aggregation", code: "ABORTED", message: "run aborted by signal" },
+      });
+    }
+    return finalize(p, new Date().toISOString(), results, aggregation, {
+      status: "failed",
+      exitCode: EXIT.io,
+      incomplete: true,
+      failure: { phase: "transcript", code: "IO_TRANSCRIPT", message },
+    });
+  }
   p.out.progress(
     `  aggregator -> ${aggregation.status} (exit ${aggregation.exitCode ?? "n/a"}, ${aggregation.durationMs}ms)`,
   );

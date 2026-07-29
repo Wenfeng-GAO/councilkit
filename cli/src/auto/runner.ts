@@ -545,8 +545,11 @@ function stderrTail(stderr: string): string {
   // transcript/report (reviewer finding). \r is stripped too: it can overwrite
   // a terminal line or smuggle raw control into the Markdown report.
   const cleaned = stderr
-    // CSI sequences (ESC [ … letter)
-    .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
+    // CSI sequences (ESC [ parameter-bytes(0x30-0x3F) intermediate-bytes
+    // (0x20-0x2F) final-byte(0x40-0x7E)) — digits/semicolons alone would leave
+    // private-parameter or intermediate-byte CSI payloads printable (reviewer
+    // finding).
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     // OSC/DCS/SOS/PM/APC (ESC ] P X ^ _ … terminated by BEL or ST): drop the
     // WHOLE sequence including its printable payload — an OSC payload can carry
     // ";"-separated text that would otherwise survive and break credential
