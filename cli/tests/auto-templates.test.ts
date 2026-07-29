@@ -4,8 +4,10 @@
  * aggregation directive, plus the boundary rules: failed Attempts are named as
  * absent only, and no workspace path is ever injected into the aggregate prompt.
  */
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import {
+  AGGREGATE_PROMPT_BUDGET,
   MAX_ATTEMPT_OUTPUT_IN_PROMPT,
   buildAggregatePrompt,
   buildAttemptPrompt,
@@ -122,5 +124,37 @@ describe("cli auto templates — aggregate prompt", () => {
 
   it("truncateForPrompt passes short text through unchanged", () => {
     expect(truncateForPrompt("short")).toBe("short");
+  });
+
+  it("enforces a total byte budget by proportionally truncating large outputs", () => {
+    const big = "x".repeat(MAX_ATTEMPT_OUTPUT_IN_PROMPT);
+    const prompt = buildAggregatePrompt({
+      aggregatorName: "R",
+      task,
+      attempts: [
+        { attemptId: "a", name: "A", status: "success", output: big },
+        { attemptId: "b", name: "B", status: "success", output: big },
+        { attemptId: "c", name: "C", status: "success", output: big },
+      ],
+    });
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(AGGREGATE_PROMPT_BUDGET);
+    // At least one retained output was shrunk (budget-driven, not just per-attempt cap).
+    expect(prompt).toContain("[truncated at");
+  });
+
+  it("drops the oldest outputs (omitted) when the budget still cannot fit all", () => {
+    const attempts = Array.from({ length: 400 }, (_, i) => ({
+      attemptId: `a${i}`,
+      name: `Agent${i}`,
+      status: "success" as const,
+      output: `${i}:`.padEnd(1024, "x"),
+    }));
+    const prompt = buildAggregatePrompt({ aggregatorName: "R", task, attempts });
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(AGGREGATE_PROMPT_BUDGET);
+    expect(prompt).toContain("因聚合预算省略");
+    // Oldest dropped from the deliverables section ...
+    expect(prompt).not.toContain("### Agent0\n");
+    // ... while the newest is retained as a deliverable.
+    expect(prompt).toContain("### Agent399");
   });
 });

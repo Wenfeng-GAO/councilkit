@@ -272,7 +272,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
 
     // Transcript kind sequence.
     const transcriptLines = readFileSync(outcome.transcriptPath, "utf8").trim().split("\n");
-    const kinds = transcriptLines.map((l) => JSON.parse(l).kind);
+    const records = transcriptLines.map((l) => JSON.parse(l) as Record<string, unknown>);
+    const kinds = records.map((r) => r.kind);
     expect(kinds).toEqual([
       "review.started",
       "attempt.finished",
@@ -281,6 +282,109 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       "aggregation.finished",
       "review.finished",
     ]);
+    // Each attempt.finished carries its final output; aggregation.finished the synthesis.
+    const attemptRecs = records.filter((r) => r.kind === "attempt.finished");
+    expect(
+      attemptRecs.every((r) => typeof r.output === "string" && (r.output as string).length > 0),
+    ).toBe(true);
+    const aggRec = records.find((r) => r.kind === "aggregation.finished");
+    expect(
+      typeof aggRec?.output === "string" && (aggRec.output as string).includes("## Overview"),
+    ).toBe(true);
+  });
+
+  it("SIGINT during aggregation → interrupted, exit 130, transcript/report persisted", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const sink = makeSink();
+    const ac = new AbortController();
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt.includes("对比汇总")) {
+        // SIGINT fires mid-aggregation.
+        ac.abort();
+        return { stdout: "", exitCode: null, timedOut: false, aborted: true };
+      }
+      return claudeEnvelope("## Findings\n- ok\n## Verification\n未验证\n## Verdict\ncomment");
+    };
+    let exitCode = -1;
+    try {
+      await runReview(
+        ["--agents", JSON.stringify(agentIds), "--aggregator", aggregatorName, "--task", "x"],
+        sink,
+        { spawnImpl: spawn, abortController: ac },
+      );
+    } catch (e) {
+      expect(e).toBeInstanceOf(ReviewExit);
+      exitCode = (e as ReviewExit).exitCode;
+    }
+    expect(exitCode).toBe(130);
+    const outcome = sink.finished as {
+      status: string;
+      exitCode: number;
+      reportPath: string;
+      transcriptPath: string;
+    };
+    expect(outcome.status).toBe("interrupted");
+    expect(outcome.exitCode).toBe(130);
+    const report = readFileSync(outcome.reportPath, "utf8");
+    expect(report).toContain("incomplete");
+    expect(report).not.toContain("## Overview");
+    const transcriptLines = readFileSync(outcome.transcriptPath, "utf8").trim().split("\n");
+    const last = JSON.parse(transcriptLines[transcriptLines.length - 1] ?? "") as Record<
+      string,
+      unknown
+    >;
+    expect(last.kind).toBe("review.finished");
+    expect(last.status).toBe("interrupted");
+  });
+
+  it("--out copy IO failure → exit 5, canonical report still complete, review.finished persisted", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const sink = makeSink();
+    // Make `blocker` a plain file so a path under it cannot be written.
+    const blocker = join(home, "blocker");
+    writeFileSync(blocker, "x");
+    const badOut = join(blocker, "out.md");
+    let exitCode = -1;
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--out",
+          badOut,
+        ],
+        sink,
+        { spawnImpl: fakeSpawn() },
+      );
+    } catch (e) {
+      expect(e).toBeInstanceOf(ReviewExit);
+      exitCode = (e as ReviewExit).exitCode;
+    }
+    expect(exitCode).toBe(5);
+    const outcome = sink.finished as {
+      status: string;
+      exitCode: number;
+      reportPath: string;
+      transcriptPath: string;
+      failure?: { phase: string };
+    };
+    expect(outcome.exitCode).toBe(5);
+    expect(outcome.status).toBe("completed");
+    expect(outcome.failure?.phase).toBe("out");
+    // Canonical report is intact and complete.
+    const report = readFileSync(outcome.reportPath, "utf8");
+    expect(report).toContain("## Overview");
+    const transcriptLines = readFileSync(outcome.transcriptPath, "utf8").trim().split("\n");
+    const last = JSON.parse(transcriptLines[transcriptLines.length - 1] ?? "") as Record<
+      string,
+      unknown
+    >;
+    expect(last.kind).toBe("review.finished");
+    expect((last.failure as { phase: string }).phase).toBe("out");
   });
 
   it("maps --council (agents→attempts, reporter→aggregator, topic injected)", async () => {

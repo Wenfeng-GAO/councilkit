@@ -3,7 +3,7 @@
  * construction is checked structurally, output extraction against canned
  * stream-json fixtures, executable resolution against a temp PATH dir.
  */
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -81,6 +81,46 @@ describe("cli auto driver-commands", () => {
     it("resolves an absolute path directly", () => {
       const abs = join(tmp, "cld");
       expect(resolveExecutable(abs, env(tmp))).toBe(abs);
+    });
+
+    it("treats an empty PATH entry as the current directory (POSIX)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "councilkit-dc-cwd-"));
+      try {
+        const p = join(dir, "cld");
+        writeFileSync(p, "#!/bin/sh\necho hi\n");
+        chmodSync(p, 0o755);
+        const oldCwd = process.cwd();
+        try {
+          process.chdir(dir);
+          const exe = resolveExecutable("cld", { PATH: "" });
+          expect(exe).toBe(realpathSync(join(dir, "cld")));
+        } finally {
+          process.chdir(oldCwd);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("absolutizes a relative PATH entry rather than returning a relative path", () => {
+      const dir = mkdtempSync(join(tmpdir(), "councilkit-dc-rel-"));
+      try {
+        mkdirSync(join(dir, "bin"));
+        const p = join(dir, "bin", "cld");
+        writeFileSync(p, "#!/bin/sh\necho hi\n");
+        chmodSync(p, 0o755);
+        const oldCwd = process.cwd();
+        try {
+          process.chdir(dir);
+          const exe = resolveExecutable("cld", { PATH: "bin" });
+          expect(exe).toBe(realpathSync(join(dir, "bin", "cld")));
+          expect(exe.startsWith("/")).toBe(true);
+        } finally {
+          process.chdir(oldCwd);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -175,6 +215,20 @@ describe("cli auto driver-commands", () => {
       );
       expect(err.exitCode).toBe(2);
       expect(err.message).toContain("kimi");
+    });
+
+    it("kimi: rejects an argv prompt over ARG_MAX with a readable usage error", () => {
+      const huge = "x".repeat(1024 * 1024 + 100);
+      const err = captureError(() =>
+        buildSpawnSpec(agent(KIMI), {
+          attemptId: "attempt-0",
+          workspace: "/ws",
+          prompt: huge,
+          env: env(tmp),
+        }),
+      );
+      expect(err.exitCode).toBe(2);
+      expect(err.message).toContain("argv");
     });
   });
 

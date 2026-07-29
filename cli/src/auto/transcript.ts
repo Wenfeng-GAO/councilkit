@@ -72,6 +72,9 @@ export const attemptFinishedRecordSchema = z
     agentName: z.string().min(1),
     driverId: z.string().min(1),
     status: z.enum(["success", "failure"]),
+    /** Final delivered text on success; null on failure (design: each Attempt's
+     * final text is part of the durable transcript). */
+    output: z.string().nullable(),
     exitCode: z.number().int().nullable(),
     durationMs: z.number().int().nonnegative(),
     failure: z
@@ -91,6 +94,8 @@ export const aggregationFinishedRecordSchema = z
     agentName: z.string().min(1),
     driverId: z.string().min(1),
     status: z.enum(["success", "failure"]),
+    /** The Aggregator's synthesized delivery on success; null on failure. */
+    output: z.string().nullable(),
     exitCode: z.number().int().nullable(),
     durationMs: z.number().int().nonnegative(),
     failure: z

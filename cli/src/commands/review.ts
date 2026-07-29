@@ -48,6 +48,9 @@ const agentRefsSchema = z.array(z.string().min(1).max(128)).min(1);
 export interface ReviewDeps {
   /** Inject a fake spawn for end-to-end tests (zero real processes). */
   spawnImpl?: SpawnImpl;
+  /** Inject the SIGINT controller so tests can drive the abort path without
+   * sending a real signal to the process. */
+  abortController?: AbortController;
 }
 
 export async function runReview(
@@ -174,7 +177,7 @@ export async function runReview(
   createWorkspace(aggregatorWorkspace);
 
   // --- SIGINT / SIGTERM ---------------------------------------------------
-  const controller = new AbortController();
+  const controller = deps.abortController ?? new AbortController();
   let signaled = false;
   const onSignal = () => {
     if (signaled) return;
@@ -259,7 +262,6 @@ interface ExecuteParams {
 }
 
 async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
-  const endedAt = new Date().toISOString();
   const runnerOpts = {
     timeoutMs: p.timeoutMs,
     concurrency: p.concurrency,
@@ -273,6 +275,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
         agentName: r.agentName,
         driverId: r.driverId,
         status: r.status,
+        output: r.status === "success" ? r.output : null,
         exitCode: r.exitCode,
         durationMs: r.durationMs,
         failure: r.failure ?? null,
@@ -288,7 +291,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
   const { results, aborted } = await runAttempts(p.specs, runnerOpts);
 
   if (aborted || p.signal.aborted) {
-    return finalize(p, endedAt, results, null, {
+    return finalize(p, new Date().toISOString(), results, null, {
       status: "interrupted",
       exitCode: EXIT.interrupted,
       incomplete: true,
@@ -300,7 +303,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
 
   // All attempts failed → no aggregation; deterministic failed report; exit 4.
   if (successes.length === 0) {
-    return finalize(p, endedAt, results, null, {
+    return finalize(p, new Date().toISOString(), results, null, {
       status: "failed",
       exitCode: EXIT.runFailed,
       incomplete: true,
@@ -340,6 +343,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     agentName: aggregation.agentName,
     driverId: aggregation.driverId,
     status: aggregation.status,
+    output: aggregation.status === "success" ? aggregation.output : null,
     exitCode: aggregation.exitCode,
     durationMs: aggregation.durationMs,
     failure: aggregation.failure ?? null,
@@ -350,8 +354,20 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     `  aggregator -> ${aggregation.status} (exit ${aggregation.exitCode ?? "n/a"}, ${aggregation.durationMs}ms)`,
   );
 
+  // Abort during (or immediately after) aggregation is an interrupted run — NOT
+  // "aggregation failed/exit 4" and NOT "completed/0" even if the Aggregator
+  // happened to finish. Persist best-effort transcript/report, exit 130.
+  if (p.signal.aborted) {
+    return finalize(p, new Date().toISOString(), results, aggregation, {
+      status: "interrupted",
+      exitCode: EXIT.interrupted,
+      incomplete: true,
+      failure: { phase: "aggregation", code: "ABORTED", message: "run aborted by signal" },
+    });
+  }
+
   if (aggregation.status !== "success") {
-    return finalize(p, endedAt, results, null, {
+    return finalize(p, new Date().toISOString(), results, null, {
       status: "failed",
       exitCode: EXIT.runFailed,
       incomplete: true,
@@ -364,7 +380,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
   }
 
   const incomplete = successes.length < results.length;
-  return finalize(p, endedAt, results, aggregation, {
+  return finalize(p, new Date().toISOString(), results, aggregation, {
     status: "completed",
     exitCode: EXIT.ok,
     incomplete,
@@ -407,29 +423,56 @@ async function finalize(
     partialReason,
   });
 
-  // Canonical report (exit 5 on IO failure, but transcript is preserved).
-  writeCanonicalReviewReport(p.reportPath, markdown);
-
-  // --out copy (exit 5 on failure; canonical artifact already preserved).
-  if (p.outPath !== undefined) {
-    writeReviewReportCopy(p.outPath, markdown);
+  // Persist the canonical report first; a copy-IO failure must never undermines
+  // the canonical artifact's completeness claim (the header already reflects the
+  // true run status). Both IO failures surface as exit 5 but still produce a full
+  // ReviewOutcome and a review.finished transcript record.
+  let ioFailure: { phase: string; code: string; message: string } | undefined;
+  try {
+    writeCanonicalReviewReport(p.reportPath, markdown);
+  } catch (error) {
+    ioFailure = {
+      phase: "report",
+      code: "IO_WRITE",
+      message: error instanceof Error ? error.message : "canonical report write failed",
+    };
   }
+  if (p.outPath !== undefined && ioFailure === undefined) {
+    try {
+      writeReviewReportCopy(p.outPath, markdown);
+    } catch (error) {
+      ioFailure = {
+        phase: "out",
+        code: "IO_COPY",
+        message: error instanceof Error ? error.message : "--out copy write failed",
+      };
+    }
+  }
+
+  const exitCode = ioFailure !== undefined ? EXIT.io : spec.exitCode;
+  const status: FinalizeSpec["status"] =
+    ioFailure !== undefined && ioFailure.phase === "report" ? "failed" : spec.status;
+  const failure = ioFailure ?? spec.failure;
 
   const finished: ReviewFinishedRecord = {
     kind: "review.finished",
     version: 1,
-    status: spec.status,
+    status,
     endedAt,
     incomplete: spec.incomplete,
     reportPath: p.reportPath,
-    failure: spec.failure,
+    failure,
   };
   p.transcript.push(finished);
-  flushTranscript(p.transcriptPath, p.transcript);
+  try {
+    flushTranscript(p.transcriptPath, p.transcript);
+  } catch {
+    // Best-effort: the canonical report (if written) is the durable artifact.
+  }
 
   return {
-    status: spec.status,
-    exitCode: spec.exitCode,
+    status,
+    exitCode,
     runId: p.runId,
     reportPath: p.reportPath,
     transcriptPath: p.transcriptPath,
@@ -443,7 +486,7 @@ async function finalize(
         message: r.failure?.message ?? "no output",
       })),
     incomplete: spec.incomplete,
-    failure: spec.failure,
+    failure,
   };
 }
 

@@ -15,6 +15,7 @@
  *    --skip-git-repo-check -m <modelId> -o <workspace>/.last-message.md -`.
  *    prompt → stdin; read the last-message file, fall back to stdout.
  */
+import { Buffer } from "node:buffer";
 import { constants, accessSync, readFileSync, statSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { errors } from "../errors";
@@ -59,9 +60,12 @@ export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process
     if (isExecutableFile(abs)) return abs;
     throw errors.usage(`executable "${name}" not found or not executable`);
   }
-  const pathDirs = (env.PATH ?? "").split(delimiter).filter((d) => d.length > 0);
+  const pathDirs = (env.PATH ?? "").split(delimiter);
   for (const dir of pathDirs) {
-    const candidate = join(dir, name);
+    // Empty PATH entries are the current directory by POSIX semantics; `resolve`
+    // also absolutizes relative PATH entries so we never hand a relative
+    // executable path to the spawner.
+    const candidate = resolve(dir, name);
     if (isExecutableFile(candidate)) return candidate;
   }
   throw errors.usage(`executable "${name}" not found on PATH (review needs it installed)`);
@@ -74,6 +78,21 @@ function isExecutableFile(p: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Conservative upper bound for argv delivery (kimi prompt-in-argv). Modern
+ * macOS ARG_MAX is ~1 MiB; staying well under this avoids an kernel E2BIG. */
+const ARGV_MAX = 1024 * 1024;
+
+/** Reject an argv that would blow ARG_MAX with a usage error (exit 2) rather than
+ * letting the spawn fail with an opaque system error. */
+function assertArgvSafe(argv: string[]): void {
+  const total = argv.reduce((n, a) => n + Buffer.byteLength(a, "utf8") + 1, 0);
+  if (total > ARGV_MAX) {
+    throw errors.usage(
+      `aggregate prompt too large for argv delivery (~${total} bytes > ${ARGV_MAX}); reduce attempt count or per-attempt output size`,
+    );
   }
 }
 
@@ -125,10 +144,14 @@ export function buildSpawnSpec(
     }
     case "kimi-stream-json": {
       // No --auto/-y (mutually exclusive with -p); config provides full autonomy.
-      // Prompt is delivered as an argv element.
+      // Prompt is delivered as an argv element — guard its total length so a
+      // budget breach surfaces as a readable usage error instead of an E2BIG
+      // crash from the kernel.
+      const argv = ["-m", agent.modelId, "-p", prompt, "--output-format", "stream-json"];
+      assertArgvSafe(argv);
       return {
         ...base,
-        argv: ["-m", agent.modelId, "-p", prompt, "--output-format", "stream-json"],
+        argv,
         promptStdin: false,
       };
     }

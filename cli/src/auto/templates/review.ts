@@ -13,9 +13,20 @@
  * workspace paths are injected (aggregation is over deliverables, not folders).
  */
 
+import { Buffer } from "node:buffer";
+
 /** Upper bound on a single Attempt's output embedded in the aggregate prompt.
  * Keeps the whole prompt well under ARG_MAX even with many Attempts. */
 export const MAX_ATTEMPT_OUTPUT_IN_PROMPT = 100 * 1024;
+
+/** Total byte budget for the assembled aggregate prompt. kimi delivers the
+ * prompt as an argv element, so the whole prompt must stay under ARG_MAX; this
+ * budget is enforced by proportional truncation then oldest-output omission. */
+export const AGGREGATE_PROMPT_BUDGET = 200 * 1024;
+
+/** Below this per-output allowance we drop an output instead of shrinking it to
+ * uselessness. */
+const MIN_PER_OUTPUT_BYTES = 512;
 
 export interface ReviewTask {
   /** One of these is set by the command layer (mutually exclusive, enforced there). */
@@ -90,52 +101,92 @@ export interface AggregatePromptInput {
   attempts: AttemptSummaryForAggregate[];
 }
 
-/** Build the prompt handed to the Aggregator subprocess. */
+/** Build the prompt handed to the Aggregator subprocess. Enforces a total byte
+ * budget: each output is first capped per-attempt, then (if the whole prompt is
+ * still over budget) every retained output is proportionally truncated, and only
+ * if that still cannot fit do we drop the OLDEST outputs — naming them as
+ * omitted so the Aggregator knows they are absent and must not cite them. */
 export function buildAggregatePrompt(input: AggregatePromptInput): string {
   const successes = input.attempts.filter((a) => a.status === "success");
   const failures = input.attempts.filter((a) => a.status === "failure");
 
-  const lines: string[] = [];
-  lines.push(`你是 ${input.aggregatorName}，负责对比汇总多位独立审查者的结论。`);
+  const introLines: string[] = [`你是 ${input.aggregatorName}，负责对比汇总多位独立审查者的结论。`];
   if (input.aggregatorPersona && input.aggregatorPersona.trim().length > 0) {
-    lines.push("", input.aggregatorPersona.trim());
+    introLines.push("", input.aggregatorPersona.trim());
   }
-  lines.push("", "## 原始任务", "", taskStatement(input.task));
+  const intro = introLines.join("\n");
+
+  const taskLines: string[] = ["", "## 原始任务", "", taskStatement(input.task)];
   const focus = input.task.focus?.trim();
-  if (focus && focus.length > 0) {
-    lines.push("", "审查重点：", focus);
-  }
+  if (focus && focus.length > 0) taskLines.push("", "审查重点：", focus);
+  const taskBlock = taskLines.join("\n");
 
-  lines.push("", "## 各审查者的交付物");
-  if (successes.length === 0) {
-    lines.push("", "（无成功的审查者交付物可供对比。）");
-  }
-  for (const a of successes) {
-    lines.push("", `### ${a.name}`, "", truncateForPrompt(a.output));
-  }
+  const failuresBlock =
+    failures.length > 0
+      ? [
+          "",
+          "## 缺席的审查者",
+          "",
+          `以下审查者未能产出交付物，不可作为共识来源，也不要引用其结论：${failures
+            .map((a) => a.name)
+            .join("、")}`,
+        ].join("\n")
+      : "";
 
-  if (failures.length > 0) {
-    lines.push(
-      "",
-      "## 缺席的审查者",
-      "",
-      `以下审查者未能产出交付物，不可作为共识来源，也不要引用其结论：${failures
-        .map((a) => a.name)
-        .join("、")}`,
-    );
-  }
-
-  lines.push(
+  const requirementBlock = [
     "",
     "## 聚合要求",
     "",
-    "点名引用每位成功的审查者。对比他们的 Findings 与 Verification，区分共识、独有发现、分歧。",
-    "不要包含任何 workspace 路径。失败缺席的审查者不得被引用为共识来源。",
+    "点名引用每位被保留的成功的审查者。对比他们的 Findings 与 Verification，区分共识、独有发现、分歧。",
+    "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
     "最终消息即交付物，只输出下面的 Markdown 五章节结构：",
     "",
     AGGREGATE_STRUCTURE,
-  );
-  return lines.join("\n");
+  ].join("\n");
+
+  // Start with each output individually capped at the per-attempt limit.
+  let kept = successes.map((a) => ({ name: a.name, body: truncateForPrompt(a.output) }));
+  const omittedNames: string[] = [];
+
+  const assemble = (): string => {
+    const bodiesLines: string[] = ["", "## 各审查者的交付物"];
+    if (kept.length === 0) {
+      bodiesLines.push("", "（无成功的审查者交付物可供对比。）");
+    }
+    for (const k of kept) bodiesLines.push("", `### ${k.name}`, "", k.body);
+    const bodiesBlock = bodiesLines.join("\n");
+    const omittedBlock =
+      omittedNames.length > 0
+        ? [
+            "",
+            "## 因聚合预算省略的审查者",
+            "",
+            `以下成功审查者的交付物因聚合 prompt 总字节预算不足被省略，不可作为共识来源：${omittedNames.join("、")}`,
+          ].join("\n")
+        : "";
+    return [intro, taskBlock, bodiesBlock, failuresBlock, omittedBlock, requirementBlock]
+      .filter((s) => s.length > 0)
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n");
+  };
+
+  let assembled = assemble();
+  let proportionalApplied = false;
+  while (kept.length > 0 && byteLength(assembled) > AGGREGATE_PROMPT_BUDGET) {
+    const bodyBytes = kept.reduce((n, k) => n + byteLength(k.body), 0);
+    const nonBodyBytes = byteLength(assembled) - bodyBytes;
+    const perCap = Math.max(0, Math.floor((AGGREGATE_PROMPT_BUDGET - nonBodyBytes) / kept.length));
+    if (!proportionalApplied && perCap >= MIN_PER_OUTPUT_BYTES) {
+      kept = kept.map((k) => ({ name: k.name, body: truncateBytes(k.body, perCap) }));
+      proportionalApplied = true;
+    } else {
+      // Drop the OLDEST retained output (front of the list) and declare it omitted.
+      omittedNames.push(kept.shift()?.name ?? "");
+      proportionalApplied = false;
+    }
+    assembled = assemble();
+  }
+  return assembled;
 }
 
 function taskStatement(task: ReviewTask): string {
@@ -151,6 +202,17 @@ function taskStatement(task: ReviewTask): string {
 /** Truncate a single Attempt's output for embedding in the aggregate prompt,
  * marking the truncation point so the Aggregator knows it is partial. */
 export function truncateForPrompt(text: string): string {
-  if (text.length <= MAX_ATTEMPT_OUTPUT_IN_PROMPT) return text;
-  return `${text.slice(0, MAX_ATTEMPT_OUTPUT_IN_PROMPT)}\n[truncated at ${MAX_ATTEMPT_OUTPUT_IN_PROMPT} bytes]`;
+  return truncateBytes(text, MAX_ATTEMPT_OUTPUT_IN_PROMPT);
+}
+
+/** Byte-accurate truncation: cuts the UTF-8 encoding at `cap` bytes and appends
+ * a marker. Bytes (not chars) are what ARG_MAX measures. */
+export function truncateBytes(text: string, cap: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= cap) return text;
+  return `${buf.subarray(0, cap).toString("utf8")}\n[truncated at ${cap} bytes]`;
+}
+
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8");
 }

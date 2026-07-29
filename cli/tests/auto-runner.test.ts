@@ -1,19 +1,21 @@
 /**
  * Unit tests for the parallel runner (plan §测试). Pool/tolerate/no-retry/
  * cancel behaviour is driven by a fake `spawnImpl` (zero real processes). The
- * kill-tree semantics (timeout + abort) and cwd isolation use the real
- * `defaultSpawn` against throwaway `node -e` children.
+ * kill-tree semantics (timeout + abort), stdout/stderr capping (head+tail), cwd
+ * isolation and stdin delivery exercise `defaultSpawn` against an injected fake
+ * ChildProcess (EventEmitter + PassThrough) — never a real subprocess.
  */
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AttemptSpec } from "../src/auto/driver-commands";
 import {
   type AttemptResult,
   type SpawnImpl,
   type SpawnInput,
-  type SpawnOutput,
   defaultSpawn,
   runAttempts,
   spawnOnce,
@@ -178,80 +180,158 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(r.status).toBe("success");
     expect(r.output).toBe("hello");
   });
+
+  it("onAttemptFinish throwing aborts in-flight attempts and propagates the error", async () => {
+    let abortedSeen = false;
+    const spawn: SpawnImpl = async (input) => {
+      input.signal.addEventListener("abort", () => {
+        abortedSeen = true;
+      });
+      await new Promise((r) => setTimeout(r, 10));
+      return claudeResultSpawn("ok")(input);
+    };
+    let finishedCalls = 0;
+    await expect(
+      runAttempts([spec("0"), spec("1")], {
+        concurrency: 1,
+        spawnImpl: spawn,
+        onAttemptFinish: () => {
+          finishedCalls++;
+          if (finishedCalls === 1) throw new Error("transcript IO failed");
+        },
+      }),
+    ).rejects.toThrow("transcript IO failed");
+    // The internal abort fired, killing the in-flight spawn (no orphan).
+    expect(abortedSeen).toBe(true);
+  });
 });
 
-describe("cli auto runner — defaultSpawn (real node children)", () => {
-  let wsa: string;
-  let wsb: string;
+/** A fake ChildProcess for driving `defaultSpawn` with zero real subprocesses.
+ * It exposes PassThrough pipes and emits `spawn`/`close`. A kill (stdin
+ * `destroy()`, as opposed to a clean `end()`) is what makes it emit `close`,
+ * mirroring a real child dying on SIGTERM. */
+class FakeChild extends EventEmitter {
+  pid: number;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  stdin = new PassThrough();
 
+  constructor(pid = 999_977) {
+    super();
+    this.pid = pid;
+    this.stdin.on("close", () => {
+      // `destroy()` (kill) sets destroyed=true; a clean `end()` does not.
+      if (this.stdin.destroyed) setImmediate(() => this.emit("close", null));
+    });
+  }
+
+  emitSpawn(): void {
+    setImmediate(() => this.emit("spawn"));
+  }
+
+  /** Echo collected stdin back on stdout, then close (exit 0) — for stdin tests. */
+  echoStdinThenClose(): void {
+    let data = "";
+    this.stdin.on("data", (d) => {
+      data += d.toString("utf8");
+    });
+    this.stdin.on("end", () => {
+      this.stdout.write(data);
+      this.stdout.end();
+      setImmediate(() => this.emit("close", 0));
+    });
+  }
+}
+
+function fakeSpawnFn(child: FakeChild): typeof import("node:child_process").spawn {
+  return (() => {
+    child.emitSpawn();
+    return child;
+  }) as unknown as typeof import("node:child_process").spawn;
+}
+
+function asSpawn(
+  fn: (exe: string, argv: string[], opts: { cwd?: string }) => FakeChild,
+): typeof import("node:child_process").spawn {
+  return fn as unknown as typeof import("node:child_process").spawn;
+}
+
+const NEVER_ABORT = new AbortController().signal;
+
+describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real processes)", () => {
+  let ws: string;
   beforeEach(() => {
-    wsa = mkdtempSync(join(tmpdir(), "ck-runner-a-"));
-    wsb = mkdtempSync(join(tmpdir(), "ck-runner-b-"));
+    ws = mkdtempSync(join(tmpdir(), "ck-runner-fake-"));
   });
   afterEach(() => {
-    for (const d of [wsa, wsb]) {
-      try {
-        rmSync(d, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
+    try {
+      rmSync(ws, { recursive: true, force: true });
+    } catch {
+      // ignore
     }
   });
 
-  it("isolates cwd: each child sees only its own workspace", async () => {
-    const a = defaultSpawn({
-      executable: "node",
-      argv: ["-e", "process.stdout.write(process.cwd())"],
-      cwd: wsa,
-      prompt: "",
-      promptStdin: false,
-      timeoutMs: 5000,
-      signal: new AbortController().signal,
+  it("forwards the isolated cwd to spawn (each child sees its own workspace)", async () => {
+    const seen: string[] = [];
+    const spawnFn = asSpawn((_exe, _argv, opts) => {
+      seen.push(opts.cwd ?? "");
+      const c = new FakeChild();
+      c.emitSpawn();
+      setImmediate(() => c.emit("close", 0));
+      return c;
     });
-    const b = defaultSpawn({
-      executable: "node",
-      argv: ["-e", "process.stdout.write(process.cwd())"],
-      cwd: wsb,
-      prompt: "",
-      promptStdin: false,
-      timeoutMs: 5000,
-      signal: new AbortController().signal,
-    });
-    const [oa, ob] = await Promise.all([a, b]);
-    expect(oa.stdout).toBe(realpathSync(wsa));
-    expect(ob.stdout).toBe(realpathSync(wsb));
+    const oa = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 5000,
+        signal: NEVER_ABORT,
+      },
+      spawnFn,
+    );
     expect(oa.exitCode).toBe(0);
+    expect(seen).toEqual([ws]);
   });
 
   it("kills the group on timeout and resolves with timedOut", async () => {
+    const child = new FakeChild();
     const start = Date.now();
-    const out = await defaultSpawn({
-      executable: "node",
-      argv: ["-e", "setInterval(()=>{}, 60000)"],
-      cwd: wsa,
-      prompt: "",
-      promptStdin: false,
-      timeoutMs: 150,
-      signal: new AbortController().signal,
-    });
+    const out = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 50,
+        signal: NEVER_ABORT,
+      },
+      fakeSpawnFn(child),
+    );
     const elapsed = Date.now() - start;
     expect(out.timedOut).toBe(true);
-    // SIGTERM → grace(2s) → SIGKILL should still resolve well under the 60s sleep.
     expect(elapsed).toBeLessThan(5000);
   });
 
   it("kills the group on abort (SIGINT semantics) and resolves with aborted", async () => {
     const ac = new AbortController();
-    const p = defaultSpawn({
-      executable: "node",
-      argv: ["-e", "setInterval(()=>{}, 60000)"],
-      cwd: wsa,
-      prompt: "",
-      promptStdin: false,
-      timeoutMs: 60000,
-      signal: ac.signal,
-    });
-    setTimeout(() => ac.abort(), 150);
+    const child = new FakeChild();
+    const p = defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 60000,
+        signal: ac.signal,
+      },
+      fakeSpawnFn(child),
+    );
+    setTimeout(() => ac.abort(), 30);
     const start = Date.now();
     const out = await p;
     const elapsed = Date.now() - start;
@@ -259,55 +339,88 @@ describe("cli auto runner — defaultSpawn (real node children)", () => {
     expect(elapsed).toBeLessThan(5000);
   });
 
-  it("truncates stdout past the 8MB cap with a marker", async () => {
-    // Print ~9MB of 'a' then keep alive briefly so close fires after the pipe flushes.
-    const out = await defaultSpawn({
-      executable: "node",
-      argv: ["-e", "process.stdout.write('a'.repeat(9*1024*1024))"],
-      cwd: wsa,
-      prompt: "",
-      promptStdin: false,
-      timeoutMs: 30000,
-      signal: new AbortController().signal,
+  it("truncates stdout past the 8MB cap keeping head + tail with a marker", async () => {
+    const child = new FakeChild();
+    child.emitSpawn();
+    setImmediate(() => {
+      child.stdout.write(Buffer.alloc(9 * 1024 * 1024, 0x61)); // 9MB of 'a'
+      child.stdout.end();
+      setImmediate(() => child.emit("close", 0));
     });
-    expect(out.stdout).toContain("[truncated at");
+    const out = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 30000,
+        signal: NEVER_ABORT,
+      },
+      fakeSpawnFn(child),
+    );
+    expect(out.stdout).toContain("[truncated ");
+    expect(out.stdout).toContain(" bytes]");
+    // The tail (last bytes) is retained, so the marker is in the middle.
+    expect(out.stdout.endsWith("a")).toBe(true);
     expect(out.stdout.length).toBeLessThan(9 * 1024 * 1024);
   });
 
-  it("delivers the prompt via stdin when promptStdin", async () => {
-    const out = await defaultSpawn({
-      executable: "node",
-      argv: [
-        "-e",
-        "let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>process.stdout.write(s))",
-      ],
-      cwd: wsa,
-      prompt: "PROMPT-BODY",
-      promptStdin: true,
-      timeoutMs: 5000,
-      signal: new AbortController().signal,
+  it("drains stderr into a capped field (never leaves the pipe unread)", async () => {
+    const child = new FakeChild();
+    child.emitSpawn();
+    const err = "E!".repeat(40);
+    setImmediate(() => {
+      child.stderr.write(err);
+      child.stderr.end();
+      setImmediate(() => child.emit("close", 0));
     });
+    const out = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 5000,
+        signal: NEVER_ABORT,
+      },
+      fakeSpawnFn(child),
+    );
+    expect(out.stderr).toContain("E!");
+  });
+
+  it("delivers the prompt via stdin when promptStdin", async () => {
+    const child = new FakeChild();
+    child.emitSpawn();
+    child.echoStdinThenClose();
+    const out = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "PROMPT-BODY",
+        promptStdin: true,
+        timeoutMs: 5000,
+        signal: NEVER_ABORT,
+      },
+      fakeSpawnFn(child),
+    );
     expect(out.stdout).toBe("PROMPT-BODY");
   });
 
-  it("AttemptResult carries duration and workspace", async () => {
+  it("AttemptResult carries duration and workspace (extraction through spawnOnce)", async () => {
     const envelope = JSON.stringify({
       type: "result",
       subtype: "success",
       is_error: false,
       result: "hi",
     });
-    const r: AttemptResult = await spawnOnce(
-      {
-        ...spec("0", wsa),
-        executable: "node",
-        argv: ["-e", `process.stdout.write(${JSON.stringify(envelope)})`],
-        promptStdin: false,
-      },
-      { timeoutMs: 5000 },
-    );
+    const r: AttemptResult = await spawnOnce(spec("0", ws), {
+      spawnImpl: async () => ({ stdout: envelope, exitCode: 0, timedOut: false, aborted: false }),
+    });
     expect(r.durationMs).toBeGreaterThanOrEqual(0);
-    expect(r.workspace).toBe(wsa);
+    expect(r.workspace).toBe(ws);
     expect(r.output).toBe("hi");
   });
 });

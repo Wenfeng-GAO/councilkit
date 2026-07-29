@@ -13,6 +13,7 @@ import { type AttemptSpec, extractFinalOutput } from "./driver-commands";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const STDOUT_CAP = 8 * 1024 * 1024;
+const STDERR_CAP = 1 * 1024 * 1024;
 const KILL_GRACE_MS = 2000;
 
 /** A never-aborting signal for callers that don't pass one. */
@@ -53,6 +54,8 @@ export interface SpawnInput {
 
 export interface SpawnOutput {
   stdout: string;
+  /** Drained stderr (capped) — always read so the child's pipe never blocks. */
+  stderr?: string;
   exitCode: number | null;
   timedOut: boolean;
   aborted: boolean;
@@ -88,12 +91,28 @@ export async function runAttempts(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const concurrency = Math.max(1, opts.concurrency ?? Math.min(3, specs.length));
   let aborted = false;
-  const signal = opts.signal ?? NEVER_ABORTED;
-  if (signal.aborted) aborted = true;
-  const onAbort = () => {
+
+  // Internal controller so a run-level failure (e.g. onAttemptFinish throwing on
+  // a transcript write) can still KILL in-flight detached children before the
+  // error propagates — otherwise the pool's other subprocesses outlive the run
+  // and become orphans (reviewer finding: orphan-on-failure).
+  const internal = new AbortController();
+  const external = opts.signal ?? NEVER_ABORTED;
+  const onExternalAbort = (): void => {
     aborted = true;
+    internal.abort();
   };
-  if (!signal.aborted) signal.addEventListener("abort", onAbort, { once: true });
+  if (external.aborted) {
+    aborted = true;
+    internal.abort();
+  } else {
+    external.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  const killInFlight = (): void => {
+    aborted = true;
+    internal.abort();
+  };
 
   let cursor = 0;
   const worker = async (): Promise<void> => {
@@ -103,15 +122,33 @@ export async function runAttempts(
       if (i >= specs.length) break;
       const spec = specs[i];
       opts.onAttemptStart?.(spec.attemptId, spec.agentName);
-      const result = await runOne(spec, { ...opts, timeoutMs, signal });
-      opts.onAttemptFinish?.(result);
+      let result: AttemptResult;
+      try {
+        result = await runOne(spec, { ...opts, timeoutMs, signal: internal.signal });
+      } catch (error) {
+        killInFlight();
+        throw error;
+      }
+      try {
+        opts.onAttemptFinish?.(result);
+      } catch (error) {
+        // A finish callback (e.g. transcript persistence) failed. Kill every
+        // in-flight child via the internal abort, then propagate the error.
+        killInFlight();
+        throw error;
+      }
       results[i] = result;
     }
   };
 
   const workers = Array.from({ length: Math.min(concurrency, specs.length) }, () => worker());
-  await Promise.all(workers);
-  signal.removeEventListener("abort", onAbort);
+  const outcomes = await Promise.allSettled(workers);
+  external.removeEventListener("abort", onExternalAbort);
+
+  const firstRejected = outcomes.find((o): o is PromiseRejectedResult => o.status === "rejected");
+  if (firstRejected !== undefined) {
+    throw firstRejected.reason;
+  }
 
   // Any spec never claimed (because the run was aborted) is a cancelled failure.
   for (let i = 0; i < specs.length; i++) {
@@ -197,19 +234,88 @@ async function runOne(
   };
 }
 
+/** Bounded byte collector with head+tail retention. The final output of every
+ * driver lives at the *end* of its stream (claude `{"type":"result"}`, kimi last
+ * assistant line, codex tail), so a naive prefix-only cap would discard exactly
+ * the bytes we need to extract. We keep the first `headCap` bytes and the last
+ * `tailCap` bytes, marking the elided middle. */
+class CappedCollector {
+  private head: Buffer[] = [];
+  private headBytes = 0;
+  private tail: Buffer[] = [];
+  private tailBytes = 0;
+  total = 0;
+  truncated = false;
+
+  constructor(
+    private readonly cap: number,
+    private readonly headCap: number,
+    private readonly tailCap: number,
+  ) {}
+
+  feed(buf: Buffer): void {
+    this.total += buf.length;
+    let rest: Buffer | undefined;
+    if (this.headBytes < this.headCap) {
+      const room = this.headCap - this.headBytes;
+      if (buf.length <= room) {
+        this.head.push(buf);
+        this.headBytes += buf.length;
+      } else {
+        this.head.push(buf.subarray(0, room));
+        this.headBytes = this.headCap;
+        rest = buf.subarray(room);
+      }
+    } else {
+      rest = buf;
+    }
+    if (rest !== undefined) {
+      this.tail.push(rest);
+      this.tailBytes += rest.length;
+      while (this.tailBytes > this.tailCap) {
+        if (this.tail.length === 1) {
+          // A single chunk larger than the tail cap: keep only its last tailCap
+          // bytes (the most recent bytes are what we want at the tail).
+          const only = this.tail[0];
+          this.tail[0] = only.subarray(only.length - this.tailCap);
+          this.tailBytes = this.tail[0].length;
+          break;
+        }
+        const dropped = this.tail.shift() as Buffer;
+        this.tailBytes -= dropped.length;
+      }
+    }
+    if (this.total > this.cap) this.truncated = true;
+  }
+
+  toString(): string {
+    if (!this.truncated) {
+      return Buffer.concat([...this.head, ...this.tail]).toString("utf8");
+    }
+    const head = Buffer.concat(this.head).toString("utf8");
+    const tail = Buffer.concat(this.tail).toString("utf8");
+    const omitted = this.total - this.headBytes - this.tailBytes;
+    return `${head}\n[truncated ${omitted} bytes]\n${tail}`;
+  }
+}
+
 /** Default real spawn: detached process group, stdin prompt delivery, stdout
- * capped at 8MB, timeout + abort both kill the group (SIGTERM → grace → SIGKILL). */
-export function defaultSpawn(input: SpawnInput): Promise<SpawnOutput> {
+ * capped at 8MB (head+tail), stderr drained to a 1MB cap (head+tail) so the pipe
+ * never blocks, timeout + abort both kill the group (SIGTERM → grace → SIGKILL).
+ * The optional `spawnFn` lets tests drive this path with a fake ChildProcess. */
+export function defaultSpawn(
+  input: SpawnInput,
+  spawnFn: typeof spawn = spawn,
+): Promise<SpawnOutput> {
   return new Promise((resolveOutput) => {
     let settled = false;
     let killReason: "timeout" | "abort" | null = null;
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let truncated = false;
+    const stdoutColl = new CappedCollector(STDOUT_CAP, STDOUT_CAP / 2, STDOUT_CAP / 2);
+    const stderrColl = new CappedCollector(STDERR_CAP, STDERR_CAP / 2, STDERR_CAP / 2);
 
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(input.executable, input.argv, {
+      child = spawnFn(input.executable, input.argv, {
         cwd: input.cwd,
         env: process.env,
         shell: false,
@@ -219,6 +325,7 @@ export function defaultSpawn(input: SpawnInput): Promise<SpawnOutput> {
     } catch (error) {
       resolveOutput({
         stdout: "",
+        stderr: "",
         exitCode: null,
         timedOut: false,
         aborted: false,
@@ -266,12 +373,10 @@ export function defaultSpawn(input: SpawnInput): Promise<SpawnOutput> {
     const timeoutTimer = setTimeout(() => killGroup("timeout"), input.timeoutMs);
     input.signal.addEventListener("abort", onAbort, { once: true });
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (truncated) return;
-      chunks.push(chunk);
-      bytes += chunk.length;
-      if (bytes > STDOUT_CAP) truncated = true;
-    });
+    // Drain BOTH pipes. stderr is collected (capped) but never left unread — an
+    // unread pipe fills its kernel buffer and the child blocks on its next write.
+    child.stdout?.on("data", (chunk: Buffer) => stdoutColl.feed(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderrColl.feed(chunk));
 
     child.on("spawn", () => {
       // If the abort fired before the child existed, kill it now.
@@ -283,16 +388,20 @@ export function defaultSpawn(input: SpawnInput): Promise<SpawnOutput> {
     });
 
     child.on("error", (error) => {
-      finish({ stdout: "", exitCode: null, timedOut: false, aborted: false, error: errMsg(error) });
+      finish({
+        stdout: stdoutColl.toString(),
+        stderr: stderrColl.toString(),
+        exitCode: null,
+        timedOut: false,
+        aborted: false,
+        error: errMsg(error),
+      });
     });
 
     child.on("close", (code) => {
-      let stdout = Buffer.concat(chunks).toString("utf8");
-      if (truncated) {
-        stdout = `${stdout.slice(0, STDOUT_CAP)}\n[truncated at ${STDOUT_CAP} bytes]`;
-      }
       finish({
-        stdout,
+        stdout: stdoutColl.toString(),
+        stderr: stderrColl.toString(),
         exitCode: code ?? null,
         timedOut: killReason === "timeout",
         aborted: killReason === "abort",
