@@ -554,7 +554,7 @@ function stderrTail(stderr: string): string {
     // WHOLE sequence including its printable payload — an OSC payload can carry
     // ";"-separated text that would otherwise survive and break credential
     // redaction (reviewer finding: only CSI was removed).
-    .replace(/\u001b[\]PX^_][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b[\]PX^_][\s\S]*?(?:\u0007|\u001b\\|\u009c)/g, "")
     // C1 string sequences (DCS U+0090, SOS U+0098, OSC U+009D, PM U+009E,
     // APC U+009F … terminated by BEL or ST U+009C): drop the whole sequence —
     // otherwise the introducer/terminator are stripped by the C1 class below
