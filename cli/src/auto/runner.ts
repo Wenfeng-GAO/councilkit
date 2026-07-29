@@ -9,6 +9,7 @@
  * processes.
  */
 import { spawn } from "node:child_process";
+import { redact } from "../redact";
 import { type AttemptSpec, FinalEventLineCollector, extractFinalOutput } from "./driver-commands";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -396,24 +397,31 @@ export function defaultSpawn(
       }
       if (child.pid !== undefined) {
         const pid = child.pid;
+        let termDelivered = true;
         try {
           killFn(-pid, "SIGTERM");
         } catch (error) {
           if (!isESRCH(error)) throw error;
+          // ESRCH proves the process group is already gone: skip the grace
+          // wait AND the SIGKILL — killing a possibly-reused PGID could hit an
+          // unrelated process group (reviewer finding).
+          termDelivered = false;
         }
-        killPromise = new Promise<void>((resolveKill) => {
-          setTimeout(() => {
-            try {
-              killFn(-pid, "SIGKILL");
-            } catch (error) {
-              if (!isESRCH(error)) {
-                // Unexpected — nothing more we can do; best effort.
+        if (termDelivered) {
+          killPromise = new Promise<void>((resolveKill) => {
+            setTimeout(() => {
+              try {
+                killFn(-pid, "SIGKILL");
+              } catch (error) {
+                if (!isESRCH(error)) {
+                  // Unexpected — nothing more we can do; best effort.
+                }
+              } finally {
+                resolveKill();
               }
-            } finally {
-              resolveKill();
-            }
-          }, KILL_GRACE_MS);
-        });
+            }, KILL_GRACE_MS);
+          });
+        }
       }
     };
 
@@ -480,6 +488,10 @@ export function defaultSpawn(
     });
 
     child.on("close", (code) => {
+      // Flush the collector's trailing bytes: the final NDJSON line may end
+      // without a newline, and skipping it would leave lastLine stale
+      // (reviewer finding: no EOF handling in the line collector).
+      lineColl?.end();
       finish({
         stdout: stdoutColl.toString(),
         stderr: stderrColl.toString(),
@@ -516,9 +528,18 @@ function formatExitFailure(exitCode: number | null, stderr?: string): string {
   return tail.length === 0 ? base : `${base}\n${tail}`;
 }
 
-/** Last ≤2KB of stderr (trimmed), prefixed with an ellipsis when truncated. */
+/** Last ≤2KB of stderr (trimmed), prefixed with an ellipsis when truncated.
+ * Before persisting to transcript/report, run it through secret `redact` and
+ * strip ANSI/control characters — a driver's stderr can carry credential-shaped
+ * strings or terminal escape sequences that would otherwise land on disk or
+ * corrupt the Markdown report structure (reviewer finding). */
 function stderrTail(stderr: string): string {
-  const trimmed = stderr.trim();
+  const redacted = redact(stderr) as string;
+  const cleaned = redacted
+    .replace(/\[[0-9;]*[a-zA-Z]/g, "")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars except \n and \t from untrusted stderr
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  const trimmed = cleaned.trim();
   if (trimmed.length === 0) return "";
   if (trimmed.length <= STDERR_TAIL_BYTES) return trimmed;
   return `…${trimmed.slice(trimmed.length - STDERR_TAIL_BYTES)}`;

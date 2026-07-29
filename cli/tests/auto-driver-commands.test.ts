@@ -356,6 +356,17 @@ describe("cli auto driver-commands", () => {
       expect(extractFinalOutput("claude-stream-json", "", undefined, coll.lastLine)).toBe(text);
     });
 
+    it("end() flushes a trailing final line that has no newline", () => {
+      const first = JSON.stringify({ role: "assistant", content: "first" });
+      const last = JSON.stringify({ role: "assistant", content: "final" });
+      const coll = new FinalEventLineCollector("kimi-stream-json");
+      coll.feed(Buffer.from(`${first}\n${last}`, "utf8")); // no trailing newline
+      expect(coll.lastLine).toBe(first);
+      coll.end();
+      expect(coll.lastLine).toBe(last);
+      expect(extractFinalOutput("kimi-stream-json", "", undefined, coll.lastLine)).toBe("final");
+    });
+
     it("a kimi assistant line with multibyte content split mid-buffer", () => {
       const text = "审查通过 ✓";
       const line = JSON.stringify({ role: "assistant", content: text });

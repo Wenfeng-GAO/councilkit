@@ -118,6 +118,22 @@ describe("cli review command — argument matrix", () => {
     await expectUsage(["--agents", "[]", "--pr", "x", "--task", "y"], "mutually exclusive");
   });
 
+  it("rejects --timeout above the 32-bit setTimeout ceiling", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    await expectUsage(
+      ["--agents", `["A"]`, "--aggregator", "A", "--pr", "x", "--timeout", "99999999h"],
+      "<= 2147483647ms",
+    );
+  });
+
   it("rejects when neither --pr nor --task is given", async () => {
     await expectUsage(["--agents", "[]"], "one of --pr or --task");
   });

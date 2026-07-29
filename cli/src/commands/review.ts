@@ -21,7 +21,7 @@ import {
   writeReviewReportCopy,
 } from "../auto/aggregate";
 import { type AttemptSpec, buildSpawnSpec } from "../auto/driver-commands";
-import { type AttemptResult, type SpawnImpl, runAttempts, spawnOnce } from "../auto/runner";
+import { type AttemptResult, type RunAttemptsOutcome, type SpawnImpl, runAttempts, spawnOnce } from "../auto/runner";
 import {
   type ReviewTask,
   buildAggregatePrompt,
@@ -247,17 +247,22 @@ export async function runReview(
       out,
       transcript,
     });
+    // Await stdout flush of the final document BEFORE removing the signal
+    // handlers and throwing the exit sentinel — main() process.exit()s on
+    // ReviewExit, and a SIGINT landing mid-flush must neither truncate the
+    // JSON via Node's default signal kill nor exit 0 after an interruption
+    // (reviewer finding: handlers were removed before the final finish).
+    await out.finish(outcome, (d) => renderHuman(d as ReviewOutcome));
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
   }
 
-  // Await stdout flush of the final document before throwing the exit sentinel
-  // — main() process.exit()s on ReviewExit, which would truncate a large
-  // ReviewOutcome still buffered in stdout under backpressure (reviewer finding).
-  // The run command keeps its existing fire-and-forget finish (unchanged).
-  await out.finish(outcome, (d) => renderHuman(d as ReviewOutcome));
-  throw new ReviewExit(outcome.exitCode);
+  // A signal that arrived only during the final flush (executeReview already
+  // completed un-aborted) is still an interruption: report 130, never a
+  // silent 0. Runs already aborted inside executeReview carry 130 themselves.
+  const exitCode = signaled && outcome.exitCode === EXIT.ok ? EXIT.interrupted : outcome.exitCode;
+  throw new ReviewExit(exitCode);
 }
 
 interface ExecuteParams {
@@ -313,7 +318,32 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     },
   };
 
-  const { results, aborted } = await runAttempts(p.specs, runnerOpts);
+  let attemptsOutcome: RunAttemptsOutcome;
+  try {
+    attemptsOutcome = await runAttempts(p.specs, runnerOpts);
+  } catch (error) {
+    // A run-level callback (e.g. the transcript flush in onAttemptFinish)
+    // failed mid-run. The runner has already killed every in-flight child;
+    // persist a best-effort INCOMPLETE report + review.finished instead of
+    // escaping as a bare CliError with no ReviewOutcome (reviewer finding).
+    // Aborted runs keep the interrupted/130 semantics.
+    const message = error instanceof Error ? error.message : String(error);
+    if (p.signal.aborted) {
+      return finalize(p, new Date().toISOString(), [], null, {
+        status: "interrupted",
+        exitCode: EXIT.interrupted,
+        incomplete: true,
+        failure: { phase: "review", code: "ABORTED", message: "run aborted by signal" },
+      });
+    }
+    return finalize(p, new Date().toISOString(), [], null, {
+      status: "failed",
+      exitCode: EXIT.io,
+      incomplete: true,
+      failure: { phase: "transcript", code: "IO_TRANSCRIPT", message },
+    });
+  }
+  const { results, aborted } = attemptsOutcome;
 
   if (aborted || p.signal.aborted) {
     return finalize(p, new Date().toISOString(), results, null, {
@@ -482,15 +512,16 @@ async function finalize(
 
   // The canonical report was rendered with the run's logical status/incomplete
   // (spec.*), so the ReviewOutcome declares the SAME run status — artifact-IO
-  // failures surface via exitCode (5) + `failure`, not by mutating the run
-  // status — keeping the canonical report and ReviewOutcome consistent. A
-  // failure of a CANONICAL artifact (report/transcript) marks the durable
-  // record incomplete; the non-canonical --out copy does not (the canonical
-  // report is intact, matching the report's own incomplete banner).
+  // failures surface via exitCode (5) + `failure` and ALWAYS mark the outcome
+  // incomplete (any missing artifact makes the durable record set incomplete);
+  // a failed CANONICAL report write additionally flips status to "failed"
+  // (nothing durable exists to contradict it). review.finished is persisted
+  // with these same fields so the on-disk record and the ReviewOutcome agree.
   const computeOutcome = (io: typeof ioFailure) => {
     const exitCode = io !== undefined ? EXIT.io : spec.exitCode;
-    const status: FinalizeSpec["status"] = spec.status;
-    const incomplete = spec.incomplete || (io !== undefined && io.phase !== "out");
+    const status: FinalizeSpec["status"] =
+      io !== undefined && io.phase === "report" ? "failed" : spec.status;
+    const incomplete = spec.incomplete || io !== undefined;
     const failure = io ?? spec.failure;
     return { exitCode, status, incomplete, failure };
   };
@@ -588,8 +619,18 @@ function parseTimeout(raw: string | undefined): number {
   if (!Number.isSafeInteger(ms) || ms <= 0) {
     throw errors.usage(`--timeout must be a positive duration, got "${raw}"`);
   }
+  // Node schedules setTimeout with a 32-bit signed delay; larger values fire
+  // after ~1ms (TimeoutOverflowWarning), which would instantly "time out" every
+  // full-permission Attempt (reviewer finding). Reject instead of clamping so a
+  // typo surfaces.
+  if (ms > MAX_TIMEOUT_MS) {
+    throw errors.usage(`--timeout must be <= ${MAX_TIMEOUT_MS}ms, got "${raw}"`);
+  }
   return ms;
 }
+
+/** Node's setTimeout 32-bit signed ceiling (2^31 - 1 ms ≈ 24.8 days). */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 function parsePositiveInt(raw: string, fieldName: string): number {
   if (!/^[1-9][0-9]*$/.test(raw)) {

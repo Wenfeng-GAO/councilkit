@@ -257,6 +257,17 @@ export class FinalEventLineCollector {
     if (this.buf.length > this.lineCap) this.buf = "";
   }
 
+  /** Flush the trailing bytes at EOF: the final NDJSON line may not end with a
+   * newline. Without this, `lastLine` stays on an earlier assistant message and
+   * the final deliverable is silently replaced by an older reply. */
+  end(): void {
+    const rest = this.buf + this.decoder.end();
+    this.buf = "";
+    if (rest.length > 0 && rest.length <= this.lineCap) {
+      this.consider(rest);
+    }
+  }
+
   private consider(line: string): void {
     if (line.length === 0 || line.length > this.lineCap) return;
     const obj = parseJsonLine(line);

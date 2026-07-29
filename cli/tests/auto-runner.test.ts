@@ -398,6 +398,54 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
     ]);
   });
 
+  it("skips the SIGKILL upgrade when SIGTERM reports ESRCH (group already gone)", async () => {
+    const child = new FakeChild();
+    const kills: Array<{ target: number; signal: string }> = [];
+    const killFn = (target: number, signal: NodeJS.Signals): void => {
+      kills.push({ target, signal: String(signal) });
+      const err = new Error("kill ESRCH") as NodeJS.ErrnoException;
+      err.code = "ESRCH";
+      throw err;
+    };
+    const start = Date.now();
+    const out = await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: ws,
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 50,
+        signal: NEVER_ABORT,
+      },
+      fakeSpawnFn(child),
+      killFn,
+    );
+    const elapsed = Date.now() - start;
+    expect(out.timedOut).toBe(true);
+    // No 2s grace wait and no SIGKILL to a possibly-reused PGID.
+    expect(elapsed).toBeLessThan(1500);
+    expect(kills).toEqual([{ target: -child.pid, signal: "SIGTERM" }]);
+  });
+
+  it("redacts secrets and strips control chars in the EXIT failure stderr tail", async () => {
+    const spawnImpl: SpawnImpl = async () => ({
+      stdout: "",
+      stderr: "boom \u0007\u001b[31m councilkit_session=secret-token-xyz \u001b[0m tail",
+      exitCode: 1,
+      timedOut: false,
+      aborted: false,
+    });
+    const { results } = await runAttempts([spec("redact")], { spawnImpl });
+    const message = results[0]?.failure?.message ?? "";
+    expect(results[0]?.failure?.code).toBe("EXIT");
+    expect(message).toContain("[redacted]");
+    expect(message).not.toContain("secret-token-xyz");
+    // No ANSI escape introducer or C0 control chars survive into the message.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting control chars are stripped
+    expect(message).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1b\x7f]/);
+  });
+
   it("truncates stdout past the 8MB cap keeping head + tail with a marker", async () => {
     const child = new FakeChild();
     child.emitSpawn();
