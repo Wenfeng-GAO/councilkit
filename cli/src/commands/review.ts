@@ -334,15 +334,21 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     // escaping as a bare CliError with no ReviewOutcome (reviewer finding).
     // Aborted runs keep the interrupted/130 semantics.
     const message = error instanceof Error ? error.message : String(error);
+    // Restore the original spec order — `completed` is in parallel-completion
+    // order, and the report/Outcome must list Attempts deterministically in
+    // the user-declared agent order (reviewer finding).
+    const ordered = [...completed].sort(
+      (a, b) => attemptIndex(a.attemptId) - attemptIndex(b.attemptId),
+    );
     if (p.signal.aborted) {
-      return finalize(p, new Date().toISOString(), completed, null, {
+      return finalize(p, new Date().toISOString(), ordered, null, {
         status: "interrupted",
         exitCode: EXIT.interrupted,
         incomplete: true,
         failure: { phase: "review", code: "ABORTED", message: "run aborted by signal" },
       });
     }
-    return finalize(p, new Date().toISOString(), completed, null, {
+    return finalize(p, new Date().toISOString(), ordered, null, {
       status: "failed",
       exitCode: EXIT.io,
       incomplete: true,
@@ -674,6 +680,12 @@ function parsePositiveInt(raw: string, fieldName: string): number {
     throw errors.usage(`--${fieldName} must be a positive integer, got "${raw}"`);
   }
   return Number(raw);
+}
+
+/** Numeric suffix of an attemptId ("attempt-3" → 3); unknown ids sort last. */
+function attemptIndex(attemptId: string): number {
+  const match = /^attempt-(\d+)$/.exec(attemptId);
+  return match === null ? Number.MAX_SAFE_INTEGER : Number(match[1]);
 }
 
 function ioName(cause: unknown): string {

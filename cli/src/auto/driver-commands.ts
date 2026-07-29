@@ -294,10 +294,15 @@ export class FinalEventLineCollector {
     if (line.length === 0 || line.length > this.lineCap) return;
     const obj = parseJsonLine(line);
     if (obj === null) return;
+    // Only retain a line that yields USABLE text. A structurally-matching but
+    // unusable event (claude error subtype, kimi assistant without text) must
+    // not overwrite an earlier usable one — the stream's middle may be
+    // truncated away by the stdout cap, leaving nothing to fall back to
+    // (reviewer finding).
     if (this.driverId === "claude-stream-json" && obj.type === "result") {
-      this.lastLine = line;
+      if (extractClaudeLine(line) !== null) this.lastLine = line;
     } else if (this.driverId === "kimi-stream-json" && obj.role === "assistant") {
-      this.lastLine = line;
+      if (extractKimiLine(line) !== null) this.lastLine = line;
     }
   }
 }
