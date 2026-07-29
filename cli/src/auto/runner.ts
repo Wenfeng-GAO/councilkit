@@ -566,8 +566,11 @@ function stderrTail(stderr: string): string {
     // parameter bytes stay printable and can split a credential (reviewer
     // finding).
     .replace(/\u009b[0-?]*[ -/]*[@-~]/g, "")
-    // Any remaining two-byte escape (ESC + one char)
-    .replace(/\u001b./g, "")
+    // Any remaining ESC sequence in ECMA-48 shape: ESC + intermediate bytes
+    // (0x20-0x2F)* + one final byte (0x30-0x7E). Covers ISO-2022 designation
+    // sequences like ESC ( B that a two-byte rule would leave a printable tail
+    // on (reviewer finding).
+    .replace(/\u001b[\x20-\x2f]*[\x30-\x7e]/g, "")
     // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars and DEL (except \n and \t) from untrusted stderr
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\u009f]/g, "");
   const redacted = redact(cleaned) as string;
