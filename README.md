@@ -172,7 +172,7 @@ node scripts/uninstall-service.mjs
 ## 验证命令
 
 ```bash
-pnpm typecheck   # 三个 tsc 程序：app、runtime-host、integration
+pnpm typecheck   # 四个 tsc 程序：app、runtime-host、integration、cli
 pnpm lint        # Biome
 pnpm test        # Vitest 全量（unit + host + integration）
 pnpm test:e2e    # Playwright，仅 Chromium，先构建再启动真实 Host
