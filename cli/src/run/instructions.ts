@@ -12,10 +12,6 @@
  */
 import type { CouncilSnapshot } from "./types";
 
-/** Wire instruction kind for an ordinary turn. The shared runtime schema only
- * knows `message` | `summary`; the CLI's `role: "message"` metadata is local. */
-export const MESSAGE_WIRE_KIND = "message" as const;
-
 /** Build the ordinary-turn instruction text. Names the round, the agent's
  * persona, and requires reading the full context before an independent speech. */
 export function messageInstruction(input: {
