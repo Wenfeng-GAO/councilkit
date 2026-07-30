@@ -78,9 +78,12 @@ export interface ReviewDeps {
   heartbeatIntervalMs?: number;
 }
 
-/** Health-probe timeout (P1-1): a driver that cannot answer a minimal prompt
- * within 10s is treated as unreachable. */
-const PROBE_TIMEOUT_MS = 10_000;
+/** Health-probe timeout (P-1): a driver that cannot answer a minimal prompt
+ * within this window is treated as unreachable. 60s, not 10s: a cold minimal
+ * call on a real backend (codex cold start, cfuse route handshake) takes
+ * 20-60s; a tighter budget false-negatives healthy drivers (G4' evidence:
+ * codex probed "unreachable" at 10s while fully functional). */
+const PROBE_TIMEOUT_MS = 60_000;
 
 /** `--resume` accepts only a real run id — anything else (path separators,
  * `..`, empty) is a usage error, never a path-traversal attempt. */
