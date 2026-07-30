@@ -23,3 +23,6 @@ test-results/
 # Squad mode artifacts
 .squad/
 .worktrees/
+
+# GSD planning artifacts (local-only)
+.planning/
