@@ -1267,6 +1267,55 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(lstatSync(runDir).isSymbolicLink()).toBe(true);
   });
 
+  it("--resume keeps the entry-bound runs root: a root swapped after entry makes every later write fail (exit 5)", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink1 = makeSink();
+    const exit1 = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink1, {
+      spawnImpl: fakeSpawn(),
+    });
+    expect(exit1).toBe(0);
+    const runId = (sink1.finished as { runId: string }).runId;
+
+    const { runsRoot } = resolvePaths();
+    const transcriptBefore = readFileSync(join(runsRoot, runId, "transcript.jsonl"), "utf8");
+
+    // Swap the runs root AFTER the entry validation but BEFORE the first
+    // resume write: the probe spawn is the first thing to run after the entry
+    // checks, so the fake performs the swap there. A delete + fresh real
+    // directory keeps the realpath string but changes the inode — exactly the
+    // swap a plain realpath re-check (or a fresh re-bind of the CURRENT root)
+    // cannot see; only the carried entry binding detects it (reviewer
+    // finding).
+    let swapped = false;
+    const swapSpawn: SpawnImpl = async (input) => {
+      if (!swapped) {
+        swapped = true;
+        renameSync(runsRoot, `${runsRoot}.orig`);
+        mkdirSync(runsRoot);
+      }
+      return fakeSpawn()(input);
+    };
+
+    try {
+      await runReview([...twoAgentArgs(aliceId, bobId, "x"), "--resume", runId], makeSink(), {
+        spawnImpl: swapSpawn,
+      });
+      throw new Error("expected runReview to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("trusted root changed");
+    }
+    // The replacement root was never written to: no review.resumed append, no
+    // recreated run dir, no workspace rebuild.
+    expect(readdirSync(runsRoot)).toEqual([]);
+    // The original tree (moved aside by the swap) stays byte-identical.
+    expect(readFileSync(join(`${runsRoot}.orig`, runId, "transcript.jsonl"), "utf8")).toBe(
+      transcriptBefore,
+    );
+  });
+
   /** Legacy-transcript resume where both attempts are reused: only the
    * aggregator workspace is recreated. */
   function seedReusedResume(runId: string): { aliceId: string; bobId: string } {

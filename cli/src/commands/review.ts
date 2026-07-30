@@ -52,7 +52,12 @@ import {
   writeReviewTranscript,
 } from "../auto/transcript";
 import { EXIT, errors } from "../errors";
-import { type TrustedRoot, assertWithinRoot, bindTrustedRoot } from "../fs-safe";
+import {
+  type TrustedRoot,
+  assertWithinRoot,
+  bindTrustedRoot,
+  revalidateTrustedRoot,
+} from "../fs-safe";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
@@ -186,6 +191,12 @@ export async function runReview(
   let priorRecords: ReviewTranscriptRecord[] = [];
   let priorStartedAt: string | undefined;
   const reusedByAttemptId = new Map<string, AttemptResult>();
+  // The runs root is bound ONCE at the resume entry and the SAME binding is
+  // carried through every later resume write/rebuild path (transcript flush,
+  // report render, workspace recreation), revalidated at each use — never
+  // rebound from the current runsRoot, which could have been swapped in
+  // between (reviewer finding).
+  let resumeRoot: TrustedRoot | null = null;
   if (resumeRaw !== undefined) {
     const resumeId = resumeRaw.trim();
     if (!RUN_ID_PATTERN.test(resumeId)) {
@@ -196,7 +207,7 @@ export async function runReview(
     // symlink must be refused here, not after its transcript was atomically
     // rewritten (reviewer finding). A missing runs root / run dir falls
     // through to the transcript read, which reports "nothing to resume from".
-    const resumeRoot = bindTrustedRoot(paths.runsRoot);
+    resumeRoot = bindTrustedRoot(paths.runsRoot);
     if (resumeRoot !== null) {
       const resumeRunDir = paths.runDir(resumeId);
       let runStat: Stats | null = null;
@@ -428,7 +439,7 @@ export async function runReview(
     };
     transcript.push(resumedRecord);
   }
-  flushTranscript(transcriptPath, transcript);
+  flushTranscript(transcriptPath, transcript, resumeRoot);
 
   /** Single writer for real AND synthetic attempt results (plan: one helper so
    * transcript / progress / outcome can never drift apart). */
@@ -447,7 +458,7 @@ export async function runReview(
       activity: r.activity,
     };
     transcript.push(rec);
-    flushTranscript(transcriptPath, transcript);
+    flushTranscript(transcriptPath, transcript, resumeRoot);
     out.progress(
       `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${r.durationMs}ms)`,
     );
@@ -541,8 +552,17 @@ export async function runReview(
       // Bind the trusted runs root ONCE (lstat + realpath): every workspace
       // recreation — delete AND create — must stay under THIS pinned root,
       // never under a run dir realpath that a swapped symlink could redirect
-      // outside the runs tree (reviewer findings).
-      const trustedRoot = bindTrustedRoot(paths.runsRoot);
+      // outside the runs tree (reviewer findings). A RESUME reuses the root
+      // bound at the entry (revalidated here: a root swapped since entry —
+      // dev/ino changed — is fail-closed exit 5); it NEVER rebinds the
+      // current runsRoot, which would silently bless the swap.
+      let trustedRoot: TrustedRoot | null;
+      if (resumeRoot !== null) {
+        revalidateTrustedRoot(resumeRoot);
+        trustedRoot = resumeRoot;
+      } else {
+        trustedRoot = bindTrustedRoot(paths.runsRoot);
+      }
       if (trustedRoot === null) {
         throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
       }
@@ -590,6 +610,7 @@ export async function runReview(
       out,
       transcript,
       recordAttemptFinished,
+      resumeRoot,
       // Human-mode heartbeat only (plan: JSON mode emits no human heartbeat).
       heartbeat: out.json
         ? undefined
@@ -628,6 +649,9 @@ interface ExecuteParams {
   /** Single writer for real + synthetic attempt results (transcript, progress,
    * outcome accounting). */
   recordAttemptFinished: (r: AttemptResult) => void;
+  /** The runs-root binding from the resume entry (null for a fresh run):
+   * revalidated before every resume-related write below, never rebound. */
+  resumeRoot: TrustedRoot | null;
   /** Human heartbeat config; undefined in JSON mode. */
   heartbeat?: { intervalMs?: number; timers?: RunnerTimers };
 }
@@ -749,7 +773,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   };
   p.transcript.push(aggRec);
   try {
-    flushTranscript(p.transcriptPath, p.transcript);
+    flushTranscript(p.transcriptPath, p.transcript, p.resumeRoot);
   } catch (error) {
     // Persisting aggregation.finished failed: route through finalize so the run
     // still produces an INCOMPLETE report + ReviewOutcome (exit 5; 130 if the
@@ -823,6 +847,10 @@ async function finalize(
   aggregation: AttemptResult | null,
   spec: FinalizeSpec,
 ): Promise<ReviewOutcome> {
+  // A resume writes the report + final transcript under the SAME root bound at
+  // the entry — revalidated here (fail-closed exit 5 if swapped), never
+  // rebound from the current runsRoot.
+  if (p.resumeRoot !== null) revalidateTrustedRoot(p.resumeRoot);
   // Surface the failure reason (interrupt cause / failure cause) in the report
   // header so an interrupted or failed run is labelled — not just "incomplete".
   const reason = spec.failure?.message;
@@ -918,7 +946,7 @@ async function finalize(
   };
   p.transcript.push(finished);
   try {
-    flushTranscript(p.transcriptPath, p.transcript);
+    flushTranscript(p.transcriptPath, p.transcript, p.resumeRoot);
   } catch (error) {
     // The final transcript rewrite is itself an artifact-IO failure: map it to
     // exit 5 and surface it in the outcome (the canonical report, if written,
@@ -1034,7 +1062,15 @@ function recreateWorkspace(workspace: string, runDir: string, root: TrustedRoot)
   createWorkspace(workspace);
 }
 
-function flushTranscript(path: string, records: ReviewTranscriptRecord[]): void {
+function flushTranscript(
+  path: string,
+  records: ReviewTranscriptRecord[],
+  root?: TrustedRoot | null,
+): void {
+  // A resume carries the runs-root binding from its entry; revalidate it
+  // before EVERY transcript write (fail-closed exit 5 when the root was
+  // swapped after entry) instead of rebinding the current root.
+  if (root != null) revalidateTrustedRoot(root);
   writeReviewTranscript(path, records);
 }
 
