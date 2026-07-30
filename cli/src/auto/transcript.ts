@@ -197,13 +197,20 @@ export type ReviewTranscriptRecord = z.infer<typeof reviewTranscriptRecordSchema
  * (it could carry secret-shaped model output). Silently skipping a bad line
  * would let an old success record become "the last terminal state" and the
  * next rewrite would drop history, so a corrupt transcript refuses the resume
- * and leaves repair to the user (reviewer finding). A missing file returns []. */
+ * and leaves repair to the user (reviewer finding). Only a MISSING file
+ * (ENOENT) returns []; any other read failure (EACCES/EISDIR/ELOOP/EIO/…) is
+ * an exit-5 io error — treating it as "no transcript" would silently discard
+ * history on the next rewrite (reviewer finding). The OS error text is never
+ * echoed verbatim. */
 export function readReviewTranscript(path: string): ReviewTranscriptRecord[] {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
-  } catch {
-    return [];
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return [];
+    throw errors.io(`failed to read review transcript: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
   }
   const records: ReviewTranscriptRecord[] = [];
   const lines = text.split("\n");

@@ -6,11 +6,14 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +21,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
+import { readReviewTranscript } from "../src/auto/transcript";
 import { dispatch } from "../src/cli";
 import { ReviewExit, runReview } from "../src/commands/review";
 import { CliError } from "../src/errors";
@@ -1189,6 +1193,55 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       `${valid.join("\n")}\n{"kind":"attempt.finished","SECRET-MARKER":1}\n`,
     );
     await expectCorrupt("line 3");
+  });
+
+  it("--resume refuses to rebuild workspaces when the run dir is a symlink (exit 5, outside untouched)", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink1 = makeSink();
+    const exit1 = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink1, {
+      spawnImpl: fakeSpawn(),
+    });
+    expect(exit1).toBe(0);
+    const runId = (sink1.finished as { runId: string }).runId;
+
+    // Swap the whole run dir for a symlink to an outside tree (the transcript
+    // comes along, so the resume gets as far as the workspace rebuild).
+    const runDir = resolvePaths().runDir(runId);
+    const outside = join(home, "outside-run");
+    renameSync(runDir, outside);
+    writeFileSync(join(outside, "precious.txt"), "keep me");
+    symlinkSync(outside, runDir);
+
+    try {
+      await runReview([...twoAgentArgs(aliceId, bobId, "x"), "--resume", runId], makeSink(), {
+        spawnImpl: fakeSpawn(),
+      });
+      throw new Error("expected runReview to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("not a real directory");
+    }
+    // Nothing was deleted through the symlink.
+    expect(readFileSync(join(outside, "precious.txt"), "utf8")).toBe("keep me");
+    expect(lstatSync(runDir).isSymbolicLink()).toBe(true);
+  });
+
+  it("readReviewTranscript: only ENOENT returns [], other read failures are exit 5", () => {
+    // A directory path makes readFileSync fail with EISDIR (not ENOENT).
+    const dir = resolvePaths().runDir("ck-review-dir");
+    mkdirSync(dir, { recursive: true });
+    try {
+      readReviewTranscript(dir);
+      throw new Error("expected readReviewTranscript to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("failed to read review transcript");
+    }
+    expect(readReviewTranscript(join(dir, "missing.jsonl"))).toEqual([]);
   });
 
   it("--resume rebuilds rerun + aggregator workspaces pristine; a reused attempt's workspace is untouched", async () => {

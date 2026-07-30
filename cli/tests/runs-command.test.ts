@@ -296,4 +296,31 @@ describe("cli runs gc command", () => {
     expect(readFileSync(join(outside, "precious.txt"), "utf8")).toBe("keep me");
     expect(lstatSync(run.workspaces).isSymbolicLink()).toBe(true);
   });
+
+  it("TOCTOU: a run dir swapped for a symlink after enumeration is exit 5, target untouched", async () => {
+    const run = seedRun("ck-review-old", 10);
+    // A real run-shaped tree OUTSIDE the runs root that must never be deleted:
+    // a lexical containment check would still pass for this swap.
+    const outside = join(home, "outside-run");
+    mkdirSync(join(outside, "workspaces"), { recursive: true });
+    writeFileSync(join(outside, "workspaces", "precious.txt"), "keep me");
+    try {
+      await runRuns(["gc"], makeSink(), {
+        now: NOW,
+        beforeRemove: () => {
+          // Simulate the race: replace the whole run dir with a symlink to outside.
+          rmSync(run.runDir, { recursive: true, force: true });
+          symlinkSync(outside, run.runDir);
+        },
+      });
+      throw new Error("expected runRuns to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("changed during gc");
+    }
+    expect(readFileSync(join(outside, "workspaces", "precious.txt"), "utf8")).toBe("keep me");
+    expect(lstatSync(run.runDir).isSymbolicLink()).toBe(true);
+  });
 });

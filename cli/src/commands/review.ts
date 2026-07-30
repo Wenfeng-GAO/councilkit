@@ -12,8 +12,8 @@
  * required. Exit codes follow the existing table (0/2/4/5/130).
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { type Stats, lstatSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { join, sep } from "node:path";
 import { z } from "zod";
 import {
   renderReviewReport,
@@ -514,8 +514,8 @@ export async function runReview(
       // `.last-message.md` would let a no-output process pass off the previous
       // round's file as this round's deliverable (reviewer finding). Reused
       // attempts are neither created nor deleted.
-      for (const spec of runnableSpecs) recreateWorkspace(spec.cwd);
-      recreateWorkspace(aggregatorWorkspace);
+      for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir);
+      recreateWorkspace(aggregatorWorkspace, runDir);
       const params = buildExecuteParams();
       outcome = await executeReview(params, runnableSpecs);
     }
@@ -955,12 +955,55 @@ function createWorkspace(workspace: string): void {
 }
 
 /** Delete-then-create so a rerun attempt starts from an EMPTY workspace (no
- * leftover checkout, no stale `.last-message.md`). */
-function recreateWorkspace(workspace: string): void {
+ * leftover checkout, no stale `.last-message.md`). Refuses (exit 5) when the
+ * run dir or an existing workspace is a symlink, or when the workspace's REAL
+ * path escapes the run dir's real path — a recursive rm would otherwise follow
+ * the link and delete content OUTSIDE the run tree (resume scenario; reviewer
+ * finding). */
+function recreateWorkspace(workspace: string, runDir: string): void {
+  let runStat: Stats;
   try {
-    rmSync(workspace, { recursive: true, force: true });
+    runStat = lstatSync(runDir);
   } catch (cause) {
-    throw errors.io(`failed to clear workspace dir: ${ioName(cause)}`, { cause: ioName(cause) });
+    throw errors.io(`failed to stat the run dir before clearing a workspace: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
+  }
+  if (!runStat.isDirectory() || runStat.isSymbolicLink()) {
+    throw errors.io("the run dir is not a real directory (refusing to clear workspaces inside it)");
+  }
+  let wsStat: Stats | null = null;
+  try {
+    wsStat = lstatSync(workspace);
+  } catch (cause) {
+    if (ioCode(cause) !== "ENOENT") {
+      throw errors.io(`failed to stat workspace dir: ${ioName(cause)}`, { cause: ioName(cause) });
+    }
+  }
+  if (wsStat !== null) {
+    if (!wsStat.isDirectory() || wsStat.isSymbolicLink()) {
+      throw errors.io("the workspace path is not a real directory (refusing to remove it)");
+    }
+    // realpath containment: a symlinked intermediate (e.g. `workspaces/`)
+    // would defeat a lexical resolve() check.
+    let realRunDir: string;
+    let realWorkspace: string;
+    try {
+      realRunDir = realpathSync(runDir);
+      realWorkspace = realpathSync(workspace);
+    } catch (cause) {
+      throw errors.io(`failed to resolve real workspace paths: ${ioName(cause)}`, {
+        cause: ioName(cause),
+      });
+    }
+    if (!realWorkspace.startsWith(realRunDir + sep)) {
+      throw errors.io("the workspace resolves outside the run dir (refusing to remove it)");
+    }
+    try {
+      rmSync(workspace, { recursive: true, force: true });
+    } catch (cause) {
+      throw errors.io(`failed to clear workspace dir: ${ioName(cause)}`, { cause: ioName(cause) });
+    }
   }
   createWorkspace(workspace);
 }
@@ -1010,6 +1053,10 @@ function attemptIndex(attemptId: string): number {
 function ioName(cause: unknown): string {
   if (cause instanceof Error) return cause.name;
   return "IOFailure";
+}
+
+function ioCode(cause: unknown): string | undefined {
+  return (cause as NodeJS.ErrnoException | undefined)?.code;
 }
 
 function renderHuman(o: ReviewOutcome): string {

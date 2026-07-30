@@ -11,8 +11,8 @@
  * `--all` ignores age (and is mutually exclusive with an explicit `--keep`).
  * A single-item IO failure is an exit-5 error, never a silent skip.
  */
-import { type Stats, lstatSync, readdirSync, rmSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { type Stats, lstatSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
@@ -189,20 +189,43 @@ function assertContained(path: string, runsRoot: string): void {
   }
 }
 
-/** Pre-delete re-validation (TOCTOU): the path must still be contained and
- * still be a real, non-symlink directory. */
+/** Pre-delete re-validation (TOCTOU): EVERY link in the chain is re-checked,
+ * not just the leaf — lstat on the workspaces path alone would follow a run
+ * dir swapped for a symlink, and a lexical containment check would still pass
+ * (reviewer finding). A symlink or non-directory at any step, or a realpath
+ * that lands outside the real runs root, refuses the delete with exit 5. */
 function assertDeletable(workspacePath: string, runsRoot: string): void {
-  assertContained(workspacePath, runsRoot);
-  let stat: Stats;
+  const runDir = dirname(workspacePath);
+  for (const [label, path] of [
+    ["run dir", runDir],
+    ["workspaces dir", workspacePath],
+  ] as const) {
+    let stat: Stats;
+    try {
+      stat = lstatSync(path);
+    } catch (cause) {
+      throw errors.io(`runs gc: a ${label} changed during gc: ${ioName(cause)}`, {
+        cause: ioName(cause),
+      });
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw errors.io(`runs gc: a ${label} changed during gc (refusing to remove it)`);
+    }
+  }
+  // Containment on REAL paths: resolve() is purely lexical and stays blind to
+  // an intermediate symlink pointing outside the runs tree.
+  let realRoot: string;
+  let realWorkspace: string;
   try {
-    stat = lstatSync(workspacePath);
+    realRoot = realpathSync(runsRoot);
+    realWorkspace = realpathSync(workspacePath);
   } catch (cause) {
-    throw errors.io(`runs gc: a workspaces dir changed during gc: ${ioName(cause)}`, {
+    throw errors.io(`runs gc: cannot resolve real paths during gc: ${ioName(cause)}`, {
       cause: ioName(cause),
     });
   }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw errors.io("runs gc: a workspaces dir changed during gc (refusing to remove it)");
+  if (!realWorkspace.startsWith(realRoot + sep)) {
+    throw errors.io("runs gc: a workspaces dir resolves outside the runs dir (refusing to gc)");
   }
 }
 
