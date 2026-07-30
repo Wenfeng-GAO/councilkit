@@ -20,8 +20,20 @@ import {
   writeCanonicalReviewReport,
   writeReviewReportCopy,
 } from "../auto/aggregate";
-import { type AttemptSpec, buildSpawnSpec } from "../auto/driver-commands";
-import { type AttemptResult, type RunAttemptsOutcome, type SpawnImpl, runAttempts, spawnOnce } from "../auto/runner";
+import {
+  type AttemptSpec,
+  DRIVER_PROBE_PROMPT,
+  buildProbeSpec,
+  buildSpawnSpec,
+} from "../auto/driver-commands";
+import {
+  type AttemptResult,
+  type RunAttemptsOutcome,
+  type RunnerTimers,
+  type SpawnImpl,
+  runAttempts,
+  spawnOnce,
+} from "../auto/runner";
 import {
   type ReviewTask,
   buildAggregatePrompt,
@@ -31,9 +43,12 @@ import {
   type AggregationFinishedRecord,
   type AttemptFinishedRecord,
   type AttemptMeta,
+  type DriverProbeRecord,
   type ReviewFinishedRecord,
+  type ReviewResumedRecord,
   type ReviewStartedRecord,
   type ReviewTranscriptRecord,
+  readReviewTranscript,
   writeReviewTranscript,
 } from "../auto/transcript";
 import { EXIT, errors } from "../errors";
@@ -51,7 +66,19 @@ export interface ReviewDeps {
   /** Inject the SIGINT controller so tests can drive the abort path without
    * sending a real signal to the process. */
   abortController?: AbortController;
+  /** Inject fake timers (heartbeat tests) — forwarded to the runner. */
+  timers?: RunnerTimers;
+  /** Override the 30s heartbeat cadence (tests). */
+  heartbeatIntervalMs?: number;
 }
+
+/** Health-probe timeout (P1-1): a driver that cannot answer a minimal prompt
+ * within 10s is treated as unreachable. */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** `--resume` accepts only a real run id — anything else (path separators,
+ * `..`, empty) is a usage error, never a path-traversal attempt. */
+const RUN_ID_PATTERN = /^ck-review-[0-9a-fA-F-]+$/;
 
 export async function runReview(
   argv: string[],
@@ -71,6 +98,7 @@ export async function runReview(
         timeout: { type: "string" },
         concurrency: { type: "string" },
         out: { type: "string" },
+        resume: { type: "string" },
       },
       allowPositionals: 0,
     },
@@ -152,46 +180,138 @@ export async function runReview(
   const concurrency =
     concurrencyRaw !== undefined ? parsePositiveInt(concurrencyRaw, "concurrency") : undefined;
 
+  // --- resume: load the prior run + validate immutable inputs (P2-2) -------
+  const resumeRaw = values.resume as string | undefined;
+  let priorRecords: ReviewTranscriptRecord[] = [];
+  let priorStartedAt: string | undefined;
+  const reusedByAttemptId = new Map<string, AttemptResult>();
+  if (resumeRaw !== undefined) {
+    const resumeId = resumeRaw.trim();
+    if (!RUN_ID_PATTERN.test(resumeId)) {
+      throw errors.usage(`--resume must be a ck-review-<uuid> run id, got "${resumeRaw}"`);
+    }
+    priorRecords = readReviewTranscript(paths.transcript(resumeId), (m) => out.diag(m));
+    const started = priorRecords.find((r) => r.kind === "review.started");
+    if (started === undefined) {
+      throw errors.usage(`run ${resumeId} has no readable review.started record to resume from`);
+    }
+    // Consistency is checked on stable IDs (not user-typed names) and on every
+    // input that shapes the prompts — a mismatch would silently reuse outputs
+    // produced for a different task.
+    const priorAgentIds = started.attempts.map((a) => a.agentId);
+    const nowAgentIds = attemptAgents.map((a) => a.id);
+    if (
+      priorAgentIds.length !== nowAgentIds.length ||
+      !priorAgentIds.every((id, i) => id === nowAgentIds[i])
+    ) {
+      throw errors.usage("--agents must match the resumed run (same agent ids, same order)");
+    }
+    if (started.aggregator.agentId !== aggregatorAgent.id) {
+      throw errors.usage("--aggregator must match the resumed run's aggregator");
+    }
+    if (
+      (started.task.pr ?? undefined) !== task.pr ||
+      (started.task.task ?? undefined) !== task.task
+    ) {
+      throw errors.usage("--pr/--task must match the resumed run");
+    }
+    if ((started.task.focus ?? undefined) !== task.focus) {
+      throw errors.usage("--focus must match the resumed run");
+    }
+    if ((started.task.councilTopic ?? undefined) !== councilTopic) {
+      throw errors.usage("council topic must match the resumed run");
+    }
+    priorStartedAt = started.startedAt;
+    // The LAST terminal record per attempt wins (a later resume may have
+    // re-failed an attempt an earlier run had succeeded).
+    const lastFinished = new Map<string, AttemptFinishedRecord>();
+    for (const r of priorRecords) {
+      if (r.kind === "attempt.finished") lastFinished.set(r.attemptId, r);
+    }
+    for (const meta of started.attempts) {
+      const rec = lastFinished.get(meta.attemptId);
+      if (rec !== undefined && rec.status === "success" && (rec.output ?? "").trim().length > 0) {
+        reusedByAttemptId.set(meta.attemptId, {
+          attemptId: meta.attemptId,
+          agentId: meta.agentId,
+          agentName: meta.agentName,
+          driverId: meta.driverId,
+          modelId: meta.modelId,
+          status: "success",
+          output: rec.output as string,
+          exitCode: rec.exitCode,
+          durationMs: rec.durationMs,
+          workspace: join(paths.runDir(resumeId), "workspaces", meta.attemptId),
+          activity: rec.activity,
+          reused: true,
+        });
+      }
+    }
+  }
+
   // --- run scaffold -------------------------------------------------------
-  const runId = `ck-review-${randomUUID()}`;
+  // A resume CONTINUES the same run id: records are appended to the existing
+  // transcript and report.md is re-rendered, never a parallel run.
+  const runId =
+    resumeRaw !== undefined ? (resumeRaw as string).trim() : `ck-review-${randomUUID()}`;
   const runDir = paths.runDir(runId);
   const transcriptPath = paths.transcript(runId);
   const reportPath = paths.report(runId);
-  const startedAt = new Date().toISOString();
+  const startedAt = priorStartedAt ?? new Date().toISOString();
+  // The run dir must exist before the first transcript flush — but
+  // `workspaces/` is created only AFTER probing, for attempts that will
+  // actually spawn (a probe must be able to prove no workspace existed yet).
+  createWorkspace(runDir);
 
-  // Cost-informed attempt list (printed before any spawn).
-  out.progress(`review ${runId} starting`);
+  const isReused = (attemptId: string): boolean => reusedByAttemptId.has(attemptId);
+
+  // Cost-informed attempt list (printed before any workspace/spawn).
+  out.progress(`review ${runId} starting${resumeRaw !== undefined ? " (resumed)" : ""}`);
   out.progress(`  task: ${task.pr ? `PR ${task.pr}` : "<task text>"}`);
+  let attemptIndexCounter = 0;
   for (const a of attemptAgents) {
+    const attemptId = `attempt-${attemptIndexCounter++}`;
     const role = a.id === aggregatorAgent.id ? " (aggregator)" : "";
-    out.progress(`  attempt: ${a.name} — ${a.driverSelection.driverId}/${a.modelId}${role}`);
+    const reused = isReused(attemptId) ? " [reused]" : "";
+    out.progress(
+      `  attempt: ${a.name} — ${a.driverSelection.driverId}/${a.modelId}${role}${reused}`,
+    );
   }
 
-  // Build all spawn specs up front so usage errors (non-cfuse route, missing
-  // executable) fail fast BEFORE any subprocess is spawned.
+  // Build spawn specs for the attempts that will actually (re)run, up front so
+  // usage errors (non-cfuse route, missing executable) fail fast BEFORE any
+  // subprocess is spawned. No workspace is created here — probing happens
+  // first, and probe-failed attempts never get a workspace.
   const attemptMetas: AttemptMeta[] = [];
-  const specs: AttemptSpec[] = [];
+  const rerunSpecs: AttemptSpec[] = [];
+  const rerunAgents: AgentRecord[] = [];
   let index = 0;
   for (const a of attemptAgents) {
     const attemptId = `attempt-${index}`;
-    const workspace = join(runDir, "workspaces", attemptId);
-    createWorkspace(workspace);
-    const prompt = buildAttemptPrompt({ agentName: a.name, personaPrompt: a.personaPrompt, task });
-    const spec = buildSpawnSpec(a, { attemptId, workspace, prompt });
-    specs.push(spec);
     attemptMetas.push({
       attemptId,
       agentId: a.id,
       agentName: a.name,
-      driverId: spec.driverId,
-      modelId: spec.modelId,
+      driverId: a.driverSelection.driverId,
+      modelId: a.modelId,
     });
+    if (!isReused(attemptId)) {
+      const workspace = join(runDir, "workspaces", attemptId);
+      const prompt = buildAttemptPrompt({
+        agentName: a.name,
+        personaPrompt: a.personaPrompt,
+        task,
+      });
+      rerunSpecs.push(buildSpawnSpec(a, { attemptId, workspace, prompt }));
+      rerunAgents.push(a);
+    }
     index++;
   }
   const aggregatorWorkspace = join(runDir, "workspaces", "aggregator");
-  createWorkspace(aggregatorWorkspace);
 
   // --- SIGINT / SIGTERM ---------------------------------------------------
+  // Registered BEFORE the probes so a signal mid-probe still takes the
+  // interrupted path.
   const controller = deps.abortController ?? new AbortController();
   let signaled = false;
   const onSignal = () => {
@@ -202,51 +322,190 @@ export async function runReview(
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
-  const transcript: ReviewTranscriptRecord[] = [];
-  const startedRecord: ReviewStartedRecord = {
-    kind: "review.started",
-    version: 1,
-    runId,
-    startedAt,
-    task: {
-      pr: task.pr,
-      task: task.task,
-      focus: task.focus,
-      councilTopic,
-    },
-    attempts: attemptMetas,
-    aggregator: {
-      attemptId: "aggregator",
-      agentId: aggregatorAgent.id,
-      agentName: aggregatorAgent.name,
-      driverId: aggregatorAgent.driverSelection.driverId,
-      modelId: aggregatorAgent.modelId,
-    },
-  };
-  transcript.push(startedRecord);
+  // --- driver health probes (P1-1) -----------------------------------------
+  // Probe each DISTINCT driver involved in this run exactly once: every driver
+  // a rerun attempt needs, plus the Aggregator's driver (aggregation ALWAYS
+  // re-runs, even when every attempt was reused). Reused attempts are never
+  // probed on their own account.
+  const probeAgents = new Map<string, AgentRecord>();
+  for (const a of rerunAgents) {
+    if (!probeAgents.has(a.driverSelection.driverId))
+      probeAgents.set(a.driverSelection.driverId, a);
+  }
+  probeAgents.set(aggregatorAgent.driverSelection.driverId, aggregatorAgent);
+
+  const probeResults: DriverProbeRecord[] = [];
+  for (const [driverId, probeAgent] of probeAgents) {
+    const spec = buildProbeSpec(probeAgent, {
+      probeId: `probe-${driverId}`,
+      cwd: process.cwd(),
+      prompt: DRIVER_PROBE_PROMPT,
+    });
+    const result = await spawnOnce(spec, {
+      timeoutMs: PROBE_TIMEOUT_MS,
+      signal: controller.signal,
+      spawnImpl: deps.spawnImpl,
+    });
+    probeResults.push({
+      driverId,
+      modelId: probeAgent.modelId,
+      status: result.status,
+      durationMs: result.durationMs,
+      failure: result.failure ?? null,
+    });
+    out.progress(
+      `  probe ${driverId} (${probeAgent.modelId}) -> ${result.status === "success" ? "ok" : "unreachable"}`,
+    );
+  }
+  const probeByDriver = new Map(probeResults.map((r) => [r.driverId, r]));
+
+  const transcript: ReviewTranscriptRecord[] = [...priorRecords];
+  if (resumeRaw === undefined) {
+    const startedRecord: ReviewStartedRecord = {
+      kind: "review.started",
+      version: 1,
+      runId,
+      startedAt,
+      task: {
+        pr: task.pr,
+        task: task.task,
+        focus: task.focus,
+        councilTopic,
+      },
+      attempts: attemptMetas,
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: aggregatorAgent.id,
+        agentName: aggregatorAgent.name,
+        driverId: aggregatorAgent.driverSelection.driverId,
+        modelId: aggregatorAgent.modelId,
+      },
+      probe: probeResults,
+    };
+    transcript.push(startedRecord);
+  } else {
+    // Append — never rewrite — the resume marker with THIS run's probe set.
+    const resumedRecord: ReviewResumedRecord = {
+      kind: "review.resumed",
+      version: 1,
+      runId,
+      resumedAt: new Date().toISOString(),
+      reusedAttemptIds: [...reusedByAttemptId.keys()],
+      rerunAttemptIds: rerunSpecs.map((s) => s.attemptId),
+      probe: probeResults,
+    };
+    transcript.push(resumedRecord);
+  }
   flushTranscript(transcriptPath, transcript);
+
+  /** Single writer for real AND synthetic attempt results (plan: one helper so
+   * transcript / progress / outcome can never drift apart). */
+  const recordAttemptFinished = (r: AttemptResult): void => {
+    const rec: AttemptFinishedRecord = {
+      kind: "attempt.finished",
+      version: 1,
+      attemptId: r.attemptId,
+      agentName: r.agentName,
+      driverId: r.driverId,
+      status: r.status,
+      output: r.status === "success" ? r.output : null,
+      exitCode: r.exitCode,
+      durationMs: r.durationMs,
+      failure: r.failure ?? null,
+      activity: r.activity,
+    };
+    transcript.push(rec);
+    flushTranscript(transcriptPath, transcript);
+    out.progress(
+      `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${r.durationMs}ms)`,
+    );
+    // Surface the failure reason (incl. the driver's stderr tail carried on
+    // the EXIT failure message) as a human-mode diagnostic (reviewer finding:
+    // stderr was collected but never shown).
+    if (r.status === "failure" && r.failure) {
+      out.progress(`    failure [${r.failure.code}]: ${r.failure.message}`);
+    }
+  };
+
+  // Attempts whose driver probe failed become synthetic DRIVER_UNREACHABLE
+  // failures: recorded, never spawned, no workspace. Reused results are
+  // carried over silently (no new attempt.finished — the history already
+  // has one).
+  const presolved: AttemptResult[] = [...reusedByAttemptId.values()];
+  for (const spec of rerunSpecs) {
+    const probe = probeByDriver.get(spec.driverId);
+    if (probe === undefined || probe.status === "success") continue;
+    const synthetic: AttemptResult = {
+      attemptId: spec.attemptId,
+      agentId: spec.agentId,
+      agentName: spec.agentName,
+      driverId: spec.driverId,
+      modelId: spec.modelId,
+      status: "failure",
+      output: "",
+      exitCode: null,
+      durationMs: probe.durationMs,
+      workspace: spec.cwd,
+      failure: {
+        code: "DRIVER_UNREACHABLE",
+        message: `driver ${spec.driverId} health probe failed: ${probe.failure?.message ?? "no output"}`,
+      },
+    };
+    presolved.push(synthetic);
+    recordAttemptFinished(synthetic);
+  }
+  const runnableSpecs = rerunSpecs.filter(
+    (s) => probeByDriver.get(s.driverId)?.status === "success",
+  );
 
   let outcome: ReviewOutcome;
   try {
-    outcome = await executeReview({
-      runId,
-      runDir,
-      transcriptPath,
-      reportPath,
-      outPath: values.out as string | undefined,
-      startedAt,
-      specs,
-      aggregatorAgent,
-      aggregatorWorkspace,
-      task,
-      councilTopic,
-      timeoutMs,
-      concurrency,
-      signal: controller.signal,
-      spawnImpl: deps.spawnImpl,
-      out,
-      transcript,
-    });
+    // Aggregator driver unreachable → the whole run aborts BEFORE any attempt
+    // spawn or workspace creation: exit 3, deterministic INCOMPLETE report.
+    const aggProbe = probeByDriver.get(aggregatorAgent.driverSelection.driverId);
+    if (aggProbe === undefined || aggProbe.status !== "success") {
+      // Attempts whose own driver probed OK never run either (the run aborts
+      // before the runner): record them as CANCELLED so every attempt has a
+      // terminal transcript record and appears in the report.
+      for (const spec of runnableSpecs) {
+        const cancelled: AttemptResult = {
+          attemptId: spec.attemptId,
+          agentId: spec.agentId,
+          agentName: spec.agentName,
+          driverId: spec.driverId,
+          modelId: spec.modelId,
+          status: "failure",
+          output: "",
+          exitCode: null,
+          durationMs: 0,
+          workspace: spec.cwd,
+          failure: {
+            code: "CANCELLED",
+            message: "run aborted before this attempt started (aggregator driver unreachable)",
+          },
+        };
+        presolved.push(cancelled);
+        recordAttemptFinished(cancelled);
+      }
+      const params = buildExecuteParams();
+      outcome = await finalize(params, new Date().toISOString(), mergeOrdered(presolved), null, {
+        status: "failed",
+        exitCode: EXIT.hostUnavailable,
+        incomplete: true,
+        failure: {
+          phase: "probe",
+          code: "DRIVER_UNREACHABLE",
+          message: `aggregator driver ${aggregatorAgent.driverSelection.driverId} health probe failed: ${aggProbe?.failure?.message ?? "no probe result"}`,
+        },
+      });
+    } else {
+      // Workspaces are created only now — after probing — and only for
+      // attempts that will actually spawn (plus the Aggregator).
+      for (const spec of runnableSpecs) createWorkspace(spec.cwd);
+      createWorkspace(aggregatorWorkspace);
+      const params = buildExecuteParams();
+      outcome = await executeReview(params, runnableSpecs);
+    }
     // Await stdout flush of the final document BEFORE removing the signal
     // handlers and throwing the exit sentinel — main() process.exit()s on
     // ReviewExit, and a SIGINT landing mid-flush must neither truncate the
@@ -264,6 +523,40 @@ export async function runReview(
   // SIGINT is 130). Runs already aborted inside executeReview carry 130.
   const exitCode = signaled ? EXIT.interrupted : outcome.exitCode;
   throw new ReviewExit(exitCode);
+
+  /** Assemble the shared finalize/execute params for this run. */
+  function buildExecuteParams(): ExecuteParams {
+    return {
+      runId,
+      runDir,
+      transcriptPath,
+      reportPath,
+      outPath: values.out as string | undefined,
+      startedAt,
+      presolved,
+      aggregatorAgent,
+      aggregatorWorkspace,
+      task,
+      councilTopic,
+      timeoutMs,
+      concurrency,
+      signal: controller.signal,
+      spawnImpl: deps.spawnImpl,
+      out,
+      transcript,
+      recordAttemptFinished,
+      // Human-mode heartbeat only (plan: JSON mode emits no human heartbeat).
+      heartbeat: out.json
+        ? undefined
+        : { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
+    };
+  }
+}
+
+/** Merge pre-resolved (reused / synthetic) and freshly-run results back into
+ * the user-declared attempt order. */
+function mergeOrdered(results: AttemptResult[]): AttemptResult[] {
+  return [...results].sort((a, b) => attemptIndex(a.attemptId) - attemptIndex(b.attemptId));
 }
 
 interface ExecuteParams {
@@ -273,7 +566,10 @@ interface ExecuteParams {
   reportPath: string;
   outPath?: string;
   startedAt: string;
-  specs: AttemptSpec[];
+  /** Attempts already decided before the runner: reused (from --resume) and
+   * synthetic probe failures (DRIVER_UNREACHABLE), in any order — merged back
+   * into declared attempt order by `mergeOrdered`. */
+  presolved: AttemptResult[];
   aggregatorAgent: AgentRecord;
   aggregatorWorkspace: string;
   task: ReviewTask;
@@ -284,9 +580,14 @@ interface ExecuteParams {
   spawnImpl?: SpawnImpl;
   out: OutputSink;
   transcript: ReviewTranscriptRecord[];
+  /** Single writer for real + synthetic attempt results (transcript, progress,
+   * outcome accounting). */
+  recordAttemptFinished: (r: AttemptResult) => void;
+  /** Human heartbeat config; undefined in JSON mode. */
+  heartbeat?: { intervalMs?: number; timers?: RunnerTimers };
 }
 
-async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
+async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<ReviewOutcome> {
   // Track results as they finish so a mid-run callback failure can still
   // finalize a report with the Attempts that DID complete (reviewer finding:
   // finalizing with [] wrote a false "no attempts ran" report).
@@ -296,37 +597,23 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     concurrency: p.concurrency,
     signal: p.signal,
     spawnImpl: p.spawnImpl,
+    heartbeatIntervalMs: p.heartbeat?.intervalMs,
+    timers: p.heartbeat?.timers,
+    onHeartbeat:
+      p.heartbeat === undefined
+        ? undefined
+        : (_attemptId: string, agentName: string, elapsedMs: number) => {
+            p.out.progress(`  attempt ${agentName} 仍在运行 (${formatElapsed(elapsedMs)})`);
+          },
     onAttemptFinish: (r: AttemptResult) => {
       completed.push(r);
-      const rec: AttemptFinishedRecord = {
-        kind: "attempt.finished",
-        version: 1,
-        attemptId: r.attemptId,
-        agentName: r.agentName,
-        driverId: r.driverId,
-        status: r.status,
-        output: r.status === "success" ? r.output : null,
-        exitCode: r.exitCode,
-        durationMs: r.durationMs,
-        failure: r.failure ?? null,
-      };
-      p.transcript.push(rec);
-      flushTranscript(p.transcriptPath, p.transcript);
-      p.out.progress(
-        `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${r.durationMs}ms)`,
-      );
-      // Surface the failure reason (incl. the driver's stderr tail carried on
-      // the EXIT failure message) as a human-mode diagnostic (reviewer finding:
-      // stderr was collected but never shown).
-      if (r.status === "failure" && r.failure) {
-        p.out.progress(`    failure [${r.failure.code}]: ${r.failure.message}`);
-      }
+      p.recordAttemptFinished(r);
     },
   };
 
   let attemptsOutcome: RunAttemptsOutcome;
   try {
-    attemptsOutcome = await runAttempts(p.specs, runnerOpts);
+    attemptsOutcome = await runAttempts(specs, runnerOpts);
   } catch (error) {
     // A run-level callback (e.g. the transcript flush in onAttemptFinish)
     // failed mid-run. The runner has already killed every in-flight child;
@@ -337,9 +624,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     // Restore the original spec order — `completed` is in parallel-completion
     // order, and the report/Outcome must list Attempts deterministically in
     // the user-declared agent order (reviewer finding).
-    const ordered = [...completed].sort(
-      (a, b) => attemptIndex(a.attemptId) - attemptIndex(b.attemptId),
-    );
+    const ordered = mergeOrdered([...completed, ...p.presolved]);
     if (p.signal.aborted) {
       return finalize(p, new Date().toISOString(), ordered, null, {
         status: "interrupted",
@@ -355,7 +640,8 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
       failure: { phase: "transcript", code: "IO_TRANSCRIPT", message },
     });
   }
-  const { results, aborted } = attemptsOutcome;
+  const { aborted } = attemptsOutcome;
+  const results = mergeOrdered([...attemptsOutcome.results, ...p.presolved]);
 
   if (aborted || p.signal.aborted) {
     return finalize(p, new Date().toISOString(), results, null, {
@@ -414,6 +700,7 @@ async function executeReview(p: ExecuteParams): Promise<ReviewOutcome> {
     exitCode: aggregation.exitCode,
     durationMs: aggregation.durationMs,
     failure: aggregation.failure ?? null,
+    activity: aggregation.activity,
   };
   p.transcript.push(aggRec);
   try {
@@ -635,7 +922,15 @@ function summarizeAttempt(r: AttemptResult): AttemptResult {
     durationMs: r.durationMs,
     workspace: r.workspace,
     failure: r.failure,
+    activity: r.activity,
+    reused: r.reused,
   };
+}
+
+/** Render an elapsed duration as `Xm Ys` for the human heartbeat line. */
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
 function createWorkspace(workspace: string): void {

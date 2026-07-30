@@ -31,8 +31,12 @@ Commands:
   council create|list|show|delete     Manage councils (topic, agents, rounds, reporter).
   run --council <name|id>             Run a fixed-N-round discussion; emit Markdown report.
   run --agents '<json-array>'         One-shot run without a stored council.
+  runs gc [--keep <days>] [--dry-run] [--all]
+                                      Delete old runs/<id>/workspaces only
+                                      (report.md/transcript.jsonl are always kept).
   review --agents '<json-array>'      N autonomous agents independently review one task,
       --aggregator <id>               then one synthesizes a report. Bypasses the Host.
+      [--resume <run-id>]             Reuse successful attempts from a prior run.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
 
 Global flags:

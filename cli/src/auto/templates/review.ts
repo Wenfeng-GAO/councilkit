@@ -2,10 +2,12 @@
  * review prompt templates (DESIGN §3, plan §"模板契约"). Pure functions — the
  * runner is template-agnostic, so a future `design` template is just new data.
  *
- * Soft contract: each Attempt is asked to emit exactly three Markdown sections
- * (`## Findings` / `## Verification` / `## Verdict`). Non-compliance is not a
- * failure — the output goes verbatim into the report appendix and the Aggregator
- * is instructed to read it as written.
+ * Soft contract (P1-4, 中文契约): each Attempt is asked to emit exactly three
+ * Markdown sections (`## 发现` / `## 验证` / `## 结论`). The verdict stays a
+ * single-line ENGLISH token (`approve | changes-requested | comment`) so it
+ * remains machine-greppable. Non-compliance is not a failure — the output goes
+ * verbatim into the report appendix and the Aggregator is instructed to read it
+ * as written (including English-titled sections, by semantics).
  *
  * The Aggregator prompt receives the task plus each *successful* Attempt's name
  * + output (truncated per-attempt to stay under ARG_MAX). Failed Attempts are
@@ -43,21 +45,85 @@ export interface AttemptPromptInput {
   task: ReviewTask;
 }
 
-const ATTEMPT_CONTRACT = `## Findings
+const ATTEMPT_CONTRACT = `## 发现
 List every issue you found, one per line:
 - [critical|major|minor|nit] file:location — description → suggested fix
 
-## Verification
+## 验证
 The commands you actually ran and their results. If you did not verify, write "未验证".
 
-## Verdict
+## 结论
 A single line: approve | changes-requested | comment`;
 
-const AGGREGATE_STRUCTURE = `## Overview
-## Consensus findings
-## Unique findings
-## Disagreements
-## Verdict`;
+const AGGREGATE_STRUCTURE = `## 概览
+## 共识发现
+## 独有发现
+## 分歧
+## 结论`;
+
+/** 代理规则原文（P1-2）:内部工具只在命令级清代理;模型 API 调用绝不动代理。 */
+const PROXY_RULE =
+  "代理规则：调用 antcode 等内部工具时，只在该条命令前加 " +
+  "`NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY=''`；模型 API 调用不要改代理设置。";
+
+/** Hosts for which a copy-pasteable access hint exists (P1-2). */
+const GITHUB_HOST = "github.com";
+const ANTCODE_HOST = "code.alipay.com";
+
+/** Safe AntCode project path segment (group/subgroup/project). Anything else
+ * (shell metachars, dots-only, empty) disqualifies the hint — a user-supplied
+ * URL must never become an injectable shell command. */
+const ANTCODE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** Parse `/<group.../project>/pull_requests/<iid>` from an AntCode PR URL.
+ * Returns null for any other shape (or unsafe characters) → no hint. */
+export function parseAntCodePrUrl(url: URL): { project: string; iid: string } | null {
+  const segments = url.pathname.split("/").filter((s) => s.length > 0);
+  const prIdx = segments.indexOf("pull_requests");
+  if (prIdx < 1 || prIdx !== segments.length - 2) return null;
+  const iid = segments[prIdx + 1];
+  if (!/^[0-9]+$/.test(iid)) return null;
+  const projectSegments = segments.slice(0, prIdx);
+  if (!projectSegments.every((s) => ANTCODE_SEGMENT.test(s))) return null;
+  return { project: projectSegments.join("/"), iid };
+}
+
+/** Build the「访问提示」block for a `--pr` value (P1-2), or null when the host
+ * is unknown / the value is not a URL / the URL is unsafe to echo as a shell
+ * command. Injected into the Attempt prompt only — the Aggregator synthesizes
+ * deliverables and never fetches. */
+export function buildAccessHint(pr: string | undefined): string | null {
+  if (pr === undefined) return null;
+  let url: URL;
+  try {
+    url = new URL(pr);
+  } catch {
+    return null;
+  }
+  // A single quote in the URL would break the quoted shell commands below.
+  if (pr.includes("'")) return null;
+  if (url.host === GITHUB_HOST) {
+    return [
+      "## 访问提示",
+      "",
+      `用 \`gh pr diff '${pr}'\` 查看 diff，\`gh pr view '${pr}'\` 查看描述与评论。`,
+      "",
+      PROXY_RULE,
+    ].join("\n");
+  }
+  if (url.host === ANTCODE_HOST) {
+    const parsed = parseAntCodePrUrl(url);
+    if (parsed === null) return null;
+    return [
+      "## 访问提示",
+      "",
+      `用 \`antcode pr diff ${parsed.iid} -P ${parsed.project} --no-pager\` 查看 diff。`,
+      "",
+      PROXY_RULE,
+    ].join("\n");
+  }
+  return null;
+}
 
 /** Build the prompt handed to each Attempt. */
 export function buildAttemptPrompt(input: AttemptPromptInput): string {
@@ -67,6 +133,10 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
     lines.push("", input.personaPrompt.trim());
   }
   lines.push("", "## 任务", "", taskStatement(input.task));
+  const accessHint = buildAccessHint(input.task.pr);
+  if (accessHint !== null) {
+    lines.push("", accessHint);
+  }
   const focus = input.task.focus?.trim();
   if (focus && focus.length > 0) {
     lines.push("", "审查重点：", focus);
@@ -140,8 +210,10 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "",
     "## 聚合要求",
     "",
-    "点名引用每位被保留的成功的审查者。对比他们的 Findings 与 Verification，区分共识、独有发现、分歧。",
+    "点名引用每位被保留的成功的审查者。对比他们的发现与验证过程，区分共识、独有发现、分歧。",
+    "reviewer 可能使用 Findings/Verification/Verdict 等英文标题，请按语义理解，不要当作格式错误。",
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
+    "结论章节给出单行英文 verdict token：approve | changes-requested | comment。",
     "最终消息即交付物，只输出下面的 Markdown 五章节结构：",
     "",
     AGGREGATE_STRUCTURE,

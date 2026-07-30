@@ -97,32 +97,30 @@ function assertArgvSafe(argv: string[]): void {
   }
 }
 
-/** Build a complete AttemptSpec for an agent + prompt. Fails fast with a usage
- * error on: unknown driver, claude non-cfuse route, or missing executable. */
-export function buildSpawnSpec(
+/** The fixed minimal probe prompt (P1-1). Asking for an exact "ok" keeps the
+ * probe output tiny; success is judged on the process succeeding with ANY
+ * non-empty final output, so an extra punctuation mark never flips a healthy
+ * backend to unreachable. */
+export const DRIVER_PROBE_PROMPT = "Reply with exactly: ok";
+
+interface DriverInvocation {
+  argv: string[];
+  promptStdin: boolean;
+  lastMessageFile?: string;
+}
+
+/** Shared argv builder for the review spawn AND the health probe. The two share
+ * the executable, route/model handling, prompt delivery channel and output
+ * format — but the probe never inherits review-specific permission flags
+ * (claude `--dangerously-skip-permissions`, codex sandbox/bypass/`-o`), so a
+ * probe exercises the driver backend, not the review's escalation path. */
+function buildInvocation(
   agent: AgentRecord,
-  opts: { attemptId: string; workspace: string; prompt: string; env?: NodeJS.ProcessEnv },
-): AttemptSpec {
-  const { attemptId, workspace, prompt } = opts;
-  const env = opts.env ?? process.env;
+  opts: { prompt: string; workspace?: string; probe: boolean },
+): DriverInvocation {
   const sel = agent.driverSelection;
   const driverId = sel.driverId;
-  const exeName = EXECUTABLE_BY_DRIVER[driverId];
-  if (exeName === undefined) {
-    throw errors.usage(`unsupported driver "${driverId}" for review`);
-  }
-  const executable = resolveExecutable(exeName, env);
-  const base = {
-    attemptId,
-    agentId: agent.id,
-    agentName: agent.name,
-    driverId,
-    modelId: agent.modelId,
-    executable,
-    cwd: workspace,
-    prompt,
-  };
-
+  const { prompt } = opts;
   switch (driverId) {
     case "claude-stream-json": {
       if (sel.options.route !== "cfuse") {
@@ -130,18 +128,9 @@ export function buildSpawnSpec(
           `review only supports the cfuse route for claude-stream-json (got "${sel.options.route}")`,
         );
       }
-      return {
-        ...base,
-        argv: [
-          "cfuse",
-          "--print",
-          "--verbose",
-          "--output-format",
-          "stream-json",
-          "--dangerously-skip-permissions",
-        ],
-        promptStdin: true,
-      };
+      const argv = ["cfuse", "--print", "--verbose", "--output-format", "stream-json"];
+      if (!opts.probe) argv.push("--dangerously-skip-permissions");
+      return { argv, promptStdin: true };
     }
     case "kimi-stream-json": {
       // No --auto/-y (mutually exclusive with -p); config provides full autonomy.
@@ -150,22 +139,28 @@ export function buildSpawnSpec(
       // crash from the kernel.
       const argv = ["-m", agent.modelId, "-p", prompt, "--output-format", "stream-json"];
       assertArgvSafe(argv);
-      return {
-        ...base,
-        argv,
-        promptStdin: false,
-      };
+      return { argv, promptStdin: false };
     }
     case "codex-app-server": {
+      if (opts.probe) {
+        return {
+          argv: ["exec", "--skip-git-repo-check", "-m", agent.modelId, "--json", "-"],
+          promptStdin: true,
+        };
+      }
+      const workspace = opts.workspace as string;
       const lastMessageFile = join(workspace, ".last-message.md");
+      // `--json` makes stdout JSONL (`item.*` events) so the activity collector
+      // can see tool calls; `-o` still carries the final message, so the final
+      // deliverable does not depend on parsing the event stream.
       return {
-        ...base,
         argv: [
           "exec",
           "-s",
           "workspace-write",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
+          "--json",
           "-m",
           agent.modelId,
           "-o",
@@ -180,6 +175,64 @@ export function buildSpawnSpec(
       throw errors.usage(`unsupported driver "${driverId}" for review`);
     }
   }
+}
+
+/** Build a complete AttemptSpec for an agent + prompt. Fails fast with a usage
+ * error on: unknown driver, claude non-cfuse route, or missing executable. */
+export function buildSpawnSpec(
+  agent: AgentRecord,
+  opts: { attemptId: string; workspace: string; prompt: string; env?: NodeJS.ProcessEnv },
+): AttemptSpec {
+  const { attemptId, workspace, prompt } = opts;
+  const env = opts.env ?? process.env;
+  const driverId = agent.driverSelection.driverId;
+  const exeName = EXECUTABLE_BY_DRIVER[driverId];
+  if (exeName === undefined) {
+    throw errors.usage(`unsupported driver "${driverId}" for review`);
+  }
+  const executable = resolveExecutable(exeName, env);
+  const invocation = buildInvocation(agent, { prompt, workspace, probe: false });
+  return {
+    attemptId,
+    agentId: agent.id,
+    agentName: agent.name,
+    driverId,
+    modelId: agent.modelId,
+    executable,
+    cwd: workspace,
+    prompt,
+    ...invocation,
+  };
+}
+
+/** Build a minimal health-probe spec for a driver (P1-1): same executable,
+ * route/model and prompt delivery as the review spawn, but without the
+ * review-only permission flags and without a workspace (`cwd` is the caller's
+ * own working directory — no review directory is created for a probe). */
+export function buildProbeSpec(
+  agent: AgentRecord,
+  opts: { probeId: string; cwd: string; prompt: string; env?: NodeJS.ProcessEnv },
+): AttemptSpec {
+  const { probeId, cwd, prompt } = opts;
+  const env = opts.env ?? process.env;
+  const driverId = agent.driverSelection.driverId;
+  const exeName = EXECUTABLE_BY_DRIVER[driverId];
+  if (exeName === undefined) {
+    throw errors.usage(`unsupported driver "${driverId}" for review`);
+  }
+  const executable = resolveExecutable(exeName, env);
+  const invocation = buildInvocation(agent, { prompt, probe: true });
+  return {
+    attemptId: probeId,
+    agentId: agent.id,
+    agentName: agent.name,
+    driverId,
+    modelId: agent.modelId,
+    executable,
+    cwd,
+    prompt,
+    ...invocation,
+  };
 }
 
 /** Upper bound on a single final-event line retained by `FinalEventLineCollector`.
@@ -349,14 +402,35 @@ function extractKimiLine(line: string): string | null {
 }
 
 /** codex: prefer the `-o` last-message file; fall back to stdout. Both must be
- * non-empty (after trim) to count. */
+ * non-empty (after trim) to count. With `--json`, stdout is a JSONL event
+ * stream, so the fallback first tries the last `item.completed` agent_message
+ * text; only when no such event exists is the raw stdout treated as legacy
+ * plain-text output (older codex without `--json`). */
 function extractCodex(stdout: string, lastMessageFile?: string): string | null {
   if (lastMessageFile !== undefined) {
     const text = readFileTrimmed(lastMessageFile);
     if (text !== null) return text;
   }
+  const fromEvents = extractCodexAgentMessage(stdout);
+  if (fromEvents !== null) return fromEvents;
   const trimmed = stdout.trim();
   return trimmed.length > 0 ? stdout : null;
+}
+
+/** Last `{"type":"item.completed","item":{"type":"agent_message","text":…}}`
+ * text in a codex `--json` event stream; null when no such event is present. */
+function extractCodexAgentMessage(stdout: string): string | null {
+  let last: string | null = null;
+  for (const line of splitLines(stdout)) {
+    const obj = parseJsonLine(line);
+    if (obj === null) continue;
+    if (obj.type !== "item.completed") continue;
+    const item = obj.item as { type?: unknown; text?: unknown } | undefined;
+    if (item?.type !== "agent_message") continue;
+    const text = asText(item.text);
+    if (text !== null) last = text;
+  }
+  return last;
 }
 
 function readFileTrimmed(path: string): string | null {
@@ -397,4 +471,173 @@ function asText(value: unknown): string | null {
     return joined.length > 0 ? joined : null;
   }
   return null;
+}
+
+/** Per-Attempt process summary (P2-1): how many tool calls the driver made and
+ * a bounded sample of the shell commands it ran. Optional everywhere — `undefined`
+ * means "no process data" (unrecognized stream), never an error. */
+export interface AttemptActivity {
+  toolCalls: number;
+  commands: string[];
+}
+
+/** Upper bound on retained representative commands per Attempt. */
+const ACTIVITY_MAX_COMMANDS = 10;
+/** Upper bound (Unicode code points) on a single retained command. */
+const ACTIVITY_COMMAND_MAX_CHARS = 80;
+/** Bound on one buffered physical line; longer lines are dropped (the collector
+ * is a best-effort observer and must never grow memory without bound). */
+const ACTIVITY_LINE_CAP = 16 * 1024 * 1024;
+
+/** Incremental stream-json process observer (P2-1). Fed with raw stdout chunks
+ * as they arrive, it decodes UTF-8 across chunk boundaries (StringDecoder),
+ * parses JSONL line-by-line and counts tool-call events per driver:
+ *  - claude: `type:"assistant"` messages — each `tool_use` content block counts
+ *    (stream_event deltas are ignored so one call is never counted twice);
+ *    commands come from Bash/Shell-style `input.command`/`input.cmd`.
+ *  - kimi: `role:"assistant"` messages — each `tool_calls[]` entry counts
+ *    (`role:"tool"` results are not calls); commands come from
+ *    `args.command/cmd`, including a JSON-string `function.arguments`.
+ *  - codex: `item.completed` events of a known tool type (`command_execution`,
+ *    `mcp_tool_call`, `web_search`); `item.started` is ignored to avoid
+ *    started/completed double counting; commands come from `item.command`.
+ * Non-JSON decoration lines are ignored, never fatal. `summary()` returns
+ * `undefined` when no recognizable event was seen at all (format unknown →
+ * report shows "无过程数据"), and `{ toolCalls: 0, commands: [] }` when the
+ * format was recognized but no tool call occurred. */
+export class DriverActivityCollector {
+  private buf = "";
+  private readonly decoder = new StringDecoder("utf8");
+  private discarding = false;
+  private toolCalls = 0;
+  private readonly commands: string[] = [];
+  private sawEvent = false;
+
+  constructor(private readonly driverId: string) {}
+
+  feed(chunk: Buffer): void {
+    this.buf += this.decoder.write(chunk);
+    let idx = this.buf.indexOf("\n");
+    while (idx >= 0) {
+      const line = this.buf.slice(0, idx);
+      this.buf = this.buf.slice(idx + 1);
+      if (this.discarding) {
+        this.discarding = false;
+      } else {
+        this.consider(line);
+      }
+      idx = this.buf.indexOf("\n");
+    }
+    if (this.buf.length > ACTIVITY_LINE_CAP) {
+      this.buf = "";
+      this.discarding = true;
+    }
+  }
+
+  /** Flush the trailing bytes at EOF (the last JSONL line may lack a newline).
+   * Idempotent: the buffer is cleared, so a second call is a no-op. */
+  end(): void {
+    const rest = this.buf + this.decoder.end();
+    this.buf = "";
+    if (this.discarding) {
+      this.discarding = false;
+      return;
+    }
+    if (rest.length > 0 && rest.length <= ACTIVITY_LINE_CAP) {
+      this.consider(rest);
+    }
+  }
+
+  summary(): AttemptActivity | undefined {
+    if (!this.sawEvent) return undefined;
+    return { toolCalls: this.toolCalls, commands: [...this.commands] };
+  }
+
+  private consider(line: string): void {
+    const obj = parseJsonLine(line);
+    if (obj === null) return;
+    switch (this.driverId) {
+      case "claude-stream-json":
+        this.considerClaude(obj);
+        return;
+      case "kimi-stream-json":
+        this.considerKimi(obj);
+        return;
+      case "codex-app-server":
+        this.considerCodex(obj);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private considerClaude(obj: Record<string, unknown>): void {
+    if (typeof obj.type !== "string") return;
+    this.sawEvent = true;
+    if (obj.type !== "assistant") return;
+    const message = obj.message as { content?: unknown } | undefined;
+    if (!Array.isArray(message?.content)) return;
+    for (const block of message.content) {
+      const b = block as { type?: unknown; input?: unknown } | null;
+      if (b?.type !== "tool_use") continue;
+      this.toolCalls++;
+      const input = b.input as { command?: unknown; cmd?: unknown } | undefined;
+      this.pushCommand(input?.command ?? input?.cmd);
+    }
+  }
+
+  private considerKimi(obj: Record<string, unknown>): void {
+    if (typeof obj.role !== "string") return;
+    this.sawEvent = true;
+    if (obj.role !== "assistant") return;
+    if (!Array.isArray(obj.tool_calls)) return;
+    for (const call of obj.tool_calls) {
+      const c = call as {
+        args?: { command?: unknown; cmd?: unknown };
+        function?: { arguments?: unknown };
+      } | null;
+      this.toolCalls++;
+      let command: unknown = c?.args?.command ?? c?.args?.cmd;
+      if (command === undefined && typeof c?.function?.arguments === "string") {
+        const args = parseJsonLine(c.function.arguments) as {
+          command?: unknown;
+          cmd?: unknown;
+        } | null;
+        command = args?.command ?? args?.cmd;
+      }
+      this.pushCommand(command);
+    }
+  }
+
+  private considerCodex(obj: Record<string, unknown>): void {
+    if (typeof obj.type !== "string") return;
+    this.sawEvent = true;
+    if (obj.type !== "item.completed") return;
+    const item = obj.item as { type?: unknown; command?: unknown } | undefined;
+    if (
+      item?.type !== "command_execution" &&
+      item?.type !== "mcp_tool_call" &&
+      item?.type !== "web_search"
+    ) {
+      return;
+    }
+    this.toolCalls++;
+    this.pushCommand(item.command);
+  }
+
+  /** Fold whitespace, truncate to 80 code points, keep the first 10 in order.
+   * `toolCalls` keeps counting past the command cap — the cap bounds memory,
+   * not the measurement. */
+  private pushCommand(raw: unknown): void {
+    if (typeof raw !== "string") return;
+    const folded = raw.replace(/\s+/g, " ").trim();
+    if (folded.length === 0) return;
+    if (this.commands.length >= ACTIVITY_MAX_COMMANDS) return;
+    const chars = Array.from(folded);
+    this.commands.push(
+      chars.length > ACTIVITY_COMMAND_MAX_CHARS
+        ? chars.slice(0, ACTIVITY_COMMAND_MAX_CHARS).join("")
+        : folded,
+    );
+  }
 }

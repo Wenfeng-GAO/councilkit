@@ -5,11 +5,44 @@
  * whole JSONL is rewritten atomically after each appended record (single-writer,
  * appends are append-only in practice but always durable via tmp+fsync+rename).
  */
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteFile } from "../store/atomic-write";
 
 export const REVIEW_TRANSCRIPT_VERSION = 1 as const;
+
+/** Normalized exit code: a real signal/timeout kill is recorded as `"killed"`
+ * (not the raw numeric the kernel returned for SIGTERM), so a child dying on
+ * SIGTERM is never displayed as `exit 0`. Old numeric/null records stay valid. */
+export const attemptExitCodeSchema = z.union([z.number().int(), z.literal("killed"), z.null()]);
+export type AttemptExitCode = z.infer<typeof attemptExitCodeSchema>;
+
+/** Per-Attempt process summary parsed incrementally from stream-json stdout.
+ * Optional everywhere: absent means "no process data" (older runs / parse
+ * failure), never an error. */
+export const attemptActivitySchema = z
+  .object({ toolCalls: z.number().int().nonnegative(), commands: z.array(z.string()) })
+  .strict();
+export type AttemptActivity = z.infer<typeof attemptActivitySchema>;
+
+/** One driver health-probe result (P1-1). The Aggregator driver is always
+ * probed (aggregation always re-runs); a normal driver probe is shared across
+ * every rerun Attempt that uses it. */
+export const driverProbeRecordSchema = z
+  .object({
+    driverId: z.string().min(1),
+    modelId: z.string().min(1),
+    status: z.enum(["success", "failure"]),
+    durationMs: z.number().int().nonnegative(),
+    failure: z
+      .object({ code: z.string().min(1), message: z.string() })
+      .strict()
+      .nullable()
+      .optional(),
+  })
+  .strict();
+export type DriverProbeRecord = z.infer<typeof driverProbeRecordSchema>;
 
 export interface AttemptMeta {
   attemptId: string;
@@ -60,6 +93,10 @@ export const reviewStartedRecordSchema = z
         modelId: z.string().min(1),
       })
       .strict(),
+    /** Driver health-probe results (P1-1). Present on every fresh run; `.optional()`
+     * keeps older transcripts (written before probes existed) readable. A resume
+     * run records its own probe set in `review.resumed`, never rewriting history. */
+    probe: z.array(driverProbeRecordSchema).optional(),
   })
   .strict();
 export type ReviewStartedRecord = z.infer<typeof reviewStartedRecordSchema>;
@@ -75,13 +112,16 @@ export const attemptFinishedRecordSchema = z
     /** Final delivered text on success; null on failure (design: each Attempt's
      * final text is part of the durable transcript). */
     output: z.string().nullable(),
-    exitCode: z.number().int().nullable(),
+    exitCode: attemptExitCodeSchema,
     durationMs: z.number().int().nonnegative(),
     failure: z
       .object({ code: z.string().min(1), message: z.string() })
       .strict()
       .nullable()
       .optional(),
+    /** Incremental process summary (P2-1). Optional for back-compat with runs
+     * written before process capture, and absent when parsing yielded nothing. */
+    activity: attemptActivitySchema.optional(),
   })
   .strict();
 export type AttemptFinishedRecord = z.infer<typeof attemptFinishedRecordSchema>;
@@ -96,13 +136,14 @@ export const aggregationFinishedRecordSchema = z
     status: z.enum(["success", "failure"]),
     /** The Aggregator's synthesized delivery on success; null on failure. */
     output: z.string().nullable(),
-    exitCode: z.number().int().nullable(),
+    exitCode: attemptExitCodeSchema,
     durationMs: z.number().int().nonnegative(),
     failure: z
       .object({ code: z.string().min(1), message: z.string() })
       .strict()
       .nullable()
       .optional(),
+    activity: attemptActivitySchema.optional(),
   })
   .strict();
 export type AggregationFinishedRecord = z.infer<typeof aggregationFinishedRecordSchema>;
@@ -123,13 +164,79 @@ export const reviewFinishedRecordSchema = z
   .strict();
 export type ReviewFinishedRecord = z.infer<typeof reviewFinishedRecordSchema>;
 
+/** Resume marker (P2-2). Appended (never rewriting history) on a `--resume` run:
+ * which Attempts were reused verbatim, which were re-run, and this run's own
+ * driver-probe results. Aggregation is always re-run, so `probe` includes the
+ * Aggregator driver even when every non-aggregator Attempt was reused. */
+export const reviewResumedRecordSchema = z
+  .object({
+    kind: z.literal("review.resumed"),
+    version: z.literal(REVIEW_TRANSCRIPT_VERSION),
+    runId: z.string().min(1),
+    resumedAt: z.string().min(1),
+    reusedAttemptIds: z.array(z.string().min(1)),
+    rerunAttemptIds: z.array(z.string().min(1)),
+    probe: z.array(driverProbeRecordSchema),
+  })
+  .strict();
+export type ReviewResumedRecord = z.infer<typeof reviewResumedRecordSchema>;
+
 export const reviewTranscriptRecordSchema = z.discriminatedUnion("kind", [
   reviewStartedRecordSchema,
+  reviewResumedRecordSchema,
   attemptFinishedRecordSchema,
   aggregationFinishedRecordSchema,
   reviewFinishedRecordSchema,
 ]);
 export type ReviewTranscriptRecord = z.infer<typeof reviewTranscriptRecordSchema>;
+
+/** Read a review transcript JSONL into validated records (P2-2). Each line is
+ * JSON.parsed then `safeParse`d against the union; a malformed line is reported
+ * by (1-indexed) line number + a short schema summary and SKIPPED — the caller
+ * still gets every valid record, and the original line is never echoed back
+ * (it could carry secret-shaped model output). A missing file returns []. The
+ * loader never throws on bad content: a `--resume` against a corrupt transcript
+ * reads whatever survived instead of aborting the resume. Bad lines are
+ * reported through the optional `onWarning` callback (never thrown). */
+export function readReviewTranscript(
+  path: string,
+  onWarning?: (message: string) => void,
+): ReviewTranscriptRecord[] {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
+  const records: ReviewTranscriptRecord[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().length === 0) continue;
+    const lineNo = i + 1;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // A non-JSON line: never echo the line (could carry model output / secrets).
+      onWarning?.(`transcript line ${lineNo}: not valid JSON (skipped)`);
+      continue;
+    }
+    const result = reviewTranscriptRecordSchema.safeParse(parsed);
+    if (result.success) {
+      records.push(result.data);
+      continue;
+    }
+    // Report the failure WITHOUT echoing the offending record's content.
+    const firstIssue = result.error.issues[0];
+    const summary =
+      firstIssue === undefined
+        ? "schema mismatch"
+        : `${firstIssue.code}${firstIssue.path.length > 0 ? ` @${firstIssue.path.join(".")}` : ""}`;
+    onWarning?.(`transcript line ${lineNo}: ${summary} (skipped)`);
+  }
+  return records;
+}
 
 /** Rewrite the entire transcript JSONL atomically. */
 export function writeReviewTranscript(path: string, records: ReviewTranscriptRecord[]): void {

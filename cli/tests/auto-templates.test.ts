@@ -9,19 +9,22 @@ import { describe, expect, it } from "vitest";
 import {
   AGGREGATE_PROMPT_BUDGET,
   MAX_ATTEMPT_OUTPUT_IN_PROMPT,
+  buildAccessHint,
   buildAggregatePrompt,
   buildAttemptPrompt,
+  parseAntCodePrUrl,
   truncateForPrompt,
 } from "../src/auto/templates/review";
 
 describe("cli auto templates — attempt prompt", () => {
   const task = { pr: "https://example.com/pr/1" };
 
-  it("contains the three-section soft contract", () => {
+  it("contains the three-section soft contract (Chinese, English verdict token)", () => {
     const prompt = buildAttemptPrompt({ agentName: "A", personaPrompt: "be thorough", task });
-    expect(prompt).toContain("## Findings");
-    expect(prompt).toContain("## Verification");
-    expect(prompt).toContain("## Verdict");
+    expect(prompt).toContain("## 发现");
+    expect(prompt).toContain("## 验证");
+    expect(prompt).toContain("## 结论");
+    expect(prompt).toContain("approve | changes-requested | comment");
   });
 
   it("states the PR task and that the final message is the deliverable", () => {
@@ -59,20 +62,22 @@ describe("cli auto templates — attempt prompt", () => {
 describe("cli auto templates — aggregate prompt", () => {
   const task = { pr: "https://example.com/pr/1" };
 
-  it("contains the five aggregation sections and cites attempt names", () => {
+  it("contains the five aggregation sections (Chinese) and cites attempt names", () => {
     const prompt = buildAggregatePrompt({
       aggregatorName: "R",
       task,
       attempts: [
-        { attemptId: "a", name: "A", status: "success", output: "## Findings\n- foo" },
-        { attemptId: "b", name: "B", status: "success", output: "## Findings\n- bar" },
+        { attemptId: "a", name: "A", status: "success", output: "## 发现\n- foo" },
+        { attemptId: "b", name: "B", status: "success", output: "## 发现\n- bar" },
       ],
     });
-    expect(prompt).toContain("## Overview");
-    expect(prompt).toContain("## Consensus findings");
-    expect(prompt).toContain("## Unique findings");
-    expect(prompt).toContain("## Disagreements");
-    expect(prompt).toContain("## Verdict");
+    expect(prompt).toContain("## 概览");
+    expect(prompt).toContain("## 共识发现");
+    expect(prompt).toContain("## 独有发现");
+    expect(prompt).toContain("## 分歧");
+    expect(prompt).toContain("## 结论");
+    // English-titled reviewer output is understood by semantics, not an error.
+    expect(prompt).toContain("Findings/Verification/Verdict");
     expect(prompt).toContain("A");
     expect(prompt).toContain("B");
   });
@@ -156,5 +161,71 @@ describe("cli auto templates — aggregate prompt", () => {
     expect(prompt).not.toContain("### Agent0\n");
     // ... while the newest is retained as a deliverable.
     expect(prompt).toContain("### Agent399");
+  });
+});
+
+describe("cli auto templates — access hint (P1-2)", () => {
+  it("github.com PR URL → gh hint + proxy rule", () => {
+    const hint = buildAccessHint("https://github.com/Wenfeng-GAO/councilkit/pull/1");
+    expect(hint).not.toBeNull();
+    expect(hint).toContain("gh pr diff 'https://github.com/Wenfeng-GAO/councilkit/pull/1'");
+    expect(hint).toContain("gh pr view 'https://github.com/Wenfeng-GAO/councilkit/pull/1'");
+    expect(hint).toContain("NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY=''");
+    expect(hint).toContain("模型 API 调用不要改代理设置");
+  });
+
+  it("code.alipay.com PR URL → antcode hint with parsed project/iid + proxy rule", () => {
+    const hint = buildAccessHint(
+      "https://code.alipay.com/agent-sandbox/arcaagenttunnel/pull_requests/1443",
+    );
+    expect(hint).not.toBeNull();
+    expect(hint).toContain("antcode pr diff 1443 -P agent-sandbox/arcaagenttunnel --no-pager");
+    expect(hint).toContain("NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY=''");
+    expect(hint).toContain("模型 API 调用不要改代理设置");
+  });
+
+  it("parseAntCodePrUrl handles multi-level group/project paths", () => {
+    const parsed = parseAntCodePrUrl(
+      new URL("https://code.alipay.com/group/sub/team/project/pull_requests/42"),
+    );
+    expect(parsed).toEqual({ project: "group/sub/team/project", iid: "42" });
+  });
+
+  it("parseAntCodePrUrl rejects malformed paths and unsafe characters", () => {
+    expect(parseAntCodePrUrl(new URL("https://code.alipay.com/pull_requests/42"))).toBeNull();
+    expect(parseAntCodePrUrl(new URL("https://code.alipay.com/a/b/pull_requests/abc"))).toBeNull();
+    expect(
+      parseAntCodePrUrl(new URL("https://code.alipay.com/a/b/pull_requests/42/files")),
+    ).toBeNull();
+    expect(parseAntCodePrUrl(new URL("https://code.alipay.com/a;b/pull_requests/42"))).toBeNull();
+  });
+
+  it("other hosts, PR numbers and non-URLs → no hint", () => {
+    expect(buildAccessHint("https://gitlab.com/a/b/merge_requests/1")).toBeNull();
+    expect(buildAccessHint("1443")).toBeNull();
+    expect(buildAccessHint("not a url at all")).toBeNull();
+    expect(buildAccessHint(undefined)).toBeNull();
+  });
+
+  it("a URL containing a single quote → no hint (never an injectable shell command)", () => {
+    expect(buildAccessHint("https://github.com/a/b/pull/1'$(rm -rf ~)")).toBeNull();
+  });
+
+  it("the attempt prompt embeds the hint; the aggregate prompt never does", () => {
+    const task = { pr: "https://github.com/Wenfeng-GAO/councilkit/pull/1" };
+    const attempt = buildAttemptPrompt({ agentName: "A", personaPrompt: "", task });
+    expect(attempt).toContain("## 访问提示");
+    expect(attempt).toContain("gh pr diff");
+    const aggregate = buildAggregatePrompt({
+      aggregatorName: "R",
+      task,
+      attempts: [{ attemptId: "a", name: "A", status: "success", output: "ok" }],
+    });
+    expect(aggregate).not.toContain("## 访问提示");
+  });
+
+  it("a non-URL --pr adds no hint to the attempt prompt", () => {
+    const attempt = buildAttemptPrompt({ agentName: "A", personaPrompt: "", task: { pr: "1443" } });
+    expect(attempt).not.toContain("## 访问提示");
   });
 });

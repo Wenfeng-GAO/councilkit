@@ -10,7 +10,13 @@
  */
 import { spawn } from "node:child_process";
 import { redact } from "../redact";
-import { type AttemptSpec, FinalEventLineCollector, extractFinalOutput } from "./driver-commands";
+import {
+  type AttemptActivity,
+  type AttemptSpec,
+  DriverActivityCollector,
+  FinalEventLineCollector,
+  extractFinalOutput,
+} from "./driver-commands";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const STDOUT_CAP = 8 * 1024 * 1024;
@@ -31,6 +37,12 @@ export interface AttemptFailure {
   message: string;
 }
 
+/** Normalized exit code (P1-4): a subprocess killed by timeout/abort is recorded
+ * as `"killed"` even when the kernel reports exit 0 for a SIGTERM death — a
+ * killed Attempt must never display as `exit 0`. Old numeric/null records stay
+ * valid (the transcript schema accepts all three). */
+export type AttemptExitCode = number | "killed" | null;
+
 /** Summary result for one Attempt (or the Aggregator spawn, same shape). */
 export interface AttemptResult {
   attemptId: string;
@@ -41,10 +53,16 @@ export interface AttemptResult {
   status: AttemptStatus;
   /** Extracted final text on success; raw/empty on failure. */
   output: string;
-  exitCode: number | null;
+  exitCode: AttemptExitCode;
   durationMs: number;
   workspace: string;
   failure?: AttemptFailure;
+  /** Incremental process summary (P2-1); absent when the stream had no
+   * recognizable events ("无过程数据"), never an error. */
+  activity?: AttemptActivity;
+  /** True when this result was carried over from a previous run by `--resume`
+   * (P2-2): not spawned, not probed, no workspace created. */
+  reused?: boolean;
 }
 
 export interface SpawnInput {
@@ -72,6 +90,10 @@ export interface SpawnOutput {
   /** Last complete final-event line captured during streaming (claude/kimi).
    * Present only when `defaultSpawn` ran a line collector; absent for fakes. */
   finalEventLine?: string | null;
+  /** Incremental process summary captured during streaming (P2-1). Present only
+   * when `defaultSpawn` observed recognizable events; absent for fakes and for
+   * unrecognized output formats. */
+  activity?: AttemptActivity;
 }
 
 /** Injectable process-group kill (defaults to `process.kill(-pid, signal)`). */
@@ -85,6 +107,28 @@ function defaultKillProcessGroup(negativePid: number, signal: NodeJS.Signals): v
 /** Test injection point: a fake spawn replaces the real child_process spawn. */
 export type SpawnImpl = (input: SpawnInput) => Promise<SpawnOutput>;
 
+/** Injectable clock + interval handles (P2-1 heartbeat). Tests drive the
+ * heartbeat with a fake clock; production uses Date.now + setInterval. */
+export interface RunnerTimers {
+  now(): number;
+  setInterval(callback: () => void, ms: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
+const defaultTimers: RunnerTimers = {
+  now: () => Date.now(),
+  setInterval: (callback, ms) => {
+    const handle = setInterval(callback, ms);
+    // Never let a heartbeat keep the process alive on its own.
+    (handle as { unref?: () => void }).unref?.();
+    return handle;
+  },
+  clearInterval: (handle) => clearInterval(handle as Parameters<typeof clearInterval>[0]),
+};
+
+/** Default human heartbeat cadence (P2-1): one "仍在运行" line every 30s. */
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+
 export interface RunnerOptions {
   timeoutMs?: number;
   concurrency?: number;
@@ -92,6 +136,12 @@ export interface RunnerOptions {
   spawnImpl?: SpawnImpl;
   onAttemptStart?: (attemptId: string, agentName: string) => void;
   onAttemptFinish?: (result: AttemptResult) => void;
+  /** Heartbeat cadence for `onHeartbeat` (defaults to 30s). */
+  heartbeatIntervalMs?: number;
+  /** Called once per heartbeat while an Attempt is still running. Not used for
+   * the Aggregator spawn (aggregation is not an Attempt). */
+  onHeartbeat?: (attemptId: string, agentName: string, elapsedMs: number) => void;
+  timers?: RunnerTimers;
 }
 
 export interface RunAttemptsOutcome {
@@ -213,21 +263,46 @@ export async function spawnOnce(
 
 async function runOne(
   spec: AttemptSpec,
-  opts: { timeoutMs: number; signal: AbortSignal; spawnImpl?: SpawnImpl },
+  opts: {
+    timeoutMs: number;
+    signal: AbortSignal;
+    spawnImpl?: SpawnImpl;
+    heartbeatIntervalMs?: number;
+    onHeartbeat?: (attemptId: string, agentName: string, elapsedMs: number) => void;
+    timers?: RunnerTimers;
+  },
 ): Promise<AttemptResult> {
-  const started = Date.now();
+  const timers = opts.timers ?? defaultTimers;
+  const started = timers.now();
   const spawnFn = opts.spawnImpl ?? defaultSpawn;
-  const out = await spawnFn({
-    executable: spec.executable,
-    argv: spec.argv,
-    cwd: spec.cwd,
-    prompt: spec.prompt,
-    promptStdin: spec.promptStdin,
-    timeoutMs: opts.timeoutMs,
-    signal: opts.signal,
-    driverId: spec.driverId,
-  });
-  const durationMs = Date.now() - started;
+
+  // Human heartbeat (P2-1): a "仍在运行" line every heartbeatIntervalMs while
+  // the Attempt runs. Always cleared in finally so a finished Attempt never
+  // heartbeats again and the timer cannot leak.
+  let heartbeat: unknown;
+  if (opts.onHeartbeat !== undefined) {
+    const intervalMs = opts.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    heartbeat = timers.setInterval(() => {
+      opts.onHeartbeat?.(spec.attemptId, spec.agentName, timers.now() - started);
+    }, intervalMs);
+  }
+
+  let out: SpawnOutput;
+  try {
+    out = await spawnFn({
+      executable: spec.executable,
+      argv: spec.argv,
+      cwd: spec.cwd,
+      prompt: spec.prompt,
+      promptStdin: spec.promptStdin,
+      timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
+      driverId: spec.driverId,
+    });
+  } finally {
+    if (heartbeat !== undefined) timers.clearInterval(heartbeat);
+  }
+  const durationMs = timers.now() - started;
 
   const extracted =
     out.error !== undefined
@@ -255,10 +330,13 @@ async function runOne(
     modelId: spec.modelId,
     status: failure === undefined ? "success" : "failure",
     output: extracted ?? "",
-    exitCode: out.exitCode,
+    // Normalize a timeout/abort kill to "killed" (P1-4): a child reaped with
+    // exit 0 after SIGTERM must not display as a clean exit.
+    exitCode: out.timedOut || out.aborted ? "killed" : out.exitCode,
     durationMs,
     workspace: spec.cwd,
     failure,
+    activity: out.activity,
   };
 }
 
@@ -349,6 +427,11 @@ export function defaultSpawn(
       input.driverId === "claude-stream-json" || input.driverId === "kimi-stream-json"
         ? new FinalEventLineCollector(input.driverId)
         : null;
+    // Incremental process observer (P2-1): fed with the same stdout chunks, so
+    // tool events are counted even when the 8MB head+tail cap elides the middle
+    // of the stream. Unknown driver ids simply never match an event shape.
+    const activityColl =
+      input.driverId !== undefined ? new DriverActivityCollector(input.driverId) : null;
 
     let child: ReturnType<typeof spawn>;
     try {
@@ -379,10 +462,16 @@ export function defaultSpawn(
       settled = true;
       clearTimeout(timeoutTimer);
       input.signal.removeEventListener("abort", onAbort);
+      // Flush the activity collector's trailing line and attach the summary to
+      // every settle path (success, error, timeout) — a killed Attempt still
+      // carries the process data gathered before the kill.
+      activityColl?.end();
+      const activity = activityColl?.summary();
+      const finalOut = activity === undefined ? out : { ...out, activity };
       if (killInitiated) {
-        killPromise.then(() => resolveOutput(out));
+        killPromise.then(() => resolveOutput(finalOut));
       } else {
-        resolveOutput(out);
+        resolveOutput(finalOut);
       }
     };
 
@@ -464,6 +553,7 @@ export function defaultSpawn(
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutColl.feed(chunk);
       lineColl?.feed(chunk);
+      activityColl?.feed(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => stderrColl.feed(chunk));
 
@@ -549,18 +639,24 @@ function stderrTail(stderr: string): string {
     // (0x20-0x2F) final-byte(0x40-0x7E)) — digits/semicolons alone would leave
     // private-parameter or intermediate-byte CSI payloads printable (reviewer
     // finding).
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matches ANSI CSI escape sequences in untrusted driver stderr
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     // OSC/DCS/SOS/PM/APC (ESC ] P X ^ _ … terminated by BEL or ST): drop the
     // WHOLE sequence including its printable payload — an OSC payload can carry
     // ";"-separated text that would otherwise survive and break credential
     // redaction (reviewer finding: only CSI was removed).
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matches ANSI OSC/DCS/SOS/PM/APC string sequences in untrusted driver stderr
     .replace(/\u001b[\]PX^_][^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?/g, "")
     // C1 string sequences (DCS U+0090, SOS U+0098, OSC U+009D, PM U+009E,
     // APC U+009F … terminated by BEL or ST U+009C): drop the whole sequence —
     // otherwise the introducer/terminator are stripped by the C1 class below
     // while the printable payload survives and can split a credential
     // (reviewer finding).
-    .replace(/[\u0090\u0098\u009d\u009e\u009f][^\u0007\u001b\u009c]*(?:\u0007|\u009c|\u001b\\)?/g, "")
+    .replace(
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matches C1 string sequences in untrusted driver stderr
+      /[\u0090\u0098\u009d\u009e\u009f][^\u0007\u001b\u009c]*(?:\u0007|\u009c|\u001b\\)?/g,
+      "",
+    )
     // C1 single-byte CSI (U+009B + same parameter/intermediate/final shape):
     // without this the introducer is stripped by the C1 class below while its
     // parameter bytes stay printable and can split a credential (reviewer
@@ -570,6 +666,7 @@ function stderrTail(stderr: string): string {
     // (0x20-0x2F)* + one final byte (0x30-0x7E). Covers ISO-2022 designation
     // sequences like ESC ( B that a two-byte rule would leave a printable tail
     // on (reviewer finding).
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately matches remaining ECMA-48 ESC sequences in untrusted driver stderr
     .replace(/\u001b[\x20-\x2f]*[\x30-\x7e]/g, "")
     // biome-ignore lint/suspicious/noControlCharactersInRegex: deliberately strips C0/C1 control chars and DEL (except \n and \t) from untrusted stderr
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\u009f]/g, "");

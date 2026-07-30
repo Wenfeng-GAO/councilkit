@@ -9,7 +9,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AttemptSpec,
+  DRIVER_PROBE_PROMPT,
+  DriverActivityCollector,
   FinalEventLineCollector,
+  buildProbeSpec,
   buildSpawnSpec,
   extractFinalOutput,
   resolveExecutable,
@@ -165,7 +168,7 @@ describe("cli auto driver-commands", () => {
       expect(spec.executable).toBe(join(tmp, "kimi"));
     });
 
-    it("codex: stdin prompt, last-message file under workspace, skip-git-repo-check", () => {
+    it("codex: stdin prompt, last-message file under workspace, skip-git-repo-check, --json", () => {
       const spec = buildSpawnSpec(agent(CODEX, "gpt-5"), {
         attemptId: "attempt-0",
         workspace: "/ws",
@@ -180,6 +183,7 @@ describe("cli auto driver-commands", () => {
         "workspace-write",
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
+        "--json",
         "-m",
         "gpt-5",
         "-o",
@@ -230,6 +234,246 @@ describe("cli auto driver-commands", () => {
       );
       expect(err.exitCode).toBe(2);
       expect(err.message).toContain("argv");
+    });
+  });
+
+  describe("buildProbeSpec argv (P1-1)", () => {
+    const probeOpts = (prompt = DRIVER_PROBE_PROMPT) => ({
+      probeId: "probe-x",
+      cwd: "/probe-cwd",
+      prompt,
+      env: env(tmp),
+    });
+
+    it("claude: same base argv as review but WITHOUT --dangerously-skip-permissions", () => {
+      const spec = buildProbeSpec(agent(CLAUDE_CFUSE), probeOpts());
+      expect(spec.argv).toEqual([
+        "cfuse",
+        "--print",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+      ]);
+      expect(spec.promptStdin).toBe(true);
+      expect(spec.cwd).toBe("/probe-cwd");
+      expect(spec.executable).toBe(join(tmp, "cld"));
+    });
+
+    it("kimi: same argv shape as review (prompt delivered via -p)", () => {
+      const spec = buildProbeSpec(agent(KIMI, "kimi-code/k3"), probeOpts());
+      expect(spec.argv).toEqual([
+        "-m",
+        "kimi-code/k3",
+        "-p",
+        DRIVER_PROBE_PROMPT,
+        "--output-format",
+        "stream-json",
+      ]);
+      expect(spec.promptStdin).toBe(false);
+    });
+
+    it("codex: minimal exec argv — no sandbox-write, no bypass, no -o", () => {
+      const spec = buildProbeSpec(agent(CODEX, "gpt-5"), probeOpts());
+      expect(spec.argv).toEqual(["exec", "--skip-git-repo-check", "-m", "gpt-5", "--json", "-"]);
+      expect(spec.promptStdin).toBe(true);
+      expect(spec.lastMessageFile).toBeUndefined();
+    });
+
+    it("claude non-cfuse route → usage error", () => {
+      const badRoute = {
+        driverId: "claude-stream-json" as const,
+        options: { route: "moonshot" as const },
+      };
+      const err = captureError(() => buildProbeSpec(agent(badRoute), probeOpts()));
+      expect(err.exitCode).toBe(2);
+      expect(err.message).toContain("cfuse");
+    });
+  });
+
+  describe("codex --json output extraction", () => {
+    it("falls back to the last item.completed agent_message when no -o file exists", () => {
+      const stdout = [
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "command_execution", command: "ls" },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "first answer" },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "final answer" },
+        }),
+      ].join("\n");
+      expect(extractFinalOutput("codex-app-server", stdout, "/missing/file.md")).toBe(
+        "final answer",
+      );
+    });
+
+    it("the -o file still wins over the JSONL stream", () => {
+      const dir = mkdtempSync(join(tmpdir(), "councilkit-codex-json-"));
+      try {
+        const file = join(dir, ".last-message.md");
+        writeFileSync(file, "from-file");
+        const stdout = JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "from-stream" },
+        });
+        expect(extractFinalOutput("codex-app-server", stdout, file)).toBe("from-file");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe("DriverActivityCollector (P2-1)", () => {
+    function feedLines(coll: DriverActivityCollector, payload: string, splitAt?: number): void {
+      const buf = Buffer.from(payload, "utf8");
+      if (splitAt === undefined) {
+        coll.feed(buf);
+      } else {
+        coll.feed(buf.subarray(0, splitAt));
+        coll.feed(buf.subarray(splitAt));
+      }
+      coll.end();
+    }
+
+    it("claude: counts tool_use blocks of complete assistant messages only (no stream_event double count)", () => {
+      const lines = [
+        JSON.stringify({ type: "system", subtype: "init" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_start", content_block: { type: "tool_use" } },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              { type: "text", text: "checking" },
+              { type: "tool_use", name: "Bash", input: { command: "git log --oneline" } },
+              { type: "tool_use", name: "Bash", input: { cmd: "pnpm test" } },
+            ],
+          },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", result: "done" }),
+      ].join("\n");
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, `${lines}\n`);
+      expect(coll.summary()).toEqual({
+        toolCalls: 2,
+        commands: ["git log --oneline", "pnpm test"],
+      });
+    });
+
+    it("claude: decodes a multibyte command split across chunks", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", input: { command: "grep 审查 src" } }] },
+      });
+      const coll = new DriverActivityCollector("claude-stream-json");
+      const buf = Buffer.from(`${line}\n`, "utf8");
+      const mid = Math.floor(buf.length / 2);
+      feedLines(coll, "", undefined);
+      const coll2 = new DriverActivityCollector("claude-stream-json");
+      coll2.feed(buf.subarray(0, mid));
+      coll2.feed(buf.subarray(mid));
+      coll2.end();
+      expect(coll2.summary()?.commands).toEqual(["grep 审查 src"]);
+    });
+
+    it("kimi: counts assistant tool_calls, ignores role:tool results and decorative lines", () => {
+      const lines = [
+        "• thinking…",
+        JSON.stringify({ role: "meta", content: "resume" }),
+        JSON.stringify({
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { function: { arguments: JSON.stringify({ command: "antcode pr diff 1" }) } },
+            { args: { cmd: "ls -la" } },
+          ],
+        }),
+        JSON.stringify({ role: "tool", content: "result of the call" }),
+      ].join("\n");
+      const coll = new DriverActivityCollector("kimi-stream-json");
+      feedLines(coll, `${lines}\n`);
+      expect(coll.summary()).toEqual({
+        toolCalls: 2,
+        commands: ["antcode pr diff 1", "ls -la"],
+      });
+    });
+
+    it("codex: counts item.completed tool items only (no started/completed double count)", () => {
+      const lines = [
+        JSON.stringify({
+          type: "item.started",
+          item: { type: "command_execution", command: "ls" },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "command_execution", command: "ls" },
+        }),
+        JSON.stringify({ type: "item.completed", item: { type: "mcp_tool_call" } }),
+        JSON.stringify({ type: "item.completed", item: { type: "web_search" } }),
+        JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "hi" } }),
+      ].join("\n");
+      const coll = new DriverActivityCollector("codex-app-server");
+      feedLines(coll, `${lines}\n`);
+      expect(coll.summary()).toEqual({ toolCalls: 3, commands: ["ls"] });
+    });
+
+    it("recognized stream without tool calls → { toolCalls: 0, commands: [] }", () => {
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, `${JSON.stringify({ type: "result", subtype: "success", result: "ok" })}\n`);
+      expect(coll.summary()).toEqual({ toolCalls: 0, commands: [] });
+    });
+
+    it("completely unrecognized output → undefined (无过程数据), never an error", () => {
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, "plain text output\nnot json at all\n");
+      expect(coll.summary()).toBeUndefined();
+    });
+
+    it("bad JSON lines between valid events are ignored", () => {
+      const lines = [
+        "{broken json",
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "tool_use", input: { command: "ls" } }] },
+        }),
+      ].join("\n");
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, `${lines}\n`);
+      expect(coll.summary()).toEqual({ toolCalls: 1, commands: ["ls"] });
+    });
+
+    it("keeps at most 10 commands but counts every tool call", () => {
+      const content = Array.from({ length: 12 }, (_, i) => ({
+        type: "tool_use",
+        input: { command: `cmd-${i}` },
+      }));
+      const line = JSON.stringify({ type: "assistant", message: { content } });
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, `${line}\n`);
+      const summary = coll.summary();
+      expect(summary?.toolCalls).toBe(12);
+      expect(summary?.commands).toHaveLength(10);
+      expect(summary?.commands[0]).toBe("cmd-0");
+      expect(summary?.commands[9]).toBe("cmd-9");
+    });
+
+    it("folds whitespace and truncates a command to 80 characters", () => {
+      const long = `echo ${"x".repeat(200)}\nwith newline`;
+      const line = JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", input: { command: long } }] },
+      });
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, `${line}\n`);
+      const cmd = coll.summary()?.commands[0] ?? "";
+      expect(Array.from(cmd).length).toBe(80);
+      expect(cmd).not.toContain("\n");
     });
   });
 

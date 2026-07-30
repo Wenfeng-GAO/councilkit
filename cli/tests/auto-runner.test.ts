@@ -431,7 +431,8 @@ describe("cli auto runner — defaultSpawn (fake ChildProcess, zero real process
   it("redacts secrets and strips control chars in the EXIT failure stderr tail", async () => {
     const spawnImpl: SpawnImpl = async () => ({
       stdout: "",
-      stderr: "boom \u0007\u001b[31m councilkit_session=secret-token-xyz \u001b[0m \u001b]8;;http://evil.example\u0007hyperlink",
+      stderr:
+        "boom \u0007\u001b[31m councilkit_session=secret-token-xyz \u001b[0m \u001b]8;;http://evil.example\u0007hyperlink",
       exitCode: 1,
       timedOut: false,
       aborted: false,

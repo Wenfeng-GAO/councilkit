@@ -36,12 +36,9 @@ function incompleteBanner(input: ReviewReportInput): string {
     input.failurePhase !== "aggregation" &&
     input.failurePhase !== "attempts"
   ) {
-    return (
-      "> INCOMPLETE — the run stopped before the Aggregator could start " +
-      `(${input.reason?.trim() || "see transcript"}). What follows is the ` +
-      "deterministic header plus each Attempt's raw deliverable in the appendix; " +
-      "no consensus is fabricated."
-    );
+    return `> INCOMPLETE — the run stopped before the Aggregator could start (${
+      input.reason?.trim() || "see transcript"
+    }). What follows is the deterministic header plus each Attempt's raw deliverable in the appendix; no consensus is fabricated.`;
   }
   // Distinguish every-Attempt-failed (no Aggregator ran) from an Aggregator
   // that ran but produced no usable output.
@@ -146,8 +143,10 @@ function renderAppendix(input: ReviewReportInput): string {
     lines.push("_(no attempts ran.)_", "");
     return lines.join("\n");
   }
+  lines.push(renderProcessComparison(input.attempts));
   for (const a of input.attempts) {
-    lines.push(`### ${a.agentName} (${a.driverId}/${a.modelId})`, "");
+    const reusedMark = a.reused === true ? " [reused]" : "";
+    lines.push(`### ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark}`, "");
     if (a.status === "success" && a.output.trim().length > 0) {
       lines.push(a.output.trim(), "");
     } else {
@@ -157,6 +156,28 @@ function renderAppendix(input: ReviewReportInput): string {
       );
     }
   }
+  return lines.join("\n");
+}
+
+/** 「过程对比」小节 (P2-1): per-Attempt duration, tool-call count and the
+ * representative commands captured from the stream. Attempts without captured
+ * process data (unrecognized format, or a reused result from an older run)
+ * show 无过程数据 — never an error. */
+function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = ["### 过程对比", ""];
+  for (const a of attempts) {
+    const reusedMark = a.reused === true ? " [reused]" : "";
+    lines.push(`- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark} — ${a.durationMs}ms`);
+    if (a.activity === undefined) {
+      lines.push("  - 无过程数据");
+      continue;
+    }
+    lines.push(`  - 工具调用：${a.activity.toolCalls} 次`);
+    for (const cmd of a.activity.commands) {
+      lines.push(`  - \`${cmd}\``);
+    }
+  }
+  lines.push("");
   return lines.join("\n");
 }
 
