@@ -401,20 +401,19 @@ function extractKimiLine(line: string): string | null {
   return asText(obj.content);
 }
 
-/** codex: prefer the `-o` last-message file; fall back to stdout. Both must be
- * non-empty (after trim) to count. With `--json`, stdout is a JSONL event
- * stream, so the fallback first tries the last `item.completed` agent_message
- * text; only when no such event exists is the raw stdout treated as legacy
- * plain-text output (older codex without `--json`). */
+/** codex: prefer the `-o` last-message file; fall back to the last
+ * `item.completed` agent_message in the `--json` stdout event stream. Both must
+ * be non-empty (after trim) to count. There is NO raw-stdout fallback: codex is
+ * always invoked with `--json`, so stdout is a JSONL event stream and protocol
+ * events (thread.started, turn.completed, …) are NEVER a deliverable — when no
+ * agent_message exists and the `-o` file is missing/empty, the run produced no
+ * output (NO_OUTPUT), not a stream dump (reviewer finding). */
 function extractCodex(stdout: string, lastMessageFile?: string): string | null {
   if (lastMessageFile !== undefined) {
     const text = readFileTrimmed(lastMessageFile);
     if (text !== null) return text;
   }
-  const fromEvents = extractCodexAgentMessage(stdout);
-  if (fromEvents !== null) return fromEvents;
-  const trimmed = stdout.trim();
-  return trimmed.length > 0 ? stdout : null;
+  return extractCodexAgentMessage(stdout);
 }
 
 /** Last `{"type":"item.completed","item":{"type":"agent_message","text":…}}`
@@ -483,6 +482,9 @@ export interface AttemptActivity {
 
 /** Upper bound on retained representative commands per Attempt. */
 const ACTIVITY_MAX_COMMANDS = 10;
+/** claude tool names whose `input.command`/`input.cmd` counts as a
+ * representative shell command (lowercase). */
+const SHELL_TOOL_NAMES = new Set(["bash", "shell"]);
 /** Upper bound (Unicode code points) on a single retained command. */
 const ACTIVITY_COMMAND_MAX_CHARS = 80;
 /** Bound on one buffered physical line; longer lines are dropped (the collector
@@ -494,7 +496,7 @@ const ACTIVITY_LINE_CAP = 16 * 1024 * 1024;
  * parses JSONL line-by-line and counts tool-call events per driver:
  *  - claude: `type:"assistant"` messages — each `tool_use` content block counts
  *    (stream_event deltas are ignored so one call is never counted twice);
- *    commands come from Bash/Shell-style `input.command`/`input.cmd`.
+ *    commands come from Bash/Shell-named tools' `input.command`/`input.cmd`.
  *  - kimi: `role:"assistant"` messages — each `tool_calls[]` entry counts
  *    (`role:"tool"` results are not calls); commands come from
  *    `args.command/cmd`, including a JSON-string `function.arguments`.
@@ -502,9 +504,11 @@ const ACTIVITY_LINE_CAP = 16 * 1024 * 1024;
  *    `mcp_tool_call`, `web_search`); `item.started` is ignored to avoid
  *    started/completed double counting; commands come from `item.command`.
  * Non-JSON decoration lines are ignored, never fatal. `summary()` returns
- * `undefined` when no recognizable event was seen at all (format unknown →
- * report shows "无过程数据"), and `{ toolCalls: 0, commands: [] }` when the
- * format was recognized but no tool call occurred. */
+ * `undefined` when no KNOWN event shape was seen (claude assistant/result,
+ * kimi assistant/tool/meta, codex item.*) — an arbitrary JSON object with a
+ * type/role field does not count as recognized, so an unknown format reports
+ * "无过程数据" instead of a confident empty summary (reviewer finding). A
+ * recognized stream without tool calls yields `{ toolCalls: 0, commands: [] }`. */
 export class DriverActivityCollector {
   private buf = "";
   private readonly decoder = new StringDecoder("utf8");
@@ -572,22 +576,29 @@ export class DriverActivityCollector {
   }
 
   private considerClaude(obj: Record<string, unknown>): void {
-    if (typeof obj.type !== "string") return;
+    // Only the known claude event shapes mark the stream as recognized — any
+    // JSON object carrying a `type` field must NOT count (reviewer finding).
+    if (obj.type !== "assistant" && obj.type !== "result") return;
     this.sawEvent = true;
     if (obj.type !== "assistant") return;
     const message = obj.message as { content?: unknown } | undefined;
     if (!Array.isArray(message?.content)) return;
     for (const block of message.content) {
-      const b = block as { type?: unknown; input?: unknown } | null;
+      const b = block as { type?: unknown; name?: unknown; input?: unknown } | null;
       if (b?.type !== "tool_use") continue;
       this.toolCalls++;
+      // Representative commands come from Bash/Shell-style tools only; other
+      // tools carrying an input.command field still COUNT as tool calls but
+      // are not sampled as shell commands (reviewer finding).
+      if (typeof b.name !== "string" || !SHELL_TOOL_NAMES.has(b.name.toLowerCase())) continue;
       const input = b.input as { command?: unknown; cmd?: unknown } | undefined;
       this.pushCommand(input?.command ?? input?.cmd);
     }
   }
 
   private considerKimi(obj: Record<string, unknown>): void {
-    if (typeof obj.role !== "string") return;
+    // Only the known kimi roles mark the stream as recognized.
+    if (obj.role !== "assistant" && obj.role !== "tool" && obj.role !== "meta") return;
     this.sawEvent = true;
     if (obj.role !== "assistant") return;
     if (!Array.isArray(obj.tool_calls)) return;
@@ -610,7 +621,10 @@ export class DriverActivityCollector {
   }
 
   private considerCodex(obj: Record<string, unknown>): void {
-    if (typeof obj.type !== "string") return;
+    // Only the known codex event shapes (`item.*`) mark the stream as
+    // recognized — protocol events like thread.started / turn.completed must
+    // NOT count (reviewer finding).
+    if (typeof obj.type !== "string" || !obj.type.startsWith("item.")) return;
     this.sawEvent = true;
     if (obj.type !== "item.completed") return;
     const item = obj.item as { type?: unknown; command?: unknown } | undefined;

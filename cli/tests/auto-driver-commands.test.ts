@@ -369,7 +369,9 @@ describe("cli auto driver-commands", () => {
     it("claude: decodes a multibyte command split across chunks", () => {
       const line = JSON.stringify({
         type: "assistant",
-        message: { content: [{ type: "tool_use", input: { command: "grep 审查 src" } }] },
+        message: {
+          content: [{ type: "tool_use", name: "Bash", input: { command: "grep 审查 src" } }],
+        },
       });
       const coll = new DriverActivityCollector("claude-stream-json");
       const buf = Buffer.from(`${line}\n`, "utf8");
@@ -440,7 +442,9 @@ describe("cli auto driver-commands", () => {
         "{broken json",
         JSON.stringify({
           type: "assistant",
-          message: { content: [{ type: "tool_use", input: { command: "ls" } }] },
+          message: {
+            content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }],
+          },
         }),
       ].join("\n");
       const coll = new DriverActivityCollector("claude-stream-json");
@@ -448,9 +452,50 @@ describe("cli auto driver-commands", () => {
       expect(coll.summary()).toEqual({ toolCalls: 1, commands: ["ls"] });
     });
 
+    it("claude: only Bash/Shell tools contribute representative commands (toolCalls unchanged)", () => {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "Bash", input: { command: "git status" } },
+            { type: "tool_use", name: "Edit", input: { command: "not-a-shell-command" } },
+            { type: "tool_use", input: { command: "unnamed-tool" } },
+          ],
+        },
+      });
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(coll, `${line}\n`);
+      expect(coll.summary()).toEqual({ toolCalls: 3, commands: ["git status"] });
+    });
+
+    it("claude: JSON events of unknown shape (any `type`) do not count as recognized", () => {
+      const coll = new DriverActivityCollector("claude-stream-json");
+      feedLines(
+        coll,
+        `${JSON.stringify({ type: "system", subtype: "init" })}\n${JSON.stringify({ type: "weird" })}\n`,
+      );
+      expect(coll.summary()).toBeUndefined();
+    });
+
+    it("kimi: an unknown role does not count as recognized", () => {
+      const coll = new DriverActivityCollector("kimi-stream-json");
+      feedLines(coll, `${JSON.stringify({ role: "user", content: "hi" })}\n`);
+      expect(coll.summary()).toBeUndefined();
+    });
+
+    it("codex: protocol events (thread.started/turn.completed) do not count as recognized", () => {
+      const coll = new DriverActivityCollector("codex-app-server");
+      feedLines(
+        coll,
+        `${JSON.stringify({ type: "thread.started", thread_id: "t" })}\n${JSON.stringify({ type: "turn.completed", usage: {} })}\n`,
+      );
+      expect(coll.summary()).toBeUndefined();
+    });
+
     it("keeps at most 10 commands but counts every tool call", () => {
       const content = Array.from({ length: 12 }, (_, i) => ({
         type: "tool_use",
+        name: "Bash",
         input: { command: `cmd-${i}` },
       }));
       const line = JSON.stringify({ type: "assistant", message: { content } });
@@ -467,7 +512,7 @@ describe("cli auto driver-commands", () => {
       const long = `echo ${"x".repeat(200)}\nwith newline`;
       const line = JSON.stringify({
         type: "assistant",
-        message: { content: [{ type: "tool_use", input: { command: long } }] },
+        message: { content: [{ type: "tool_use", name: "Bash", input: { command: long } }] },
       });
       const coll = new DriverActivityCollector("claude-stream-json");
       feedLines(coll, `${line}\n`);
@@ -532,10 +577,23 @@ describe("cli auto driver-commands", () => {
       }
     });
 
-    it("codex: falls back to stdout when the file is absent", () => {
-      expect(extractFinalOutput("codex-app-server", "from-stdout", "/missing/file.md")).toBe(
-        "from-stdout",
-      );
+    it("codex: plain-text stdout is NOT a deliverable when the file is absent", () => {
+      // No raw-stdout fallback (reviewer finding): codex always runs with
+      // --json, so stdout is an event stream — never the deliverable itself.
+      expect(extractFinalOutput("codex-app-server", "from-stdout", "/missing/file.md")).toBeNull();
+    });
+
+    it("codex: protocol-only JSONL events are never a deliverable (NO_OUTPUT)", () => {
+      const stdout = [
+        JSON.stringify({ type: "thread.started", thread_id: "t" }),
+        JSON.stringify({ type: "turn.started" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "command_execution", command: "ls" },
+        }),
+        JSON.stringify({ type: "turn.completed", usage: {} }),
+      ].join("\n");
+      expect(extractFinalOutput("codex-app-server", stdout, "/missing/file.md")).toBeNull();
     });
 
     it("codex: returns null when both file and stdout are empty", () => {

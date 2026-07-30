@@ -12,7 +12,7 @@
  * required. Exit codes follow the existing table (0/2/4/5/130).
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -190,10 +190,18 @@ export async function runReview(
     if (!RUN_ID_PATTERN.test(resumeId)) {
       throw errors.usage(`--resume must be a ck-review-<uuid> run id, got "${resumeRaw}"`);
     }
-    priorRecords = readReviewTranscript(paths.transcript(resumeId), (m) => out.diag(m));
+    priorRecords = readReviewTranscript(paths.transcript(resumeId));
     const started = priorRecords.find((r) => r.kind === "review.started");
     if (started === undefined) {
       throw errors.usage(`run ${resumeId} has no readable review.started record to resume from`);
+    }
+    // The transcript must provably belong to THIS run id — an implicit match is
+    // not enough (reviewer finding): refuse to resume from another run's
+    // history.
+    if (started.runId !== resumeId) {
+      throw errors.usage(
+        `--resume ${resumeId} does not match the transcript's review.started runId`,
+      );
     }
     // Consistency is checked on stable IDs (not user-typed names) and on every
     // input that shapes the prompts — a mismatch would silently reuse outputs
@@ -500,9 +508,14 @@ export async function runReview(
       });
     } else {
       // Workspaces are created only now — after probing — and only for
-      // attempts that will actually spawn (plus the Aggregator).
-      for (const spec of runnableSpecs) createWorkspace(spec.cwd);
-      createWorkspace(aggregatorWorkspace);
+      // attempts that will actually spawn (plus the Aggregator). A rerun gets a
+      // PRISTINE workspace: delete-then-create, never a recursive mkdir over
+      // leftovers — a stale checkout would interfere with cloning and a stale
+      // `.last-message.md` would let a no-output process pass off the previous
+      // round's file as this round's deliverable (reviewer finding). Reused
+      // attempts are neither created nor deleted.
+      for (const spec of runnableSpecs) recreateWorkspace(spec.cwd);
+      recreateWorkspace(aggregatorWorkspace);
       const params = buildExecuteParams();
       outcome = await executeReview(params, runnableSpecs);
     }
@@ -939,6 +952,17 @@ function createWorkspace(workspace: string): void {
   } catch (cause) {
     throw errors.io(`failed to create workspace dir: ${ioName(cause)}`, { cause: ioName(cause) });
   }
+}
+
+/** Delete-then-create so a rerun attempt starts from an EMPTY workspace (no
+ * leftover checkout, no stale `.last-message.md`). */
+function recreateWorkspace(workspace: string): void {
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+  } catch (cause) {
+    throw errors.io(`failed to clear workspace dir: ${ioName(cause)}`, { cause: ioName(cause) });
+  }
+  createWorkspace(workspace);
 }
 
 function flushTranscript(path: string, records: ReviewTranscriptRecord[]): void {

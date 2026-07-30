@@ -1111,6 +1111,138 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
   });
 
+  it("--resume rejects a transcript whose review.started runId does not match (exit 2)", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const runId = "ck-review-66666666-7777-4888-8999-000000000000";
+    writeLegacyTranscript({
+      runId,
+      task: "t",
+      attempts: [
+        { attemptId: "attempt-0", agentId: aliceId, agentName: "Alice" },
+        { attemptId: "attempt-1", agentId: bobId, agentName: "Bob" },
+      ],
+      aggregator: { agentId: bobId, agentName: "Bob" },
+      finished: [],
+    });
+    // Corrupt the linkage: the started record claims a DIFFERENT run id.
+    const transcriptPath = resolvePaths().transcript(runId);
+    const text = readFileSync(transcriptPath, "utf8");
+    writeFileSync(
+      transcriptPath,
+      text.replace(
+        `"runId":"${runId}"`,
+        '"runId":"ck-review-ffffffff-ffff-4fff-8fff-ffffffffffff"',
+      ),
+    );
+    try {
+      await runReview([...twoAgentArgs(aliceId, bobId, "t"), "--resume", runId], makeSink(), {
+        spawnImpl: fakeSpawn(),
+      });
+      throw new Error("expected runReview to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(2);
+      expect(err.message).toContain("does not match");
+    }
+  });
+
+  it("--resume refuses a corrupt transcript line (exit 5, line number, no echo)", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const runId = "ck-review-12345678-9abc-4def-8abc-def012345678";
+    writeLegacyTranscript({
+      runId,
+      task: "t",
+      attempts: [
+        { attemptId: "attempt-0", agentId: aliceId, agentName: "Alice" },
+        { attemptId: "attempt-1", agentId: bobId, agentName: "Bob" },
+      ],
+      aggregator: { agentId: bobId, agentName: "Bob" },
+      finished: [],
+    });
+    const transcriptPath = resolvePaths().transcript(runId);
+    const expectCorrupt = async (fragment: string): Promise<void> => {
+      try {
+        await runReview([...twoAgentArgs(aliceId, bobId, "t"), "--resume", runId], makeSink(), {
+          spawnImpl: fakeSpawn(),
+        });
+        throw new Error("expected runReview to throw");
+      } catch (e) {
+        const err = e as CliError;
+        expect(err).toBeInstanceOf(CliError);
+        expect(err.exitCode).toBe(5);
+        expect(err.message).toContain(fragment);
+        expect(err.message).not.toContain("SECRET-MARKER");
+      }
+    };
+    // A non-JSON line (line 3) carrying a secret-shaped marker: reported by
+    // line number, content NEVER echoed back.
+    writeFileSync(
+      transcriptPath,
+      `${readFileSync(transcriptPath, "utf8")}not-json-SECRET-MARKER\n`,
+    );
+    await expectCorrupt("line 3");
+    // A schema-mismatching record line is likewise fatal.
+    const valid = readFileSync(transcriptPath, "utf8").trim().split("\n").slice(0, 2);
+    writeFileSync(
+      transcriptPath,
+      `${valid.join("\n")}\n{"kind":"attempt.finished","SECRET-MARKER":1}\n`,
+    );
+    await expectCorrupt("line 3");
+  });
+
+  it("--resume rebuilds rerun + aggregator workspaces pristine; a reused attempt's workspace is untouched", async () => {
+    const { aliceId, bobId } = seedTwo();
+    // First run: Alice's attempt fails, Bob's succeeds.
+    const firstSpawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      if (kind === "probe") return claudeEnvelope("ok");
+      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      if (kind === "attempt:Alice") {
+        return { stdout: "", exitCode: 1, timedOut: false, aborted: false };
+      }
+      return attemptEnvelope("Bob");
+    };
+    const sink1 = makeSink();
+    const exit1 = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink1, {
+      spawnImpl: firstSpawn,
+    });
+    expect(exit1).toBe(0);
+    const runId = (sink1.finished as { runId: string }).runId;
+
+    // Plant stale leftovers in every workspace — including a stale codex-style
+    // `.last-message.md` that a no-output rerun could otherwise pass off as
+    // this round's deliverable.
+    const wsRoot = join(resolvePaths().runDir(runId), "workspaces");
+    for (const dir of ["attempt-0", "attempt-1", "aggregator"]) {
+      writeFileSync(join(wsRoot, dir, "stale.txt"), "leftover");
+      writeFileSync(join(wsRoot, dir, ".last-message.md"), "stale deliverable");
+    }
+
+    const secondSpawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      if (kind === "probe") return claudeEnvelope("ok");
+      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      return attemptEnvelope("Alice");
+    };
+    const sink2 = makeSink();
+    const exit2 = await runCapturing(
+      [...twoAgentArgs(aliceId, bobId, "x"), "--resume", runId],
+      sink2,
+      { spawnImpl: secondSpawn },
+    );
+    expect(exit2).toBe(0);
+
+    // Rerun attempt + aggregator: recreated EMPTY (stale files gone).
+    expect(existsSync(join(wsRoot, "attempt-0"))).toBe(true);
+    expect(existsSync(join(wsRoot, "attempt-0", "stale.txt"))).toBe(false);
+    expect(existsSync(join(wsRoot, "attempt-0", ".last-message.md"))).toBe(false);
+    expect(existsSync(join(wsRoot, "aggregator"))).toBe(true);
+    expect(existsSync(join(wsRoot, "aggregator", "stale.txt"))).toBe(false);
+    // Reused attempt (Bob): workspace neither recreated nor deleted.
+    expect(readFileSync(join(wsRoot, "attempt-1", "stale.txt"), "utf8")).toBe("leftover");
+  });
+
   it("--resume reads a legacy transcript (no probe/activity), reuses successes, creates no workspace for them", async () => {
     const { aliceId, bobId } = seedTwo();
     const runId = "ck-review-11111111-2222-4333-8444-555555555555";

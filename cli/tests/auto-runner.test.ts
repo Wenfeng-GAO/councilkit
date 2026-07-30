@@ -156,6 +156,30 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(results[0].failure?.code).toBe("NO_OUTPUT");
   });
 
+  it("codex probe: protocol-only JSONL (thread.started/turn.completed, no agent_message) is NO_OUTPUT", async () => {
+    // Reviewer finding: a codex --json event stream without an agent_message
+    // must judge the probe/attempt FAILED — the stream itself is not output.
+    const codexSpec: AttemptSpec = {
+      ...spec("probe-codex"),
+      driverId: "codex-app-server",
+      lastMessageFile: "/missing/last-message.md",
+    };
+    const stdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "t" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "command_execution", command: "ls" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n");
+    const r = await spawnOnce(codexSpec, {
+      spawnImpl: async () => ({ stdout, exitCode: 0, timedOut: false, aborted: false }),
+    });
+    expect(r.status).toBe("failure");
+    expect(r.failure?.code).toBe("NO_OUTPUT");
+  });
+
   it("EXIT failure carries the collected stderr tail in the failure message", async () => {
     const spawn: SpawnImpl = async () => ({
       stdout: JSON.stringify({

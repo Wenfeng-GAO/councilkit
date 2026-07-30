@@ -191,17 +191,14 @@ export const reviewTranscriptRecordSchema = z.discriminatedUnion("kind", [
 export type ReviewTranscriptRecord = z.infer<typeof reviewTranscriptRecordSchema>;
 
 /** Read a review transcript JSONL into validated records (P2-2). Each line is
- * JSON.parsed then `safeParse`d against the union; a malformed line is reported
- * by (1-indexed) line number + a short schema summary and SKIPPED — the caller
- * still gets every valid record, and the original line is never echoed back
- * (it could carry secret-shaped model output). A missing file returns []. The
- * loader never throws on bad content: a `--resume` against a corrupt transcript
- * reads whatever survived instead of aborting the resume. Bad lines are
- * reported through the optional `onWarning` callback (never thrown). */
-export function readReviewTranscript(
-  path: string,
-  onWarning?: (message: string) => void,
-): ReviewTranscriptRecord[] {
+ * JSON.parsed then `safeParse`d against the union. ANY malformed line aborts
+ * the read with a diagnostic CliError(io) carrying the (1-indexed) line number
+ * and a short schema summary — the offending line's content is NEVER echoed
+ * (it could carry secret-shaped model output). Silently skipping a bad line
+ * would let an old success record become "the last terminal state" and the
+ * next rewrite would drop history, so a corrupt transcript refuses the resume
+ * and leaves repair to the user (reviewer finding). A missing file returns []. */
+export function readReviewTranscript(path: string): ReviewTranscriptRecord[] {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -218,9 +215,10 @@ export function readReviewTranscript(
     try {
       parsed = JSON.parse(line);
     } catch {
-      // A non-JSON line: never echo the line (could carry model output / secrets).
-      onWarning?.(`transcript line ${lineNo}: not valid JSON (skipped)`);
-      continue;
+      // Never echo the line (could carry model output / secrets).
+      throw errors.io(`review transcript is corrupt: line ${lineNo} is not valid JSON`, {
+        line: lineNo,
+      });
     }
     const result = reviewTranscriptRecordSchema.safeParse(parsed);
     if (result.success) {
@@ -233,7 +231,9 @@ export function readReviewTranscript(
       firstIssue === undefined
         ? "schema mismatch"
         : `${firstIssue.code}${firstIssue.path.length > 0 ? ` @${firstIssue.path.join(".")}` : ""}`;
-    onWarning?.(`transcript line ${lineNo}: ${summary} (skipped)`);
+    throw errors.io(`review transcript is corrupt: line ${lineNo}: ${summary}`, {
+      line: lineNo,
+    });
   }
   return records;
 }

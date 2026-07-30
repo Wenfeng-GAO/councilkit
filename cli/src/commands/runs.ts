@@ -12,7 +12,7 @@
  * A single-item IO failure is an exit-5 error, never a silent skip.
  */
 import { type Stats, lstatSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
@@ -39,6 +39,9 @@ export interface RunsGcOutcome {
 export interface RunsDeps {
   /** Injectable clock (tests pin "now" instead of touching real mtimes). */
   now?: number;
+  /** Test hook invoked after the pre-delete re-validation, right before each
+   * removal — lets a test simulate the TOCTOU swap (real dir → symlink). */
+  beforeRemove?: (workspacePath: string) => void;
 }
 
 export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = {}): Promise<void> {
@@ -79,6 +82,11 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
 
   if (!dryRun) {
     for (const c of candidates) {
+      deps.beforeRemove?.(c.workspacePath);
+      // TOCTOU guard: the workspaces dir was validated at enumeration time, but
+      // it may have been swapped for a symlink since — re-validate immediately
+      // before the recursive delete (reviewer finding).
+      assertDeletable(c.workspacePath, runsRoot);
       try {
         rmSync(c.workspacePath, { recursive: true, force: true });
       } catch (cause) {
@@ -99,18 +107,35 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
   await out.finish(outcome, (d) => renderHuman(d as RunsGcOutcome));
 }
 
-/** Enumerate `<runsRoot>/<run-id>/workspaces` candidates. Symlinks (run dir or
- * workspaces dir) are skipped via lstat — never followed. A missing runsRoot
- * is an empty success. */
+/** Enumerate `<runsRoot>/<run-id>/workspaces` candidates. Symlinks (runsRoot
+ * itself, run dir or workspaces dir) are never followed — a symlinked runsRoot
+ * is an exit-5 error, a symlinked run/workspaces dir is skipped. A missing
+ * runsRoot is an empty success; any OTHER single-item IO failure is an exit-5
+ * error, never a silent skip (reviewer findings). */
 function collectCandidates(
   runsRoot: string,
   opts: { all: boolean; keepDays: number | null; now: number },
 ): RunsGcCandidate[] {
+  let rootStat: Stats;
+  try {
+    rootStat = lstatSync(runsRoot);
+  } catch (cause) {
+    if (ioCode(cause) === "ENOENT") return [];
+    throw errors.io(`runs gc: cannot stat the runs dir: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw errors.io("runs gc: the runs dir is not a real directory (refusing to gc)");
+  }
   let entries: string[];
   try {
     entries = readdirSync(runsRoot);
-  } catch {
-    return [];
+  } catch (cause) {
+    if (ioCode(cause) === "ENOENT") return [];
+    throw errors.io(`runs gc: cannot read the runs dir: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
   }
   const candidates: RunsGcCandidate[] = [];
   for (const runId of entries) {
@@ -118,18 +143,27 @@ function collectCandidates(
     let runStat: Stats;
     try {
       runStat = lstatSync(runDir);
-    } catch {
-      continue;
+    } catch (cause) {
+      // Vanished between readdir and lstat — a benign race, not corruption.
+      if (ioCode(cause) === "ENOENT") continue;
+      throw errors.io(`runs gc: cannot stat a run dir: ${ioName(cause)}`, {
+        cause: ioName(cause),
+      });
     }
     if (!runStat.isDirectory() || runStat.isSymbolicLink()) continue;
     const workspacePath = join(runDir, "workspaces");
     let wsStat: Stats;
     try {
       wsStat = lstatSync(workspacePath);
-    } catch {
-      continue;
+    } catch (cause) {
+      // A run without a workspaces dir is simply not a candidate.
+      if (ioCode(cause) === "ENOENT") continue;
+      throw errors.io(`runs gc: cannot stat a workspaces dir: ${ioName(cause)}`, {
+        cause: ioName(cause),
+      });
     }
     if (!wsStat.isDirectory() || wsStat.isSymbolicLink()) continue;
+    assertContained(workspacePath, runsRoot);
     if (!opts.all) {
       const keepDays = opts.keepDays ?? DEFAULT_KEEP_DAYS;
       if (wsStat.mtimeMs >= opts.now - keepDays * DAY_MS) continue;
@@ -143,6 +177,37 @@ function collectCandidates(
   }
   candidates.sort((a, b) => a.runId.localeCompare(b.runId));
   return candidates;
+}
+
+/** Containment guard: the resolved path must stay strictly inside the resolved
+ * runsRoot — gc must never touch anything outside the configured runs tree. */
+function assertContained(path: string, runsRoot: string): void {
+  const resolvedRoot = resolve(runsRoot);
+  const resolvedPath = resolve(path);
+  if (!resolvedPath.startsWith(resolvedRoot + sep)) {
+    throw errors.io("runs gc: a workspaces dir resolves outside the runs dir (refusing to gc)");
+  }
+}
+
+/** Pre-delete re-validation (TOCTOU): the path must still be contained and
+ * still be a real, non-symlink directory. */
+function assertDeletable(workspacePath: string, runsRoot: string): void {
+  assertContained(workspacePath, runsRoot);
+  let stat: Stats;
+  try {
+    stat = lstatSync(workspacePath);
+  } catch (cause) {
+    throw errors.io(`runs gc: a workspaces dir changed during gc: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
+  }
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw errors.io("runs gc: a workspaces dir changed during gc (refusing to remove it)");
+  }
+}
+
+function ioCode(cause: unknown): string | undefined {
+  return (cause as NodeJS.ErrnoException | undefined)?.code;
 }
 
 function renderHuman(o: RunsGcOutcome): string {

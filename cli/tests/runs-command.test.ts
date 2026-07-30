@@ -239,4 +239,61 @@ describe("cli runs gc command", () => {
       chmodSync(run.runDir, 0o700);
     }
   });
+
+  it("a symlinked runsRoot is exit 5 (never gc'd through)", async () => {
+    const real = join(home, "real-runs");
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, resolvePaths().runsRoot);
+    try {
+      await runRuns(["gc", "--all"], makeSink(), { now: NOW });
+      throw new Error("expected runRuns to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("not a real directory");
+    }
+  });
+
+  it("a readdir IO failure on runsRoot is exit 5, not an empty success", async () => {
+    seedRun("ck-review-old", 10);
+    const { runsRoot } = resolvePaths();
+    chmodSync(runsRoot, 0o000);
+    try {
+      await runRuns(["gc", "--all"], makeSink(), { now: NOW });
+      throw new Error("expected runRuns to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+    } finally {
+      chmodSync(runsRoot, 0o700);
+    }
+  });
+
+  it("TOCTOU: a workspaces dir swapped for a symlink after enumeration is exit 5, target untouched", async () => {
+    const run = seedRun("ck-review-old", 10);
+    // A real dir OUTSIDE the runs tree that must never be deleted through gc.
+    const outside = join(home, "outside-ws");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "precious.txt"), "keep me");
+    try {
+      await runRuns(["gc"], makeSink(), {
+        now: NOW,
+        beforeRemove: (workspacePath) => {
+          // Simulate the race: replace the real dir with a symlink to outside.
+          rmSync(workspacePath, { recursive: true, force: true });
+          symlinkSync(outside, workspacePath);
+        },
+      });
+      throw new Error("expected runRuns to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("changed during gc");
+    }
+    expect(readFileSync(join(outside, "precious.txt"), "utf8")).toBe("keep me");
+    expect(lstatSync(run.workspaces).isSymbolicLink()).toBe(true);
+  });
 });
