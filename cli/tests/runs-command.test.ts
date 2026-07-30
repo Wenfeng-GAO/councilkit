@@ -323,4 +323,35 @@ describe("cli runs gc command", () => {
     expect(readFileSync(join(outside, "workspaces", "precious.txt"), "utf8")).toBe("keep me");
     expect(lstatSync(run.runDir).isSymbolicLink()).toBe(true);
   });
+
+  it("TOCTOU: the runs ROOT swapped for a symlink after enumeration is exit 5, target untouched", async () => {
+    seedRun("ck-review-old", 10);
+    const { runsRoot } = resolvePaths();
+    // A run-shaped tree OUTSIDE the runs root that must never be gc'd: if the
+    // delete re-realpath'd the CURRENT root, this swap would become the new
+    // trusted root and the delete would proceed inside it (reviewer finding).
+    const outside = join(home, "outside-root");
+    mkdirSync(join(outside, "ck-review-old", "workspaces"), { recursive: true });
+    writeFileSync(join(outside, "ck-review-old", "workspaces", "precious.txt"), "keep me");
+    try {
+      await runRuns(["gc"], makeSink(), {
+        now: NOW,
+        beforeRemove: () => {
+          // Simulate the race: replace the whole runs ROOT with a symlink.
+          rmSync(runsRoot, { recursive: true, force: true });
+          symlinkSync(outside, runsRoot);
+        },
+      });
+      throw new Error("expected runRuns to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("trusted root changed");
+    }
+    expect(readFileSync(join(outside, "ck-review-old", "workspaces", "precious.txt"), "utf8")).toBe(
+      "keep me",
+    );
+    expect(lstatSync(runsRoot).isSymbolicLink()).toBe(true);
+  });
 });

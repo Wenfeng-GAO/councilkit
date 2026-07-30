@@ -11,9 +11,15 @@
  * `--all` ignores age (and is mutually exclusive with an explicit `--keep`).
  * A single-item IO failure is an exit-5 error, never a silent skip.
  */
-import { type Stats, lstatSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { type Stats, lstatSync, readdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { errors } from "../errors";
+import {
+  type TrustedRoot,
+  assertWithinRoot,
+  bindTrustedRoot,
+  revalidateTrustedRoot,
+} from "../fs-safe";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
 import { parseFlags, parseIntFlag } from "./parse";
@@ -78,15 +84,22 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
 
   const now = deps.now ?? Date.now();
   const { runsRoot } = resolvePaths();
-  const candidates = collectCandidates(runsRoot, { all, keepDays, now });
+  // Bind the trusted runs root ONCE (lstat proves a real directory, realpath
+  // pins its canonical location). Every candidate is validated against THIS
+  // pinned root, and the root is re-validated against it before every delete —
+  // re-realpathing the CURRENT root at delete time would accept a root swapped
+  // for a symlink mid-gc as the new trusted root (reviewer finding). A missing
+  // runsRoot stays an empty success.
+  const bound = bindTrustedRoot(runsRoot);
+  const candidates = bound === null ? [] : collectCandidates(bound, { all, keepDays, now });
 
-  if (!dryRun) {
+  if (!dryRun && bound !== null) {
     for (const c of candidates) {
       deps.beforeRemove?.(c.workspacePath);
       // TOCTOU guard: the workspaces dir was validated at enumeration time, but
       // it may have been swapped for a symlink since — re-validate immediately
       // before the recursive delete (reviewer finding).
-      assertDeletable(c.workspacePath, runsRoot);
+      assertDeletable(c.workspacePath, bound);
       try {
         rmSync(c.workspacePath, { recursive: true, force: true });
       } catch (cause) {
@@ -107,27 +120,16 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
   await out.finish(outcome, (d) => renderHuman(d as RunsGcOutcome));
 }
 
-/** Enumerate `<runsRoot>/<run-id>/workspaces` candidates. Symlinks (runsRoot
- * itself, run dir or workspaces dir) are never followed — a symlinked runsRoot
- * is an exit-5 error, a symlinked run/workspaces dir is skipped. A missing
- * runsRoot is an empty success; any OTHER single-item IO failure is an exit-5
- * error, never a silent skip (reviewer findings). */
+/** Enumerate `<runsRoot>/<run-id>/workspaces` candidates under the BOUND root.
+ * Symlinks are never followed — a symlinked run/workspaces dir is skipped, and
+ * a candidate whose REAL path escapes the bound root is an exit-5 error. Any
+ * single-item IO failure is an exit-5 error, never a silent skip (reviewer
+ * findings). */
 function collectCandidates(
-  runsRoot: string,
+  bound: TrustedRoot,
   opts: { all: boolean; keepDays: number | null; now: number },
 ): RunsGcCandidate[] {
-  let rootStat: Stats;
-  try {
-    rootStat = lstatSync(runsRoot);
-  } catch (cause) {
-    if (ioCode(cause) === "ENOENT") return [];
-    throw errors.io(`runs gc: cannot stat the runs dir: ${ioName(cause)}`, {
-      cause: ioName(cause),
-    });
-  }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    throw errors.io("runs gc: the runs dir is not a real directory (refusing to gc)");
-  }
+  const runsRoot = bound.path;
   let entries: string[];
   try {
     entries = readdirSync(runsRoot);
@@ -163,7 +165,9 @@ function collectCandidates(
       });
     }
     if (!wsStat.isDirectory() || wsStat.isSymbolicLink()) continue;
-    assertContained(workspacePath, runsRoot);
+    // Containment against the BOUND root on REAL paths (an intermediate
+    // symlink pointing outside the tree defeats a lexical check).
+    assertWithinRoot(bound, workspacePath);
     if (!opts.all) {
       const keepDays = opts.keepDays ?? DEFAULT_KEEP_DAYS;
       if (wsStat.mtimeMs >= opts.now - keepDays * DAY_MS) continue;
@@ -179,22 +183,18 @@ function collectCandidates(
   return candidates;
 }
 
-/** Containment guard: the resolved path must stay strictly inside the resolved
- * runsRoot — gc must never touch anything outside the configured runs tree. */
-function assertContained(path: string, runsRoot: string): void {
-  const resolvedRoot = resolve(runsRoot);
-  const resolvedPath = resolve(path);
-  if (!resolvedPath.startsWith(resolvedRoot + sep)) {
-    throw errors.io("runs gc: a workspaces dir resolves outside the runs dir (refusing to gc)");
-  }
-}
-
-/** Pre-delete re-validation (TOCTOU): EVERY link in the chain is re-checked,
- * not just the leaf — lstat on the workspaces path alone would follow a run
- * dir swapped for a symlink, and a lexical containment check would still pass
- * (reviewer finding). A symlink or non-directory at any step, or a realpath
- * that lands outside the real runs root, refuses the delete with exit 5. */
-function assertDeletable(workspacePath: string, runsRoot: string): void {
+/** Pre-delete re-validation (TOCTOU), all against the root BOUND at
+ * enumeration time:
+ *  (a) the bound root must be UNCHANGED — a root swapped for a symlink (or
+ *      re-created elsewhere) would otherwise turn an external tree into the
+ *      new trusted root (reviewer finding);
+ *  (b) EVERY link in the chain is re-checked, not just the leaf — lstat on
+ *      the workspaces path alone would follow a run dir swapped for a
+ *      symlink, and a lexical containment check would still pass;
+ *  (c) the workspace's REAL path must still sit under the bound root.
+ * Any violation refuses the delete with exit 5 (fail-closed). */
+function assertDeletable(workspacePath: string, bound: TrustedRoot): void {
+  revalidateTrustedRoot(bound);
   const runDir = dirname(workspacePath);
   for (const [label, path] of [
     ["run dir", runDir],
@@ -212,21 +212,10 @@ function assertDeletable(workspacePath: string, runsRoot: string): void {
       throw errors.io(`runs gc: a ${label} changed during gc (refusing to remove it)`);
     }
   }
-  // Containment on REAL paths: resolve() is purely lexical and stays blind to
-  // an intermediate symlink pointing outside the runs tree.
-  let realRoot: string;
-  let realWorkspace: string;
-  try {
-    realRoot = realpathSync(runsRoot);
-    realWorkspace = realpathSync(workspacePath);
-  } catch (cause) {
-    throw errors.io(`runs gc: cannot resolve real paths during gc: ${ioName(cause)}`, {
-      cause: ioName(cause),
-    });
-  }
-  if (!realWorkspace.startsWith(realRoot + sep)) {
-    throw errors.io("runs gc: a workspaces dir resolves outside the runs dir (refusing to gc)");
-  }
+  // Containment on REAL paths against the BOUND root: resolve() is purely
+  // lexical and stays blind to an intermediate symlink pointing outside the
+  // runs tree.
+  assertWithinRoot(bound, workspacePath);
 }
 
 function ioCode(cause: unknown): string | undefined {

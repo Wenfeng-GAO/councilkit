@@ -1228,6 +1228,91 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(lstatSync(runDir).isSymbolicLink()).toBe(true);
   });
 
+  /** Legacy-transcript resume where both attempts are reused: only the
+   * aggregator workspace is recreated. */
+  function seedReusedResume(runId: string): { aliceId: string; bobId: string } {
+    const { aliceId, bobId } = seedTwo();
+    const finishedFor = (attemptId: string, agentName: string): Record<string, unknown> => ({
+      kind: "attempt.finished",
+      version: 1,
+      attemptId,
+      agentName,
+      driverId: "claude-stream-json",
+      status: "success",
+      output: `legacy output from ${agentName}`,
+      exitCode: 0,
+      durationMs: 5,
+      failure: null,
+    });
+    writeLegacyTranscript({
+      runId,
+      task: "legacy task",
+      attempts: [
+        { attemptId: "attempt-0", agentId: aliceId, agentName: "Alice" },
+        { attemptId: "attempt-1", agentId: bobId, agentName: "Bob" },
+      ],
+      aggregator: { agentId: bobId, agentName: "Bob" },
+      finished: [finishedFor("attempt-0", "Alice"), finishedFor("attempt-1", "Bob")],
+    });
+    return { aliceId, bobId };
+  }
+
+  it("--resume refuses to DELETE through a symlinked workspaces dir (exit 5, outside untouched)", async () => {
+    const runId = "ck-review-22222222-2222-4222-8222-222222222222";
+    const { aliceId, bobId } = seedReusedResume(runId);
+    // An intermediate symlink: runDir is real, but runDir/workspaces points to
+    // an outside tree holding an aggregator workspace with precious content.
+    const runDir = resolvePaths().runDir(runId);
+    const outside = join(home, "outside-ws");
+    mkdirSync(join(outside, "aggregator"), { recursive: true });
+    writeFileSync(join(outside, "aggregator", "precious.txt"), "keep me");
+    symlinkSync(outside, join(runDir, "workspaces"));
+
+    try {
+      await runReview(
+        [...twoAgentArgs(aliceId, bobId, "legacy task"), "--resume", runId],
+        makeSink(),
+        { spawnImpl: fakeSpawn() },
+      );
+      throw new Error("expected runReview to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+    }
+    // Nothing deleted through the intermediate symlink, symlink left in place.
+    expect(readFileSync(join(outside, "aggregator", "precious.txt"), "utf8")).toBe("keep me");
+    expect(lstatSync(join(runDir, "workspaces")).isSymbolicLink()).toBe(true);
+  });
+
+  it("--resume refuses to CREATE a workspace through a symlinked workspaces dir (exit 5, outside stays empty)", async () => {
+    const runId = "ck-review-33333333-3333-4333-8333-333333333333";
+    const { aliceId, bobId } = seedReusedResume(runId);
+    // The workspace does NOT exist yet (outside dir is empty): the create path
+    // used to skip validation entirely and would mkdir through the link, then
+    // spawn a high-permission attempt with that external cwd (reviewer finding).
+    const runDir = resolvePaths().runDir(runId);
+    const outside = join(home, "outside-empty");
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, join(runDir, "workspaces"));
+
+    try {
+      await runReview(
+        [...twoAgentArgs(aliceId, bobId, "legacy task"), "--resume", runId],
+        makeSink(),
+        { spawnImpl: fakeSpawn() },
+      );
+      throw new Error("expected runReview to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+    }
+    // Nothing created outside the runs tree; the symlink was never followed.
+    expect(readdirSync(outside)).toEqual([]);
+    expect(lstatSync(join(runDir, "workspaces")).isSymbolicLink()).toBe(true);
+  });
+
   it("readReviewTranscript: only ENOENT returns [], other read failures are exit 5", () => {
     // A directory path makes readFileSync fail with EISDIR (not ENOENT).
     const dir = resolvePaths().runDir("ck-review-dir");

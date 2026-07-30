@@ -12,8 +12,8 @@
  * required. Exit codes follow the existing table (0/2/4/5/130).
  */
 import { randomUUID } from "node:crypto";
-import { type Stats, lstatSync, mkdirSync, realpathSync, rmSync } from "node:fs";
-import { join, sep } from "node:path";
+import { type Stats, lstatSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import {
   renderReviewReport,
@@ -52,6 +52,7 @@ import {
   writeReviewTranscript,
 } from "../auto/transcript";
 import { EXIT, errors } from "../errors";
+import { type TrustedRoot, assertWithinRoot, bindTrustedRoot } from "../fs-safe";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
@@ -514,8 +515,16 @@ export async function runReview(
       // `.last-message.md` would let a no-output process pass off the previous
       // round's file as this round's deliverable (reviewer finding). Reused
       // attempts are neither created nor deleted.
-      for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir);
-      recreateWorkspace(aggregatorWorkspace, runDir);
+      // Bind the trusted runs root ONCE (lstat + realpath): every workspace
+      // recreation — delete AND create — must stay under THIS pinned root,
+      // never under a run dir realpath that a swapped symlink could redirect
+      // outside the runs tree (reviewer findings).
+      const trustedRoot = bindTrustedRoot(paths.runsRoot);
+      if (trustedRoot === null) {
+        throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
+      }
+      for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
+      recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
       const params = buildExecuteParams();
       outcome = await executeReview(params, runnableSpecs);
     }
@@ -955,12 +964,16 @@ function createWorkspace(workspace: string): void {
 }
 
 /** Delete-then-create so a rerun attempt starts from an EMPTY workspace (no
- * leftover checkout, no stale `.last-message.md`). Refuses (exit 5) when the
- * run dir or an existing workspace is a symlink, or when the workspace's REAL
- * path escapes the run dir's real path — a recursive rm would otherwise follow
- * the link and delete content OUTSIDE the run tree (resume scenario; reviewer
- * finding). */
-function recreateWorkspace(workspace: string, runDir: string): void {
+ * leftover checkout, no stale `.last-message.md`). Fail-closed (exit 5, nothing
+ * deleted or created) unless EVERY step validates against the root bound at
+ * run start: the run dir must be a real directory, every existing component on
+ * the workspace path (run dir, `workspaces/`, the workspace itself) must be a
+ * real directory — never a symlink — and the nearest existing ancestor's REAL
+ * path must stay under the bound runs root. This runs on the CREATE path too:
+ * a symlinked `workspaces/` would otherwise make a recursive rm delete — or a
+ * recursive mkdir create and spawn cwd — OUTSIDE the runs tree (resume
+ * scenario; reviewer findings). */
+function recreateWorkspace(workspace: string, runDir: string, root: TrustedRoot): void {
   let runStat: Stats;
   try {
     runStat = lstatSync(runDir);
@@ -972,6 +985,11 @@ function recreateWorkspace(workspace: string, runDir: string): void {
   if (!runStat.isDirectory() || runStat.isSymbolicLink()) {
     throw errors.io("the run dir is not a real directory (refusing to clear workspaces inside it)");
   }
+  // Bound-root validation — runs whether or not the workspace already exists:
+  // lstat every existing component (a symlinked intermediate is refused) and
+  // realpath the nearest existing ancestor against the BOUND runs root (a
+  // lexical check is blind to an intermediate symlink pointing outside).
+  assertWithinRoot(root, workspace);
   let wsStat: Stats | null = null;
   try {
     wsStat = lstatSync(workspace);
@@ -983,21 +1001,6 @@ function recreateWorkspace(workspace: string, runDir: string): void {
   if (wsStat !== null) {
     if (!wsStat.isDirectory() || wsStat.isSymbolicLink()) {
       throw errors.io("the workspace path is not a real directory (refusing to remove it)");
-    }
-    // realpath containment: a symlinked intermediate (e.g. `workspaces/`)
-    // would defeat a lexical resolve() check.
-    let realRunDir: string;
-    let realWorkspace: string;
-    try {
-      realRunDir = realpathSync(runDir);
-      realWorkspace = realpathSync(workspace);
-    } catch (cause) {
-      throw errors.io(`failed to resolve real workspace paths: ${ioName(cause)}`, {
-        cause: ioName(cause),
-      });
-    }
-    if (!realWorkspace.startsWith(realRunDir + sep)) {
-      throw errors.io("the workspace resolves outside the run dir (refusing to remove it)");
     }
     try {
       rmSync(workspace, { recursive: true, force: true });
