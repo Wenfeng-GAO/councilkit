@@ -1228,6 +1228,45 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(lstatSync(runDir).isSymbolicLink()).toBe(true);
   });
 
+  it("--resume validates a symlinked run dir BEFORE any read/write: artifacts through the link stay byte-identical", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink1 = makeSink();
+    const exit1 = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink1, {
+      spawnImpl: fakeSpawn(),
+    });
+    expect(exit1).toBe(0);
+    const runId = (sink1.finished as { runId: string }).runId;
+
+    const runDir = resolvePaths().runDir(runId);
+    const transcriptBefore = readFileSync(join(runDir, "transcript.jsonl"), "utf8");
+    const reportBefore = readFileSync(join(runDir, "report.md"), "utf8");
+
+    // Swap the run dir for a symlink to the real tree: with the run-dir check
+    // ordered after the transcript load / probes / review.resumed append, the
+    // resume would atomically rewrite the transcript THROUGH the link before
+    // being refused (reviewer finding).
+    const outside = join(home, "outside-run");
+    renameSync(runDir, outside);
+    symlinkSync(outside, runDir);
+
+    try {
+      await runReview([...twoAgentArgs(aliceId, bobId, "x"), "--resume", runId], makeSink(), {
+        spawnImpl: fakeSpawn(),
+      });
+      throw new Error("expected runReview to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("not a real directory");
+    }
+    // No review.resumed append, no transcript rewrite, no report re-render —
+    // everything reachable through the symlink is byte-identical.
+    expect(readFileSync(join(outside, "transcript.jsonl"), "utf8")).toBe(transcriptBefore);
+    expect(readFileSync(join(outside, "report.md"), "utf8")).toBe(reportBefore);
+    expect(lstatSync(runDir).isSymbolicLink()).toBe(true);
+  });
+
   /** Legacy-transcript resume where both attempts are reused: only the
    * aggregator workspace is recreated. */
   function seedReusedResume(runId: string): { aliceId: string; bobId: string } {

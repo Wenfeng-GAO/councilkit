@@ -2,7 +2,7 @@
  * Shared filesystem-safety primitives for commands that recursively delete or
  * create directories inside the runs tree (`runs gc`, `review`). The trust
  * model: the runs ROOT is bound ONCE (lstat proves a real directory, realpath
- * pins its canonical location) and every target is validated against that
+ * + dev/ino pin its canonical location and identity) and every target is validated against that
  * BOUND root — never against a root re-resolved later, which could have been
  * swapped for a symlink to an external tree in between (reviewer findings).
  */
@@ -16,6 +16,12 @@ export interface TrustedRoot {
   path: string;
   /** Canonical realpath captured at bind time. */
   realPath: string;
+  /** Device of the bound directory (lstat at bind time). */
+  dev: number;
+  /** Inode of the bound directory (lstat at bind time): a same-path
+   * REPLACEMENT (delete + fresh real directory) keeps the realpath string but
+   * gets a new inode, so the realpath alone cannot detect it. */
+  ino: number;
 }
 
 /**
@@ -36,7 +42,7 @@ export function bindTrustedRoot(root: string): TrustedRoot | null {
     throw errors.io("the trusted root is not a real directory (refusing to proceed)");
   }
   try {
-    return { path: root, realPath: realpathSync(root) };
+    return { path: root, realPath: realpathSync(root), dev: stat.dev, ino: stat.ino };
   } catch (cause) {
     throw errors.io(`cannot resolve the trusted root: ${ioName(cause)}`, { cause: ioName(cause) });
   }
@@ -44,9 +50,11 @@ export function bindTrustedRoot(root: string): TrustedRoot | null {
 
 /**
  * Re-validate a bound root against the CURRENT filesystem: it must still be a
- * real directory resolving to the SAME realpath pinned at bind time. A root
- * swapped since bind time (deleted, replaced, or turned into a symlink — even
- * one resolving to a tree shaped like the original) is fail-closed exit 5.
+ * real directory resolving to the SAME realpath pinned at bind time AND the
+ * SAME dev+inode. A root swapped since bind time (deleted, replaced, or turned
+ * into a symlink — even one resolving to a tree shaped like the original, and
+ * even a same-path replacement by another REAL directory, which keeps the
+ * realpath but not the inode) is fail-closed exit 5.
  */
 export function revalidateTrustedRoot(bound: TrustedRoot): void {
   let stat: Stats;
@@ -57,7 +65,13 @@ export function revalidateTrustedRoot(bound: TrustedRoot): void {
   } catch (cause) {
     throw errors.io(`the trusted root changed: ${ioName(cause)}`, { cause: ioName(cause) });
   }
-  if (!stat.isDirectory() || stat.isSymbolicLink() || realPath !== bound.realPath) {
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    realPath !== bound.realPath ||
+    stat.dev !== bound.dev ||
+    stat.ino !== bound.ino
+  ) {
     throw errors.io("the trusted root changed (refusing to proceed)");
   }
 }

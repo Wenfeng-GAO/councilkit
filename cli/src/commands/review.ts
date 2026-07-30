@@ -191,6 +191,29 @@ export async function runReview(
     if (!RUN_ID_PATTERN.test(resumeId)) {
       throw errors.usage(`--resume must be a ck-review-<uuid> run id, got "${resumeRaw}"`);
     }
+    // Fail-closed path validation BEFORE any resume read or write (transcript
+    // load, probes, the review.resumed append): a run dir swapped for a
+    // symlink must be refused here, not after its transcript was atomically
+    // rewritten (reviewer finding). A missing runs root / run dir falls
+    // through to the transcript read, which reports "nothing to resume from".
+    const resumeRoot = bindTrustedRoot(paths.runsRoot);
+    if (resumeRoot !== null) {
+      const resumeRunDir = paths.runDir(resumeId);
+      let runStat: Stats | null = null;
+      try {
+        runStat = lstatSync(resumeRunDir);
+      } catch (cause) {
+        if (ioCode(cause) !== "ENOENT") {
+          throw errors.io(`failed to stat the run dir before resuming: ${ioName(cause)}`, {
+            cause: ioName(cause),
+          });
+        }
+      }
+      if (runStat !== null && (!runStat.isDirectory() || runStat.isSymbolicLink())) {
+        throw errors.io("the run dir is not a real directory (refusing to resume)");
+      }
+      assertWithinRoot(resumeRoot, resumeRunDir);
+    }
     priorRecords = readReviewTranscript(paths.transcript(resumeId));
     const started = priorRecords.find((r) => r.kind === "review.started");
     if (started === undefined) {

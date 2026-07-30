@@ -354,4 +354,34 @@ describe("cli runs gc command", () => {
     );
     expect(lstatSync(runsRoot).isSymbolicLink()).toBe(true);
   });
+
+  it("TOCTOU: the runs ROOT replaced by a fresh REAL directory at the same path is exit 5 (inode changed)", async () => {
+    seedRun("ck-review-old", 10);
+    const { runsRoot } = resolvePaths();
+    // A same-path replacement by another REAL directory: lstat still says
+    // "directory" and the realpath string is unchanged — only dev/ino detect
+    // the swap (reviewer finding).
+    try {
+      await runRuns(["gc"], makeSink(), {
+        now: NOW,
+        beforeRemove: () => {
+          rmSync(runsRoot, { recursive: true, force: true });
+          mkdirSync(join(runsRoot, "ck-review-old", "workspaces"), { recursive: true });
+          writeFileSync(join(runsRoot, "ck-review-old", "workspaces", "precious.txt"), "keep me");
+        },
+      });
+      throw new Error("expected runRuns to throw");
+    } catch (e) {
+      const err = e as CliError;
+      expect(err).toBeInstanceOf(CliError);
+      expect(err.exitCode).toBe(5);
+      expect(err.message).toContain("trusted root changed");
+    }
+    // The replacement tree was never gc'd.
+    expect(
+      readFileSync(join(runsRoot, "ck-review-old", "workspaces", "precious.txt"), "utf8"),
+    ).toBe("keep me");
+    expect(lstatSync(runsRoot).isDirectory()).toBe(true);
+    expect(lstatSync(runsRoot).isSymbolicLink()).toBe(false);
+  });
 });
