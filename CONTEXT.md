@@ -29,7 +29,7 @@ CLI 侧 Agent 对模型执行能力的无秘密引用：一个 **Runtime Driver*
 _Avoid_: Execution Profile、profile、installationId binding
 
 **Council**:
-CLI 侧保存的可复用静态讨论配置：topic、background、目标输出、agent 组合与轮次配置。它只是配置，不是讨论实例；`run` 执行一场讨论时才产生讨论实例。Council 与浏览器的 Room 数据不互通。
+CLI 侧保存的可复用静态讨论配置：topic、background、目标输出、agent 组合与轮次配置。它只是配置，不是讨论实例；`run` 执行一场讨论时才产生讨论实例。Council 与浏览器的 Room 数据不互通。**Autonomous Run** 可复用 Council 的 agent 组合与 Reporter（映射为 **Aggregator**），忽略轮次配置。
 _Avoid_: Room、room、template
 
 **Reporter**:
@@ -37,8 +37,24 @@ CLI 上下文中 Council 显式指定、负责在固定轮次结束后做一次�
 _Avoid_: Facilitator、summarizer
 
 **Run**:
-CLI 执行一个 **Council** 产生的一场讨论实例：有序消息记录（transcript）与最终报告，由 CLI 持久化在本地存储。Run 与浏览器的 Room 实例语义对应，但数据不互通。
+CLI 执行一个 **Council** 产生的一场讨论实例：有序消息记录（transcript）与最终报告，由 CLI 持久化在本地存储。Run 与浏览器的 Room 实例语义对应，但数据不互通。与 **Autonomous Run** 并列；需要强调区分时可称 Discussion Run。
 _Avoid_: Room、session、execution
+
+**Autonomous Run**:
+CLI 直接并行发起的一组全能力 Agent 执行实例：同一 **Task Template** 与同一输入，N 个 **Attempt** 各自独立完成后由 **Aggregator** 对比汇总。它不经过 Runtime Host，不使用 Execution Scope / Context Snapshot / Discussion Orchestrator；与 Run（Discussion Run）共享 runs/ 落盘样式与退出码体系，但数据不互通。子进程以用户本人权限运行、继承正常用户环境，信任级等同用户亲手执行该 CLI（2026-07-29 用户决策：安全不作为约束，全部权限可接受）。
+_Avoid_: Discussion、Council、Execution Scope、Context Snapshot
+
+**Attempt**:
+一个 **Agent** 在 **Autonomous Run** 中对同一任务的一次独立全能力执行：一个子进程、一个隔离 workspace、一份最终文本交付物。Attempt 之间互不可见，不共享 workspace 与会话；单个 Attempt 失败不中止 Run，其余继续。
+_Avoid_: Participant、Execution Session、turn
+
+**Aggregator**:
+**Autonomous Run** 显式指定、在全部 Attempt 结束后做一次汇总对比调用的 agent；它本身也是一个 Attempt（先独立完成任务，再看到全部 Attempt 产出做聚合），不可用时不得静默替换。
+_Avoid_: Reporter、Facilitator、summarizer
+
+**Task Template**:
+**Autonomous Run** 的任务说明与输出契约（工作方式授权 + 最终消息结构约定），只决定 prompt 文本，不改变执行与持久化规则；V1 内置 `review`。
+_Avoid_: Discussion Mode、workflow、Council
 
 **Credential Source**:
 Runtime Installation 获得认证能力的方式；秘密内容不属于 Profile 或讨论数据。V1 只支持 `installation-managed`：Codex 复用本地 Codex 登录，`cld` 自行读取其本地配置，Runtime Host 不读取或转存凭据。

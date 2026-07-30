@@ -1,6 +1,6 @@
 # AGENTS.md — CouncilKit for coding agents
 
-CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run**（不使用浏览器的 Room/Facilitator）。
+CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` 命令）不经 Runtime Host，直接 spawn 全能力 agent 子进程，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md`。
 
 ## 前置
 
