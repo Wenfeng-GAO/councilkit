@@ -555,11 +555,12 @@ export function defaultSpawn(
         let termDelivered = true;
         try {
           killFn(-pid, "SIGTERM");
-        } catch (error) {
-          if (!isESRCH(error)) throw error;
-          // ESRCH proves the process group is already gone: skip the grace
-          // wait AND the SIGKILL — killing a possibly-reused PGID could hit an
-          // unrelated process group (reviewer finding).
+        } catch {
+          // ESRCH proves the group is already gone; EPERM (or anything else)
+          // means we cannot kill it — but THROWING here would escape a
+          // timer/AbortSignal callback as an uncaught exception and crash the
+          // CLI with no ReviewOutcome (reviewer finding). Either way there is
+          // nothing more to attempt.
           termDelivered = false;
         }
         if (termDelivered) {
@@ -567,10 +568,8 @@ export function defaultSpawn(
             setTimeout(() => {
               try {
                 killFn(-pid, "SIGKILL");
-              } catch (error) {
-                if (!isESRCH(error)) {
-                  // Unexpected — nothing more we can do; best effort.
-                }
+              } catch {
+                // best effort — group already gone or not killable.
               } finally {
                 resolveKill();
               }

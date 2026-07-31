@@ -717,6 +717,10 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
             p.out.progress(`  attempt ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
           },
     onAttemptFinish: (r: AttemptResult) => {
+      // Mark resume-rerun results BEFORE persistence — assigning after
+      // runAttempts returns would leave attempt.finished without the flag, and
+      // the next resume would silently lose the history (reviewer finding).
+      if (p.resumedAfterFailureIds?.has(r.attemptId)) r.resumedAfterFailure = true;
       // A retried Attempt fires this callback twice (attemptNumber 1 then 2);
       // keep only the LAST result per logical attemptId so a mid-run callback
       // failure never double-counts the same Attempt in the error-path report
