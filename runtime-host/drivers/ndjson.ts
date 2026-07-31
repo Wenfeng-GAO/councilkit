@@ -13,27 +13,35 @@ export interface NdjsonConsumer {
 }
 
 export function attachNdjsonSplitter(stream: Readable, consumer: NdjsonConsumer): void {
-  let buffer = "";
+  // Raw byte accumulator. Decoding each chunk independently with toString("utf8")
+  // would replace a multi-byte character split across pipe chunks with U+FFFD.
+  // Byte 0x0a (ASCII newline) never appears inside a multi-byte UTF-8 sequence,
+  // so splitting on it at the byte level is safe; each COMPLETE line is decoded
+  // once with toString("utf8") so split characters reassemble correctly. See the
+  // StringDecoder precedent in cli/src/auto/driver-commands.ts.
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let overflow = false;
 
   stream.on("data", (chunk: Buffer | string) => {
     if (overflow) return;
-    buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    let index = buffer.indexOf("\n");
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    buffer = buffer.length === 0 ? buf : Buffer.concat([buffer, buf]);
+    let index = buffer.indexOf(0x0a);
     while (index !== -1) {
-      const line = buffer.slice(0, index);
-      buffer = buffer.slice(index + 1);
-      if (Buffer.byteLength(line, "utf8") > LIMITS.ndjsonLineBytes) {
+      const lineBuf = buffer.subarray(0, index);
+      buffer = buffer.subarray(index + 1);
+      if (lineBuf.length > LIMITS.ndjsonLineBytes) {
         overflow = true;
         consumer.onLimitExceeded();
         return;
       }
+      const line = lineBuf.toString("utf8");
       if (line.trim().length > 0) {
         consumer.onLine(line);
       }
-      index = buffer.indexOf("\n");
+      index = buffer.indexOf(0x0a);
     }
-    if (Buffer.byteLength(buffer, "utf8") > LIMITS.ndjsonLineBytes) {
+    if (buffer.length > LIMITS.ndjsonLineBytes) {
       overflow = true;
       consumer.onLimitExceeded();
     }
@@ -41,8 +49,8 @@ export function attachNdjsonSplitter(stream: Readable, consumer: NdjsonConsumer)
 
   stream.on("end", () => {
     if (!overflow) {
-      const tail = buffer.trim();
-      if (tail.length > 0) consumer.onLine(buffer);
+      const tail = buffer.toString("utf8").trim();
+      if (tail.length > 0) consumer.onLine(buffer.toString("utf8"));
       consumer.onEnd();
     }
   });
