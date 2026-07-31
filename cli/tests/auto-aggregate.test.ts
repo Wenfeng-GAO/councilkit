@@ -397,37 +397,20 @@ describe("cli auto aggregate — proxy strip + code span edge cases", () => {
   });
 });
 
-describe("cli auto aggregate — list-aware fence state machine", () => {
+describe("cli auto aggregate — list-nested fences are NOT tracked (documented trade-off)", () => {
   const wrap = (output: string) =>
     renderReviewReport(buildInput([attempt({ agentName: "Alice", output })]));
 
-  it("a bare `- ``` ` inside a TOP-LEVEL fence is content, not a closer", () => {
+  it("a `- ``` ` line does NOT open a fence; following headings are demoted (safe over-demotion)", () => {
+    const md = wrap(["- ```js", "# code-sample-heading", "- ```", "# After"].join("\n"));
+    // Over-demoted inside the (untracked) sample — display-only, never an outline leak.
+    expect(md).toContain("### code-sample-heading");
+    expect(md).toContain("### After");
+  });
+
+  it("a top-level fence never closes on a `- ``` ` content line", () => {
     const md = wrap(["```", "- ``` ", "# still-code", "```", "# After"].join("\n"));
-    // The heading inside the fence is untouched; the one after the real close
-    // is demoted two levels (H1 → H3).
     expect(md).toContain("# still-code");
-    expect(md).toContain("### After");
-  });
-
-  it("a list-nested fence opens and closes with the same marker", () => {
-    const md = wrap(["- ```js", "  # code-heading", "- ```", "# After"].join("\n"));
-    expect(md).toContain("# code-heading");
-    expect(md).toContain("### After");
-  });
-
-  it("an unclosed list-nested fence is force-closed WITH its prefix", () => {
-    const md = wrap(["- ```js", "  const x = 1;"].join("\n"));
-    expect(md).toContain("- ```");
-  });
-});
-
-describe("cli auto aggregate — list fence closes with content-indent bare run", () => {
-  it("closes a list fence with an indented bare run (CommonMark style)", () => {
-    const md = renderReviewReport(
-      buildInput([
-        attempt({ agentName: "Alice", output: "- ```js\n  const x = 1;\n  ```\n# After" }),
-      ]),
-    );
     expect(md).toContain("### After");
   });
 });

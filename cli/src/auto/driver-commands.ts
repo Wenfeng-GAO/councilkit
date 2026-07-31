@@ -526,12 +526,30 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
   // The remainder starts with an assignment AND contains a shell operator
   // (`NO_PROXY='*' FOO='1' && cmd`): the assignments formed a statement chain,
   // not a prefix — revert. `FOO='1' antcode …` (no operator) and
-  // `antcode … && echo` (no leading assignment) stay stripped (reviewer
-  // finding).
-  if (stripped && /^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(cur) && /(&&|\|\||[;|])/.test(cur)) {
+  // `antcode … && echo` (no leading assignment) stay stripped. The operator
+  // scan is quote-aware so `FOO='a|b' cmd` is not a false positive (reviewer
+  // findings).
+  if (stripped && /^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(cur) && hasShellOperatorOutsideQuotes(cur)) {
     return { text: cmd, stripped: false };
   }
   return { text: cur, stripped };
+}
+
+/** True when a shell operator (`;`, `|`, `&`, `<`, `>`, including `&&`/`||`)
+ * appears OUTSIDE single/double quotes. */
+function hasShellOperatorOutsideQuotes(text: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const prev = i > 0 ? text[i - 1] : "";
+    if (ch === "'" && !inDouble && prev !== "\\") inSingle = !inSingle;
+    else if (ch === '"' && !inSingle && prev !== "\\") inDouble = !inDouble;
+    else if (!inSingle && !inDouble && (ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Upper bound on retained representative commands per Attempt. */

@@ -283,11 +283,6 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
   return lines.join("\n");
 }
 
-/** Escape a string for use as a literal in a RegExp source. */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /** Demote ATX headings by two levels outside fenced code blocks. Fences are
  * recognized by up to 3 leading spaces followed by ``` or ~~~ (≥3 repeats); a
  * fence closes only on a line of the SAME character with length ≥ the opening
@@ -302,30 +297,14 @@ function downgradeHeadingsOutsideFences(text: string): string {
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;
-  /** The list-marker prefix of the current fence ("" for top-level). A fence
-   * opened inside a list item can only be closed by a line with the SAME
-   * prefix — a bare `- ``` ` inside a top-level fence is content, not a
-   * closer (reviewer finding from the naive list support). */
-  let fencePrefix = "";
   const out: string[] = [];
   for (const line of lines) {
     if (inFence) {
       out.push(line);
       // A CLOSING fence is the fence run alone on its line (≤3 leading spaces,
-      // blank-only tail). For a fence opened INSIDE a list item, CommonMark
-      // closes it with an indented bare run at content level (no marker
-      // repetition, e.g. `- ```js\n  code\n  ``` `); a marker-prefixed close is
-      // also accepted. For a top-level opener the run must be bare — a
-      // `- ``` ` line inside it is list content, NOT a closer (reviewer
-      // findings in both directions).
-      const bareClose = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      const prefixClose =
-        fencePrefix.length > 0
-          ? new RegExp(
-              "^ {0,3}" + escapeRegExp(fencePrefix) + "(`{3,}|~{3,})[ \\t]*$",
-            ).exec(line)
-          : null;
-      const closeMatch = fencePrefix.length > 0 ? (prefixClose ?? bareClose) : bareClose;
+      // blank-only tail) — a same-character run WITH trailing info/text is not
+      // a closer.
+      const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[1][0] === fenceChar &&
@@ -335,20 +314,22 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       continue;
     }
-    // Top-level fences (≤3 spaces) and fences nested ONE list level deep
-    // (single marker + 1-4 spaces). The prefix is tracked so the closer must
-    // carry the same one — deeper nesting stays untracked (over-demotion of
-    // headings inside it is display-only, never outline-breaking).
-    const openMatch = /^( {0,3})((?:[-*+] {1,4}|\d+[.)] {1,4})?)(`{3,}|~{3,})(.*)$/.exec(line);
+    // TOP-LEVEL fences only (≤3 leading spaces). List-nested fences are
+    // deliberately NOT tracked: two attempts at list-container semantics both
+    // caused worse state corruption (closer confusion, swallowed content), so
+    // by Orchestrator decision we accept the SAFE trade-off — headings inside
+    // a list-nested code sample are over-demoted (display-only), but nothing
+    // can ever leak into the report outline (decisions: fence-list-tradeoff).
+    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
-      const fenceCh = openMatch[3][0];
+      const fenceCh = openMatch[2][0];
       // CommonMark: a BACKTICK fence's info string must not contain a backtick
       // — a line like ``` `inline` ``` is not a fence opening (it is paragraph
       // text), so the H1/H2 that follow must still be demoted. A tilde fence's
       // info string has no such restriction. Without this rule a backtick fence
       // whose info carried a backtick swallowed the rest of the deliverable,
       // disabling heading demotion (reviewer finding).
-      if (fenceCh === "`" && openMatch[4].includes("`")) {
+      if (fenceCh === "`" && openMatch[3].includes("`")) {
         // Not a fence opening (backtick fence info must not contain a backtick);
         // the line is paragraph text, kept verbatim, and heading demotion stays
         // active for the lines that follow.
@@ -357,8 +338,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       inFence = true;
       fenceChar = fenceCh;
-      fenceLen = openMatch[3].length;
-      fencePrefix = openMatch[2];
+      fenceLen = openMatch[2].length;
       out.push(line);
       continue;
     }
@@ -377,7 +357,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
   // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
   // after this output is never consumed (reviewer findings).
   if (inFence) {
-    out.push(fencePrefix + fenceChar.repeat(Math.max(3, fenceLen)));
+    out.push(fenceChar.repeat(Math.max(3, fenceLen)));
   }
   return out.join("\n");
 }
