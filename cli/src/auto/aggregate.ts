@@ -155,9 +155,10 @@ function renderAttemptsTable(attempts: ReadonlyArray<AttemptResult>): string {
 }
 
 /** Escape pipe and newline (incl. bare CR) so a cell value can never split the
- * table row. */
+ * table row. Backslashes are escaped FIRST so an existing `\|` is not
+ * double-escaped into `\\|` (reviewer finding). */
 function cell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 }
 
 /** Distinguish completed / partial (incomplete success) / failed / interrupted
@@ -297,10 +298,6 @@ function downgradeHeadingsOutsideFences(text: string): string {
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;
-  /** Leading-space count of the opener — the force-close must use the same
-   * indent, otherwise a column-0 run becomes a NEW top-level opener and
-   * swallows the appendix (reviewer finding). */
-  let fenceIndent = 0;
   const out: string[] = [];
   for (const line of lines) {
     if (inFence) {
@@ -308,7 +305,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       // A CLOSING fence is the fence run alone on its line (≤3 leading spaces,
       // blank-only tail) — a same-character run WITH trailing info/text is not
       // a closer.
-      const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMatch = /^(`{3,}|~{3,})[ \t]*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[1][0] === fenceChar &&
@@ -318,22 +315,22 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       continue;
     }
-    // TOP-LEVEL fences only (≤3 leading spaces). List-nested fences are
-    // deliberately NOT tracked: two attempts at list-container semantics both
-    // caused worse state corruption (closer confusion, swallowed content), so
-    // by Orchestrator decision we accept the SAFE trade-off — headings inside
-    // a list-nested code sample are over-demoted (display-only), but nothing
-    // can ever leak into the report outline (decisions: fence-list-tradeoff).
-    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+    // COLUMN-0 fences only. Any indented fence line (1-3 spaces) could be a
+    // list continuation, and tracking those has caused repeated state
+    // corruption (5+ reviewer rounds). Restricting to column-0 is a SAFE
+    // subset: headings inside indented code are over-demoted (display-only),
+    // and a column-0 force-close is always a valid closer for a column-0
+    // opener (decisions: fence-list-tradeoff).
+    const openMatch = /^(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
-      const fenceCh = openMatch[2][0];
+      const fenceCh = openMatch[1][0];
       // CommonMark: a BACKTICK fence's info string must not contain a backtick
       // — a line like ``` `inline` ``` is not a fence opening (it is paragraph
       // text), so the H1/H2 that follow must still be demoted. A tilde fence's
       // info string has no such restriction. Without this rule a backtick fence
       // whose info carried a backtick swallowed the rest of the deliverable,
       // disabling heading demotion (reviewer finding).
-      if (fenceCh === "`" && openMatch[3].includes("`")) {
+      if (fenceCh === "`" && openMatch[2].includes("`")) {
         // Not a fence opening (backtick fence info must not contain a backtick);
         // the line is paragraph text, kept verbatim, and heading demotion stays
         // active for the lines that follow.
@@ -342,8 +339,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       inFence = true;
       fenceChar = fenceCh;
-      fenceLen = openMatch[2].length;
-      fenceIndent = openMatch[1].length;
+      fenceLen = openMatch[1].length;
       out.push(line);
       continue;
     }
@@ -362,7 +358,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
   // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
   // after this output is never consumed (reviewer findings).
   if (inFence) {
-    out.push(" ".repeat(fenceIndent) + fenceChar.repeat(Math.max(3, fenceLen)));
+    out.push(fenceChar.repeat(Math.max(3, fenceLen)));
   }
   return out.join("\n");
 }

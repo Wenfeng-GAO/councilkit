@@ -490,7 +490,7 @@ export interface AttemptActivity {
  * and leave command fragments behind (reviewer finding); those commands are
  * left untouched instead. */
 const PROXY_ENV_RE =
-  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*")[ \t]+/;
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s\\]*)[ \t]+/;
 
 /** Strip leading proxy env prefixes. Standalone assignments and prefixes
  * followed by a shell operator are NOT stripped (they are separate statements,
