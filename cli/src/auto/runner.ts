@@ -295,14 +295,18 @@ export async function runAttempts(
   return { results: results as AttemptResult[], aborted };
 }
 
-/** Transient-EXIT retry predicate (plan §"瞬态重试"): retry ONCE only when the
- * Attempt failed with a non-zero EXIT code in under 120s and the run is not
- * being aborted. TIMEOUT / NO_OUTPUT / SPAWN_ERROR / ABORTED never match;
- * DRIVER_UNREACHABLE is resolved at the command layer and never reaches the
- * runner. A second failure is final — there is never a third try. */
+/** Transient-failure retry predicate (plan §"瞬态重试"): retry ONCE only when
+ * the Attempt failed fast (<120s) and the run is not being aborted. Eligible
+ * codes: `EXIT` (non-zero numeric exit) and `SPAWN_ERROR` (e.g. EPIPE writing
+ * the prompt to an early-dying driver — the same CLI-flake class as a fast
+ * EXIT; reviewer finding that it bypassed the retry). TIMEOUT / NO_OUTPUT /
+ * ABORTED never match; DRIVER_UNREACHABLE is resolved at the command layer and
+ * never reaches the runner. A second failure is final — never a third try. */
 function shouldRetry(result: AttemptResult, signal: AbortSignal): boolean {
   if (signal.aborted) return false;
-  if (result.failure?.code !== "EXIT") return false;
+  const code = result.failure?.code;
+  if (code === "SPAWN_ERROR") return result.durationMs < 120_000;
+  if (code !== "EXIT") return false;
   if (typeof result.exitCode !== "number" || result.exitCode === 0) return false;
   return result.durationMs < 120_000;
 }

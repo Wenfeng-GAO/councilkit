@@ -885,3 +885,20 @@ describe("cli auto runner — process-group cleanup on natural close", () => {
     ]);
   });
 });
+
+describe("cli auto runner — retry predicate covers fast SPAWN_ERROR", () => {
+  it("retries once when the first spawn fails fast with a stream error", async () => {
+    let calls = 0;
+    const spawnImpl: SpawnImpl = async () => {
+      calls++;
+      if (calls === 1) {
+        return { stdout: "", stderr: "", exitCode: null, timedOut: false, aborted: false, error: "EPIPE" };
+      }
+      return { stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }), exitCode: 0, timedOut: false, aborted: false };
+    };
+    const { results } = await runAttempts([spec("retry-spawn")], { spawnImpl });
+    expect(calls).toBe(2);
+    expect(results[0]?.status).toBe("success");
+    expect(results[0]?.retryOf).toBe(1);
+  });
+});
