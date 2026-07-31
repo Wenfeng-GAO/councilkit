@@ -28,8 +28,6 @@ export const REPORT_SECTION_HEADINGS = [
   "## Next actions（下一步行动）",
 ] as const;
 
-export const REPORT_WIRE_KIND = "summary" as const;
-
 /** Build the Reporter instruction text. Always lists the nine required section
  * headings and names every participating agent so the model can reference them. */
 export function reporterInstruction(input: {
