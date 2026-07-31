@@ -649,10 +649,14 @@ export function defaultSpawn(
      * otherwise hold `close` off until the turn timeout — a fast EXIT would be
      * misread as TIMEOUT and skip the retry (reviewer finding). Kill errors
      * (EPERM included) are ALL swallowed: throwing inside an EventEmitter
-     * callback would crash the CLI without any ReviewOutcome (second finding). */
+     * callback would crash the CLI without any ReviewOutcome (second finding).
+     * killInitiated is set ONLY when the TERM was actually delivered —
+     * otherwise the re-entry guard would block a later timeout/abort killGroup
+     * and leave the child running (third finding). */
+    let naturalCleanupRan = false;
     const cleanupGroupOnNaturalEnd = (): void => {
-      if (killInitiated) return;
-      killInitiated = true;
+      if (naturalCleanupRan || killInitiated) return;
+      naturalCleanupRan = true;
       if (child.pid === undefined) return;
       const pid = child.pid;
       let termDelivered = true;
@@ -663,6 +667,7 @@ export function defaultSpawn(
         termDelivered = false;
       }
       if (termDelivered) {
+        killInitiated = true;
         killPromise = new Promise<void>((resolveKill) => {
           setTimeout(() => {
             try {

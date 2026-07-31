@@ -302,6 +302,9 @@ export async function runReview(
           // 「第 1 次尝试（失败，已重试）」 mark across a resume (plan §"瞬态重试").
           attemptNumber: rec.attemptNumber,
           retryOf: rec.retryOf,
+          resumedAfterFailure: (rec as { resumedAfterFailure?: boolean }).resumedAfterFailure === true
+            ? true
+            : undefined,
         });
       }
     }
@@ -483,6 +486,7 @@ export async function runReview(
       // synthetic results simply omit both.
       attemptNumber: r.attemptNumber,
       retryOf: r.retryOf,
+      resumedAfterFailure: r.resumedAfterFailure === true ? true : undefined,
     };
     transcript.push(rec);
     flushTranscript(transcriptPath, transcript, resumeRoot);
