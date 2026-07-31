@@ -73,6 +73,9 @@ export interface AttemptResult {
   /** When this result is the retried second execution, the `attemptNumber` of
    * the failed first try it replaced (`1`). Absent on a non-retried Attempt. */
   retryOf?: number;
+  /** This fresh result follows a FAILED attempt in the run being resumed —
+   * the appendix marks it 「上一轮失败,resume 重跑」 (reviewer finding). */
+  resumedAfterFailure?: boolean;
 }
 
 export interface SpawnInput {
@@ -640,39 +643,45 @@ export function defaultSpawn(
       });
     });
 
-    child.on("close", (code) => {
-      // The leader's EXIT only proves the PARENT process ended — its detached
-      // process-group children may still be alive and would pollute a rebuilt
-      // workspace or race a retry (reviewer findings ×2). Run the same
-      // TERM→grace→KILL sequence as timeout/abort and AWAIT it before
-      // resolving, so a straggler is provably dead (or provably gone) before
-      // the next spawn starts.
-      if (!killInitiated) {
-        killInitiated = true;
-        if (child.pid !== undefined) {
-          const pid = child.pid;
-          let termDelivered = true;
-          try {
-            killFn(-pid, "SIGTERM");
-          } catch (error) {
-            if (!isESRCH(error)) throw error;
-            termDelivered = false;
-          }
-          if (termDelivered) {
-            killPromise = new Promise<void>((resolveKill) => {
-              setTimeout(() => {
-                try {
-                  killFn(-pid, "SIGKILL");
-                } catch {
-                  // best effort — group already gone.
-                } finally {
-                  resolveKill();
-                }
-              }, KILL_GRACE_MS);
-            });
-          }
-        }
+    /** Start the TERM→grace→KILL cleanup for a NATURALLY ended leader (once).
+     * Bound to `exit` (fires when the leader process exits) rather than only
+     * `close`: background children that inherited the stdio pipes would
+     * otherwise hold `close` off until the turn timeout — a fast EXIT would be
+     * misread as TIMEOUT and skip the retry (reviewer finding). Kill errors
+     * (EPERM included) are ALL swallowed: throwing inside an EventEmitter
+     * callback would crash the CLI without any ReviewOutcome (second finding). */
+    const cleanupGroupOnNaturalEnd = (): void => {
+      if (killInitiated) return;
+      killInitiated = true;
+      if (child.pid === undefined) return;
+      const pid = child.pid;
+      let termDelivered = true;
+      try {
+        killFn(-pid, "SIGTERM");
+      } catch {
+        // EPERM / ESRCH / anything — best effort, never throw here.
+        termDelivered = false;
       }
+      if (termDelivered) {
+        killPromise = new Promise<void>((resolveKill) => {
+          setTimeout(() => {
+            try {
+              killFn(-pid, "SIGKILL");
+            } catch {
+              // best effort — group already gone or not killable.
+            } finally {
+              resolveKill();
+            }
+          }, KILL_GRACE_MS);
+        });
+      }
+    };
+    // `exit` = leader process ended (kill stragglers so pipes can close);
+    // `close` = stdio drained (settle the result). Both paths are guarded.
+    child.on("exit", cleanupGroupOnNaturalEnd);
+
+    child.on("close", (code) => {
+      cleanupGroupOnNaturalEnd();
       // Flush the collector's trailing bytes: the final NDJSON line may end
       // without a newline, and skipping it would leave lastLine stale
       // (reviewer finding: no EOF handling in the line collector).

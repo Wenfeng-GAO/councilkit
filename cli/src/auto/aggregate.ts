@@ -266,6 +266,11 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
     if (a.retryOf !== undefined) {
       lines.push("> 第 1 次尝试（失败，已重试）", "");
     }
+    // A rerun after a failed attempt in the RESUMED run is marked too — the
+    // appendix must not present it as a first-try success (reviewer finding).
+    if (a.resumedAfterFailure === true) {
+      lines.push("> 上一轮失败，resume 重跑后的交付物", "");
+    }
     if (a.status === "success" && a.output.trim().length > 0) {
       // trimEnd only: a leading trim() would delete the first line's indent and
       // turn legitimately indented code (≥4 spaces = NOT a fence) into a fake

@@ -195,6 +195,7 @@ export async function runReview(
   let priorRecords: ReviewTranscriptRecord[] = [];
   let priorStartedAt: string | undefined;
   const reusedByAttemptId = new Map<string, AttemptResult>();
+  const resumedAfterFailureIds = new Set<string>();
   // The runs root is bound ONCE at the resume entry and the SAME binding is
   // carried through every later resume write/rebuild path (transcript flush,
   // report render, workspace recreation), revalidated at each use — never
@@ -303,6 +304,13 @@ export async function runReview(
           retryOf: rec.retryOf,
         });
       }
+    }
+    // Attempts that FAILED in the prior run and are being rerun now: mark the
+    // fresh result so the appendix can say 「上一轮失败,resume 重跑」 instead
+    // of silently presenting it as a first-try success (reviewer finding).
+    for (const meta of started.attempts) {
+      if (reusedByAttemptId.has(meta.attemptId)) continue;
+      if (lastFinished.has(meta.attemptId)) resumedAfterFailureIds.add(meta.attemptId);
     }
   }
 
@@ -632,6 +640,7 @@ export async function runReview(
       recordAttemptFinished,
       resumeRoot,
       trustedRoot,
+      resumedAfterFailureIds,
       // Human-mode heartbeat only (plan: JSON mode emits no human heartbeat).
       heartbeat: out.json
         ? undefined
@@ -673,6 +682,9 @@ interface ExecuteParams {
   /** The runs-root binding from the resume entry (null for a fresh run):
    * revalidated before every resume-related write below, never rebound. */
   resumeRoot: TrustedRoot | null;
+  /** Attempt ids whose prior-run terminal record was a failure (resume only):
+   * their fresh results get `resumedAfterFailure` for the appendix mark. */
+  resumedAfterFailureIds?: Set<string>;
   /** The trusted runs root bound for THIS run (fresh or carried from a resume).
    * Non-null whenever `executeReview` runs — it is null only on the
    * aggregator-unreachable path that finalizes without spawning. Used to rebuild
@@ -774,6 +786,9 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     });
   }
   const { aborted } = attemptsOutcome;
+  for (const r of attemptsOutcome.results) {
+    if (p.resumedAfterFailureIds?.has(r.attemptId)) r.resumedAfterFailure = true;
+  }
   const results = mergeOrdered([...attemptsOutcome.results, ...p.presolved]);
 
   if (aborted || p.signal.aborted) {
