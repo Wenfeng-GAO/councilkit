@@ -576,6 +576,19 @@ export function defaultSpawn(
               }
             }, KILL_GRACE_MS);
           });
+        } else {
+          // The TERM is undeliverable and the leader may keep running — NOTHING
+          // else will settle this spawn (no close, no later cleanup: the
+          // re-entry guard blocks them), so it would hang forever (reviewer
+          // finding). Settle now with the reason's classification.
+          finish({
+            stdout: stdoutColl.toString(),
+            stderr: stderrColl.toString(),
+            finalEventLine: lineColl?.lastLine ?? undefined,
+            exitCode: null,
+            timedOut: reason === "timeout",
+            aborted: reason === "abort",
+          });
         }
       }
     };
