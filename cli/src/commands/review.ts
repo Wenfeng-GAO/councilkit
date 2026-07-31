@@ -52,7 +52,7 @@ import {
   readReviewTranscript,
   writeReviewTranscript,
 } from "../auto/transcript";
-import { EXIT, errors } from "../errors";
+import { CliError, EXIT, errors } from "../errors";
 import {
   type TrustedRoot,
   assertWithinRoot,
@@ -714,22 +714,44 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     // bound runs root) before the retry spawn, so the failed first try's
     // leftover cwd — notably a codex `.last-message.md` — cannot pass a
     // no-output second try off as a real deliverable (reviewer finding).
+    // Workspace/fs-safe errors thrown here are tagged `detail.phase = "workspace"`
+    // so the run-level catch below can map them to phase=workspace instead of
+    // the default transcript phase (reviewer finding: a retry rebuild failure
+    // was uniformly reported as phase=transcript/code=IO_TRANSCRIPT).
     rebuildWorkspaceBeforeRetry:
       p.trustedRoot === null
         ? undefined
-        : (s: AttemptSpec) => recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot),
+        : (s: AttemptSpec) => {
+            try {
+              recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot);
+            } catch (error) {
+              if (error instanceof CliError) {
+                throw new CliError({
+                  code: error.exitCode,
+                  message: error.message,
+                  detail: { ...(error.detail ?? {}), phase: "workspace" },
+                  cause: error,
+                });
+              }
+              throw error;
+            }
+          },
   };
 
   let attemptsOutcome: RunAttemptsOutcome;
   try {
     attemptsOutcome = await runAttempts(specs, runnerOpts);
   } catch (error) {
-    // A run-level callback (e.g. the transcript flush in onAttemptFinish)
-    // failed mid-run. The runner has already killed every in-flight child;
-    // persist a best-effort INCOMPLETE report + review.finished instead of
-    // escaping as a bare CliError with no ReviewOutcome (reviewer finding).
-    // Aborted runs keep the interrupted/130 semantics.
+    // A run-level callback failed mid-run — either the transcript flush in
+    // onAttemptFinish (an artifact-IO fault) OR the retry workspace rebuild
+    // (a fs-safe/workspace fault). The runner has already killed every
+    // in-flight child; persist a best-effort INCOMPLETE report + review.finished
+    // instead of escaping as a bare CliError with no ReviewOutcome (reviewer
+    // finding). Aborted runs keep the interrupted/130 semantics. The two fault
+    // sources are distinguished so the outcome's failure phase is reported
+    // faithfully (reviewer finding: both were mapped to phase=transcript).
     const message = error instanceof Error ? error.message : String(error);
+    const isWorkspaceFault = error instanceof CliError && error.detail?.phase === "workspace";
     // Restore the original spec order — `completed` is in parallel-completion
     // order, and the report/Outcome must list Attempts deterministically in
     // the user-declared agent order (reviewer finding).
@@ -746,7 +768,9 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       status: "failed",
       exitCode: EXIT.io,
       incomplete: true,
-      failure: { phase: "transcript", code: "IO_TRANSCRIPT", message },
+      failure: isWorkspaceFault
+        ? { phase: "workspace", code: "IO_WORKSPACE", message }
+        : { phase: "transcript", code: "IO_TRANSCRIPT", message },
     });
   }
   const { aborted } = attemptsOutcome;
@@ -1061,6 +1085,14 @@ function createWorkspace(workspace: string): void {
  * recursive mkdir create and spawn cwd — OUTSIDE the runs tree (resume
  * scenario; reviewer findings). */
 function recreateWorkspace(workspace: string, runDir: string, root: TrustedRoot): void {
+  // Revalidate the bound root against the CURRENT filesystem BEFORE any delete
+  // or create: a same-path REPLACEMENT of runsRoot (delete + fresh real
+  // directory) keeps the realpath string but changes dev/ino, so the
+  // assertWithinRoot realpath check alone cannot detect it — the retry path
+  // holds the root bound at run start (possibly minutes earlier), and without
+  // this revalidate it would rmSync inside the swapped tree (reviewer finding:
+  // recreateWorkspace reused the long-held TrustedRoot without revalidating).
+  revalidateTrustedRoot(root);
   let runStat: Stats;
   try {
     runStat = lstatSync(runDir);

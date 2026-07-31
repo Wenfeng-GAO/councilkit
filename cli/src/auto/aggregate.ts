@@ -158,26 +158,30 @@ function statusLabel(input: ReviewReportInput): string {
   return input.incomplete ? "partial" : "complete";
 }
 
-/** `## 过程对比` (plan §"报告重排"): one block per Attempt — formatted duration,
- * tool-call count and the deduplicated commands. Rendering-time dedup strips a
- * leading proxy env prefix (noted once at the section top) and run-length
- * encodes ADJACENT identical commands as `×N` (non-adjacent repeats are kept).
- * Attempts without captured activity show 无过程数据. */
+/** `## 过程对比` (plan §"报告重排"): ONE line per final Attempt — name, formatted
+ * duration, tool-call count and the deduplicated commands joined by `; `. The
+ * command list is omitted when empty (no commands captured). Rendering-time
+ * dedup strips a leading proxy env prefix (noted once at the section top) and
+ * run-length encodes ADJACENT identical commands as `×N` (non-adjacent repeats
+ * are kept). Attempts without captured activity show 无过程数据. The multi-line
+ * per-Attempt command list is gone — each Attempt is a single bullet (reviewer
+ * finding: the plan asked for one line per final Attempt). */
 function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string {
   const lines: string[] = ["## 过程对比", ""];
   let strippedProxy = false;
   for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark}`);
-    lines.push(`  - 耗时：${formatDurationMs(a.durationMs)}`);
+    const head = `- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark} — ${formatDurationMs(a.durationMs)}`;
     if (a.activity === undefined) {
-      lines.push("  - 无过程数据");
+      lines.push(`${head} — 无过程数据`);
       continue;
     }
-    lines.push(`  - 工具调用：${a.activity.toolCalls} 次`);
     const rendered = dedupCommands(a.activity.commands);
     if (rendered.some((c) => c.strippedProxy)) strippedProxy = true;
-    for (const c of rendered) lines.push(`  - \`${c.text}\``);
+    // No commands → omit the trailing command segment entirely.
+    const commandSeg =
+      rendered.length > 0 ? ` — ${rendered.map((c) => `\`${c.text}\``).join("; ")}` : "";
+    lines.push(`${head} — 工具调用 ${a.activity.toolCalls} 次${commandSeg}`);
   }
   if (strippedProxy) {
     // One note at the section top: the proxy env prefix was omitted from the
@@ -308,10 +312,24 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       continue;
     }
-    const openMatch = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
+      const fenceCh = openMatch[2][0];
+      // CommonMark: a BACKTICK fence's info string must not contain a backtick
+      // — a line like ``` `inline` ``` is not a fence opening (it is paragraph
+      // text), so the H1/H2 that follow must still be demoted. A tilde fence's
+      // info string has no such restriction. Without this rule a backtick fence
+      // whose info carried a backtick swallowed the rest of the deliverable,
+      // disabling heading demotion (reviewer finding).
+      if (fenceCh === "`" && openMatch[3].includes("`")) {
+        // Not a fence opening (backtick fence info must not contain a backtick);
+        // the line is paragraph text, kept verbatim, and heading demotion stays
+        // active for the lines that follow.
+        out.push(line);
+        continue;
+      }
       inFence = true;
-      fenceChar = openMatch[2][0];
+      fenceChar = fenceCh;
       fenceLen = openMatch[2].length;
       out.push(line);
       continue;

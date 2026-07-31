@@ -1316,6 +1316,67 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
   });
 
+  it("retry workspace rebuild revalidates the bound root; a same-path swap is fail-closed exit 5 (phase=workspace)", async () => {
+    // Reviewer findings: (1) the retry path's recreateWorkspace reused the
+    // long-held TrustedRoot without revalidating — a same-path REPLACEMENT of
+    // runsRoot (delete + fresh real directory) keeps the realpath string but
+    // changes dev/ino, so the assertWithinRoot realpath check alone cannot see
+    // it and the retry would rmSync inside the swapped tree. (3) when the
+    // retry rebuild threw, the run-level catch mapped every error to
+    // phase=transcript/code=IO_TRANSCRIPT; a workspace/fs-safe fault must be
+    // reported as phase=workspace.
+    const { aliceId, bobId } = seedTwo();
+    const { runsRoot } = resolvePaths();
+    // Fresh run, serial (--concurrency 1) so Alice's first try + retry is
+    // deterministic. Alice's first try fails with a transient EXIT (<120s) →
+    // the runner retries, rebuilding her workspace first. Swap runsRoot DURING
+    // that first spawn: rename it aside and recreate the run dir at the SAME
+    // lexical path so later transcript writes still resolve.
+    let swapped = false;
+    const swapSpawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      if (kind === "probe") return claudeEnvelope("ok");
+      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      if (kind === "attempt:Alice" && !swapped) {
+        swapped = true;
+        renameSync(runsRoot, `${runsRoot}.orig`);
+        // Recreate the swapped tree's attempt-0 workspace (input.cwd is the
+        // lexical runsRoot/.../attempt-0 path, now pointing at the new root).
+        mkdirSync(input.cwd, { recursive: true });
+        writeFileSync(join(input.cwd, "sentinel.txt"), "swap-tree");
+        // Transient EXIT failure with a duration well under the 120s retry cap.
+        return { stdout: "", exitCode: 1, timedOut: false, aborted: false };
+      }
+      return attemptEnvelope(kind === "attempt:Bob" ? "Bob" : "Alice");
+    };
+    const sink = makeSink();
+    const exitCode = await runCapturing(
+      [...twoAgentArgs(aliceId, bobId, "x"), "--concurrency", "1"],
+      sink,
+      { spawnImpl: swapSpawn },
+    );
+    // The retry rebuild's revalidate refuses the swapped root → exit 5.
+    expect(exitCode).toBe(5);
+    const outcome = sink.finished as {
+      incomplete: boolean;
+      runId: string;
+      failure?: { phase: string; code: string; message: string };
+    };
+    expect(outcome.incomplete).toBe(true);
+    // Finding 3: the fault is reported as phase=workspace, not transcript.
+    expect(outcome.failure?.phase).toBe("workspace");
+    expect(outcome.failure?.code).toBe("IO_WORKSPACE");
+    expect(outcome.failure?.message).toContain("trusted root changed");
+    // Finding 1: the swapped tree's workspace was NOT deleted (revalidate threw
+    // before rmSync) — the sentinel survives.
+    expect(
+      readFileSync(
+        join(runsRoot, outcome.runId, "workspaces", "attempt-0", "sentinel.txt"),
+        "utf8",
+      ),
+    ).toBe("swap-tree");
+  });
+
   /** Legacy-transcript resume where both attempts are reused: only the
    * aggregator workspace is recreated. */
   function seedReusedResume(runId: string): { aliceId: string; bobId: string } {

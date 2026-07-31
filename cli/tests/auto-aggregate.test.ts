@@ -180,6 +180,32 @@ describe("cli auto aggregate — fence-aware heading demotion", () => {
     expect(appendix).not.toContain("##A title");
     expect(appendix).not.toContain("## A title");
   });
+
+  it("does not open a backtick fence when the info string contains a backtick (CommonMark)", () => {
+    // Reviewer finding: a backtick fence's info string must not contain a
+    // backtick (CommonMark). A line like ``` `foo` ``` is paragraph text, NOT a
+    // fence opening — so the H1 that follows must still be demoted. The old
+    // open-fence rule accepted any line starting with ``` and swallowed the
+    // rest of the deliverable as a fenced block, disabling demotion.
+    const output = "``` `foo`\n# should be demoted\n```\n# after";
+    const md = renderReviewReport(buildInput([attempt({ agentName: "Alice", output })]));
+    const appendix = md.slice(md.indexOf("### Alice"));
+    // The ``` `foo` line did NOT open a fence → the next H1 is demoted.
+    expect(appendix).toContain("### should be demoted\n");
+    // The illegal-fence line is kept verbatim as paragraph text.
+    expect(appendix).toContain("``` `foo`");
+  });
+
+  it("a tilde fence with a backtick in its info string DOES open (tilde is unrestricted)", () => {
+    // CommonMark restriction is backtick-fence-only; a tilde fence's info string
+    // may contain backticks. The H1 inside stays verbatim, the trailing H1 is
+    // demoted after the fence closes.
+    const output = "~~~ `foo`\n# inside tilde fence\n~~~\n# after";
+    const md = renderReviewReport(buildInput([attempt({ agentName: "Alice", output })]));
+    const appendix = md.slice(md.indexOf("### Alice"));
+    expect(appendix).toContain("\n# inside tilde fence\n");
+    expect(appendix).toContain("### after");
+  });
 });
 
 describe("cli auto aggregate — process comparison command normalization", () => {
@@ -255,6 +281,67 @@ describe("cli auto aggregate — process comparison command normalization", () =
     expect(proc).toContain("`git diff ×2`");
     expect(proc).toContain("已省略命令前的 NO_PROXY/HTTPS_PROXY/HTTP_PROXY 等代理前缀");
     expect(proc).not.toContain("NO_PROXY='*'");
+  });
+});
+
+describe("cli auto aggregate — process comparison single-line shape", () => {
+  it("renders ONE line per final Attempt (no multi-line command list)", () => {
+    // Reviewer finding: the plan asked for a single line per final Attempt, but
+    // the renderer emitted a multi-line bullet (耗时 / 工具调用 / one line per
+    // command). The single line is:
+    //   - <name> (<driver/model>) — <耗时> — 工具调用 N 次 — `cmd1`; `cmd2 ×3`
+    // with the command segment omitted when empty and 「无过程数据」 when no
+    // activity was captured.
+    const md = renderReviewReport(
+      buildInput([
+        attempt({
+          agentName: "Alice",
+          durationMs: 48_000,
+          activity: { toolCalls: 3, commands: ["git diff", "ls", "git diff"] },
+        }),
+        attempt({ agentName: "Bob", activity: undefined }),
+        attempt({
+          agentName: "Carol",
+          durationMs: 1_000,
+          activity: { toolCalls: 1, commands: [] },
+        }),
+      ]),
+    );
+    const proc = md.slice(md.indexOf("## 过程对比"), md.indexOf("## 附录:各审查者交付物"));
+    // Alice: one line, non-adjacent dupes kept separately, joined by "; ".
+    expect(proc).toContain(
+      "- Alice (claude-stream-json/m) — 48s — 工具调用 3 次 — `git diff`; `ls`; `git diff`",
+    );
+    // Bob: no activity → 无过程数据, single line.
+    expect(proc).toContain("- Bob (claude-stream-json/m) — 0s — 无过程数据");
+    // Carol: no commands → trailing command segment omitted.
+    expect(proc).toContain("- Carol (claude-stream-json/m) — 1s — 工具调用 1 次");
+    // No indented per-command bullets remain.
+    expect(proc).not.toMatch(/\n {2}- `/);
+    // Exactly one "- " bullet per Attempt (3 attempts → 3 bullets).
+    const bullets = proc.match(/^- /gm);
+    expect(bullets).toHaveLength(3);
+  });
+
+  it("joins adjacent run-length-encoded commands on the single line", () => {
+    const md = renderReviewReport(
+      buildInput([
+        attempt({
+          agentName: "Alice",
+          durationMs: 5_000,
+          activity: {
+            toolCalls: 2,
+            commands: ["NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY='' git diff", "git diff"],
+          },
+        }),
+      ]),
+    );
+    const proc = md.slice(md.indexOf("## 过程对比"), md.indexOf("## 附录:各审查者交付物"));
+    expect(proc).toContain("- Alice (claude-stream-json/m) — 5s — 工具调用 2 次 — `git diff ×2`");
+    expect(proc).toContain("已省略命令前的 NO_PROXY/HTTPS_PROXY/HTTP_PROXY 等代理前缀");
+    // Still a single bullet for the attempt.
+    const bullets = proc.match(/^- /gm);
+    expect(bullets).toHaveLength(1);
   });
 });
 
