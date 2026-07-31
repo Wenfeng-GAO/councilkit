@@ -522,6 +522,7 @@ export function defaultSpawn(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(drainTimer);
       input.signal.removeEventListener("abort", onAbort);
       // Flush the activity collector's trailing line and attach the summary to
       // every settle path (success, error, timeout) — a killed Attempt still
@@ -662,16 +663,10 @@ export function defaultSpawn(
       if (child.pid === undefined) return;
       const pid = child.pid;
       let termDelivered = true;
-      let groupGone = false;
       try {
         killFn(-pid, "SIGTERM");
-      } catch (error) {
-        if (isESRCH(error)) {
-          // ESRCH = the group is PROVABLY gone — nothing to kill; the normal
-          // `close` will still fire and settle with the real code. Do NOT
-          // settle early here (it would lose the real exit code).
-          groupGone = true;
-        }
+      } catch {
+        // ESRCH / EPERM / anything — best effort, never throw here.
         termDelivered = false;
       }
       if (termDelivered) {
@@ -687,28 +682,36 @@ export function defaultSpawn(
             }
           }, KILL_GRACE_MS);
         });
-      } else if (!groupGone && !settled) {
-        // The TERM is undeliverable AND the descendants may hold the pipes —
-        // `close` may never fire, which would hang the Attempt until the turn
-        // timeout and misclassify a fast EXIT (reviewer finding). The leader
-        // HAS exited, so settle now with its code; buffered output is accepted
-        // as lost (best effort beats a 45-minute hang).
-        lineColl?.end();
-        finish({
-          stdout: stdoutColl.toString(),
-          stderr: stderrColl.toString(),
-          finalEventLine: lineColl?.lastLine ?? undefined,
-          exitCode: leaderExitCode,
-          timedOut: false,
-          aborted: false,
-        });
       }
     };
-    // `exit` = leader process ended (kill stragglers so pipes can close);
-    // `close` = stdio drained (settle the result). Both paths are guarded.
+    /** Bounded drain: after the leader exits, `close` normally follows quickly
+     * — but descendants that inherited the pipes (possibly in another PGID)
+     * can hold them forever (reviewer finding). Give the pipes DRAIN_GRACE_MS
+     * to flush the final event, then settle with the leader's code. This also
+     * covers the EPERM case WITHOUT settling before the drain (second
+     * finding). */
+    const DRAIN_GRACE_MS = 3_000;
+    const settleAfterDrain = (): void => {
+      lineColl?.end();
+      finish({
+        stdout: stdoutColl.toString(),
+        stderr: stderrColl.toString(),
+        finalEventLine: lineColl?.lastLine ?? undefined,
+        exitCode: leaderExitCode,
+        timedOut: false,
+        aborted: false,
+      });
+    };
+    let drainTimer: NodeJS.Timeout;
+    // `exit` = leader process ended (kill stragglers so pipes can close, and
+    // bound the drain); `close` = stdio drained (settle the result first).
     child.on("exit", (code) => {
       leaderExitCode = code ?? null;
       cleanupGroupOnNaturalEnd();
+      if (!settled) {
+        drainTimer = setTimeout(settleAfterDrain, DRAIN_GRACE_MS);
+        (drainTimer as { unref?: () => void }).unref?.();
+      }
     });
 
     child.on("close", (code) => {
@@ -727,10 +730,6 @@ export function defaultSpawn(
       });
     });
   });
-}
-
-function isESRCH(error: unknown): boolean {
-  return (error as { code?: string })?.code === "ESRCH";
 }
 
 function errMsg(error: unknown): string {

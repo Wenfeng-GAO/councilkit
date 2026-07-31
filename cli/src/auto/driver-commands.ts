@@ -502,11 +502,10 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
     const next = cur.replace(PROXY_ENV_RE, "");
     if (next === cur || next.trim().length === 0) break;
     // Chained assignments separated by an operator (`A='1' B='2' && cmd`) are
-    // statements, not a prefix. If an operator shows up after ANY stripping,
-    // the whole chain was statement-like — revert to the original untouched
-    // (reviewer finding: checking only the final remainder let `A B && cmd`
-    // lose the first assignment).
-    if (/^[;&|><]/.test(next.trimStart())) {
+    // statements, not a prefix; a remainder that is a COMMENT (`FOO='1' # …`)
+    // is a standalone assignment too. Either way, revert to the original
+    // untouched (reviewer findings).
+    if (/^[#;&|><]/.test(next.trimStart())) {
       return { text: cmd, stripped: false };
     }
     cur = next;
@@ -571,7 +570,7 @@ function shellTokens(text: string): string[] {
   return tokens;
 }
 
-const SHELL_OPERATOR_TOKENS = new Set(["&&", "||", ";", "|", "&", ">", "<", ">>", ">&"]);
+const SHELL_OPERATOR_TOKENS = new Set(["&&", "||", ";", "|", "&", ">", "<", ">>", ">&", "#"]);
 const ASSIGNMENT_TOKEN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 /** True when leading assignment tokens are immediately followed by a shell
