@@ -1,4 +1,5 @@
 import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from "../report/render";
+import { stripProxyPrefix } from "./driver-commands";
 import { formatDurationMs } from "./duration";
 /**
  * review report rendering (DESIGN §4, plan §"文件清单"/§"ReviewOutcome"). The
@@ -110,21 +111,29 @@ function renderHeader(input: ReviewReportInput): string {
   const lines: string[] = [];
   lines.push("# Autonomous Review Report", "");
   lines.push(`- Run: ${input.runId}`);
-  lines.push(`- Task: ${taskLine(input.task)}`);
+  // Header lines must stay single-line: task/focus/reason/agentName are free
+  // text and could otherwise inject extra headings into the outline (reviewer
+  // finding).
+  lines.push(`- Task: ${oneLine(taskLine(input.task))}`);
   const focus = input.task.focus?.trim();
-  if (focus && focus.length > 0) lines.push(`- Focus: ${focus}`);
+  if (focus && focus.length > 0) lines.push(`- Focus: ${oneLine(focus)}`);
   lines.push(
-    `- Aggregator: ${input.aggregator.agentName} (${input.aggregator.driverId}/${input.aggregator.modelId})`,
+    `- Aggregator: ${oneLine(input.aggregator.agentName)} (${input.aggregator.driverId}/${input.aggregator.modelId})`,
   );
   lines.push("", renderAttemptsTable(input.attempts));
   lines.push(`- Status: ${statusLabel(input)}`);
   if (input.reason && input.reason.trim().length > 0) {
-    lines.push(`- Reason: ${input.reason.trim()}`);
+    lines.push(`- Reason: ${oneLine(input.reason.trim())}`);
   }
   lines.push(`- Started: ${input.startedAt}`);
   lines.push(`- Ended: ${input.endedAt}`);
   lines.push("");
   return lines.join("\n");
+}
+
+/** Collapse every whitespace run (incl. newlines) to a single space. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /** Fixed five-column attempts summary table (plan §"报告重排"). `|` and newlines
@@ -177,7 +186,12 @@ function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string
       continue;
     }
     const rendered = dedupCommands(a.activity.commands);
-    if (rendered.some((c) => c.strippedProxy)) strippedProxy = true;
+    // The note fires when a prefix was stripped at COLLECTION time (new data,
+    // flag on the activity) OR at render time (legacy transcripts whose
+    // commands still carry the prefix).
+    if (a.activity.strippedProxy === true || rendered.some((c) => c.strippedProxy)) {
+      strippedProxy = true;
+    }
     // No commands → omit the trailing command segment entirely.
     const commandSeg =
       rendered.length > 0 ? ` — ${rendered.map((c) => codeSpan(c.text)).join("; ")}` : "";
@@ -192,39 +206,10 @@ function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string
   return lines.join("\n");
 }
 
-/** One proxy env prefix to strip (case-insensitive). A command may carry several
- * consecutive prefixes (`NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY='' <cmd>`); all
- * leading prefixes are removed. The value MUST be quoted — an unquoted value
- * containing escaped spaces or command substitution would be partially stripped
- * and leave command fragments behind (reviewer finding); those commands are
- * left untouched instead. */
-const PROXY_ENV_RE =
-  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"[^"]*")\s+/;
-
 interface RenderedCommand {
   text: string;
   /** True when a proxy env prefix was stripped from this command. */
   strippedProxy: boolean;
-}
-
-/** Strip the leading proxy env prefix from a single captured command. Returns
- * the remainder and whether a prefix was removed. */
-function stripProxyPrefix(cmd: string): { text: string; stripped: boolean } {
-  let stripped = false;
-  let cur = cmd;
-  // Loop: there may be multiple consecutive proxy env assignments.
-  for (;;) {
-    const next = cur.replace(PROXY_ENV_RE, "");
-    // A STANDALONE assignment (`NO_PROXY='*'` with nothing after it) is a shell
-    // statement of its own, not a prefix — stripping it would erase the command
-    // entirely. Likewise, if what follows starts with a shell operator
-    // (`;`, `&&`, …), the assignment was a separate statement, not a prefix
-    // (reviewer findings). Only strip when a real command follows.
-    if (next === cur || next.trim().length === 0 || /^[;&|><]/.test(next.trimStart())) break;
-    cur = next;
-    stripped = true;
-  }
-  return { text: cur, stripped };
 }
 
 /** Run-length encode ADJACENT identical (post-proxy-strip) commands as `×N`.
@@ -300,7 +285,10 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
  * fence. Setext headings are deliberately NOT processed: the output contract is
  * ATX, and `---` may also be a thematic break (plan §risks). */
 function downgradeHeadingsOutsideFences(text: string): string {
-  const lines = text.split("\n");
+  // Normalize CRLF first: a `\r` before the newline makes every `$`-anchored
+  // regex (fence open/close, ATX match) fail, so Windows-style deliverables
+  // would keep their H1/H2 in the appendix (reviewer finding).
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;

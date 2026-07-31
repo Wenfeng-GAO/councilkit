@@ -1743,4 +1743,44 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(sink.lines.filter((l) => l.includes("仍在运行"))).toHaveLength(0);
     expect(fake.activeCount()).toBe(0);
   });
+
+  it("transient EXIT <120s retries once: two transcript records, one final result, 45min default", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink = makeSink();
+    const seen: Array<{ kind: SpawnKind; timeoutMs: number }> = [];
+    let aliceTries = 0;
+    const spawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      seen.push({ kind, timeoutMs: input.timeoutMs });
+      if (kind === "probe") return claudeEnvelope("ok");
+      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      if (kind === "attempt:Alice") {
+        aliceTries++;
+        if (aliceTries === 1) {
+          return { stdout: "", stderr: "boom", exitCode: 1, timedOut: false, aborted: false };
+        }
+      }
+      return attemptEnvelope("Alice");
+    };
+    const exitCode = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink, { spawnImpl: spawn });
+    expect(exitCode).toBe(0);
+    const outcome = sink.finished as {
+      attempts: Array<{ agentName: string; durationMs: number }>;
+      transcriptPath: string;
+    };
+    // Two attempts total (Alice + Bob), final results only.
+    expect(outcome.attempts).toHaveLength(2);
+    for (const a of outcome.attempts) expect(typeof a.durationMs).toBe("number");
+    // Two attempt.finished records for Alice: first failure + retry success.
+    const alice = readRecords(outcome.transcriptPath).filter(
+      (r) => r.kind === "attempt.finished" && r.agentName === "Alice",
+    );
+    expect(alice).toHaveLength(2);
+    expect(alice[0].attemptNumber).toBe(1);
+    expect(alice[1].attemptNumber).toBe(2);
+    expect(alice[1].retryOf).toBe(1);
+    // 45min default for attempts; probe stays 60s.
+    expect(seen.find((s) => s.kind === "probe")?.timeoutMs).toBe(60_000);
+    expect(seen.find((s) => s.kind === "attempt:Alice")?.timeoutMs).toBe(2_700_000);
+  });
 });

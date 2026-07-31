@@ -478,6 +478,33 @@ function asText(value: unknown): string | null {
 export interface AttemptActivity {
   toolCalls: number;
   commands: string[];
+  /** True when at least one command had a proxy env prefix stripped at
+   * collection time (drives the「已省略代理前缀」note in the report). */
+  strippedProxy?: boolean;
+}
+
+/** One proxy env prefix to strip (case-insensitive). A command may carry several
+ * consecutive prefixes (`NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY='' <cmd>`); all
+ * leading prefixes are removed. The value MUST be quoted — an unquoted value
+ * containing escaped spaces or command substitution would be partially stripped
+ * and leave command fragments behind (reviewer finding); those commands are
+ * left untouched instead. */
+const PROXY_ENV_RE =
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"[^"]*")\s+/;
+
+/** Strip leading proxy env prefixes. Standalone assignments and prefixes
+ * followed by a shell operator are NOT stripped (they are separate statements,
+ * not prefixes — reviewer findings). Exported for the report renderer. */
+export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean } {
+  let stripped = false;
+  let cur = cmd;
+  for (;;) {
+    const next = cur.replace(PROXY_ENV_RE, "");
+    if (next === cur || next.trim().length === 0 || /^[;&|><]/.test(next.trimStart())) break;
+    cur = next;
+    stripped = true;
+  }
+  return { text: cur, stripped };
 }
 
 /** Upper bound on retained representative commands per Attempt. */
@@ -516,6 +543,7 @@ export class DriverActivityCollector {
   private toolCalls = 0;
   private readonly commands: string[] = [];
   private sawEvent = false;
+  private sawStrippedProxy = false;
 
   constructor(private readonly driverId: string) {}
 
@@ -554,7 +582,11 @@ export class DriverActivityCollector {
 
   summary(): AttemptActivity | undefined {
     if (!this.sawEvent) return undefined;
-    return { toolCalls: this.toolCalls, commands: [...this.commands] };
+    return {
+      toolCalls: this.toolCalls,
+      commands: [...this.commands],
+      strippedProxy: this.sawStrippedProxy || undefined,
+    };
   }
 
   private consider(line: string): void {
@@ -641,10 +673,14 @@ export class DriverActivityCollector {
 
   /** Fold whitespace, truncate to 80 code points, keep the first 10 in order.
    * `toolCalls` keeps counting past the command cap — the cap bounds memory,
-   * not the measurement. */
+   * not the measurement. Proxy env prefixes are stripped BEFORE truncation —
+   * truncating first would let a long prefix eat the actual command (reviewer
+   * finding); the flag is surfaced via `strippedProxy` on the summary. */
   private pushCommand(raw: unknown): void {
     if (typeof raw !== "string") return;
-    const folded = raw.replace(/\s+/g, " ").trim();
+    const { text, stripped } = stripProxyPrefix(raw);
+    if (stripped) this.sawStrippedProxy = true;
+    const folded = text.replace(/\s+/g, " ").trim();
     if (folded.length === 0) return;
     if (this.commands.length >= ACTIVITY_MAX_COMMANDS) return;
     const chars = Array.from(folded);
