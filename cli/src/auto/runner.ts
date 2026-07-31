@@ -576,11 +576,14 @@ export function defaultSpawn(
               }
             }, KILL_GRACE_MS);
           });
-        } else {
+        } else if (reason !== "stream") {
           // The TERM is undeliverable and the leader may keep running — NOTHING
           // else will settle this spawn (no close, no later cleanup: the
           // re-entry guard blocks them), so it would hang forever (reviewer
-          // finding). Settle now with the reason's classification.
+          // finding). Settle now with the reason's classification. The "stream"
+          // reason is excluded: onStreamError settles right after us WITH the
+          // real error, and settling here first would drop it behind the
+          // settled guard (second finding).
           finish({
             stdout: stdoutColl.toString(),
             stderr: stderrColl.toString(),
