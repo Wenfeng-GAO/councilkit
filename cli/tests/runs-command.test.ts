@@ -35,7 +35,7 @@ interface FakeSink {
   finished: unknown;
   progress(m: string): void;
   diag(m: string): void;
-  finish(d: unknown): void;
+  finish(d: unknown): Promise<void>;
 }
 
 function makeSink(): FakeSink {
@@ -47,6 +47,7 @@ function makeSink(): FakeSink {
     diag: () => {},
     finish: (d) => {
       sink.finished = d;
+      return Promise.resolve();
     },
   };
   return sink;
