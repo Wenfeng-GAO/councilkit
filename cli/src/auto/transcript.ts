@@ -22,7 +22,12 @@ export type AttemptExitCode = z.infer<typeof attemptExitCodeSchema>;
  * Optional everywhere: absent means "no process data" (older runs / parse
  * failure), never an error. */
 export const attemptActivitySchema = z
-  .object({ toolCalls: z.number().int().nonnegative(), commands: z.array(z.string()) })
+  .object({
+    toolCalls: z.number().int().nonnegative(),
+    commands: z.array(z.string()),
+    /** Proxy-prefix-stripped flag (collection time). Optional for back-compat. */
+    strippedProxy: z.boolean().optional(),
+  })
   .strict();
 export type AttemptActivity = z.infer<typeof attemptActivitySchema>;
 

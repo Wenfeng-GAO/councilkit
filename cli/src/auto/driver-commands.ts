@@ -504,6 +504,13 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
     cur = next;
     stripped = true;
   }
+  // Chained assignments separated by an operator (`A='1' B='2' && cmd`) are
+  // statements, not a prefix — if the remainder starts with an operator, any
+  // partial stripping was wrong; return the original untouched (reviewer
+  // finding).
+  if (stripped && /^[;&|><]/.test(cur.trimStart())) {
+    return { text: cmd, stripped: false };
+  }
   return { text: cur, stripped };
 }
 

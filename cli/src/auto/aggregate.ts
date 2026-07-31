@@ -41,7 +41,7 @@ function incompleteBanner(input: ReviewReportInput): string {
     input.failurePhase !== "attempts"
   ) {
     return `> INCOMPLETE — the run stopped before the Aggregator could start (${
-      input.reason?.trim() || "see transcript"
+      oneLine(input.reason?.trim() || "see transcript")
     }). What follows is the deterministic header plus each Attempt's raw deliverable in the appendix; no consensus is fabricated.`;
   }
   // Distinguish every-Attempt-failed (no Aggregator ran) from an Aggregator
@@ -180,7 +180,7 @@ function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string
   let strippedProxy = false;
   for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    const head = `- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark} — ${formatDurationMs(a.durationMs)}`;
+    const head = `- ${oneLine(a.agentName)} (${a.driverId}/${a.modelId})${reusedMark} — ${formatDurationMs(a.durationMs)}`;
     if (a.activity === undefined) {
       lines.push(`${head} — 无过程数据`);
       continue;
@@ -258,7 +258,7 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
   }
   for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`### ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark}`, "");
+    lines.push(`### ${oneLine(a.agentName)} (${a.driverId}/${a.modelId})${reusedMark}`, "");
     // A retried Attempt keeps only its final result here; the failed first try
     // is noted once so the appendix never silently drops it.
     if (a.retryOf !== undefined) {
@@ -285,10 +285,11 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
  * fence. Setext headings are deliberately NOT processed: the output contract is
  * ATX, and `---` may also be a thematic break (plan §risks). */
 function downgradeHeadingsOutsideFences(text: string): string {
-  // Normalize CRLF first: a `\r` before the newline makes every `$`-anchored
-  // regex (fence open/close, ATX match) fail, so Windows-style deliverables
-  // would keep their H1/H2 in the appendix (reviewer finding).
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  // Normalize CRLF AND bare CR first: a `\r` (with or without `\n`) breaks every
+  // `$`-anchored regex (fence open/close, ATX match), so Windows/Mac-classic
+  // style deliverables would keep their H1/H2 in the appendix (reviewer
+  // findings).
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;
@@ -341,6 +342,13 @@ function downgradeHeadingsOutsideFences(text: string): string {
     } else {
       out.push(line);
     }
+  }
+  // An UNCLOSED fence would swallow everything that follows the deliverable in
+  // the appendix — including the next Attempt's `### <name>` heading — into a
+  // code block. Force-close it so report structure after this output is never
+  // consumed (reviewer finding).
+  if (inFence) {
+    out.push(fenceChar === "`" ? "```" : "~~~");
   }
   return out.join("\n");
 }
