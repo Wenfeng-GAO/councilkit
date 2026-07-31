@@ -698,8 +698,11 @@ export function defaultSpawn(
         stderr: stderrColl.toString(),
         finalEventLine: lineColl?.lastLine ?? undefined,
         exitCode: leaderExitCode,
-        timedOut: false,
-        aborted: false,
+        // Preserve a real timeout/abort — clobbering it would misreport a
+        // TIMEOUT as EXIT and could even satisfy the retry predicate
+        // (reviewer finding).
+        timedOut: killReason === "timeout",
+        aborted: killReason === "abort",
       });
     };
     let drainTimer: NodeJS.Timeout;
