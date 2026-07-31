@@ -420,3 +420,14 @@ describe("cli auto aggregate — list-aware fence state machine", () => {
     expect(md).toContain("- ```");
   });
 });
+
+describe("cli auto aggregate — list fence closes with content-indent bare run", () => {
+  it("closes a list fence with an indented bare run (CommonMark style)", () => {
+    const md = renderReviewReport(
+      buildInput([
+        attempt({ agentName: "Alice", output: "- ```js\n  const x = 1;\n  ```\n# After" }),
+      ]),
+    );
+    expect(md).toContain("### After");
+  });
+});

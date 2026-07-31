@@ -490,7 +490,7 @@ export interface AttemptActivity {
  * and leave command fragments behind (reviewer finding); those commands are
  * left untouched instead. */
 const PROXY_ENV_RE =
-  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*")\s+/;
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*")[ \t]+/;
 
 /** Strip leading proxy env prefixes. Standalone assignments and prefixes
  * followed by a shell operator are NOT stripped (they are separate statements,
@@ -521,6 +521,14 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
     stripped &&
     /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\.)*"|\S*)\s*)+$/.test(cur)
   ) {
+    return { text: cmd, stripped: false };
+  }
+  // The remainder starts with an assignment AND contains a shell operator
+  // (`NO_PROXY='*' FOO='1' && cmd`): the assignments formed a statement chain,
+  // not a prefix — revert. `FOO='1' antcode …` (no operator) and
+  // `antcode … && echo` (no leading assignment) stay stripped (reviewer
+  // finding).
+  if (stripped && /^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(cur) && /(&&|\|\||[;|])/.test(cur)) {
     return { text: cmd, stripped: false };
   }
   return { text: cur, stripped };

@@ -311,14 +311,21 @@ function downgradeHeadingsOutsideFences(text: string): string {
   for (const line of lines) {
     if (inFence) {
       out.push(line);
-      // A CLOSING fence is the fence run alone on its line (up to 3 leading
-      // spaces, then only whitespace after) — a same-character run WITH trailing
-      // info/text (e.g. ```js inside a fenced block) must NOT close the fence
-      // (reviewer finding: the unanchored regex treated any line starting with
-      // ```/~~~ as a close, mistakenly re-enabling heading demotion mid-fence).
-      const closeMatch = new RegExp(
-        "^ {0,3}" + escapeRegExp(fencePrefix) + "(`{3,}|~{3,})[ \\t]*$",
-      ).exec(line);
+      // A CLOSING fence is the fence run alone on its line (≤3 leading spaces,
+      // blank-only tail). For a fence opened INSIDE a list item, CommonMark
+      // closes it with an indented bare run at content level (no marker
+      // repetition, e.g. `- ```js\n  code\n  ``` `); a marker-prefixed close is
+      // also accepted. For a top-level opener the run must be bare — a
+      // `- ``` ` line inside it is list content, NOT a closer (reviewer
+      // findings in both directions).
+      const bareClose = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const prefixClose =
+        fencePrefix.length > 0
+          ? new RegExp(
+              "^ {0,3}" + escapeRegExp(fencePrefix) + "(`{3,}|~{3,})[ \\t]*$",
+            ).exec(line)
+          : null;
+      const closeMatch = fencePrefix.length > 0 ? (prefixClose ?? bareClose) : bareClose;
       if (
         closeMatch !== null &&
         closeMatch[1][0] === fenceChar &&
