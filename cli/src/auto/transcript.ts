@@ -122,6 +122,13 @@ export const attemptFinishedRecordSchema = z
     /** Incremental process summary (P2-1). Optional for back-compat with runs
      * written before process capture, and absent when parsing yielded nothing. */
     activity: attemptActivitySchema.optional(),
+    /** 1-based physical execution index for this Attempt (plan §"瞬态重试"):
+     * `1` for the first try, `2` for the retried second try. Absent on older
+     * transcripts and on synthetic/cancelled records. */
+    attemptNumber: z.number().int().positive().optional(),
+    /** Present (and `1`) on the retried second try, naming the failed first
+     * try's `attemptNumber`. Absent on a non-retried Attempt. */
+    retryOf: z.number().int().positive().optional(),
   })
   .strict();
 export type AttemptFinishedRecord = z.infer<typeof attemptFinishedRecordSchema>;

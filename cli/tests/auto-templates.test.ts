@@ -57,6 +57,14 @@ describe("cli auto templates — attempt prompt", () => {
     expect(prompt).toMatch(/完全自主/);
     expect(prompt).toMatch(/fetch\/clone\/checkout/);
   });
+
+  it("advises timing-aware targeted testing and diff-to-file before exploring", () => {
+    const prompt = buildAttemptPrompt({ agentName: "A", personaPrompt: "", task });
+    expect(prompt).toContain("全量 build 前先评估时长，优先定向测试。");
+    expect(prompt).toContain(
+      "先用 gh pr diff / antcode pr diff 落盘到文件再分段读取，避免盲目目录探索。",
+    );
+  });
 });
 
 describe("cli auto templates — aggregate prompt", () => {
@@ -172,6 +180,7 @@ describe("cli auto templates — access hint (P1-2)", () => {
     expect(hint).toContain("gh pr view 'https://github.com/Wenfeng-GAO/councilkit/pull/1'");
     expect(hint).toContain("NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY=''");
     expect(hint).toContain("模型 API 调用不要改代理设置");
+    expect(hint).toContain("建议先用 `gh pr diff` 把 diff 落盘到文件");
   });
 
   it("code.alipay.com PR URL → antcode hint with parsed project/iid + proxy rule", () => {
@@ -182,6 +191,7 @@ describe("cli auto templates — access hint (P1-2)", () => {
     expect(hint).toContain("antcode pr diff 1443 -P agent-sandbox/arcaagenttunnel --no-pager");
     expect(hint).toContain("NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY=''");
     expect(hint).toContain("模型 API 调用不要改代理设置");
+    expect(hint).toContain("建议先用 `antcode pr diff` 把 diff 落盘到文件");
   });
 
   it("parseAntCodePrUrl handles multi-level group/project paths", () => {

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AttemptSpec } from "../src/auto/driver-commands";
 import {
   type AttemptResult,
+  type RunnerTimers,
   type SpawnImpl,
   type SpawnInput,
   defaultSpawn,
@@ -115,7 +116,7 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(obs.maxConcurrent).toBeLessThanOrEqual(3);
   });
 
-  it("tolerates a single failure and never retries it", async () => {
+  it("tolerates a single EXIT failure, retrying it once (transient <120s, non-zero)", async () => {
     let calls = 0;
     const spawn: SpawnImpl = async (input) => {
       calls++;
@@ -134,10 +135,15 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     };
     const specs = [spec("0"), spec("1"), spec("2")];
     const { results } = await runAttempts(specs, { spawnImpl: spawn });
-    expect(calls).toBe(3); // exactly once each — no retry
+    // "1" exits non-zero under 120s → retried once (4 total spawns); the retry
+    // also fails, so the result stays a failure and there is no third try.
+    expect(calls).toBe(4);
     expect(results[0].status).toBe("success");
     expect(results[1].status).toBe("failure");
     expect(results[1].failure?.code).toBe("EXIT");
+    // The final result carries the retry chain (attemptNumber 2, retryOf 1).
+    expect(results[1].attemptNumber).toBe(2);
+    expect(results[1].retryOf).toBe(1);
     expect(results[2].status).toBe("success");
   });
 
@@ -263,6 +269,116 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     ).rejects.toThrow("transcript IO failed");
     // The internal abort fired, killing the in-flight spawn (no orphan).
     expect(abortedSeen).toBe(true);
+  });
+});
+
+describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", () => {
+  /** A clock that returns the next step value on each `now()` call, then the
+   * last value forever — so `durationMs` for an execution is
+   * `steps[1] - steps[0]` (and 0 for any subsequent execution). */
+  function stepClock(steps: number[]): RunnerTimers {
+    let i = 0;
+    const intervals = new Map<number, () => void>();
+    let nextId = 1;
+    return {
+      now: () => (i < steps.length ? steps[i++] : steps[steps.length - 1]),
+      setInterval: (cb: () => void) => {
+        const id = nextId++;
+        intervals.set(id, cb);
+        return id;
+      },
+      clearInterval: (handle: unknown) => intervals.delete(handle as number),
+    };
+  }
+
+  /** A spawn that always fails with a non-zero EXIT (claude error envelope). */
+  function exitFailSpawn(): { spawn: SpawnImpl; calls: () => number } {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return {
+        stdout: JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "" }),
+        exitCode: 1,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    return { spawn, calls: () => calls };
+  }
+
+  it("retries once when an EXIT failure takes <120s, fires two callbacks with retryOf", async () => {
+    const { spawn, calls } = exitFailSpawn();
+    const finishes: AttemptResult[] = [];
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 119_999]),
+      onAttemptFinish: (r) => finishes.push(r),
+    });
+    expect(calls()).toBe(2); // first try + one retry, no third
+    expect(results[0].status).toBe("failure");
+    expect(results[0].attemptNumber).toBe(2);
+    expect(results[0].retryOf).toBe(1);
+    expect(finishes).toHaveLength(2);
+    expect(finishes[0].attemptNumber).toBe(1);
+    expect(finishes[0].retryOf).toBeUndefined();
+    expect(finishes[1].attemptNumber).toBe(2);
+    expect(finishes[1].retryOf).toBe(1);
+  });
+
+  it("does NOT retry when the EXIT failure takes exactly 120000ms (boundary)", async () => {
+    const { spawn, calls } = exitFailSpawn();
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 120_000]),
+    });
+    expect(calls()).toBe(1);
+    expect(results[0].attemptNumber).toBe(1);
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry a TIMEOUT failure", async () => {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return { stdout: "", exitCode: null, timedOut: true, aborted: false };
+    };
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 60_000]),
+    });
+    expect(calls).toBe(1);
+    expect(results[0].failure?.code).toBe("TIMEOUT");
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry a NO_OUTPUT failure (exit 0, empty)", async () => {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return { stdout: "", exitCode: 0, timedOut: false, aborted: false };
+    };
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 5_000]),
+    });
+    expect(calls).toBe(1);
+    expect(results[0].failure?.code).toBe("NO_OUTPUT");
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry once the run has aborted (signal aborts after the first try)", async () => {
+    const ac = new AbortController();
+    const { spawn, calls } = exitFailSpawn();
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      signal: ac.signal,
+      timers: stepClock([0, 5_000]),
+      onAttemptFinish: (r) => {
+        if (r.attemptNumber === 1) ac.abort();
+      },
+    });
+    expect(calls()).toBe(1);
+    expect(results[0].retryOf).toBeUndefined();
   });
 });
 

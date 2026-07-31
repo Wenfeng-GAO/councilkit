@@ -26,6 +26,7 @@ import {
   buildProbeSpec,
   buildSpawnSpec,
 } from "../auto/driver-commands";
+import { formatDurationMs } from "../auto/duration";
 import {
   type AttemptResult,
   type RunAttemptsOutcome,
@@ -290,6 +291,10 @@ export async function runReview(
           workspace: join(paths.runDir(resumeId), "workspaces", meta.attemptId),
           activity: rec.activity,
           reused: true,
+          // Preserve the retry chain on re-render so the appendix keeps the
+          // 「第 1 次尝试（失败，已重试）」 mark across a resume (plan §"瞬态重试").
+          attemptNumber: rec.attemptNumber,
+          retryOf: rec.retryOf,
         });
       }
     }
@@ -459,11 +464,16 @@ export async function runReview(
       durationMs: r.durationMs,
       failure: r.failure ?? null,
       activity: r.activity,
+      // Transient-retry chain (plan §"瞬态重试"): every physical execution is
+      // recorded; the retried second try carries retryOf=1. Older records and
+      // synthetic results simply omit both.
+      attemptNumber: r.attemptNumber,
+      retryOf: r.retryOf,
     };
     transcript.push(rec);
     flushTranscript(transcriptPath, transcript, resumeRoot);
     out.progress(
-      `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${r.durationMs}ms)`,
+      `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${formatDurationMs(r.durationMs)})`,
     );
     // Surface the failure reason (incl. the driver's stderr tail carried on
     // the EXIT failure message) as a human-mode diagnostic (reviewer finding:
@@ -675,10 +685,16 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       p.heartbeat === undefined
         ? undefined
         : (_attemptId: string, agentName: string, elapsedMs: number) => {
-            p.out.progress(`  attempt ${agentName} 仍在运行 (${formatElapsed(elapsedMs)})`);
+            p.out.progress(`  attempt ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
           },
     onAttemptFinish: (r: AttemptResult) => {
-      completed.push(r);
+      // A retried Attempt fires this callback twice (attemptNumber 1 then 2);
+      // keep only the LAST result per logical attemptId so a mid-run callback
+      // failure never double-counts the same Attempt in the error-path report
+      // (plan §risks: completed 按 attemptId 去重).
+      const idx = completed.findIndex((x) => x.attemptId === r.attemptId);
+      if (idx === -1) completed.push(r);
+      else completed[idx] = r;
       p.recordAttemptFinished(r);
     },
   };
@@ -799,7 +815,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     });
   }
   p.out.progress(
-    `  aggregator -> ${aggregation.status} (exit ${aggregation.exitCode ?? "n/a"}, ${aggregation.durationMs}ms)`,
+    `  aggregator -> ${aggregation.status} (exit ${aggregation.exitCode ?? "n/a"}, ${formatDurationMs(aggregation.durationMs)})`,
   );
 
   // Abort during (or immediately after) aggregation is an interrupted run — NOT
@@ -1000,13 +1016,9 @@ function summarizeAttempt(r: AttemptResult): AttemptResult {
     failure: r.failure,
     activity: r.activity,
     reused: r.reused,
+    attemptNumber: r.attemptNumber,
+    retryOf: r.retryOf,
   };
-}
-
-/** Render an elapsed duration as `Xm Ys` for the human heartbeat line. */
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
 function createWorkspace(workspace: string): void {
@@ -1078,7 +1090,10 @@ function flushTranscript(
 }
 
 function parseTimeout(raw: string | undefined): number {
-  if (raw === undefined) return 30 * 60 * 1000;
+  // Default 45min (plan §"默认 45 分钟"): a real PR review needs more than the
+  // previous 30min to fetch/checkout/build; probe (60s) and explicit --timeout
+  // are unchanged.
+  if (raw === undefined) return 45 * 60 * 1000;
   const match = /^(\d+)(ms|s|m|h)$/.exec(raw);
   if (match === null) {
     throw errors.usage(`--timeout must look like 30m|600s|1h|5000ms, got "${raw}"`);

@@ -2,7 +2,8 @@
  * Parallel autonomous runner (DESIGN §2, plan §"runner 语义"). Spawns a pool
  * of fully-autonomous subprocesses, each in an isolated cwd, with per-Attempt
  * timeout + process-group kill on timeout/SIGINT. Failed Attempts are tolerated
- * (never retried) and the pool keeps draining.
+ * and the pool keeps draining; a transient EXIT failure (non-zero, <120s, not
+ * aborted) is retried ONCE inside the worker (plan §"瞬态重试").
  *
  * The runner never goes through the Runtime Host — it is direct spawn only. A
  * `spawnImpl` injection point lets tests drive the whole flow with zero real
@@ -63,6 +64,13 @@ export interface AttemptResult {
   /** True when this result was carried over from a previous run by `--resume`
    * (P2-2): not spawned, not probed, no workspace created. */
   reused?: boolean;
+  /** 1-based physical execution index for this Attempt (plan §"瞬态重试").
+   * Absent on pre-retry transcripts (and on synthetic/cancelled results);
+   * present on every real execution so transcript records can be paired. */
+  attemptNumber?: number;
+  /** When this result is the retried second execution, the `attemptNumber` of
+   * the failed first try it replaced (`1`). Absent on a non-retried Attempt. */
+  retryOf?: number;
 }
 
 export interface SpawnInput {
@@ -151,7 +159,8 @@ export interface RunAttemptsOutcome {
 }
 
 /** Run a pool of Attempts with a shared cursor; results are written back in
- * original order. Tolerates per-Attempt failure; never retries. */
+ * original order. Tolerates per-Attempt failure; retries a transient EXIT
+ * failure once (see `shouldRetry`). */
 export async function runAttempts(
   specs: ReadonlyArray<AttemptSpec>,
   opts: RunnerOptions = {},
@@ -193,21 +202,33 @@ export async function runAttempts(
       opts.onAttemptStart?.(spec.attemptId, spec.agentName);
       let result: AttemptResult;
       try {
-        result = await runOne(spec, { ...opts, timeoutMs, signal: internal.signal });
+        result = await runSpecWithRetry(spec);
       } catch (error) {
-        killInFlight();
-        throw error;
-      }
-      try {
-        opts.onAttemptFinish?.(result);
-      } catch (error) {
-        // A finish callback (e.g. transcript persistence) failed. Kill every
-        // in-flight child via the internal abort, then propagate the error.
         killInFlight();
         throw error;
       }
       results[i] = result;
     }
+  };
+
+  /** Run a single spec, retrying ONCE on a transient EXIT failure (plan §"瞬态
+   * 重试"). Each physical execution triggers `onAttemptFinish` with a 1-based
+   * `attemptNumber` (the retry carries `retryOf`); `results[i]` keeps only the
+   * final result. The retry is layered HERE — not inside `runOne` — so the
+   * probe and Aggregator (which use `spawnOnce` → `runOne` directly) are never
+   * retried, and the per-execution callback can append each try to the transcript. */
+  const runSpecWithRetry = async (spec: AttemptSpec): Promise<AttemptResult> => {
+    const subOpts = { ...opts, timeoutMs, signal: internal.signal };
+    const first = await runOne(spec, subOpts);
+    const firstResult: AttemptResult = { ...first, attemptNumber: 1 };
+    opts.onAttemptFinish?.(firstResult);
+    if (shouldRetry(firstResult, internal.signal)) {
+      const second = await runOne(spec, subOpts);
+      const secondResult: AttemptResult = { ...second, attemptNumber: 2, retryOf: 1 };
+      opts.onAttemptFinish?.(secondResult);
+      return secondResult;
+    }
+    return firstResult;
   };
 
   const workers = Array.from({ length: Math.min(concurrency, specs.length) }, () => worker());
@@ -247,6 +268,18 @@ export async function runAttempts(
     }
   }
   return { results: results as AttemptResult[], aborted };
+}
+
+/** Transient-EXIT retry predicate (plan §"瞬态重试"): retry ONCE only when the
+ * Attempt failed with a non-zero EXIT code in under 120s and the run is not
+ * being aborted. TIMEOUT / NO_OUTPUT / SPAWN_ERROR / ABORTED never match;
+ * DRIVER_UNREACHABLE is resolved at the command layer and never reaches the
+ * runner. A second failure is final — there is never a third try. */
+function shouldRetry(result: AttemptResult, signal: AbortSignal): boolean {
+  if (signal.aborted) return false;
+  if (result.failure?.code !== "EXIT") return false;
+  if (typeof result.exitCode !== "number" || result.exitCode === 0) return false;
+  return result.durationMs < 120_000;
 }
 
 /** Run a single AttemptSpec (used by the Aggregator spawn). */

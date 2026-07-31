@@ -1,9 +1,12 @@
 import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from "../report/render";
+import { formatDurationMs } from "./duration";
 /**
  * review report rendering (DESIGN §4, plan §"文件清单"/§"ReviewOutcome"). The
- * canonical `runs/<run-id>/report.md` is a deterministic header → aggregation
- * body → `## Appendix: per-attempt outputs`. Failed Attempts appear in the
- * appendix as `failed: <reason>` and are never cited in the aggregation body.
+ * canonical `runs/<run-id>/report.md` is a deterministic header (with an
+ * Attempts summary table) → aggregation body (five chapters) → `## 过程对比`
+ * → `## 附录:各审查者交付物` (fence-aware heading demotion). Failed Attempts
+ * appear in the appendix as `failed: <reason>` and are never cited in the
+ * aggregation body.
  *
  * Reuses `report/render.ts` write/assert helpers (unchanged) for the canonical
  * write + `--out` copy, so durability semantics match the `run` command.
@@ -98,7 +101,8 @@ export function renderReviewReport(input: ReviewReportInput): string {
   } else {
     sections.push(incompleteBanner(input), "");
   }
-  sections.push(renderAppendix(input));
+  sections.push(renderProcessComparison(input.attempts));
+  sections.push(renderAppendix(input.attempts));
   return sections.join("\n");
 }
 
@@ -112,13 +116,7 @@ function renderHeader(input: ReviewReportInput): string {
   lines.push(
     `- Aggregator: ${input.aggregator.agentName} (${input.aggregator.driverId}/${input.aggregator.modelId})`,
   );
-  lines.push("- Attempts:");
-  for (const a of input.attempts) {
-    const mark = a.status === "success" ? "ok" : `failed:${a.failure?.code ?? "unknown"}`;
-    lines.push(
-      `  - ${a.agentName} (${a.driverId}/${a.modelId}) — ${mark} — exit ${a.exitCode ?? "n/a"} — ${a.durationMs}ms`,
-    );
-  }
+  lines.push("", renderAttemptsTable(input.attempts));
   lines.push(`- Status: ${statusLabel(input)}`);
   if (input.reason && input.reason.trim().length > 0) {
     lines.push(`- Reason: ${input.reason.trim()}`);
@@ -129,6 +127,29 @@ function renderHeader(input: ReviewReportInput): string {
   return lines.join("\n");
 }
 
+/** Fixed five-column attempts summary table (plan §"报告重排"). `|` and newlines
+ * in a cell are escaped so a driver's output never breaks the table grid; an
+ * Attempt without captured activity shows 「无过程数据」 in the 工具调用 column. */
+function renderAttemptsTable(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = [
+    "| Attempt | Driver/Model | 结果 | 耗时 | 工具调用 |",
+    "| --- | --- | --- | --- | --- |",
+  ];
+  for (const a of attempts) {
+    const result = a.status === "success" ? "ok" : `failed:${a.failure?.code ?? "unknown"}`;
+    const toolCalls = a.activity === undefined ? "无过程数据" : `${a.activity.toolCalls}`;
+    lines.push(
+      `| ${cell(a.agentName)} | ${cell(`${a.driverId}/${a.modelId}`)} | ${cell(result)} | ${cell(formatDurationMs(a.durationMs))} | ${cell(toolCalls)} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Escape pipe and newline so a cell value can never split the table row. */
+function cell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 /** Distinguish completed / partial (incomplete success) / failed / interrupted
  * in the report header — an interrupted run must not read as merely "incomplete". */
 function statusLabel(input: ReviewReportInput): string {
@@ -137,18 +158,110 @@ function statusLabel(input: ReviewReportInput): string {
   return input.incomplete ? "partial" : "complete";
 }
 
-function renderAppendix(input: ReviewReportInput): string {
-  const lines: string[] = ["## Appendix: per-attempt outputs", ""];
-  if (input.attempts.length === 0) {
+/** `## 过程对比` (plan §"报告重排"): one block per Attempt — formatted duration,
+ * tool-call count and the deduplicated commands. Rendering-time dedup strips a
+ * leading proxy env prefix (noted once at the section top) and run-length
+ * encodes ADJACENT identical commands as `×N` (non-adjacent repeats are kept).
+ * Attempts without captured activity show 无过程数据. */
+function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = ["## 过程对比", ""];
+  let strippedProxy = false;
+  for (const a of attempts) {
+    const reusedMark = a.reused === true ? " [reused]" : "";
+    lines.push(`- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark}`);
+    lines.push(`  - 耗时：${formatDurationMs(a.durationMs)}`);
+    if (a.activity === undefined) {
+      lines.push("  - 无过程数据");
+      continue;
+    }
+    lines.push(`  - 工具调用：${a.activity.toolCalls} 次`);
+    const rendered = dedupCommands(a.activity.commands);
+    if (rendered.some((c) => c.strippedProxy)) strippedProxy = true;
+    for (const c of rendered) lines.push(`  - \`${c.text}\``);
+  }
+  if (strippedProxy) {
+    // One note at the section top: the proxy env prefix was omitted from the
+    // commands below (it is identical on every internal-tool invocation).
+    lines.splice(1, 0, "> 已省略命令前的 NO_PROXY/HTTPS_PROXY/HTTP_PROXY 等代理前缀。", "");
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/** One proxy env prefix to strip (case-insensitive). A command may carry several
+ * consecutive prefixes (`NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY='' <cmd>`); all
+ * leading prefixes are removed. */
+const PROXY_ENV_RE =
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"[^"]*"|\S+)\s+/;
+
+interface RenderedCommand {
+  text: string;
+  /** True when a proxy env prefix was stripped from this command. */
+  strippedProxy: boolean;
+}
+
+/** Strip the leading proxy env prefix from a single captured command. Returns
+ * the remainder and whether a prefix was removed. */
+function stripProxyPrefix(cmd: string): { text: string; stripped: boolean } {
+  let stripped = false;
+  let cur = cmd;
+  // Loop: there may be multiple consecutive proxy env assignments.
+  for (;;) {
+    const next = cur.replace(PROXY_ENV_RE, "");
+    if (next === cur) break;
+    cur = next;
+    stripped = true;
+  }
+  return { text: cur, stripped };
+}
+
+/** Run-length encode ADJACENT identical (post-proxy-strip) commands as `×N`.
+ * Non-adjacent repeats are NOT merged — a global set would drop ordering and
+ * falsely merge separated repeats (plan §risks). The 80-char truncation from
+ * the collection phase is preserved as-is. */
+function dedupCommands(commands: ReadonlyArray<string>): RenderedCommand[] {
+  interface Acc {
+    stripedText: string;
+    text: string;
+    strippedProxy: boolean;
+    count: number;
+  }
+  const out: Acc[] = [];
+  for (const raw of commands) {
+    const { text, stripped } = stripProxyPrefix(raw);
+    const last = out[out.length - 1];
+    if (last !== undefined && last.stripedText === text) {
+      last.count++;
+      continue;
+    }
+    out.push({ stripedText: text, text, strippedProxy: stripped, count: 1 });
+  }
+  return out.map((c) => ({
+    text: c.count > 1 ? `${c.text} ×${c.count}` : c.text,
+    strippedProxy: c.strippedProxy,
+  }));
+}
+
+/** `## 附录:各审查者交付物` (plan §"报告重排"): per-attempt `### <name>` with the
+ * deliverable's ATX headings demoted two levels OUTSIDE code fences, so no H1/H2
+ * from a deliverable can pollute the report outline. A retried Attempt is marked
+ * 「第 1 次尝试（失败，已重试）」 from the retry chain carried on the result. */
+function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = ["## 附录:各审查者交付物", ""];
+  if (attempts.length === 0) {
     lines.push("_(no attempts ran.)_", "");
     return lines.join("\n");
   }
-  lines.push(renderProcessComparison(input.attempts));
-  for (const a of input.attempts) {
+  for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
     lines.push(`### ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark}`, "");
+    // A retried Attempt keeps only its final result here; the failed first try
+    // is noted once so the appendix never silently drops it.
+    if (a.retryOf !== undefined) {
+      lines.push("> 第 1 次尝试（失败，已重试）", "");
+    }
     if (a.status === "success" && a.output.trim().length > 0) {
-      lines.push(a.output.trim(), "");
+      lines.push(downgradeHeadingsOutsideFences(a.output.trim()), "");
     } else {
       lines.push(
         `failed: ${a.failure?.code ?? "unknown"} — ${a.failure?.message ?? "no output"}`,
@@ -159,26 +272,48 @@ function renderAppendix(input: ReviewReportInput): string {
   return lines.join("\n");
 }
 
-/** 「过程对比」小节 (P2-1): per-Attempt duration, tool-call count and the
- * representative commands captured from the stream. Attempts without captured
- * process data (unrecognized format, or a reused result from an older run)
- * show 无过程数据 — never an error. */
-function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string {
-  const lines: string[] = ["### 过程对比", ""];
-  for (const a of attempts) {
-    const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark} — ${a.durationMs}ms`);
-    if (a.activity === undefined) {
-      lines.push("  - 无过程数据");
+/** Demote ATX headings by two levels outside fenced code blocks. Fences are
+ * recognized by up to 3 leading spaces followed by ``` or ~~~ (≥3 repeats); a
+ * fence closes only on a line of the SAME character with length ≥ the opening
+ * fence. Setext headings are deliberately NOT processed: the output contract is
+ * ATX, and `---` may also be a thematic break (plan §risks). */
+function downgradeHeadingsOutsideFences(text: string): string {
+  const lines = text.split("\n");
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (inFence) {
+      out.push(line);
+      const closeMatch = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+      if (
+        closeMatch !== null &&
+        closeMatch[2][0] === fenceChar &&
+        closeMatch[2].length >= fenceLen
+      ) {
+        inFence = false;
+      }
       continue;
     }
-    lines.push(`  - 工具调用：${a.activity.toolCalls} 次`);
-    for (const cmd of a.activity.commands) {
-      lines.push(`  - \`${cmd}\``);
+    const openMatch = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+    if (openMatch !== null) {
+      inFence = true;
+      fenceChar = openMatch[2][0];
+      fenceLen = openMatch[2].length;
+      out.push(line);
+      continue;
+    }
+    const heading = /^( {0,3})(#{1,6})(?=[ \t]|$)(.*)$/.exec(line);
+    if (heading !== null) {
+      // Add two `#` to the marker: H1→H3, H2→H4 (under the `### <name>` heading);
+      // H5/H6 grow to 7/8 and naturally fall out of the outline.
+      out.push(`${heading[1]}##${heading[2]}${heading[3]}`);
+    } else {
+      out.push(line);
     }
   }
-  lines.push("");
-  return lines.join("\n");
+  return out.join("\n");
 }
 
 function taskLine(task: ReviewTask): string {

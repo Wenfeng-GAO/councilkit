@@ -313,7 +313,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(report).toContain("## Disagreements");
     expect(report).toContain("## Verdict");
     // Appendix with each attempt named + the aggregator's own attempt output.
-    expect(report).toContain("## Appendix: per-attempt outputs");
+    expect(report).toContain("## 附录:各审查者交付物");
     expect(report).toContain("Alice");
     expect(report).toContain("Bob");
     expect(report).toContain("Carol");
@@ -1615,7 +1615,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(attemptRecs).toHaveLength(2);
     expect(attemptRecs.every((r) => r.exitCode === "killed")).toBe(true);
     const report = readFileSync(outcome.reportPath, "utf8");
-    expect(report).toContain("exit killed");
+    expect(report).toContain("failed:TIMEOUT");
   });
 
   it("human mode emits a 仍在运行 heartbeat per interval and stops when the attempt finishes", async () => {
@@ -1647,10 +1647,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
     expect(exitCode).toBe(0);
     const beats = sink.lines.filter((l) => l.includes("仍在运行"));
-    expect(beats).toEqual([
-      "  attempt Alice 仍在运行 (0m 30s)",
-      "  attempt Alice 仍在运行 (1m 0s)",
-    ]);
+    expect(beats).toEqual(["  attempt Alice 仍在运行 (30s)", "  attempt Alice 仍在运行 (1m00s)"]);
     // The timer is always cleared — a finished attempt never heartbeats again.
     expect(fake.activeCount()).toBe(0);
   });
