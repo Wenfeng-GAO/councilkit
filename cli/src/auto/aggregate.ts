@@ -180,7 +180,7 @@ function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string
     if (rendered.some((c) => c.strippedProxy)) strippedProxy = true;
     // No commands → omit the trailing command segment entirely.
     const commandSeg =
-      rendered.length > 0 ? ` — ${rendered.map((c) => `\`${c.text}\``).join("; ")}` : "";
+      rendered.length > 0 ? ` — ${rendered.map((c) => codeSpan(c.text)).join("; ")}` : "";
     lines.push(`${head} — 工具调用 ${a.activity.toolCalls} 次${commandSeg}`);
   }
   if (strippedProxy) {
@@ -194,9 +194,12 @@ function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string
 
 /** One proxy env prefix to strip (case-insensitive). A command may carry several
  * consecutive prefixes (`NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY='' <cmd>`); all
- * leading prefixes are removed. */
+ * leading prefixes are removed. The value MUST be quoted — an unquoted value
+ * containing escaped spaces or command substitution would be partially stripped
+ * and leave command fragments behind (reviewer finding); those commands are
+ * left untouched instead. */
 const PROXY_ENV_RE =
-  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"[^"]*"|\S+)\s+/;
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"[^"]*")\s+/;
 
 interface RenderedCommand {
   text: string;
@@ -361,4 +364,12 @@ export function writeCanonicalReviewReport(path: string, markdown: string): void
 /** Atomic copy to `--out`; the canonical artifact is already preserved. */
 export function writeReviewReportCopy(outPath: string, markdown: string): void {
   writeReportCopy(outPath, markdown);
+}
+
+/** Markdown inline-code span for a command: single backticks normally, but a
+ * command that itself contains a backtick must use a longer fence — otherwise
+ * the embedded backtick closes the span early and the rest renders as prose
+ * (reviewer finding). */
+function codeSpan(text: string): string {
+  return text.includes("`") ? "`` " + text + " ``" : "`" + text + "`";
 }

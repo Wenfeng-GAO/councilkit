@@ -364,3 +364,35 @@ describe("cli auto aggregate — transient retry mark", () => {
     expect(appendix).not.toContain("第 1 次尝试");
   });
 });
+
+describe("cli auto aggregate — proxy strip + code span edge cases", () => {
+  it("does NOT strip an unquoted proxy value containing an escaped space", () => {
+    // Reviewer finding: the old regex accepted `\S+` values, so
+    // `NO_PROXY=a\ b antcode pr diff` was partially stripped, leaving a
+    // command fragment. Only quoted prefixes are stripped now.
+    const md = renderReviewReport(
+      buildInput([
+        attempt({
+          agentName: "Alice",
+          activity: { toolCalls: 1, commands: ["NO_PROXY=a\\ b antcode pr diff 1443"] },
+        }),
+      ]),
+    );
+    const proc = md.slice(md.indexOf("## 过程对比"), md.indexOf("## 附录:各审查者交付物"));
+    expect(proc).toContain("NO_PROXY=a\\ b antcode pr diff 1443");
+    expect(proc).not.toContain("已省略命令前的");
+  });
+
+  it("renders a command containing backticks with a double-backtick code span", () => {
+    const md = renderReviewReport(
+      buildInput([
+        attempt({
+          agentName: "Alice",
+          activity: { toolCalls: 1, commands: ["echo `date`"] },
+        }),
+      ]),
+    );
+    const proc = md.slice(md.indexOf("## 过程对比"), md.indexOf("## 附录:各审查者交付物"));
+    expect(proc).toContain("`` echo `date` ``");
+  });
+});
