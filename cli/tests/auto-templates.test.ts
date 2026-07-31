@@ -65,6 +65,21 @@ describe("cli auto templates — attempt prompt", () => {
       "先用 gh pr diff / antcode pr diff 落盘到文件再分段读取，避免盲目目录探索。",
     );
   });
+
+  it("does NOT inject the diff-to-file hint in --task mode (no PR target)", () => {
+    // Reviewer finding: the gh/antcode pr-diff-to-file guidance was injected
+    // unconditionally, so a --task run with no PR target was still told to land
+    // a PR diff first. It must only appear under --pr.
+    const prompt = buildAttemptPrompt({
+      agentName: "A",
+      personaPrompt: "",
+      task: { task: "audit the dependencies for known CVEs" },
+    });
+    expect(prompt).not.toContain("先用 gh pr diff / antcode pr diff 落盘到文件");
+    // The general autonomy guidance is still present in --task mode.
+    expect(prompt).toContain("全量 build 前先评估时长，优先定向测试。");
+    expect(prompt).toContain("audit the dependencies for known CVEs");
+  });
 });
 
 describe("cli auto templates — aggregate prompt", () => {

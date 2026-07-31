@@ -152,6 +152,24 @@ describe("cli auto aggregate — fence-aware heading demotion", () => {
     expect(appendix).toContain("### After");
   });
 
+  it("does not close a fence on a ``` line carrying info/text (only on a bare fence run)", () => {
+    // Reviewer finding: the close-fence regex was not anchored to end-of-line,
+    // so a same-character fence run WITH trailing info/text (e.g. ```text inside
+    // a fenced block) was mistaken for a close, re-enabling heading demotion
+    // mid-fence. A close must be the fence run alone on its line.
+    const output = "# Outside\n```\n# inside\n```text\n# still inside\n```\n# After";
+    const md = renderReviewReport(buildInput([attempt({ agentName: "Alice", output })]));
+    const appendix = md.slice(md.indexOf("### Alice"));
+    expect(appendix).toContain("### Outside\n");
+    // The ```text line did NOT close the fence → the next line stays verbatim.
+    expect(appendix).toContain("\n# still inside\n");
+    expect(appendix).toContain("```text");
+    // The bare ``` line DOES close → the trailing heading is demoted.
+    expect(appendix).toContain("### After");
+    // The line immediately after the opening fence stayed inside (not demoted).
+    expect(appendix).toContain("\n# inside\n");
+  });
+
   it("does not process Setext headings (left verbatim)", () => {
     const output = "A title\n======\n\nA section\n------\n";
     const md = renderReviewReport(buildInput([attempt({ agentName: "Alice", output })]));
@@ -214,6 +232,29 @@ describe("cli auto aggregate — process comparison command normalization", () =
     );
     const proc = md.slice(md.indexOf("## 过程对比"), md.indexOf("## 附录:各审查者交付物"));
     expect(proc).not.toContain("已省略命令前的");
+  });
+
+  it("merges the stripped-proxy flag across ×N members (note fires if any member had a prefix)", () => {
+    // Reviewer finding: when adjacent identical (post-strip) commands were
+    // run-length encoded, the strippedProxy flag was taken only from the first
+    // member. A group whose first member lacked the prefix (bare `git diff`)
+    // but whose second had one (`NO_PROXY='*' git diff`) lost the flag, so the
+    // 「已省略」note silently disappeared even though a proxy was stripped.
+    const md = renderReviewReport(
+      buildInput([
+        attempt({
+          agentName: "Alice",
+          activity: {
+            toolCalls: 2,
+            commands: ["git diff", "NO_PROXY='*' git diff"],
+          },
+        }),
+      ]),
+    );
+    const proc = md.slice(md.indexOf("## 过程对比"), md.indexOf("## 附录:各审查者交付物"));
+    expect(proc).toContain("`git diff ×2`");
+    expect(proc).toContain("已省略命令前的 NO_PROXY/HTTPS_PROXY/HTTP_PROXY 等代理前缀");
+    expect(proc).not.toContain("NO_PROXY='*'");
   });
 });
 

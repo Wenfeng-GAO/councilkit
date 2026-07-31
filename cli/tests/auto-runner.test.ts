@@ -6,7 +6,7 @@
  * ChildProcess (EventEmitter + PassThrough) — never a real subprocess.
  */
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -379,6 +379,81 @@ describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", ()
     });
     expect(calls()).toBe(1);
     expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("rebuilds the workspace before the retry spawn (no leftover .last-message.md)", async () => {
+    // Reviewer finding: the retry reused the first try's dirty cwd, so a codex
+    // leftover `.last-message.md` could be read as the second try's deliverable
+    // even when it produced no new output. The `rebuildWorkspaceBeforeRetry`
+    // hook must fire between the failed first spawn and the retry, handing the
+    // retry a pristine EMPTY workspace.
+    const ws = mkdtempSync(join(tmpdir(), "ck-runner-retry-"));
+    try {
+      // Seed a stale codex last-message file from the failed first attempt.
+      writeFileSync(join(ws, ".last-message.md"), "STALE-FIRST-ATTEMPT");
+      let calls = 0;
+      const seenContents: string[] = [];
+      const spawn: SpawnImpl = async (input) => {
+        calls++;
+        seenContents.push(readdirSync(input.cwd).sort().join(",") || "(empty)");
+        const fail = calls === 1; // first try: non-zero EXIT under 120s → retry
+        return {
+          stdout: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "ok",
+          }),
+          exitCode: fail ? 1 : 0,
+          timedOut: false,
+          aborted: false,
+        };
+      };
+      let rebuildCalls = 0;
+      const rebuiltCwds: string[] = [];
+      const { results } = await runAttempts([spec("0", ws)], {
+        spawnImpl: spawn,
+        timers: stepClock([0, 5_000]),
+        rebuildWorkspaceBeforeRetry: (s) => {
+          rebuildCalls++;
+          rebuiltCwds.push(s.cwd);
+          // Simulate the fs-safe delete-then-recreate: empty the dir before the
+          // retry spawn lands in it.
+          rmSync(s.cwd, { recursive: true, force: true });
+          mkdirSync(s.cwd, { recursive: true });
+        },
+      });
+      expect(calls).toBe(2);
+      expect(rebuildCalls).toBe(1);
+      expect(rebuiltCwds).toEqual([ws]);
+      // The first spawn saw the stale residue in its cwd.
+      expect(seenContents[0]).toContain(".last-message.md");
+      // The retry spawn saw an EMPTY workspace (rebuilt before the retry).
+      expect(seenContents[1]).toBe("(empty)");
+      expect(results[0].status).toBe("success");
+      // The stale file did not survive into the retry.
+      expect(existsSync(join(ws, ".last-message.md"))).toBe(false);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT call rebuildWorkspaceBeforeRetry when no retry happens (success first try)", async () => {
+    let rebuildCalls = 0;
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }),
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 5_000]),
+      rebuildWorkspaceBeforeRetry: () => {
+        rebuildCalls++;
+      },
+    });
+    expect(rebuildCalls).toBe(0);
   });
 });
 

@@ -232,6 +232,13 @@ function dedupCommands(commands: ReadonlyArray<string>): RenderedCommand[] {
     const last = out[out.length - 1];
     if (last !== undefined && last.stripedText === text) {
       last.count++;
+      // Fold the proxy-stripped flag across every merged member: if ANY of the
+      // adjacent identical commands had a proxy prefix stripped, the group is
+      // treated as stripped so the「已省略」note still fires. Otherwise a group
+      // whose FIRST member lacked the prefix (e.g. `foo` then `NO_PROXY='*' foo`)
+      // would lose the flag and the note would silently disappear (reviewer
+      // finding).
+      last.strippedProxy = last.strippedProxy || stripped;
       continue;
     }
     out.push({ stripedText: text, text, strippedProxy: stripped, count: 1 });
@@ -286,7 +293,12 @@ function downgradeHeadingsOutsideFences(text: string): string {
   for (const line of lines) {
     if (inFence) {
       out.push(line);
-      const closeMatch = /^( {0,3})(`{3,}|~{3,})/.exec(line);
+      // A CLOSING fence is the fence run alone on its line (up to 3 leading
+      // spaces, then only whitespace after) — a same-character run WITH trailing
+      // info/text (e.g. ```js inside a fenced block) must NOT close the fence
+      // (reviewer finding: the unanchored regex treated any line starting with
+      // ```/~~~ as a close, mistakenly re-enabling heading demotion mid-fence).
+      const closeMatch = /^( {0,3})(`{3,}|~{3,})\s*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[2][0] === fenceChar &&

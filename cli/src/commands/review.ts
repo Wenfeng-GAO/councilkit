@@ -201,6 +201,12 @@ export async function runReview(
   // rebound from the current runsRoot, which could have been swapped in
   // between (reviewer finding).
   let resumeRoot: TrustedRoot | null = null;
+  // The trusted runs root bound for THIS run (fresh or carried from a resume).
+  // Hoisted to function scope so `buildExecuteParams` can thread it to
+  // `executeReview`, which wires the retry-time workspace rebuild. Assigned in
+  // the spawn branch below; stays null on the aggregator-unreachable path where
+  // `executeReview` is never called.
+  let trustedRoot: TrustedRoot | null = null;
   if (resumeRaw !== undefined) {
     const resumeId = resumeRaw.trim();
     if (!RUN_ID_PATTERN.test(resumeId)) {
@@ -569,16 +575,17 @@ export async function runReview(
       // bound at the entry (revalidated here: a root swapped since entry —
       // dev/ino changed — is fail-closed exit 5); it NEVER rebinds the
       // current runsRoot, which would silently bless the swap.
-      let trustedRoot: TrustedRoot | null;
+      let trustedRootBound: TrustedRoot | null;
       if (resumeRoot !== null) {
         revalidateTrustedRoot(resumeRoot);
-        trustedRoot = resumeRoot;
+        trustedRootBound = resumeRoot;
       } else {
-        trustedRoot = bindTrustedRoot(paths.runsRoot);
+        trustedRootBound = bindTrustedRoot(paths.runsRoot);
       }
-      if (trustedRoot === null) {
+      if (trustedRootBound === null) {
         throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
       }
+      trustedRoot = trustedRootBound;
       for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
       recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
       const params = buildExecuteParams();
@@ -624,6 +631,7 @@ export async function runReview(
       transcript,
       recordAttemptFinished,
       resumeRoot,
+      trustedRoot,
       // Human-mode heartbeat only (plan: JSON mode emits no human heartbeat).
       heartbeat: out.json
         ? undefined
@@ -665,6 +673,11 @@ interface ExecuteParams {
   /** The runs-root binding from the resume entry (null for a fresh run):
    * revalidated before every resume-related write below, never rebound. */
   resumeRoot: TrustedRoot | null;
+  /** The trusted runs root bound for THIS run (fresh or carried from a resume).
+   * Non-null whenever `executeReview` runs — it is null only on the
+   * aggregator-unreachable path that finalizes without spawning. Used to rebuild
+   * a pristine workspace before the transient-retry spawn (reviewer finding). */
+  trustedRoot: TrustedRoot | null;
   /** Human heartbeat config; undefined in JSON mode. */
   heartbeat?: { intervalMs?: number; timers?: RunnerTimers };
 }
@@ -697,6 +710,14 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       else completed[idx] = r;
       p.recordAttemptFinished(r);
     },
+    // Rebuild a pristine workspace (fs-safe delete-then-recreate under the
+    // bound runs root) before the retry spawn, so the failed first try's
+    // leftover cwd — notably a codex `.last-message.md` — cannot pass a
+    // no-output second try off as a real deliverable (reviewer finding).
+    rebuildWorkspaceBeforeRetry:
+      p.trustedRoot === null
+        ? undefined
+        : (s: AttemptSpec) => recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot),
   };
 
   let attemptsOutcome: RunAttemptsOutcome;

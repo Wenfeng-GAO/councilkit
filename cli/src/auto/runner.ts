@@ -150,6 +150,13 @@ export interface RunnerOptions {
    * the Aggregator spawn (aggregation is not an Attempt). */
   onHeartbeat?: (attemptId: string, agentName: string, elapsedMs: number) => void;
   timers?: RunnerTimers;
+  /** Rebuild an Attempt's workspace to a pristine empty dir BEFORE the retry
+   * spawn (reviewer finding: the retry reused the first try's dirty cwd, so a
+   * codex leftover `.last-message.md` could pass a no-output second try off as
+   * a real deliverable). Wired by the command layer to its fs-safe
+   * delete-then-recreate path; absent for callers that don't own a workspace
+   * (probe / Aggregator never retry, and tests can inject a fake). */
+  rebuildWorkspaceBeforeRetry?: (spec: AttemptSpec) => void;
 }
 
 export interface RunAttemptsOutcome {
@@ -223,6 +230,14 @@ export async function runAttempts(
     const firstResult: AttemptResult = { ...first, attemptNumber: 1 };
     opts.onAttemptFinish?.(firstResult);
     if (shouldRetry(firstResult, internal.signal)) {
+      // Rebuild a PRISTINE workspace before the retry spawn: the first try's
+      // cwd now holds its leftovers (a stale checkout, codex's `.last-message.md`,
+      // …) and reusing it would let a no-output second try piggyback on the
+      // first try's artifacts and pass off stale bytes as a fresh deliverable
+      // (reviewer finding). The command layer owns the workspace lifecycle, so
+      // it injects the fs-safe delete-then-recreate path here; a throw propagates
+      // through the worker's try/catch and kills the pool like any run failure.
+      opts.rebuildWorkspaceBeforeRetry?.(spec);
       const second = await runOne(spec, subOpts);
       const secondResult: AttemptResult = { ...second, attemptNumber: 2, retryOf: 1 };
       opts.onAttemptFinish?.(secondResult);
