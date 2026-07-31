@@ -215,7 +215,10 @@ function stripProxyPrefix(cmd: string): { text: string; stripped: boolean } {
   // Loop: there may be multiple consecutive proxy env assignments.
   for (;;) {
     const next = cur.replace(PROXY_ENV_RE, "");
-    if (next === cur) break;
+    // A STANDALONE assignment (`NO_PROXY='*'` with nothing after it) is a shell
+    // statement of its own, not a prefix — stripping it would erase the command
+    // entirely (reviewer finding). Only strip when a real command follows.
+    if (next === cur || next.trim().length === 0) break;
     cur = next;
     stripped = true;
   }
@@ -305,7 +308,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       // info/text (e.g. ```js inside a fenced block) must NOT close the fence
       // (reviewer finding: the unanchored regex treated any line starting with
       // ```/~~~ as a close, mistakenly re-enabling heading demotion mid-fence).
-      const closeMatch = /^( {0,3})(`{3,}|~{3,})\s*$/.exec(line);
+      const closeMatch = /^( {0,3})(`{3,}|~{3,})[ \t]*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[2][0] === fenceChar &&
@@ -366,10 +369,14 @@ export function writeReviewReportCopy(outPath: string, markdown: string): void {
   writeReportCopy(outPath, markdown);
 }
 
-/** Markdown inline-code span for a command: single backticks normally, but a
- * command that itself contains a backtick must use a longer fence — otherwise
- * the embedded backtick closes the span early and the rest renders as prose
+/** Markdown inline-code span for a command: use a backtick fence one longer
+ * than the longest backtick run in the text (CommonMark rule) — a command
+ * containing `` ` `` or `` `` `` would otherwise close the span early
  * (reviewer finding). */
 function codeSpan(text: string): string {
-  return text.includes("`") ? "`` " + text + " ``" : "`" + text + "`";
+  const runs = text.match(/`+/g);
+  const max = runs === null ? 0 : Math.max(...runs.map((r) => r.length));
+  if (max === 0) return "`" + text + "`";
+  const fence = "`".repeat(max + 1);
+  return `${fence} ${text} ${fence}`;
 }

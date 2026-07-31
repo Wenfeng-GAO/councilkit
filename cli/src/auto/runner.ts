@@ -10,6 +10,7 @@
  * processes.
  */
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { redact } from "../redact";
 import {
   type AttemptActivity,
@@ -116,7 +117,10 @@ function defaultKillProcessGroup(negativePid: number, signal: NodeJS.Signals): v
 export type SpawnImpl = (input: SpawnInput) => Promise<SpawnOutput>;
 
 /** Injectable clock + interval handles (P2-1 heartbeat). Tests drive the
- * heartbeat with a fake clock; production uses Date.now + setInterval. */
+ * heartbeat with a fake clock; production uses the MONOTONIC
+ * `performance.now()` — a wall-clock rollback (NTP slew) must never make a
+ * long-running Attempt look like a sub-120s transient failure and trigger a
+ * retry (reviewer finding). */
 export interface RunnerTimers {
   now(): number;
   setInterval(callback: () => void, ms: number): unknown;
@@ -124,7 +128,9 @@ export interface RunnerTimers {
 }
 
 const defaultTimers: RunnerTimers = {
-  now: () => Date.now(),
+  // Round to integer ms: the transcript schema requires nonnegative integers,
+  // and performance.now() is fractional (reviewer finding's schema regression).
+  now: () => Math.round(performance.now()),
   setInterval: (callback, ms) => {
     const handle = setInterval(callback, ms);
     // Never let a heartbeat keep the process alive on its own.
@@ -350,7 +356,10 @@ async function runOne(
   } finally {
     if (heartbeat !== undefined) timers.clearInterval(heartbeat);
   }
-  const durationMs = timers.now() - started;
+  // Clamp at zero: even with a monotonic clock, a fake/injected timer may jump
+  // backwards; a negative durationMs would violate the transcript's
+  // nonnegative schema and break --resume parsing (reviewer finding).
+  const durationMs = Math.max(0, timers.now() - started);
 
   const extracted =
     out.error !== undefined
