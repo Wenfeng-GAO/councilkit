@@ -283,6 +283,11 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
   return lines.join("\n");
 }
 
+/** Escape a string for use as a literal in a RegExp source. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\/** Demote ATX headings by two levels outside fenced code blocks.");
+}
+
 /** Demote ATX headings by two levels outside fenced code blocks. Fences are
  * recognized by up to 3 leading spaces followed by ``` or ~~~ (≥3 repeats); a
  * fence closes only on a line of the SAME character with length ≥ the opening
@@ -297,6 +302,11 @@ function downgradeHeadingsOutsideFences(text: string): string {
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;
+  /** The list-marker prefix of the current fence ("" for top-level). A fence
+   * opened inside a list item can only be closed by a line with the SAME
+   * prefix — a bare `- ``` ` inside a top-level fence is content, not a
+   * closer (reviewer finding from the naive list support). */
+  let fencePrefix = "";
   const out: string[] = [];
   for (const line of lines) {
     if (inFence) {
@@ -306,31 +316,32 @@ function downgradeHeadingsOutsideFences(text: string): string {
       // info/text (e.g. ```js inside a fenced block) must NOT close the fence
       // (reviewer finding: the unanchored regex treated any line starting with
       // ```/~~~ as a close, mistakenly re-enabling heading demotion mid-fence).
-      const closeMatch = /^( {0,3})(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMatch = new RegExp(
+        "^ {0,3}" + escapeRegExp(fencePrefix) + "(`{3,}|~{3,})[ \\t]*$",
+      ).exec(line);
       if (
         closeMatch !== null &&
-        closeMatch[2][0] === fenceChar &&
-        closeMatch[2].length >= fenceLen
+        closeMatch[1][0] === fenceChar &&
+        closeMatch[1].length >= fenceLen
       ) {
         inFence = false;
       }
       continue;
     }
-    // Only TOP-LEVEL fences (≤3 leading spaces). Fences nested in list items
-    // are deliberately NOT tracked: recognizing them corrupted the state
-    // machine (list-marker closers vs top-level content, indented force-close
-    // becoming a new opener — reviewer findings). The cost is over-demotion of
-    // headings inside a list-nested code sample, which is display-only.
-    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+    // Top-level fences (≤3 spaces) and fences nested ONE list level deep
+    // (single marker + 1-4 spaces). The prefix is tracked so the closer must
+    // carry the same one — deeper nesting stays untracked (over-demotion of
+    // headings inside it is display-only, never outline-breaking).
+    const openMatch = /^( {0,3})((?:[-*+] {1,4}|\d+[.)] {1,4})?)(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
-      const fenceCh = openMatch[2][0];
+      const fenceCh = openMatch[3][0];
       // CommonMark: a BACKTICK fence's info string must not contain a backtick
       // — a line like ``` `inline` ``` is not a fence opening (it is paragraph
       // text), so the H1/H2 that follow must still be demoted. A tilde fence's
       // info string has no such restriction. Without this rule a backtick fence
       // whose info carried a backtick swallowed the rest of the deliverable,
       // disabling heading demotion (reviewer finding).
-      if (fenceCh === "`" && openMatch[3].includes("`")) {
+      if (fenceCh === "`" && openMatch[4].includes("`")) {
         // Not a fence opening (backtick fence info must not contain a backtick);
         // the line is paragraph text, kept verbatim, and heading demotion stays
         // active for the lines that follow.
@@ -339,7 +350,8 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       inFence = true;
       fenceChar = fenceCh;
-      fenceLen = openMatch[2].length;
+      fenceLen = openMatch[3].length;
+      fencePrefix = openMatch[2];
       out.push(line);
       continue;
     }
@@ -358,7 +370,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
   // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
   // after this output is never consumed (reviewer findings).
   if (inFence) {
-    out.push(fenceChar.repeat(Math.max(3, fenceLen)));
+    out.push(fencePrefix + fenceChar.repeat(Math.max(3, fenceLen)));
   }
   return out.join("\n");
 }

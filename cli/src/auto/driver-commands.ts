@@ -512,9 +512,15 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
     cur = next;
     stripped = true;
   }
-  // The remainder is itself assignment-only (`NO_PROXY='1' HTTPS_PROXY='2'`):
-  // there was never a command to prefix — revert (reviewer finding).
-  if (stripped && /^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(cur)) {
+  // The remainder is ENTIRELY assignments with no command (`NO_PROXY='1'
+  // HTTPS_PROXY='2'`, or `FOO='1' BAR=2`): there was never a command to
+  // prefix — revert. A remainder of `FOO='1' antcode …` (env prefix + real
+  // command) is NOT caught by this: it contains a non-assignment token
+  // (reviewer finding: the starts-with-assignment check reverted those too).
+  if (
+    stripped &&
+    /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\.)*"|\S*)\s*)+$/.test(cur)
+  ) {
     return { text: cmd, stripped: false };
   }
   return { text: cur, stripped };

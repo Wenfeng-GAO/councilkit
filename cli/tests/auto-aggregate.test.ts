@@ -396,3 +396,27 @@ describe("cli auto aggregate — proxy strip + code span edge cases", () => {
     expect(proc).toContain("`` echo `date` ``");
   });
 });
+
+describe("cli auto aggregate — list-aware fence state machine", () => {
+  const wrap = (output: string) =>
+    renderReviewReport(buildInput([attempt({ agentName: "Alice", output })]));
+
+  it("a bare `- ``` ` inside a TOP-LEVEL fence is content, not a closer", () => {
+    const md = wrap(["```", "- ``` ", "# still-code", "```", "# After"].join("\n"));
+    // The heading inside the fence is untouched; the one after the real close
+    // is demoted two levels (H1 → H3).
+    expect(md).toContain("# still-code");
+    expect(md).toContain("### After");
+  });
+
+  it("a list-nested fence opens and closes with the same marker", () => {
+    const md = wrap(["- ```js", "  # code-heading", "- ```", "# After"].join("\n"));
+    expect(md).toContain("# code-heading");
+    expect(md).toContain("### After");
+  });
+
+  it("an unclosed list-nested fence is force-closed WITH its prefix", () => {
+    const md = wrap(["- ```js", "  const x = 1;"].join("\n"));
+    expect(md).toContain("- ```");
+  });
+});
