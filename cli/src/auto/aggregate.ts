@@ -217,8 +217,10 @@ function stripProxyPrefix(cmd: string): { text: string; stripped: boolean } {
     const next = cur.replace(PROXY_ENV_RE, "");
     // A STANDALONE assignment (`NO_PROXY='*'` with nothing after it) is a shell
     // statement of its own, not a prefix — stripping it would erase the command
-    // entirely (reviewer finding). Only strip when a real command follows.
-    if (next === cur || next.trim().length === 0) break;
+    // entirely. Likewise, if what follows starts with a shell operator
+    // (`;`, `&&`, …), the assignment was a separate statement, not a prefix
+    // (reviewer findings). Only strip when a real command follows.
+    if (next === cur || next.trim().length === 0 || /^[;&|><]/.test(next.trimStart())) break;
     cur = next;
     stripped = true;
   }
@@ -280,10 +282,13 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
     if (a.status === "success" && a.output.trim().length > 0) {
       lines.push(downgradeHeadingsOutsideFences(a.output.trim()), "");
     } else {
-      lines.push(
-        `failed: ${a.failure?.code ?? "unknown"} — ${a.failure?.message ?? "no output"}`,
-        "",
-      );
+      // failure.message can carry child stderr — demote its headings too, or a
+      // failed deliverable could still inject an H1/H2 into the outline
+      // (reviewer finding).
+      const detail = downgradeHeadingsOutsideFences(
+        a.failure?.message ?? "no output",
+      ).replace(/\n/g, " ");
+      lines.push(`failed: ${a.failure?.code ?? "unknown"} — ${detail}`, "");
     }
   }
   return lines.join("\n");

@@ -12,6 +12,7 @@
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { redact } from "../redact";
+import { formatDurationMs } from "./duration";
 import {
   type AttemptActivity,
   type AttemptSpec,
@@ -370,7 +371,7 @@ async function runOne(
   if (out.error !== undefined) {
     failure = { code: "SPAWN_ERROR", message: out.error };
   } else if (out.timedOut) {
-    failure = { code: "TIMEOUT", message: `timed out after ${opts.timeoutMs}ms` };
+    failure = { code: "TIMEOUT", message: `timed out after ${formatDurationMs(opts.timeoutMs)}` };
   } else if (out.aborted) {
     failure = { code: "ABORTED", message: "aborted by cancellation signal" };
   } else if (out.exitCode !== 0) {
