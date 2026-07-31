@@ -285,7 +285,7 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
 
 /** Escape a string for use as a literal in a RegExp source. */
 function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\/** Demote ATX headings by two levels outside fenced code blocks.");
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Demote ATX headings by two levels outside fenced code blocks. Fences are
