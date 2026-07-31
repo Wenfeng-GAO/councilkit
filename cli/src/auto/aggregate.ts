@@ -306,7 +306,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       // info/text (e.g. ```js inside a fenced block) must NOT close the fence
       // (reviewer finding: the unanchored regex treated any line starting with
       // ```/~~~ as a close, mistakenly re-enabling heading demotion mid-fence).
-      const closeMatch = /^( {0,3})(?:[-*+] |\d+[.)] )?(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMatch = /^( {0,3})(`{3,}|~{3,})[ \t]*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[2][0] === fenceChar &&
@@ -316,7 +316,12 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       continue;
     }
-    const openMatch = /^( {0,3})(?:[-*+] |\d+[.)] )?(`{3,}|~{3,})(.*)$/.exec(line);
+    // Only TOP-LEVEL fences (≤3 leading spaces). Fences nested in list items
+    // are deliberately NOT tracked: recognizing them corrupted the state
+    // machine (list-marker closers vs top-level content, indented force-close
+    // becoming a new opener — reviewer findings). The cost is over-demotion of
+    // headings inside a list-nested code sample, which is display-only.
+    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
       const fenceCh = openMatch[2][0];
       // CommonMark: a BACKTICK fence's info string must not contain a backtick

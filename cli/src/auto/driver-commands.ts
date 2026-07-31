@@ -512,6 +512,11 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
     cur = next;
     stripped = true;
   }
+  // The remainder is itself assignment-only (`NO_PROXY='1' HTTPS_PROXY='2'`):
+  // there was never a command to prefix — revert (reviewer finding).
+  if (stripped && /^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(cur)) {
+    return { text: cmd, stripped: false };
+  }
   return { text: cur, stripped };
 }
 
