@@ -154,9 +154,10 @@ function renderAttemptsTable(attempts: ReadonlyArray<AttemptResult>): string {
   return lines.join("\n");
 }
 
-/** Escape pipe and newline so a cell value can never split the table row. */
+/** Escape pipe and newline (incl. bare CR) so a cell value can never split the
+ * table row. */
 function cell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return value.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 }
 
 /** Distinguish completed / partial (incomplete success) / failed / interrupted
@@ -345,10 +346,11 @@ function downgradeHeadingsOutsideFences(text: string): string {
   }
   // An UNCLOSED fence would swallow everything that follows the deliverable in
   // the appendix — including the next Attempt's `### <name>` heading — into a
-  // code block. Force-close it so report structure after this output is never
-  // consumed (reviewer finding).
+  // code block. Force-close it with a run AT LEAST as long as the opening one
+  // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
+  // after this output is never consumed (reviewer findings).
   if (inFence) {
-    out.push(fenceChar === "`" ? "```" : "~~~");
+    out.push(fenceChar.repeat(Math.max(3, fenceLen)));
   }
   return out.join("\n");
 }

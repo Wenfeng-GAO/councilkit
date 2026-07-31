@@ -500,16 +500,17 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
   let cur = cmd;
   for (;;) {
     const next = cur.replace(PROXY_ENV_RE, "");
-    if (next === cur || next.trim().length === 0 || /^[;&|><]/.test(next.trimStart())) break;
+    if (next === cur || next.trim().length === 0) break;
+    // Chained assignments separated by an operator (`A='1' B='2' && cmd`) are
+    // statements, not a prefix. If an operator shows up after ANY stripping,
+    // the whole chain was statement-like — revert to the original untouched
+    // (reviewer finding: checking only the final remainder let `A B && cmd`
+    // lose the first assignment).
+    if (/^[;&|><]/.test(next.trimStart())) {
+      return { text: cmd, stripped: false };
+    }
     cur = next;
     stripped = true;
-  }
-  // Chained assignments separated by an operator (`A='1' B='2' && cmd`) are
-  // statements, not a prefix — if the remainder starts with an operator, any
-  // partial stripping was wrong; return the original untouched (reviewer
-  // finding).
-  if (stripped && /^[;&|><]/.test(cur.trimStart())) {
-    return { text: cmd, stripped: false };
   }
   return { text: cur, stripped };
 }
