@@ -490,7 +490,7 @@ export interface AttemptActivity {
  * and leave command fragments behind (reviewer finding); those commands are
  * left untouched instead. */
 const PROXY_ENV_RE =
-  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"[^"]*")\s+/;
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*")\s+/;
 
 /** Strip leading proxy env prefixes. Standalone assignments and prefixes
  * followed by a shell operator are NOT stripped (they are separate statements,
@@ -686,7 +686,11 @@ export class DriverActivityCollector {
    * finding); the flag is surfaced via `strippedProxy` on the summary. */
   private pushCommand(raw: unknown): void {
     if (typeof raw !== "string") return;
-    const { text, stripped } = stripProxyPrefix(raw);
+    // Trim leading whitespace BEFORE stripping: a quoted heredoc-style command
+    // (`  NO_PROXY='*' antcode …`) is still prefix-shaped, and stripping must
+    // happen before the 80-char cap or the prefix eats the real command
+    // (reviewer findings).
+    const { text, stripped } = stripProxyPrefix(raw.trimStart());
     if (stripped) this.sawStrippedProxy = true;
     const folded = text.replace(/\s+/g, " ").trim();
     if (folded.length === 0) return;

@@ -118,7 +118,7 @@ function renderHeader(input: ReviewReportInput): string {
   const focus = input.task.focus?.trim();
   if (focus && focus.length > 0) lines.push(`- Focus: ${oneLine(focus)}`);
   lines.push(
-    `- Aggregator: ${oneLine(input.aggregator.agentName)} (${input.aggregator.driverId}/${input.aggregator.modelId})`,
+    `- Aggregator: ${oneLine(input.aggregator.agentName)} (${oneLine(input.aggregator.driverId)}/${oneLine(input.aggregator.modelId)})`,
   );
   lines.push("", renderAttemptsTable(input.attempts));
   lines.push(`- Status: ${statusLabel(input)}`);
@@ -181,7 +181,7 @@ function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string
   let strippedProxy = false;
   for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    const head = `- ${oneLine(a.agentName)} (${a.driverId}/${a.modelId})${reusedMark} — ${formatDurationMs(a.durationMs)}`;
+    const head = `- ${oneLine(a.agentName)} (${oneLine(a.driverId)}/${oneLine(a.modelId)})${reusedMark} — ${formatDurationMs(a.durationMs)}`;
     if (a.activity === undefined) {
       lines.push(`${head} — 无过程数据`);
       continue;
@@ -259,14 +259,17 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
   }
   for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`### ${oneLine(a.agentName)} (${a.driverId}/${a.modelId})${reusedMark}`, "");
+    lines.push(`### ${oneLine(a.agentName)} (${oneLine(a.driverId)}/${oneLine(a.modelId)})${reusedMark}`, "");
     // A retried Attempt keeps only its final result here; the failed first try
     // is noted once so the appendix never silently drops it.
     if (a.retryOf !== undefined) {
       lines.push("> 第 1 次尝试（失败，已重试）", "");
     }
     if (a.status === "success" && a.output.trim().length > 0) {
-      lines.push(downgradeHeadingsOutsideFences(a.output.trim()), "");
+      // trimEnd only: a leading trim() would delete the first line's indent and
+      // turn legitimately indented code (≥4 spaces = NOT a fence) into a fake
+      // top-level fence opener (reviewer finding).
+      lines.push(downgradeHeadingsOutsideFences(a.output.trimEnd()), "");
     } else {
       // failure.message can carry child stderr — demote its headings too, or a
       // failed deliverable could still inject an H1/H2 into the outline
@@ -303,7 +306,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       // info/text (e.g. ```js inside a fenced block) must NOT close the fence
       // (reviewer finding: the unanchored regex treated any line starting with
       // ```/~~~ as a close, mistakenly re-enabling heading demotion mid-fence).
-      const closeMatch = /^( {0,3})(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const closeMatch = /^( {0,3})(?:[-*+] |\d+[.)] )?(`{3,}|~{3,})[ \t]*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[2][0] === fenceChar &&
@@ -313,7 +316,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       continue;
     }
-    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+    const openMatch = /^( {0,3})(?:[-*+] |\d+[.)] )?(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
       const fenceCh = openMatch[2][0];
       // CommonMark: a BACKTICK fence's info string must not contain a backtick
