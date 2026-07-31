@@ -869,12 +869,19 @@ describe("cli auto runner — process-group cleanup on natural close", () => {
     const killFn = (target: number, signal: NodeJS.Signals): void => {
       kills.push({ target, signal: String(signal) });
     };
+    const start = Date.now();
     const out = await defaultSpawn(
       { executable: "x", argv: [], cwd: "/tmp/ck-fake-ws", prompt: "hi", promptStdin: true, timeoutMs: 60000, signal: NEVER_ABORT },
       fakeSpawnFn(child),
       killFn,
     );
+    const elapsed = Date.now() - start;
     expect(out.exitCode).toBe(0);
-    expect(kills).toEqual([{ target: -child.pid, signal: "SIGTERM" }]);
+    // TERM→grace→KILL is awaited before resolving (retry isolation).
+    expect(elapsed).toBeGreaterThanOrEqual(1500);
+    expect(kills).toEqual([
+      { target: -child.pid, signal: "SIGTERM" },
+      { target: -child.pid, signal: "SIGKILL" },
+    ]);
   });
 });

@@ -298,6 +298,10 @@ function downgradeHeadingsOutsideFences(text: string): string {
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;
+  /** Leading-space count of the opener — the force-close uses the same indent
+   * so it is always a CommonMark-valid closer (a column-0 run after an
+   * indented opener would become a NEW opener instead — reviewer finding). */
+  let fenceIndent = 0;
   const out: string[] = [];
   for (const line of lines) {
     if (inFence) {
@@ -317,22 +321,22 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       continue;
     }
-    // COLUMN-0 fences only. Any indented fence line (1-3 spaces) could be a
-    // list continuation, and tracking those has caused repeated state
-    // corruption (5+ reviewer rounds). Restricting to column-0 is a SAFE
-    // subset: headings inside indented code are over-demoted (display-only),
-    // and a column-0 force-close is always a valid closer for a column-0
-    // opener (decisions: fence-list-tradeoff).
-    const openMatch = /^(`{3,}|~{3,})(.*)$/.exec(line);
+    // Fences open at ≤3 leading spaces (CommonMark top-level). A 1-3 space
+    // indented run MIGHT be a list continuation — but tracking it is safe as
+    // long as (a) the closer accepts ≤3 spaces, and (b) a force-close keeps
+    // the opener indent: untracked-after-list-end content then stays inside a
+    // CommonMark-valid code block, so headings can never escape INTO the
+    // outline un-demoted (decisions: fence-list-tradeoff).
+    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
     if (openMatch !== null) {
-      const fenceCh = openMatch[1][0];
+      const fenceCh = openMatch[2][0];
       // CommonMark: a BACKTICK fence's info string must not contain a backtick
       // — a line like ``` `inline` ``` is not a fence opening (it is paragraph
       // text), so the H1/H2 that follow must still be demoted. A tilde fence's
       // info string has no such restriction. Without this rule a backtick fence
       // whose info carried a backtick swallowed the rest of the deliverable,
       // disabling heading demotion (reviewer finding).
-      if (fenceCh === "`" && openMatch[2].includes("`")) {
+      if (fenceCh === "`" && openMatch[3].includes("`")) {
         // Not a fence opening (backtick fence info must not contain a backtick);
         // the line is paragraph text, kept verbatim, and heading demotion stays
         // active for the lines that follow.
@@ -341,7 +345,8 @@ function downgradeHeadingsOutsideFences(text: string): string {
       }
       inFence = true;
       fenceChar = fenceCh;
-      fenceLen = openMatch[1].length;
+      fenceLen = openMatch[2].length;
+      fenceIndent = openMatch[1].length;
       out.push(line);
       continue;
     }
@@ -360,7 +365,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
   // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
   // after this output is never consumed (reviewer findings).
   if (inFence) {
-    out.push(fenceChar.repeat(Math.max(3, fenceLen)));
+    out.push(" ".repeat(fenceIndent) + fenceChar.repeat(Math.max(3, fenceLen)));
   }
   return out.join("\n");
 }

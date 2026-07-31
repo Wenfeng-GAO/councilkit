@@ -730,3 +730,11 @@ describe("stripProxyPrefix — token-aware statement chain", () => {
     expect(r.stripped).toBe(true);
   });
 });
+
+describe("stripProxyPrefix — newline-separated statement is not a prefix", () => {
+  it("does not strip when the separator is a newline (statement boundary)", () => {
+    const r = stripProxyPrefix("NO_PROXY='*'\necho hi");
+    expect(r.text).toBe("NO_PROXY='*'\necho hi");
+    expect(r.stripped).toBe(false);
+  });
+});

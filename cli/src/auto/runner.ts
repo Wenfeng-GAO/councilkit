@@ -643,14 +643,34 @@ export function defaultSpawn(
     child.on("close", (code) => {
       // The leader's EXIT only proves the PARENT process ended — its detached
       // process-group children may still be alive and would pollute a rebuilt
-      // workspace or race a retry (reviewer finding). Best-effort TERM the
-      // whole group on a natural close (no kill already initiated); ESRCH
-      // means the group is already gone.
-      if (!killInitiated && child.pid !== undefined) {
-        try {
-          killFn(-child.pid, "SIGTERM");
-        } catch {
-          // best effort — group already gone.
+      // workspace or race a retry (reviewer findings ×2). Run the same
+      // TERM→grace→KILL sequence as timeout/abort and AWAIT it before
+      // resolving, so a straggler is provably dead (or provably gone) before
+      // the next spawn starts.
+      if (!killInitiated) {
+        killInitiated = true;
+        if (child.pid !== undefined) {
+          const pid = child.pid;
+          let termDelivered = true;
+          try {
+            killFn(-pid, "SIGTERM");
+          } catch (error) {
+            if (!isESRCH(error)) throw error;
+            termDelivered = false;
+          }
+          if (termDelivered) {
+            killPromise = new Promise<void>((resolveKill) => {
+              setTimeout(() => {
+                try {
+                  killFn(-pid, "SIGKILL");
+                } catch {
+                  // best effort — group already gone.
+                } finally {
+                  resolveKill();
+                }
+              }, KILL_GRACE_MS);
+            });
+          }
         }
       }
       // Flush the collector's trailing bytes: the final NDJSON line may end
