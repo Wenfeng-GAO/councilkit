@@ -490,7 +490,7 @@ export interface AttemptActivity {
  * and leave command fragments behind (reviewer finding); those commands are
  * left untouched instead. */
 const PROXY_ENV_RE =
-  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s\\]*)[ \t]+/;
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s\\'"`$]*)[ \t]+/;
 
 /** Strip leading proxy env prefixes. Standalone assignments and prefixes
  * followed by a shell operator are NOT stripped (they are separate statements,
@@ -535,25 +535,39 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
   return { text: cur, stripped };
 }
 
-/** Tokenize shell-ish text outside quotes (space/tab separated). */
+/** Tokenize shell-ish text outside quotes: space/tab/newline separated, with
+ * operator characters (`;&|<>`) split into their own tokens (merging runs
+ * like `&&`, `||`, `>>`). Quote-aware: operators inside quotes stay literal. */
 function shellTokens(text: string): string[] {
   const tokens: string[] = [];
   let cur = "";
   let inSingle = false;
   let inDouble = false;
+  const flush = (): void => {
+    if (cur.length > 0) tokens.push(cur);
+    cur = "";
+  };
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     const prev = i > 0 ? text[i - 1] : "";
     if (ch === "'" && !inDouble && prev !== "\\") inSingle = !inSingle;
     else if (ch === '"' && !inSingle && prev !== "\\") inDouble = !inDouble;
-    if ((ch === " " || ch === "\t" || ch === "\n") && !inSingle && !inDouble) {
-      if (cur.length > 0) tokens.push(cur);
-      cur = "";
+    if (!inSingle && !inDouble && (ch === " " || ch === "\t" || ch === "\n")) {
+      flush();
+    } else if (!inSingle && !inDouble && (ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">")) {
+      flush();
+      // Merge a run of the same operator char (&&, ||, >>, …).
+      let op = ch;
+      while (i + 1 < text.length && text[i + 1] === ch) {
+        op += ch;
+        i++;
+      }
+      tokens.push(op);
     } else {
       cur += ch;
     }
   }
-  if (cur.length > 0) tokens.push(cur);
+  flush();
   return tokens;
 }
 

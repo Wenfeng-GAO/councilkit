@@ -414,3 +414,12 @@ describe("cli auto aggregate — list-nested fences are NOT tracked (documented 
     expect(md).toContain("### After");
   });
 });
+
+describe("cli auto aggregate — indented close of a column-0 fence", () => {
+  it("a ≤3-space indented fence run closes an open fence (CommonMark-legal close)", () => {
+    const md = renderReviewReport(
+      buildInput([attempt({ agentName: "Alice", output: "```\nconst x = 1;\n  ```\n# After" })]),
+    );
+    expect(md).toContain("### After");
+  });
+});

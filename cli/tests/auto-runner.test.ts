@@ -860,3 +860,21 @@ describe("cli auto runner — path round-trip with real temp PATH", () => {
     expect(results[0].output).toBe("kimi-final");
   });
 });
+
+describe("cli auto runner — process-group cleanup on natural close", () => {
+  it("best-effort TERMs the detached group when the leader closes naturally", async () => {
+    const child = new FakeChild();
+    child.echoStdinThenClose();
+    const kills: Array<{ target: number; signal: string }> = [];
+    const killFn = (target: number, signal: NodeJS.Signals): void => {
+      kills.push({ target, signal: String(signal) });
+    };
+    const out = await defaultSpawn(
+      { executable: "x", argv: [], cwd: "/tmp/ck-fake-ws", prompt: "hi", promptStdin: true, timeoutMs: 60000, signal: NEVER_ABORT },
+      fakeSpawnFn(child),
+      killFn,
+    );
+    expect(out.exitCode).toBe(0);
+    expect(kills).toEqual([{ target: -child.pid, signal: "SIGTERM" }]);
+  });
+});

@@ -302,10 +302,12 @@ function downgradeHeadingsOutsideFences(text: string): string {
   for (const line of lines) {
     if (inFence) {
       out.push(line);
-      // A CLOSING fence is the fence run alone on its line (≤3 leading spaces,
-      // blank-only tail) — a same-character run WITH trailing info/text is not
-      // a closer.
-      const closeMatch = /^(`{3,}|~{3,})[ \t]*$/.exec(line);
+      // A CLOSING fence is the fence run alone on its line (≤3 leading spaces
+      // are legal per CommonMark for a close) with a blank-only tail — a
+      // same-character run WITH trailing info/text is not a closer. Openers
+      // stay column-0-only (indented lines may be list continuations), but a
+      // close inside an OPEN fence is unambiguous at any ≤3 indent.
+      const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
       if (
         closeMatch !== null &&
         closeMatch[1][0] === fenceChar &&
