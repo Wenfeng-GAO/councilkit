@@ -297,6 +297,10 @@ function downgradeHeadingsOutsideFences(text: string): string {
   let inFence = false;
   let fenceChar = "";
   let fenceLen = 0;
+  /** Leading-space count of the opener — the force-close must use the same
+   * indent, otherwise a column-0 run becomes a NEW top-level opener and
+   * swallows the appendix (reviewer finding). */
+  let fenceIndent = 0;
   const out: string[] = [];
   for (const line of lines) {
     if (inFence) {
@@ -339,6 +343,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
       inFence = true;
       fenceChar = fenceCh;
       fenceLen = openMatch[2].length;
+      fenceIndent = openMatch[1].length;
       out.push(line);
       continue;
     }
@@ -357,7 +362,7 @@ function downgradeHeadingsOutsideFences(text: string): string {
   // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
   // after this output is never consumed (reviewer findings).
   if (inFence) {
-    out.push(fenceChar.repeat(Math.max(3, fenceLen)));
+    out.push(" ".repeat(fenceIndent) + fenceChar.repeat(Math.max(3, fenceLen)));
   }
   return out.join("\n");
 }

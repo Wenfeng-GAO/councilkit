@@ -717,3 +717,16 @@ describe("stripProxyPrefix — assignment-only vs env-prefix+command", () => {
     expect(r.stripped).toBe(true);
   });
 });
+
+describe("stripProxyPrefix — token-aware statement chain", () => {
+  it("reverts when assignments are followed by an operator token", () => {
+    expect(stripProxyPrefix("NO_PROXY='*' FOO='1' && antcode pr diff 1").text).toBe(
+      "NO_PROXY='*' FOO='1' && antcode pr diff 1",
+    );
+  });
+  it("strips when a real command word precedes the operator", () => {
+    const r = stripProxyPrefix("NO_PROXY='*' antcode pr diff 1 && echo done");
+    expect(r.text).toBe("antcode pr diff 1 && echo done");
+    expect(r.stripped).toBe(true);
+  });
+});

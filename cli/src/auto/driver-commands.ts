@@ -523,21 +523,22 @@ export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean
   ) {
     return { text: cmd, stripped: false };
   }
-  // The remainder starts with an assignment AND contains a shell operator
-  // (`NO_PROXY='*' FOO='1' && cmd`): the assignments formed a statement chain,
-  // not a prefix — revert. `FOO='1' antcode …` (no operator) and
-  // `antcode … && echo` (no leading assignment) stay stripped. The operator
-  // scan is quote-aware so `FOO='a|b' cmd` is not a false positive (reviewer
-  // findings).
-  if (stripped && /^\s*[A-Za-z_][A-Za-z0-9_]*=/.test(cur) && hasShellOperatorOutsideQuotes(cur)) {
+  // Statement-chain detection, token-aware: skip leading assignment tokens
+  // (quote-aware); if the FIRST non-assignment token is a shell operator, the
+  // assignments were statements (`NO_PROXY='*' FOO='1' && cmd`) — revert. A
+  // real command word before any operator (`FOO='1' antcode … && echo`) is a
+  // legitimate env prefix and stays stripped (reviewer findings, both
+  // directions).
+  if (stripped && startsWithAssignmentThenOperator(cur)) {
     return { text: cmd, stripped: false };
   }
   return { text: cur, stripped };
 }
 
-/** True when a shell operator (`;`, `|`, `&`, `<`, `>`, including `&&`/`||`)
- * appears OUTSIDE single/double quotes. */
-function hasShellOperatorOutsideQuotes(text: string): boolean {
+/** Tokenize shell-ish text outside quotes (space/tab separated). */
+function shellTokens(text: string): string[] {
+  const tokens: string[] = [];
+  let cur = "";
   let inSingle = false;
   let inDouble = false;
   for (let i = 0; i < text.length; i++) {
@@ -545,11 +546,27 @@ function hasShellOperatorOutsideQuotes(text: string): boolean {
     const prev = i > 0 ? text[i - 1] : "";
     if (ch === "'" && !inDouble && prev !== "\\") inSingle = !inSingle;
     else if (ch === '"' && !inSingle && prev !== "\\") inDouble = !inDouble;
-    else if (!inSingle && !inDouble && (ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">")) {
-      return true;
+    if ((ch === " " || ch === "\t" || ch === "\n") && !inSingle && !inDouble) {
+      if (cur.length > 0) tokens.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
     }
   }
-  return false;
+  if (cur.length > 0) tokens.push(cur);
+  return tokens;
+}
+
+const SHELL_OPERATOR_TOKENS = new Set(["&&", "||", ";", "|", "&", ">", "<", ">>", ">&"]);
+const ASSIGNMENT_TOKEN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** True when leading assignment tokens are immediately followed by a shell
+ * OPERATOR token — meaning they were statements, not a command prefix. */
+function startsWithAssignmentThenOperator(text: string): boolean {
+  const tokens = shellTokens(text);
+  let i = 0;
+  while (i < tokens.length && ASSIGNMENT_TOKEN_RE.test(tokens[i])) i++;
+  return i > 0 && i < tokens.length && SHELL_OPERATOR_TOKENS.has(tokens[i]);
 }
 
 /** Upper bound on retained representative commands per Attempt. */
