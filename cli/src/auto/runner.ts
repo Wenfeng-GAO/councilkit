@@ -653,16 +653,25 @@ export function defaultSpawn(
      * otherwise the re-entry guard would block a later timeout/abort killGroup
      * and leave the child running (third finding). */
     let naturalCleanupRan = false;
+    /** The leader's exit code/signal when `exit` fires — needed to settle
+     * immediately if the cleanup TERM is undeliverable (see below). */
+    let leaderExitCode: number | null = null;
     const cleanupGroupOnNaturalEnd = (): void => {
       if (naturalCleanupRan || killInitiated) return;
       naturalCleanupRan = true;
       if (child.pid === undefined) return;
       const pid = child.pid;
       let termDelivered = true;
+      let groupGone = false;
       try {
         killFn(-pid, "SIGTERM");
-      } catch {
-        // EPERM / ESRCH / anything — best effort, never throw here.
+      } catch (error) {
+        if (isESRCH(error)) {
+          // ESRCH = the group is PROVABLY gone — nothing to kill; the normal
+          // `close` will still fire and settle with the real code. Do NOT
+          // settle early here (it would lose the real exit code).
+          groupGone = true;
+        }
         termDelivered = false;
       }
       if (termDelivered) {
@@ -678,11 +687,29 @@ export function defaultSpawn(
             }
           }, KILL_GRACE_MS);
         });
+      } else if (!groupGone && !settled) {
+        // The TERM is undeliverable AND the descendants may hold the pipes —
+        // `close` may never fire, which would hang the Attempt until the turn
+        // timeout and misclassify a fast EXIT (reviewer finding). The leader
+        // HAS exited, so settle now with its code; buffered output is accepted
+        // as lost (best effort beats a 45-minute hang).
+        lineColl?.end();
+        finish({
+          stdout: stdoutColl.toString(),
+          stderr: stderrColl.toString(),
+          finalEventLine: lineColl?.lastLine ?? undefined,
+          exitCode: leaderExitCode,
+          timedOut: false,
+          aborted: false,
+        });
       }
     };
     // `exit` = leader process ended (kill stragglers so pipes can close);
     // `close` = stdio drained (settle the result). Both paths are guarded.
-    child.on("exit", cleanupGroupOnNaturalEnd);
+    child.on("exit", (code) => {
+      leaderExitCode = code ?? null;
+      cleanupGroupOnNaturalEnd();
+    });
 
     child.on("close", (code) => {
       cleanupGroupOnNaturalEnd();
