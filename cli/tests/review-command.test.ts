@@ -314,7 +314,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(report).toContain("## Disagreements");
     expect(report).toContain("## Verdict");
     // Appendix with each attempt named + the aggregator's own attempt output.
-    expect(report).toContain("## Appendix: per-attempt outputs");
+    expect(report).toContain("## 附录:各审查者交付物");
     expect(report).toContain("Alice");
     expect(report).toContain("Bob");
     expect(report).toContain("Carol");
@@ -1317,6 +1317,67 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
   });
 
+  it("retry workspace rebuild revalidates the bound root; a same-path swap is fail-closed exit 5 (phase=workspace)", async () => {
+    // Reviewer findings: (1) the retry path's recreateWorkspace reused the
+    // long-held TrustedRoot without revalidating — a same-path REPLACEMENT of
+    // runsRoot (delete + fresh real directory) keeps the realpath string but
+    // changes dev/ino, so the assertWithinRoot realpath check alone cannot see
+    // it and the retry would rmSync inside the swapped tree. (3) when the
+    // retry rebuild threw, the run-level catch mapped every error to
+    // phase=transcript/code=IO_TRANSCRIPT; a workspace/fs-safe fault must be
+    // reported as phase=workspace.
+    const { aliceId, bobId } = seedTwo();
+    const { runsRoot } = resolvePaths();
+    // Fresh run, serial (--concurrency 1) so Alice's first try + retry is
+    // deterministic. Alice's first try fails with a transient EXIT (<120s) →
+    // the runner retries, rebuilding her workspace first. Swap runsRoot DURING
+    // that first spawn: rename it aside and recreate the run dir at the SAME
+    // lexical path so later transcript writes still resolve.
+    let swapped = false;
+    const swapSpawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      if (kind === "probe") return claudeEnvelope("ok");
+      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      if (kind === "attempt:Alice" && !swapped) {
+        swapped = true;
+        renameSync(runsRoot, `${runsRoot}.orig`);
+        // Recreate the swapped tree's attempt-0 workspace (input.cwd is the
+        // lexical runsRoot/.../attempt-0 path, now pointing at the new root).
+        mkdirSync(input.cwd, { recursive: true });
+        writeFileSync(join(input.cwd, "sentinel.txt"), "swap-tree");
+        // Transient EXIT failure with a duration well under the 120s retry cap.
+        return { stdout: "", exitCode: 1, timedOut: false, aborted: false };
+      }
+      return attemptEnvelope(kind === "attempt:Bob" ? "Bob" : "Alice");
+    };
+    const sink = makeSink();
+    const exitCode = await runCapturing(
+      [...twoAgentArgs(aliceId, bobId, "x"), "--concurrency", "1"],
+      sink,
+      { spawnImpl: swapSpawn },
+    );
+    // The retry rebuild's revalidate refuses the swapped root → exit 5.
+    expect(exitCode).toBe(5);
+    const outcome = sink.finished as {
+      incomplete: boolean;
+      runId: string;
+      failure?: { phase: string; code: string; message: string };
+    };
+    expect(outcome.incomplete).toBe(true);
+    // Finding 3: the fault is reported as phase=workspace, not transcript.
+    expect(outcome.failure?.phase).toBe("workspace");
+    expect(outcome.failure?.code).toBe("IO_WORKSPACE");
+    expect(outcome.failure?.message).toContain("trusted root changed");
+    // Finding 1: the swapped tree's workspace was NOT deleted (revalidate threw
+    // before rmSync) — the sentinel survives.
+    expect(
+      readFileSync(
+        join(runsRoot, outcome.runId, "workspaces", "attempt-0", "sentinel.txt"),
+        "utf8",
+      ),
+    ).toBe("swap-tree");
+  });
+
   /** Legacy-transcript resume where both attempts are reused: only the
    * aggregator workspace is recreated. */
   function seedReusedResume(runId: string): { aliceId: string; bobId: string } {
@@ -1616,7 +1677,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(attemptRecs).toHaveLength(2);
     expect(attemptRecs.every((r) => r.exitCode === "killed")).toBe(true);
     const report = readFileSync(outcome.reportPath, "utf8");
-    expect(report).toContain("exit killed");
+    expect(report).toContain("failed:TIMEOUT");
   });
 
   it("human mode emits a 仍在运行 heartbeat per interval and stops when the attempt finishes", async () => {
@@ -1648,10 +1709,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
     expect(exitCode).toBe(0);
     const beats = sink.lines.filter((l) => l.includes("仍在运行"));
-    expect(beats).toEqual([
-      "  attempt Alice 仍在运行 (0m 30s)",
-      "  attempt Alice 仍在运行 (1m 0s)",
-    ]);
+    expect(beats).toEqual(["  attempt Alice 仍在运行 (30s)", "  attempt Alice 仍在运行 (1m00s)"]);
     // The timer is always cleared — a finished attempt never heartbeats again.
     expect(fake.activeCount()).toBe(0);
   });
@@ -1685,5 +1743,45 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(exitCode).toBe(0);
     expect(sink.lines.filter((l) => l.includes("仍在运行"))).toHaveLength(0);
     expect(fake.activeCount()).toBe(0);
+  });
+
+  it("transient EXIT <120s retries once: two transcript records, one final result, 45min default", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink = makeSink();
+    const seen: Array<{ kind: SpawnKind; timeoutMs: number }> = [];
+    let aliceTries = 0;
+    const spawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      seen.push({ kind, timeoutMs: input.timeoutMs });
+      if (kind === "probe") return claudeEnvelope("ok");
+      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      if (kind === "attempt:Alice") {
+        aliceTries++;
+        if (aliceTries === 1) {
+          return { stdout: "", stderr: "boom", exitCode: 1, timedOut: false, aborted: false };
+        }
+      }
+      return attemptEnvelope("Alice");
+    };
+    const exitCode = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink, { spawnImpl: spawn });
+    expect(exitCode).toBe(0);
+    const outcome = sink.finished as {
+      attempts: Array<{ agentName: string; durationMs: number }>;
+      transcriptPath: string;
+    };
+    // Two attempts total (Alice + Bob), final results only.
+    expect(outcome.attempts).toHaveLength(2);
+    for (const a of outcome.attempts) expect(typeof a.durationMs).toBe("number");
+    // Two attempt.finished records for Alice: first failure + retry success.
+    const alice = readRecords(outcome.transcriptPath).filter(
+      (r) => r.kind === "attempt.finished" && r.agentName === "Alice",
+    );
+    expect(alice).toHaveLength(2);
+    expect(alice[0].attemptNumber).toBe(1);
+    expect(alice[1].attemptNumber).toBe(2);
+    expect(alice[1].retryOf).toBe(1);
+    // 45min default for attempts; probe stays 60s.
+    expect(seen.find((s) => s.kind === "probe")?.timeoutMs).toBe(60_000);
+    expect(seen.find((s) => s.kind === "attempt:Alice")?.timeoutMs).toBe(2_700_000);
   });
 });

@@ -22,7 +22,12 @@ export type AttemptExitCode = z.infer<typeof attemptExitCodeSchema>;
  * Optional everywhere: absent means "no process data" (older runs / parse
  * failure), never an error. */
 export const attemptActivitySchema = z
-  .object({ toolCalls: z.number().int().nonnegative(), commands: z.array(z.string()) })
+  .object({
+    toolCalls: z.number().int().nonnegative(),
+    commands: z.array(z.string()),
+    /** Proxy-prefix-stripped flag (collection time). Optional for back-compat. */
+    strippedProxy: z.boolean().optional(),
+  })
   .strict();
 export type AttemptActivity = z.infer<typeof attemptActivitySchema>;
 
@@ -122,6 +127,17 @@ export const attemptFinishedRecordSchema = z
     /** Incremental process summary (P2-1). Optional for back-compat with runs
      * written before process capture, and absent when parsing yielded nothing. */
     activity: attemptActivitySchema.optional(),
+    /** 1-based physical execution index for this Attempt (plan §"瞬态重试"):
+     * `1` for the first try, `2` for the retried second try. Absent on older
+     * transcripts and on synthetic/cancelled records. */
+    attemptNumber: z.number().int().positive().optional(),
+    /** Present (and `1`) on the retried second try, naming the failed first
+     * try's `attemptNumber`. Absent on a non-retried Attempt. */
+    retryOf: z.number().int().positive().optional(),
+    /** Present on a fresh success that followed a FAILED attempt in the run
+     * being resumed — persisted so the appendix mark survives further resumes
+     * (reviewer finding). */
+    resumedAfterFailure: z.boolean().optional(),
   })
   .strict();
 export type AttemptFinishedRecord = z.infer<typeof attemptFinishedRecordSchema>;

@@ -6,7 +6,7 @@
  * ChildProcess (EventEmitter + PassThrough) — never a real subprocess.
  */
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AttemptSpec } from "../src/auto/driver-commands";
 import {
   type AttemptResult,
+  type RunnerTimers,
   type SpawnImpl,
   type SpawnInput,
   defaultSpawn,
@@ -115,7 +116,7 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(obs.maxConcurrent).toBeLessThanOrEqual(3);
   });
 
-  it("tolerates a single failure and never retries it", async () => {
+  it("tolerates a single EXIT failure, retrying it once (transient <120s, non-zero)", async () => {
     let calls = 0;
     const spawn: SpawnImpl = async (input) => {
       calls++;
@@ -134,10 +135,15 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     };
     const specs = [spec("0"), spec("1"), spec("2")];
     const { results } = await runAttempts(specs, { spawnImpl: spawn });
-    expect(calls).toBe(3); // exactly once each — no retry
+    // "1" exits non-zero under 120s → retried once (4 total spawns); the retry
+    // also fails, so the result stays a failure and there is no third try.
+    expect(calls).toBe(4);
     expect(results[0].status).toBe("success");
     expect(results[1].status).toBe("failure");
     expect(results[1].failure?.code).toBe("EXIT");
+    // The final result carries the retry chain (attemptNumber 2, retryOf 1).
+    expect(results[1].attemptNumber).toBe(2);
+    expect(results[1].retryOf).toBe(1);
     expect(results[2].status).toBe("success");
   });
 
@@ -263,6 +269,191 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     ).rejects.toThrow("transcript IO failed");
     // The internal abort fired, killing the in-flight spawn (no orphan).
     expect(abortedSeen).toBe(true);
+  });
+});
+
+describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", () => {
+  /** A clock that returns the next step value on each `now()` call, then the
+   * last value forever — so `durationMs` for an execution is
+   * `steps[1] - steps[0]` (and 0 for any subsequent execution). */
+  function stepClock(steps: number[]): RunnerTimers {
+    let i = 0;
+    const intervals = new Map<number, () => void>();
+    let nextId = 1;
+    return {
+      now: () => (i < steps.length ? steps[i++] : steps[steps.length - 1]),
+      setInterval: (cb: () => void) => {
+        const id = nextId++;
+        intervals.set(id, cb);
+        return id;
+      },
+      clearInterval: (handle: unknown) => intervals.delete(handle as number),
+    };
+  }
+
+  /** A spawn that always fails with a non-zero EXIT (claude error envelope). */
+  function exitFailSpawn(): { spawn: SpawnImpl; calls: () => number } {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return {
+        stdout: JSON.stringify({ type: "result", subtype: "error", is_error: true, result: "" }),
+        exitCode: 1,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    return { spawn, calls: () => calls };
+  }
+
+  it("retries once when an EXIT failure takes <120s, fires two callbacks with retryOf", async () => {
+    const { spawn, calls } = exitFailSpawn();
+    const finishes: AttemptResult[] = [];
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 119_999]),
+      onAttemptFinish: (r) => finishes.push(r),
+    });
+    expect(calls()).toBe(2); // first try + one retry, no third
+    expect(results[0].status).toBe("failure");
+    expect(results[0].attemptNumber).toBe(2);
+    expect(results[0].retryOf).toBe(1);
+    expect(finishes).toHaveLength(2);
+    expect(finishes[0].attemptNumber).toBe(1);
+    expect(finishes[0].retryOf).toBeUndefined();
+    expect(finishes[1].attemptNumber).toBe(2);
+    expect(finishes[1].retryOf).toBe(1);
+  });
+
+  it("does NOT retry when the EXIT failure takes exactly 120000ms (boundary)", async () => {
+    const { spawn, calls } = exitFailSpawn();
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 120_000]),
+    });
+    expect(calls()).toBe(1);
+    expect(results[0].attemptNumber).toBe(1);
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry a TIMEOUT failure", async () => {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return { stdout: "", exitCode: null, timedOut: true, aborted: false };
+    };
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 60_000]),
+    });
+    expect(calls).toBe(1);
+    expect(results[0].failure?.code).toBe("TIMEOUT");
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry a NO_OUTPUT failure (exit 0, empty)", async () => {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return { stdout: "", exitCode: 0, timedOut: false, aborted: false };
+    };
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 5_000]),
+    });
+    expect(calls).toBe(1);
+    expect(results[0].failure?.code).toBe("NO_OUTPUT");
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry once the run has aborted (signal aborts after the first try)", async () => {
+    const ac = new AbortController();
+    const { spawn, calls } = exitFailSpawn();
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      signal: ac.signal,
+      timers: stepClock([0, 5_000]),
+      onAttemptFinish: (r) => {
+        if (r.attemptNumber === 1) ac.abort();
+      },
+    });
+    expect(calls()).toBe(1);
+    expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("rebuilds the workspace before the retry spawn (no leftover .last-message.md)", async () => {
+    // Reviewer finding: the retry reused the first try's dirty cwd, so a codex
+    // leftover `.last-message.md` could be read as the second try's deliverable
+    // even when it produced no new output. The `rebuildWorkspaceBeforeRetry`
+    // hook must fire between the failed first spawn and the retry, handing the
+    // retry a pristine EMPTY workspace.
+    const ws = mkdtempSync(join(tmpdir(), "ck-runner-retry-"));
+    try {
+      // Seed a stale codex last-message file from the failed first attempt.
+      writeFileSync(join(ws, ".last-message.md"), "STALE-FIRST-ATTEMPT");
+      let calls = 0;
+      const seenContents: string[] = [];
+      const spawn: SpawnImpl = async (input) => {
+        calls++;
+        seenContents.push(readdirSync(input.cwd).sort().join(",") || "(empty)");
+        const fail = calls === 1; // first try: non-zero EXIT under 120s → retry
+        return {
+          stdout: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            result: "ok",
+          }),
+          exitCode: fail ? 1 : 0,
+          timedOut: false,
+          aborted: false,
+        };
+      };
+      let rebuildCalls = 0;
+      const rebuiltCwds: string[] = [];
+      const { results } = await runAttempts([spec("0", ws)], {
+        spawnImpl: spawn,
+        timers: stepClock([0, 5_000]),
+        rebuildWorkspaceBeforeRetry: (s) => {
+          rebuildCalls++;
+          rebuiltCwds.push(s.cwd);
+          // Simulate the fs-safe delete-then-recreate: empty the dir before the
+          // retry spawn lands in it.
+          rmSync(s.cwd, { recursive: true, force: true });
+          mkdirSync(s.cwd, { recursive: true });
+        },
+      });
+      expect(calls).toBe(2);
+      expect(rebuildCalls).toBe(1);
+      expect(rebuiltCwds).toEqual([ws]);
+      // The first spawn saw the stale residue in its cwd.
+      expect(seenContents[0]).toContain(".last-message.md");
+      // The retry spawn saw an EMPTY workspace (rebuilt before the retry).
+      expect(seenContents[1]).toBe("(empty)");
+      expect(results[0].status).toBe("success");
+      // The stale file did not survive into the retry.
+      expect(existsSync(join(ws, ".last-message.md"))).toBe(false);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT call rebuildWorkspaceBeforeRetry when no retry happens (success first try)", async () => {
+    let rebuildCalls = 0;
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }),
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 5_000]),
+      rebuildWorkspaceBeforeRetry: () => {
+        rebuildCalls++;
+      },
+    });
+    expect(rebuildCalls).toBe(0);
   });
 });
 
@@ -667,5 +858,44 @@ describe("cli auto runner — path round-trip with real temp PATH", () => {
     const { results } = await runAttempts([s], { spawnImpl: spawn });
     expect(results[0].status).toBe("success");
     expect(results[0].output).toBe("kimi-final");
+  });
+});
+
+describe("cli auto runner — process-group cleanup on natural close", () => {
+  it("best-effort TERMs the detached group when the leader closes naturally", async () => {
+    const child = new FakeChild();
+    child.echoStdinThenClose();
+    const kills: Array<{ target: number; signal: string }> = [];
+    const killFn = (target: number, signal: NodeJS.Signals): void => {
+      kills.push({ target, signal: String(signal) });
+    };
+    const start = Date.now();
+    const out = await defaultSpawn(
+      { executable: "x", argv: [], cwd: "/tmp/ck-fake-ws", prompt: "hi", promptStdin: true, timeoutMs: 60000, signal: NEVER_ABORT },
+      fakeSpawnFn(child),
+      killFn,
+    );
+    const elapsed = Date.now() - start;
+    expect(out.exitCode).toBe(0);
+    // TERM→grace→KILL is awaited before resolving (retry isolation).
+    expect(elapsed).toBeGreaterThanOrEqual(1500);
+    expect(kills).toEqual([
+      { target: -child.pid, signal: "SIGTERM" },
+      { target: -child.pid, signal: "SIGKILL" },
+    ]);
+  });
+});
+
+describe("cli auto runner — fast SPAWN_ERROR is NOT retried (frozen brief)", () => {
+  it("does not retry a stream-error failure (retry is EXIT-only per the brief)", async () => {
+    let calls = 0;
+    const spawnImpl: SpawnImpl = async () => {
+      calls++;
+      return { stdout: "", stderr: "", exitCode: null, timedOut: false, aborted: false, error: "EPIPE" };
+    };
+    const { results } = await runAttempts([spec("no-retry-spawn")], { spawnImpl });
+    expect(calls).toBe(1);
+    expect(results[0]?.status).toBe("failure");
+    expect(results[0]?.failure?.code).toBe("SPAWN_ERROR");
   });
 });

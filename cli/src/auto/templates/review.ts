@@ -107,6 +107,7 @@ export function buildAccessHint(pr: string | undefined): string | null {
       "## 访问提示",
       "",
       `用 \`gh pr diff '${pr}'\` 查看 diff，\`gh pr view '${pr}'\` 查看描述与评论。`,
+      "建议先用 `gh pr diff` 把 diff 落盘到文件，再分段读取，避免盲目目录探索。",
       "",
       PROXY_RULE,
     ].join("\n");
@@ -118,6 +119,7 @@ export function buildAccessHint(pr: string | undefined): string | null {
       "## 访问提示",
       "",
       `用 \`antcode pr diff ${parsed.iid} -P ${parsed.project} --no-pager\` 查看 diff。`,
+      "建议先用 `antcode pr diff` 把 diff 落盘到文件，再分段读取，避免盲目目录探索。",
       "",
       PROXY_RULE,
     ].join("\n");
@@ -150,7 +152,15 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
     "",
     "你在空目录中完全自主工作：自行 fetch/clone/checkout 代码，自行跑测试、lint、构建或任何你认为必要的验证。没有人为你准备环境，一切由你自己完成。",
     "不可信 PR 等同于 PR 代码会被执行（与 CI 同级风险）。",
+    "全量 build 前先评估时长，优先定向测试。",
   );
+  // The diff-to-file guidance is PR-specific (gh pr diff / antcode pr diff):
+  // under `--task` there is no PR target, so asking the reviewer to land a PR
+  // diff first is meaningless noise (reviewer finding: it was injected
+  // unconditionally, even in --task mode).
+  if (input.task.pr && input.task.pr.trim().length > 0) {
+    lines.push("先用 gh pr diff / antcode pr diff 落盘到文件再分段读取，避免盲目目录探索。");
+  }
   lines.push("", "## 输出契约（最终消息即交付物，过程输出不算）", "", ATTEMPT_CONTRACT);
   lines.push("", "只输出上面的 Markdown，不要输出多余寒暄或过程日志。");
   return lines.join("\n");

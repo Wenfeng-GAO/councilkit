@@ -26,6 +26,7 @@ import {
   buildProbeSpec,
   buildSpawnSpec,
 } from "../auto/driver-commands";
+import { formatDurationMs } from "../auto/duration";
 import {
   type AttemptResult,
   type RunAttemptsOutcome,
@@ -51,7 +52,7 @@ import {
   readReviewTranscript,
   writeReviewTranscript,
 } from "../auto/transcript";
-import { EXIT, errors } from "../errors";
+import { CliError, EXIT, errors } from "../errors";
 import {
   type TrustedRoot,
   assertWithinRoot,
@@ -194,12 +195,19 @@ export async function runReview(
   let priorRecords: ReviewTranscriptRecord[] = [];
   let priorStartedAt: string | undefined;
   const reusedByAttemptId = new Map<string, AttemptResult>();
+  const resumedAfterFailureIds = new Set<string>();
   // The runs root is bound ONCE at the resume entry and the SAME binding is
   // carried through every later resume write/rebuild path (transcript flush,
   // report render, workspace recreation), revalidated at each use — never
   // rebound from the current runsRoot, which could have been swapped in
   // between (reviewer finding).
   let resumeRoot: TrustedRoot | null = null;
+  // The trusted runs root bound for THIS run (fresh or carried from a resume).
+  // Hoisted to function scope so `buildExecuteParams` can thread it to
+  // `executeReview`, which wires the retry-time workspace rebuild. Assigned in
+  // the spawn branch below; stays null on the aggregator-unreachable path where
+  // `executeReview` is never called.
+  let trustedRoot: TrustedRoot | null = null;
   if (resumeRaw !== undefined) {
     const resumeId = resumeRaw.trim();
     if (!RUN_ID_PATTERN.test(resumeId)) {
@@ -290,8 +298,22 @@ export async function runReview(
           workspace: join(paths.runDir(resumeId), "workspaces", meta.attemptId),
           activity: rec.activity,
           reused: true,
+          // Preserve the retry chain on re-render so the appendix keeps the
+          // 「第 1 次尝试（失败，已重试）」 mark across a resume (plan §"瞬态重试").
+          attemptNumber: rec.attemptNumber,
+          retryOf: rec.retryOf,
+          resumedAfterFailure: (rec as { resumedAfterFailure?: boolean }).resumedAfterFailure === true
+            ? true
+            : undefined,
         });
       }
+    }
+    // Attempts that FAILED in the prior run and are being rerun now: mark the
+    // fresh result so the appendix can say 「上一轮失败,resume 重跑」 instead
+    // of silently presenting it as a first-try success (reviewer finding).
+    for (const meta of started.attempts) {
+      if (reusedByAttemptId.has(meta.attemptId)) continue;
+      if (lastFinished.has(meta.attemptId)) resumedAfterFailureIds.add(meta.attemptId);
     }
   }
 
@@ -459,11 +481,17 @@ export async function runReview(
       durationMs: r.durationMs,
       failure: r.failure ?? null,
       activity: r.activity,
+      // Transient-retry chain (plan §"瞬态重试"): every physical execution is
+      // recorded; the retried second try carries retryOf=1. Older records and
+      // synthetic results simply omit both.
+      attemptNumber: r.attemptNumber,
+      retryOf: r.retryOf,
+      resumedAfterFailure: r.resumedAfterFailure === true ? true : undefined,
     };
     transcript.push(rec);
     flushTranscript(transcriptPath, transcript, resumeRoot);
     out.progress(
-      `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${r.durationMs}ms)`,
+      `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${formatDurationMs(r.durationMs)})`,
     );
     // Surface the failure reason (incl. the driver's stderr tail carried on
     // the EXIT failure message) as a human-mode diagnostic (reviewer finding:
@@ -559,16 +587,17 @@ export async function runReview(
       // bound at the entry (revalidated here: a root swapped since entry —
       // dev/ino changed — is fail-closed exit 5); it NEVER rebinds the
       // current runsRoot, which would silently bless the swap.
-      let trustedRoot: TrustedRoot | null;
+      let trustedRootBound: TrustedRoot | null;
       if (resumeRoot !== null) {
         revalidateTrustedRoot(resumeRoot);
-        trustedRoot = resumeRoot;
+        trustedRootBound = resumeRoot;
       } else {
-        trustedRoot = bindTrustedRoot(paths.runsRoot);
+        trustedRootBound = bindTrustedRoot(paths.runsRoot);
       }
-      if (trustedRoot === null) {
+      if (trustedRootBound === null) {
         throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
       }
+      trustedRoot = trustedRootBound;
       for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
       recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
       const params = buildExecuteParams();
@@ -614,6 +643,8 @@ export async function runReview(
       transcript,
       recordAttemptFinished,
       resumeRoot,
+      trustedRoot,
+      resumedAfterFailureIds,
       // Human-mode heartbeat only (plan: JSON mode emits no human heartbeat).
       heartbeat: out.json
         ? undefined
@@ -655,6 +686,14 @@ interface ExecuteParams {
   /** The runs-root binding from the resume entry (null for a fresh run):
    * revalidated before every resume-related write below, never rebound. */
   resumeRoot: TrustedRoot | null;
+  /** Attempt ids whose prior-run terminal record was a failure (resume only):
+   * their fresh results get `resumedAfterFailure` for the appendix mark. */
+  resumedAfterFailureIds?: Set<string>;
+  /** The trusted runs root bound for THIS run (fresh or carried from a resume).
+   * Non-null whenever `executeReview` runs — it is null only on the
+   * aggregator-unreachable path that finalizes without spawning. Used to rebuild
+   * a pristine workspace before the transient-retry spawn (reviewer finding). */
+  trustedRoot: TrustedRoot | null;
   /** Human heartbeat config; undefined in JSON mode. */
   heartbeat?: { intervalMs?: number; timers?: RunnerTimers };
 }
@@ -675,24 +714,64 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       p.heartbeat === undefined
         ? undefined
         : (_attemptId: string, agentName: string, elapsedMs: number) => {
-            p.out.progress(`  attempt ${agentName} 仍在运行 (${formatElapsed(elapsedMs)})`);
+            p.out.progress(`  attempt ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
           },
     onAttemptFinish: (r: AttemptResult) => {
-      completed.push(r);
+      // Mark resume-rerun results BEFORE persistence — assigning after
+      // runAttempts returns would leave attempt.finished without the flag, and
+      // the next resume would silently lose the history (reviewer finding).
+      if (p.resumedAfterFailureIds?.has(r.attemptId)) r.resumedAfterFailure = true;
+      // A retried Attempt fires this callback twice (attemptNumber 1 then 2);
+      // keep only the LAST result per logical attemptId so a mid-run callback
+      // failure never double-counts the same Attempt in the error-path report
+      // (plan §risks: completed 按 attemptId 去重).
+      const idx = completed.findIndex((x) => x.attemptId === r.attemptId);
+      if (idx === -1) completed.push(r);
+      else completed[idx] = r;
       p.recordAttemptFinished(r);
     },
+    // Rebuild a pristine workspace (fs-safe delete-then-recreate under the
+    // bound runs root) before the retry spawn, so the failed first try's
+    // leftover cwd — notably a codex `.last-message.md` — cannot pass a
+    // no-output second try off as a real deliverable (reviewer finding).
+    // Workspace/fs-safe errors thrown here are tagged `detail.phase = "workspace"`
+    // so the run-level catch below can map them to phase=workspace instead of
+    // the default transcript phase (reviewer finding: a retry rebuild failure
+    // was uniformly reported as phase=transcript/code=IO_TRANSCRIPT).
+    rebuildWorkspaceBeforeRetry:
+      p.trustedRoot === null
+        ? undefined
+        : (s: AttemptSpec) => {
+            try {
+              recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot);
+            } catch (error) {
+              if (error instanceof CliError) {
+                throw new CliError({
+                  code: error.exitCode,
+                  message: error.message,
+                  detail: { ...(error.detail ?? {}), phase: "workspace" },
+                  cause: error,
+                });
+              }
+              throw error;
+            }
+          },
   };
 
   let attemptsOutcome: RunAttemptsOutcome;
   try {
     attemptsOutcome = await runAttempts(specs, runnerOpts);
   } catch (error) {
-    // A run-level callback (e.g. the transcript flush in onAttemptFinish)
-    // failed mid-run. The runner has already killed every in-flight child;
-    // persist a best-effort INCOMPLETE report + review.finished instead of
-    // escaping as a bare CliError with no ReviewOutcome (reviewer finding).
-    // Aborted runs keep the interrupted/130 semantics.
+    // A run-level callback failed mid-run — either the transcript flush in
+    // onAttemptFinish (an artifact-IO fault) OR the retry workspace rebuild
+    // (a fs-safe/workspace fault). The runner has already killed every
+    // in-flight child; persist a best-effort INCOMPLETE report + review.finished
+    // instead of escaping as a bare CliError with no ReviewOutcome (reviewer
+    // finding). Aborted runs keep the interrupted/130 semantics. The two fault
+    // sources are distinguished so the outcome's failure phase is reported
+    // faithfully (reviewer finding: both were mapped to phase=transcript).
     const message = error instanceof Error ? error.message : String(error);
+    const isWorkspaceFault = error instanceof CliError && error.detail?.phase === "workspace";
     // Restore the original spec order — `completed` is in parallel-completion
     // order, and the report/Outcome must list Attempts deterministically in
     // the user-declared agent order (reviewer finding).
@@ -709,10 +788,15 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       status: "failed",
       exitCode: EXIT.io,
       incomplete: true,
-      failure: { phase: "transcript", code: "IO_TRANSCRIPT", message },
+      failure: isWorkspaceFault
+        ? { phase: "workspace", code: "IO_WORKSPACE", message }
+        : { phase: "transcript", code: "IO_TRANSCRIPT", message },
     });
   }
   const { aborted } = attemptsOutcome;
+  for (const r of attemptsOutcome.results) {
+    if (p.resumedAfterFailureIds?.has(r.attemptId)) r.resumedAfterFailure = true;
+  }
   const results = mergeOrdered([...attemptsOutcome.results, ...p.presolved]);
 
   if (aborted || p.signal.aborted) {
@@ -799,7 +883,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     });
   }
   p.out.progress(
-    `  aggregator -> ${aggregation.status} (exit ${aggregation.exitCode ?? "n/a"}, ${aggregation.durationMs}ms)`,
+    `  aggregator -> ${aggregation.status} (exit ${aggregation.exitCode ?? "n/a"}, ${formatDurationMs(aggregation.durationMs)})`,
   );
 
   // Abort during (or immediately after) aggregation is an interrupted run — NOT
@@ -1000,13 +1084,9 @@ function summarizeAttempt(r: AttemptResult): AttemptResult {
     failure: r.failure,
     activity: r.activity,
     reused: r.reused,
+    attemptNumber: r.attemptNumber,
+    retryOf: r.retryOf,
   };
-}
-
-/** Render an elapsed duration as `Xm Ys` for the human heartbeat line. */
-function formatElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
 function createWorkspace(workspace: string): void {
@@ -1028,6 +1108,14 @@ function createWorkspace(workspace: string): void {
  * recursive mkdir create and spawn cwd — OUTSIDE the runs tree (resume
  * scenario; reviewer findings). */
 function recreateWorkspace(workspace: string, runDir: string, root: TrustedRoot): void {
+  // Revalidate the bound root against the CURRENT filesystem BEFORE any delete
+  // or create: a same-path REPLACEMENT of runsRoot (delete + fresh real
+  // directory) keeps the realpath string but changes dev/ino, so the
+  // assertWithinRoot realpath check alone cannot detect it — the retry path
+  // holds the root bound at run start (possibly minutes earlier), and without
+  // this revalidate it would rmSync inside the swapped tree (reviewer finding:
+  // recreateWorkspace reused the long-held TrustedRoot without revalidating).
+  revalidateTrustedRoot(root);
   let runStat: Stats;
   try {
     runStat = lstatSync(runDir);
@@ -1078,7 +1166,10 @@ function flushTranscript(
 }
 
 function parseTimeout(raw: string | undefined): number {
-  if (raw === undefined) return 30 * 60 * 1000;
+  // Default 45min (plan §"默认 45 分钟"): a real PR review needs more than the
+  // previous 30min to fetch/checkout/build; probe (60s) and explicit --timeout
+  // are unchanged.
+  if (raw === undefined) return 45 * 60 * 1000;
   const match = /^(\d+)(ms|s|m|h)$/.exec(raw);
   if (match === null) {
     throw errors.usage(`--timeout must look like 30m|600s|1h|5000ms, got "${raw}"`);

@@ -16,6 +16,7 @@ import {
   buildSpawnSpec,
   extractFinalOutput,
   resolveExecutable,
+  stripProxyPrefix,
 } from "../src/auto/driver-commands";
 import type { CliError } from "../src/errors";
 import type { AgentRecord } from "../src/store/schemas";
@@ -701,5 +702,39 @@ describe("cli auto driver-commands", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("stripProxyPrefix — assignment-only vs env-prefix+command", () => {
+  it("reverts when the remainder is entirely assignments", () => {
+    expect(stripProxyPrefix("NO_PROXY='1' HTTPS_PROXY='2'").text).toBe(
+      "NO_PROXY='1' HTTPS_PROXY='2'",
+    );
+  });
+  it("strips only the proxy assignment when a real command follows another assignment", () => {
+    const r = stripProxyPrefix("NO_PROXY='*' FOO='1' antcode pr diff 1");
+    expect(r.text).toBe("FOO='1' antcode pr diff 1");
+    expect(r.stripped).toBe(true);
+  });
+});
+
+describe("stripProxyPrefix — token-aware statement chain", () => {
+  it("reverts when assignments are followed by an operator token", () => {
+    expect(stripProxyPrefix("NO_PROXY='*' FOO='1' && antcode pr diff 1").text).toBe(
+      "NO_PROXY='*' FOO='1' && antcode pr diff 1",
+    );
+  });
+  it("strips when a real command word precedes the operator", () => {
+    const r = stripProxyPrefix("NO_PROXY='*' antcode pr diff 1 && echo done");
+    expect(r.text).toBe("antcode pr diff 1 && echo done");
+    expect(r.stripped).toBe(true);
+  });
+});
+
+describe("stripProxyPrefix — newline-separated statement is not a prefix", () => {
+  it("does not strip when the separator is a newline (statement boundary)", () => {
+    const r = stripProxyPrefix("NO_PROXY='*'\necho hi");
+    expect(r.text).toBe("NO_PROXY='*'\necho hi");
+    expect(r.stripped).toBe(false);
   });
 });

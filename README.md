@@ -102,9 +102,9 @@ councilkit run --agents '<["ref1","ref2"]>' --topic <text> --reporter <ref> \
 
 councilkit review --agents '<["ref1","ref2"]>' --aggregator <ref> \
   (--pr <url|number> | --task "<text>") [--focus "<text>"] \
-  [--timeout 30m] [--concurrency 3] [--out path] [--json]
+  [--timeout 45m] [--concurrency 3] [--out path] [--json]
 councilkit review --council <name|id> \
-  (--pr <url|number> | --task "<text>") [--focus "<text>"] [--timeout 30m] [--concurrency 3] [--out path] [--json]
+  (--pr <url|number> | --task "<text>") [--focus "<text>"] [--timeout 45m] [--concurrency 3] [--out path] [--json]
 ```
 
 - `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
@@ -114,12 +114,12 @@ councilkit review --council <name|id> \
 
 #### `councilkit review` — 自主并行审查（不经 Host）
 
-同一任务由 N 个全能力 agent（Attempt）在**隔离空 cwd**（`runs/<run-id>/workspaces/<attemptId>/`）中独立并行做一遍，再由 Aggregator 对比汇总，产出 `report.md`（确定性头部 + 五章节聚合正文 + `## Appendix: per-attempt outputs`）+ `transcript.jsonl`。
+同一任务由 N 个全能力 agent（Attempt）在**隔离空 cwd**（`runs/<run-id>/workspaces/<attemptId>/`）中独立并行做一遍，再由 Aggregator 对比汇总，产出 `report.md`（确定性头部含 Attempts 五列表格 + 中文五章节聚合正文 + `## 过程对比` + `## 附录:各审查者交付物`）+ `transcript.jsonl`。
 
 - **不经 Runtime Host**：CLI 直接按 PATH 解析 `cld`/`kimi`/`codex` 并 spawn，绕过 scope/SSE/ACK。claude 仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）；kimi 用 `-p`（无 `--auto`，自主权限由 config 提供）；codex 用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`。
 - **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
 - `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
-- 失败 tolerate：单 Attempt 失败不重试，进入 `attemptFailures`，其余继续、聚合照常；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 形如 `30m|600s|1h|5000ms`，`--concurrency` 默认 `min(3, N)`。
+- 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 形如 `30m|600s|1h|5000ms`，`--concurrency` 默认 `min(3, N)`。
 
 ### 报告位置与凭据生命周期
 

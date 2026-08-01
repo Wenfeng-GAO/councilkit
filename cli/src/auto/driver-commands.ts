@@ -478,6 +478,108 @@ function asText(value: unknown): string | null {
 export interface AttemptActivity {
   toolCalls: number;
   commands: string[];
+  /** True when at least one command had a proxy env prefix stripped at
+   * collection time (drives the「已省略代理前缀」note in the report). */
+  strippedProxy?: boolean;
+}
+
+/** One proxy env prefix to strip (case-insensitive). A command may carry several
+ * consecutive prefixes (`NO_PROXY='*' HTTPS_PROXY='' HTTP_PROXY='' <cmd>`); all
+ * leading prefixes are removed. The value MUST be quoted — an unquoted value
+ * containing escaped spaces or command substitution would be partially stripped
+ * and leave command fragments behind (reviewer finding); those commands are
+ * left untouched instead. */
+const PROXY_ENV_RE =
+  /^(?:NO_PROXY|no_proxy|HTTPS_PROXY|https_proxy|HTTP_PROXY|http_proxy)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s\\'"`$;&|<>]*)[ \t]+/;
+
+/** Strip leading proxy env prefixes. Standalone assignments and prefixes
+ * followed by a shell operator are NOT stripped (they are separate statements,
+ * not prefixes — reviewer findings). Exported for the report renderer. */
+export function stripProxyPrefix(cmd: string): { text: string; stripped: boolean } {
+  let stripped = false;
+  let cur = cmd;
+  for (;;) {
+    const next = cur.replace(PROXY_ENV_RE, "");
+    if (next === cur || next.trim().length === 0) break;
+    // Chained assignments separated by an operator (`A='1' B='2' && cmd`) are
+    // statements, not a prefix; a remainder that is a COMMENT (`FOO='1' # …`)
+    // is a standalone assignment too. Either way, revert to the original
+    // untouched (reviewer findings).
+    if (/^[#;&|><]/.test(next.trimStart())) {
+      return { text: cmd, stripped: false };
+    }
+    cur = next;
+    stripped = true;
+  }
+  // The remainder is ENTIRELY assignments with no command (`NO_PROXY='1'
+  // HTTPS_PROXY='2'`, or `FOO='1' BAR=2`): there was never a command to
+  // prefix — revert. A remainder of `FOO='1' antcode …` (env prefix + real
+  // command) is NOT caught by this: it contains a non-assignment token
+  // (reviewer finding: the starts-with-assignment check reverted those too).
+  if (
+    stripped &&
+    /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\.)*"|\S*)\s*)+$/.test(cur)
+  ) {
+    return { text: cmd, stripped: false };
+  }
+  // Statement-chain detection, token-aware: skip leading assignment tokens
+  // (quote-aware); if the FIRST non-assignment token is a shell operator, the
+  // assignments were statements (`NO_PROXY='*' FOO='1' && cmd`) — revert. A
+  // real command word before any operator (`FOO='1' antcode … && echo`) is a
+  // legitimate env prefix and stays stripped (reviewer findings, both
+  // directions).
+  if (stripped && startsWithAssignmentThenOperator(cur)) {
+    return { text: cmd, stripped: false };
+  }
+  return { text: cur, stripped };
+}
+
+/** Tokenize shell-ish text outside quotes: space/tab/newline separated, with
+ * operator characters (`;&|<>`) split into their own tokens (merging runs
+ * like `&&`, `||`, `>>`). Quote-aware: operators inside quotes stay literal. */
+function shellTokens(text: string): string[] {
+  const tokens: string[] = [];
+  let cur = "";
+  let inSingle = false;
+  let inDouble = false;
+  const flush = (): void => {
+    if (cur.length > 0) tokens.push(cur);
+    cur = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const prev = i > 0 ? text[i - 1] : "";
+    if (ch === "'" && !inDouble && prev !== "\\") inSingle = !inSingle;
+    else if (ch === '"' && !inSingle && prev !== "\\") inDouble = !inDouble;
+    if (!inSingle && !inDouble && (ch === " " || ch === "\t" || ch === "\n")) {
+      flush();
+    } else if (!inSingle && !inDouble && (ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">")) {
+      flush();
+      // Merge a run of the same operator char (&&, ||, >>, …).
+      let op = ch;
+      while (i + 1 < text.length && text[i + 1] === ch) {
+        op += ch;
+        i++;
+      }
+      tokens.push(op);
+    } else {
+      cur += ch;
+    }
+  }
+  flush();
+  return tokens;
+}
+
+const SHELL_OPERATOR_TOKENS = new Set(["&&", "||", ";", "|", "&", ">", "<", ">>", ">&", "#"]);
+const ASSIGNMENT_TOKEN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** True when leading assignment tokens are immediately followed by a shell
+ * OPERATOR token — meaning they were statements, not a command prefix. */
+function startsWithAssignmentThenOperator(text: string): boolean {
+  const tokens = shellTokens(text);
+  let i = 0;
+  while (i < tokens.length && ASSIGNMENT_TOKEN_RE.test(tokens[i])) i++;
+  return i > 0 && i < tokens.length && SHELL_OPERATOR_TOKENS.has(tokens[i]);
 }
 
 /** Upper bound on retained representative commands per Attempt. */
@@ -516,6 +618,7 @@ export class DriverActivityCollector {
   private toolCalls = 0;
   private readonly commands: string[] = [];
   private sawEvent = false;
+  private sawStrippedProxy = false;
 
   constructor(private readonly driverId: string) {}
 
@@ -554,7 +657,11 @@ export class DriverActivityCollector {
 
   summary(): AttemptActivity | undefined {
     if (!this.sawEvent) return undefined;
-    return { toolCalls: this.toolCalls, commands: [...this.commands] };
+    return {
+      toolCalls: this.toolCalls,
+      commands: [...this.commands],
+      strippedProxy: this.sawStrippedProxy || undefined,
+    };
   }
 
   private consider(line: string): void {
@@ -641,10 +748,18 @@ export class DriverActivityCollector {
 
   /** Fold whitespace, truncate to 80 code points, keep the first 10 in order.
    * `toolCalls` keeps counting past the command cap — the cap bounds memory,
-   * not the measurement. */
+   * not the measurement. Proxy env prefixes are stripped BEFORE truncation —
+   * truncating first would let a long prefix eat the actual command (reviewer
+   * finding); the flag is surfaced via `strippedProxy` on the summary. */
   private pushCommand(raw: unknown): void {
     if (typeof raw !== "string") return;
-    const folded = raw.replace(/\s+/g, " ").trim();
+    // Trim leading whitespace BEFORE stripping: a quoted heredoc-style command
+    // (`  NO_PROXY='*' antcode …`) is still prefix-shaped, and stripping must
+    // happen before the 80-char cap or the prefix eats the real command
+    // (reviewer findings).
+    const { text, stripped } = stripProxyPrefix(raw.trimStart());
+    if (stripped) this.sawStrippedProxy = true;
+    const folded = text.replace(/\s+/g, " ").trim();
     if (folded.length === 0) return;
     if (this.commands.length >= ACTIVITY_MAX_COMMANDS) return;
     const chars = Array.from(folded);

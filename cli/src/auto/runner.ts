@@ -2,14 +2,17 @@
  * Parallel autonomous runner (DESIGN §2, plan §"runner 语义"). Spawns a pool
  * of fully-autonomous subprocesses, each in an isolated cwd, with per-Attempt
  * timeout + process-group kill on timeout/SIGINT. Failed Attempts are tolerated
- * (never retried) and the pool keeps draining.
+ * and the pool keeps draining; a transient EXIT failure (non-zero, <120s, not
+ * aborted) is retried ONCE inside the worker (plan §"瞬态重试").
  *
  * The runner never goes through the Runtime Host — it is direct spawn only. A
  * `spawnImpl` injection point lets tests drive the whole flow with zero real
  * processes.
  */
 import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import { redact } from "../redact";
+import { formatDurationMs } from "./duration";
 import {
   type AttemptActivity,
   type AttemptSpec,
@@ -63,6 +66,16 @@ export interface AttemptResult {
   /** True when this result was carried over from a previous run by `--resume`
    * (P2-2): not spawned, not probed, no workspace created. */
   reused?: boolean;
+  /** 1-based physical execution index for this Attempt (plan §"瞬态重试").
+   * Absent on pre-retry transcripts (and on synthetic/cancelled results);
+   * present on every real execution so transcript records can be paired. */
+  attemptNumber?: number;
+  /** When this result is the retried second execution, the `attemptNumber` of
+   * the failed first try it replaced (`1`). Absent on a non-retried Attempt. */
+  retryOf?: number;
+  /** This fresh result follows a FAILED attempt in the run being resumed —
+   * the appendix marks it 「上一轮失败,resume 重跑」 (reviewer finding). */
+  resumedAfterFailure?: boolean;
 }
 
 export interface SpawnInput {
@@ -108,7 +121,10 @@ function defaultKillProcessGroup(negativePid: number, signal: NodeJS.Signals): v
 export type SpawnImpl = (input: SpawnInput) => Promise<SpawnOutput>;
 
 /** Injectable clock + interval handles (P2-1 heartbeat). Tests drive the
- * heartbeat with a fake clock; production uses Date.now + setInterval. */
+ * heartbeat with a fake clock; production uses the MONOTONIC
+ * `performance.now()` — a wall-clock rollback (NTP slew) must never make a
+ * long-running Attempt look like a sub-120s transient failure and trigger a
+ * retry (reviewer finding). */
 export interface RunnerTimers {
   now(): number;
   setInterval(callback: () => void, ms: number): unknown;
@@ -116,7 +132,9 @@ export interface RunnerTimers {
 }
 
 const defaultTimers: RunnerTimers = {
-  now: () => Date.now(),
+  // Round to integer ms: the transcript schema requires nonnegative integers,
+  // and performance.now() is fractional (reviewer finding's schema regression).
+  now: () => Math.round(performance.now()),
   setInterval: (callback, ms) => {
     const handle = setInterval(callback, ms);
     // Never let a heartbeat keep the process alive on its own.
@@ -142,6 +160,13 @@ export interface RunnerOptions {
    * the Aggregator spawn (aggregation is not an Attempt). */
   onHeartbeat?: (attemptId: string, agentName: string, elapsedMs: number) => void;
   timers?: RunnerTimers;
+  /** Rebuild an Attempt's workspace to a pristine empty dir BEFORE the retry
+   * spawn (reviewer finding: the retry reused the first try's dirty cwd, so a
+   * codex leftover `.last-message.md` could pass a no-output second try off as
+   * a real deliverable). Wired by the command layer to its fs-safe
+   * delete-then-recreate path; absent for callers that don't own a workspace
+   * (probe / Aggregator never retry, and tests can inject a fake). */
+  rebuildWorkspaceBeforeRetry?: (spec: AttemptSpec) => void;
 }
 
 export interface RunAttemptsOutcome {
@@ -151,7 +176,8 @@ export interface RunAttemptsOutcome {
 }
 
 /** Run a pool of Attempts with a shared cursor; results are written back in
- * original order. Tolerates per-Attempt failure; never retries. */
+ * original order. Tolerates per-Attempt failure; retries a transient EXIT
+ * failure once (see `shouldRetry`). */
 export async function runAttempts(
   specs: ReadonlyArray<AttemptSpec>,
   opts: RunnerOptions = {},
@@ -193,21 +219,41 @@ export async function runAttempts(
       opts.onAttemptStart?.(spec.attemptId, spec.agentName);
       let result: AttemptResult;
       try {
-        result = await runOne(spec, { ...opts, timeoutMs, signal: internal.signal });
+        result = await runSpecWithRetry(spec);
       } catch (error) {
-        killInFlight();
-        throw error;
-      }
-      try {
-        opts.onAttemptFinish?.(result);
-      } catch (error) {
-        // A finish callback (e.g. transcript persistence) failed. Kill every
-        // in-flight child via the internal abort, then propagate the error.
         killInFlight();
         throw error;
       }
       results[i] = result;
     }
+  };
+
+  /** Run a single spec, retrying ONCE on a transient EXIT failure (plan §"瞬态
+   * 重试"). Each physical execution triggers `onAttemptFinish` with a 1-based
+   * `attemptNumber` (the retry carries `retryOf`); `results[i]` keeps only the
+   * final result. The retry is layered HERE — not inside `runOne` — so the
+   * probe and Aggregator (which use `spawnOnce` → `runOne` directly) are never
+   * retried, and the per-execution callback can append each try to the transcript. */
+  const runSpecWithRetry = async (spec: AttemptSpec): Promise<AttemptResult> => {
+    const subOpts = { ...opts, timeoutMs, signal: internal.signal };
+    const first = await runOne(spec, subOpts);
+    const firstResult: AttemptResult = { ...first, attemptNumber: 1 };
+    opts.onAttemptFinish?.(firstResult);
+    if (shouldRetry(firstResult, internal.signal)) {
+      // Rebuild a PRISTINE workspace before the retry spawn: the first try's
+      // cwd now holds its leftovers (a stale checkout, codex's `.last-message.md`,
+      // …) and reusing it would let a no-output second try piggyback on the
+      // first try's artifacts and pass off stale bytes as a fresh deliverable
+      // (reviewer finding). The command layer owns the workspace lifecycle, so
+      // it injects the fs-safe delete-then-recreate path here; a throw propagates
+      // through the worker's try/catch and kills the pool like any run failure.
+      opts.rebuildWorkspaceBeforeRetry?.(spec);
+      const second = await runOne(spec, subOpts);
+      const secondResult: AttemptResult = { ...second, attemptNumber: 2, retryOf: 1 };
+      opts.onAttemptFinish?.(secondResult);
+      return secondResult;
+    }
+    return firstResult;
   };
 
   const workers = Array.from({ length: Math.min(concurrency, specs.length) }, () => worker());
@@ -247,6 +293,21 @@ export async function runAttempts(
     }
   }
   return { results: results as AttemptResult[], aborted };
+}
+
+/** Transient-EXIT retry predicate (plan §"瞬态重试"): retry ONCE only when the
+ * Attempt failed with a non-zero EXIT code in under 120s and the run is not
+ * being aborted. TIMEOUT / NO_OUTPUT / SPAWN_ERROR / ABORTED never match
+ * (SPAWN_ERROR included — the frozen brief restricts retry to EXIT; a fast
+ * stream-level flake is accepted as a tolerable attempt failure for now and
+ * is queued as a next-iteration candidate, see decisions D4).
+ * DRIVER_UNREACHABLE is resolved at the command layer and never reaches the
+ * runner. A second failure is final — there is never a third try. */
+function shouldRetry(result: AttemptResult, signal: AbortSignal): boolean {
+  if (signal.aborted) return false;
+  if (result.failure?.code !== "EXIT") return false;
+  if (typeof result.exitCode !== "number" || result.exitCode === 0) return false;
+  return result.durationMs < 120_000;
 }
 
 /** Run a single AttemptSpec (used by the Aggregator spawn). */
@@ -302,7 +363,10 @@ async function runOne(
   } finally {
     if (heartbeat !== undefined) timers.clearInterval(heartbeat);
   }
-  const durationMs = timers.now() - started;
+  // Clamp at zero: even with a monotonic clock, a fake/injected timer may jump
+  // backwards; a negative durationMs would violate the transcript's
+  // nonnegative schema and break --resume parsing (reviewer finding).
+  const durationMs = Math.max(0, timers.now() - started);
 
   const extracted =
     out.error !== undefined
@@ -313,7 +377,7 @@ async function runOne(
   if (out.error !== undefined) {
     failure = { code: "SPAWN_ERROR", message: out.error };
   } else if (out.timedOut) {
-    failure = { code: "TIMEOUT", message: `timed out after ${opts.timeoutMs}ms` };
+    failure = { code: "TIMEOUT", message: `timed out after ${formatDurationMs(opts.timeoutMs)}` };
   } else if (out.aborted) {
     failure = { code: "ABORTED", message: "aborted by cancellation signal" };
   } else if (out.exitCode !== 0) {
@@ -461,6 +525,7 @@ export function defaultSpawn(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(drainTimer);
       input.signal.removeEventListener("abort", onAbort);
       // Flush the activity collector's trailing line and attach the summary to
       // every settle path (success, error, timeout) — a killed Attempt still
@@ -494,11 +559,12 @@ export function defaultSpawn(
         let termDelivered = true;
         try {
           killFn(-pid, "SIGTERM");
-        } catch (error) {
-          if (!isESRCH(error)) throw error;
-          // ESRCH proves the process group is already gone: skip the grace
-          // wait AND the SIGKILL — killing a possibly-reused PGID could hit an
-          // unrelated process group (reviewer finding).
+        } catch {
+          // ESRCH proves the group is already gone; EPERM (or anything else)
+          // means we cannot kill it — but THROWING here would escape a
+          // timer/AbortSignal callback as an uncaught exception and crash the
+          // CLI with no ReviewOutcome (reviewer finding). Either way there is
+          // nothing more to attempt.
           termDelivered = false;
         }
         if (termDelivered) {
@@ -506,14 +572,28 @@ export function defaultSpawn(
             setTimeout(() => {
               try {
                 killFn(-pid, "SIGKILL");
-              } catch (error) {
-                if (!isESRCH(error)) {
-                  // Unexpected — nothing more we can do; best effort.
-                }
+              } catch {
+                // best effort — group already gone or not killable.
               } finally {
                 resolveKill();
               }
             }, KILL_GRACE_MS);
+          });
+        } else if (reason !== "stream") {
+          // The TERM is undeliverable and the leader may keep running — NOTHING
+          // else will settle this spawn (no close, no later cleanup: the
+          // re-entry guard blocks them), so it would hang forever (reviewer
+          // finding). Settle now with the reason's classification. The "stream"
+          // reason is excluded: onStreamError settles right after us WITH the
+          // real error, and settling here first would drop it behind the
+          // settled guard (second finding).
+          finish({
+            stdout: stdoutColl.toString(),
+            stderr: stderrColl.toString(),
+            finalEventLine: lineColl?.lastLine ?? undefined,
+            exitCode: null,
+            timedOut: reason === "timeout",
+            aborted: reason === "abort",
           });
         }
       }
@@ -582,7 +662,82 @@ export function defaultSpawn(
       });
     });
 
+    /** Start the TERM→grace→KILL cleanup for a NATURALLY ended leader (once).
+     * Bound to `exit` (fires when the leader process exits) rather than only
+     * `close`: background children that inherited the stdio pipes would
+     * otherwise hold `close` off until the turn timeout — a fast EXIT would be
+     * misread as TIMEOUT and skip the retry (reviewer finding). Kill errors
+     * (EPERM included) are ALL swallowed: throwing inside an EventEmitter
+     * callback would crash the CLI without any ReviewOutcome (second finding).
+     * killInitiated is set ONLY when the TERM was actually delivered —
+     * otherwise the re-entry guard would block a later timeout/abort killGroup
+     * and leave the child running (third finding). */
+    let naturalCleanupRan = false;
+    /** The leader's exit code/signal when `exit` fires — needed to settle
+     * immediately if the cleanup TERM is undeliverable (see below). */
+    let leaderExitCode: number | null = null;
+    const cleanupGroupOnNaturalEnd = (): void => {
+      if (naturalCleanupRan || killInitiated) return;
+      naturalCleanupRan = true;
+      if (child.pid === undefined) return;
+      const pid = child.pid;
+      let termDelivered = true;
+      try {
+        killFn(-pid, "SIGTERM");
+      } catch {
+        // ESRCH / EPERM / anything — best effort, never throw here.
+        termDelivered = false;
+      }
+      if (termDelivered) {
+        killInitiated = true;
+        killPromise = new Promise<void>((resolveKill) => {
+          setTimeout(() => {
+            try {
+              killFn(-pid, "SIGKILL");
+            } catch {
+              // best effort — group already gone or not killable.
+            } finally {
+              resolveKill();
+            }
+          }, KILL_GRACE_MS);
+        });
+      }
+    };
+    /** Bounded drain: after the leader exits, `close` normally follows quickly
+     * — but descendants that inherited the pipes (possibly in another PGID)
+     * can hold them forever (reviewer finding). Give the pipes DRAIN_GRACE_MS
+     * to flush the final event, then settle with the leader's code. This also
+     * covers the EPERM case WITHOUT settling before the drain (second
+     * finding). */
+    const DRAIN_GRACE_MS = 3_000;
+    const settleAfterDrain = (): void => {
+      lineColl?.end();
+      finish({
+        stdout: stdoutColl.toString(),
+        stderr: stderrColl.toString(),
+        finalEventLine: lineColl?.lastLine ?? undefined,
+        exitCode: leaderExitCode,
+        // Preserve a real timeout/abort — clobbering it would misreport a
+        // TIMEOUT as EXIT and could even satisfy the retry predicate
+        // (reviewer finding).
+        timedOut: killReason === "timeout",
+        aborted: killReason === "abort",
+      });
+    };
+    let drainTimer: NodeJS.Timeout;
+    // `exit` = leader process ended (kill stragglers so pipes can close, and
+    // bound the drain); `close` = stdio drained (settle the result first).
+    child.on("exit", (code) => {
+      leaderExitCode = code ?? null;
+      cleanupGroupOnNaturalEnd();
+      if (!settled) {
+        drainTimer = setTimeout(settleAfterDrain, DRAIN_GRACE_MS);
+        (drainTimer as { unref?: () => void }).unref?.();
+      }
+    });
+
     child.on("close", (code) => {
+      cleanupGroupOnNaturalEnd();
       // Flush the collector's trailing bytes: the final NDJSON line may end
       // without a newline, and skipping it would leave lastLine stale
       // (reviewer finding: no EOF handling in the line collector).
@@ -597,10 +752,6 @@ export function defaultSpawn(
       });
     });
   });
-}
-
-function isESRCH(error: unknown): boolean {
-  return (error as { code?: string })?.code === "ESRCH";
 }
 
 function errMsg(error: unknown): string {

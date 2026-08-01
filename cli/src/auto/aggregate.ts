@@ -1,9 +1,13 @@
 import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from "../report/render";
+import { stripProxyPrefix } from "./driver-commands";
+import { formatDurationMs } from "./duration";
 /**
  * review report rendering (DESIGN §4, plan §"文件清单"/§"ReviewOutcome"). The
- * canonical `runs/<run-id>/report.md` is a deterministic header → aggregation
- * body → `## Appendix: per-attempt outputs`. Failed Attempts appear in the
- * appendix as `failed: <reason>` and are never cited in the aggregation body.
+ * canonical `runs/<run-id>/report.md` is a deterministic header (with an
+ * Attempts summary table) → aggregation body (five chapters) → `## 过程对比`
+ * → `## 附录:各审查者交付物` (fence-aware heading demotion). Failed Attempts
+ * appear in the appendix as `failed: <reason>` and are never cited in the
+ * aggregation body.
  *
  * Reuses `report/render.ts` write/assert helpers (unchanged) for the canonical
  * write + `--out` copy, so durability semantics match the `run` command.
@@ -37,7 +41,7 @@ function incompleteBanner(input: ReviewReportInput): string {
     input.failurePhase !== "attempts"
   ) {
     return `> INCOMPLETE — the run stopped before the Aggregator could start (${
-      input.reason?.trim() || "see transcript"
+      oneLine(input.reason?.trim() || "see transcript")
     }). What follows is the deterministic header plus each Attempt's raw deliverable in the appendix; no consensus is fabricated.`;
   }
   // Distinguish every-Attempt-failed (no Aggregator ran) from an Aggregator
@@ -98,7 +102,8 @@ export function renderReviewReport(input: ReviewReportInput): string {
   } else {
     sections.push(incompleteBanner(input), "");
   }
-  sections.push(renderAppendix(input));
+  sections.push(renderProcessComparison(input.attempts));
+  sections.push(renderAppendix(input.attempts));
   return sections.join("\n");
 }
 
@@ -106,27 +111,54 @@ function renderHeader(input: ReviewReportInput): string {
   const lines: string[] = [];
   lines.push("# Autonomous Review Report", "");
   lines.push(`- Run: ${input.runId}`);
-  lines.push(`- Task: ${taskLine(input.task)}`);
+  // Header lines must stay single-line: task/focus/reason/agentName are free
+  // text and could otherwise inject extra headings into the outline (reviewer
+  // finding).
+  lines.push(`- Task: ${oneLine(taskLine(input.task))}`);
   const focus = input.task.focus?.trim();
-  if (focus && focus.length > 0) lines.push(`- Focus: ${focus}`);
+  if (focus && focus.length > 0) lines.push(`- Focus: ${oneLine(focus)}`);
   lines.push(
-    `- Aggregator: ${input.aggregator.agentName} (${input.aggregator.driverId}/${input.aggregator.modelId})`,
+    `- Aggregator: ${oneLine(input.aggregator.agentName)} (${oneLine(input.aggregator.driverId)}/${oneLine(input.aggregator.modelId)})`,
   );
-  lines.push("- Attempts:");
-  for (const a of input.attempts) {
-    const mark = a.status === "success" ? "ok" : `failed:${a.failure?.code ?? "unknown"}`;
-    lines.push(
-      `  - ${a.agentName} (${a.driverId}/${a.modelId}) — ${mark} — exit ${a.exitCode ?? "n/a"} — ${a.durationMs}ms`,
-    );
-  }
+  lines.push("", renderAttemptsTable(input.attempts));
   lines.push(`- Status: ${statusLabel(input)}`);
   if (input.reason && input.reason.trim().length > 0) {
-    lines.push(`- Reason: ${input.reason.trim()}`);
+    lines.push(`- Reason: ${oneLine(input.reason.trim())}`);
   }
   lines.push(`- Started: ${input.startedAt}`);
   lines.push(`- Ended: ${input.endedAt}`);
   lines.push("");
   return lines.join("\n");
+}
+
+/** Collapse every whitespace run (incl. newlines) to a single space. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** Fixed five-column attempts summary table (plan §"报告重排"). `|` and newlines
+ * in a cell are escaped so a driver's output never breaks the table grid; an
+ * Attempt without captured activity shows 「无过程数据」 in the 工具调用 column. */
+function renderAttemptsTable(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = [
+    "| Attempt | Driver/Model | 结果 | 耗时 | 工具调用 |",
+    "| --- | --- | --- | --- | --- |",
+  ];
+  for (const a of attempts) {
+    const result = a.status === "success" ? "ok" : `failed:${a.failure?.code ?? "unknown"}`;
+    const toolCalls = a.activity === undefined ? "无过程数据" : `${a.activity.toolCalls}`;
+    lines.push(
+      `| ${cell(a.agentName)} | ${cell(`${a.driverId}/${a.modelId}`)} | ${cell(result)} | ${cell(formatDurationMs(a.durationMs))} | ${cell(toolCalls)} |`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Escape pipe and newline (incl. bare CR) so a cell value can never split the
+ * table row. Backslashes are escaped FIRST so an existing `\|` is not
+ * double-escaped into `\\|` (reviewer finding). */
+function cell(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
 }
 
 /** Distinguish completed / partial (incomplete success) / failed / interrupted
@@ -137,48 +169,210 @@ function statusLabel(input: ReviewReportInput): string {
   return input.incomplete ? "partial" : "complete";
 }
 
-function renderAppendix(input: ReviewReportInput): string {
-  const lines: string[] = ["## Appendix: per-attempt outputs", ""];
-  if (input.attempts.length === 0) {
+/** `## 过程对比` (plan §"报告重排"): ONE line per final Attempt — name, formatted
+ * duration, tool-call count and the deduplicated commands joined by `; `. The
+ * command list is omitted when empty (no commands captured). Rendering-time
+ * dedup strips a leading proxy env prefix (noted once at the section top) and
+ * run-length encodes ADJACENT identical commands as `×N` (non-adjacent repeats
+ * are kept). Attempts without captured activity show 无过程数据. The multi-line
+ * per-Attempt command list is gone — each Attempt is a single bullet (reviewer
+ * finding: the plan asked for one line per final Attempt). */
+function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = ["## 过程对比", ""];
+  let strippedProxy = false;
+  for (const a of attempts) {
+    const reusedMark = a.reused === true ? " [reused]" : "";
+    const head = `- ${oneLine(a.agentName)} (${oneLine(a.driverId)}/${oneLine(a.modelId)})${reusedMark} — ${formatDurationMs(a.durationMs)}`;
+    if (a.activity === undefined) {
+      lines.push(`${head} — 无过程数据`);
+      continue;
+    }
+    const rendered = dedupCommands(a.activity.commands);
+    // The note fires when a prefix was stripped at COLLECTION time (new data,
+    // flag on the activity) OR at render time (legacy transcripts whose
+    // commands still carry the prefix).
+    if (a.activity.strippedProxy === true || rendered.some((c) => c.strippedProxy)) {
+      strippedProxy = true;
+    }
+    // No commands → omit the trailing command segment entirely.
+    const commandSeg =
+      rendered.length > 0 ? ` — ${rendered.map((c) => codeSpan(c.text)).join("; ")}` : "";
+    lines.push(`${head} — 工具调用 ${a.activity.toolCalls} 次${commandSeg}`);
+  }
+  if (strippedProxy) {
+    // One note at the section top: the proxy env prefix was omitted from the
+    // commands below (it is identical on every internal-tool invocation).
+    lines.splice(1, 0, "> 已省略命令前的 NO_PROXY/HTTPS_PROXY/HTTP_PROXY 等代理前缀。", "");
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+interface RenderedCommand {
+  text: string;
+  /** True when a proxy env prefix was stripped from this command. */
+  strippedProxy: boolean;
+}
+
+/** Run-length encode ADJACENT identical (post-proxy-strip) commands as `×N`.
+ * Non-adjacent repeats are NOT merged — a global set would drop ordering and
+ * falsely merge separated repeats (plan §risks). The 80-char truncation from
+ * the collection phase is preserved as-is. */
+function dedupCommands(commands: ReadonlyArray<string>): RenderedCommand[] {
+  interface Acc {
+    stripedText: string;
+    text: string;
+    strippedProxy: boolean;
+    count: number;
+  }
+  const out: Acc[] = [];
+  for (const raw of commands) {
+    const { text, stripped } = stripProxyPrefix(raw);
+    const last = out[out.length - 1];
+    if (last !== undefined && last.stripedText === text) {
+      last.count++;
+      // Fold the proxy-stripped flag across every merged member: if ANY of the
+      // adjacent identical commands had a proxy prefix stripped, the group is
+      // treated as stripped so the「已省略」note still fires. Otherwise a group
+      // whose FIRST member lacked the prefix (e.g. `foo` then `NO_PROXY='*' foo`)
+      // would lose the flag and the note would silently disappear (reviewer
+      // finding).
+      last.strippedProxy = last.strippedProxy || stripped;
+      continue;
+    }
+    out.push({ stripedText: text, text, strippedProxy: stripped, count: 1 });
+  }
+  return out.map((c) => ({
+    text: c.count > 1 ? `${c.text} ×${c.count}` : c.text,
+    strippedProxy: c.strippedProxy,
+  }));
+}
+
+/** `## 附录:各审查者交付物` (plan §"报告重排"): per-attempt `### <name>` with the
+ * deliverable's ATX headings demoted two levels OUTSIDE code fences, so no H1/H2
+ * from a deliverable can pollute the report outline. A retried Attempt is marked
+ * 「第 1 次尝试（失败，已重试）」 from the retry chain carried on the result. */
+function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
+  const lines: string[] = ["## 附录:各审查者交付物", ""];
+  if (attempts.length === 0) {
     lines.push("_(no attempts ran.)_", "");
     return lines.join("\n");
   }
-  lines.push(renderProcessComparison(input.attempts));
-  for (const a of input.attempts) {
+  for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`### ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark}`, "");
+    lines.push(`### ${oneLine(a.agentName)} (${oneLine(a.driverId)}/${oneLine(a.modelId)})${reusedMark}`, "");
+    // A retried Attempt keeps only its final result here; the failed first try
+    // is noted once so the appendix never silently drops it.
+    if (a.retryOf !== undefined) {
+      lines.push("> 第 1 次尝试（失败，已重试）", "");
+    }
+    // A rerun after a failed attempt in the RESUMED run is marked too — the
+    // appendix must not present it as a first-try success (reviewer finding).
+    if (a.resumedAfterFailure === true) {
+      lines.push("> 上一轮失败，resume 重跑后的交付物", "");
+    }
     if (a.status === "success" && a.output.trim().length > 0) {
-      lines.push(a.output.trim(), "");
+      // trimEnd only: a leading trim() would delete the first line's indent and
+      // turn legitimately indented code (≥4 spaces = NOT a fence) into a fake
+      // top-level fence opener (reviewer finding).
+      lines.push(downgradeHeadingsOutsideFences(a.output.trimEnd()), "");
     } else {
-      lines.push(
-        `failed: ${a.failure?.code ?? "unknown"} — ${a.failure?.message ?? "no output"}`,
-        "",
-      );
+      // failure.message can carry child stderr — demote its headings too, or a
+      // failed deliverable could still inject an H1/H2 into the outline
+      // (reviewer finding).
+      const detail = downgradeHeadingsOutsideFences(
+        a.failure?.message ?? "no output",
+      ).replace(/\n/g, " ");
+      lines.push(`failed: ${a.failure?.code ?? "unknown"} — ${detail}`, "");
     }
   }
   return lines.join("\n");
 }
 
-/** 「过程对比」小节 (P2-1): per-Attempt duration, tool-call count and the
- * representative commands captured from the stream. Attempts without captured
- * process data (unrecognized format, or a reused result from an older run)
- * show 无过程数据 — never an error. */
-function renderProcessComparison(attempts: ReadonlyArray<AttemptResult>): string {
-  const lines: string[] = ["### 过程对比", ""];
-  for (const a of attempts) {
-    const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`- ${a.agentName} (${a.driverId}/${a.modelId})${reusedMark} — ${a.durationMs}ms`);
-    if (a.activity === undefined) {
-      lines.push("  - 无过程数据");
+/** Demote ATX headings by two levels outside fenced code blocks. Fences are
+ * recognized by up to 3 leading spaces followed by ``` or ~~~ (≥3 repeats); a
+ * fence closes only on a line of the SAME character with length ≥ the opening
+ * fence. Setext headings are deliberately NOT processed: the output contract is
+ * ATX, and `---` may also be a thematic break (plan §risks). */
+function downgradeHeadingsOutsideFences(text: string): string {
+  // Normalize CRLF AND bare CR first: a `\r` (with or without `\n`) breaks every
+  // `$`-anchored regex (fence open/close, ATX match), so Windows/Mac-classic
+  // style deliverables would keep their H1/H2 in the appendix (reviewer
+  // findings).
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  /** Leading-space count of the opener — the force-close uses the same indent
+   * so it is always a CommonMark-valid closer (a column-0 run after an
+   * indented opener would become a NEW opener instead — reviewer finding). */
+  let fenceIndent = 0;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (inFence) {
+      out.push(line);
+      // A CLOSING fence is the fence run alone on its line (≤3 leading spaces
+      // are legal per CommonMark for a close) with a blank-only tail — a
+      // same-character run WITH trailing info/text is not a closer. Openers
+      // stay column-0-only (indented lines may be list continuations), but a
+      // close inside an OPEN fence is unambiguous at any ≤3 indent.
+      const closeMatch = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      if (
+        closeMatch !== null &&
+        closeMatch[1][0] === fenceChar &&
+        closeMatch[1].length >= fenceLen
+      ) {
+        inFence = false;
+      }
       continue;
     }
-    lines.push(`  - 工具调用：${a.activity.toolCalls} 次`);
-    for (const cmd of a.activity.commands) {
-      lines.push(`  - \`${cmd}\``);
+    // Fences open at ≤3 leading spaces (CommonMark top-level). A 1-3 space
+    // indented run MIGHT be a list continuation — but tracking it is safe as
+    // long as (a) the closer accepts ≤3 spaces, and (b) a force-close keeps
+    // the opener indent: untracked-after-list-end content then stays inside a
+    // CommonMark-valid code block, so headings can never escape INTO the
+    // outline un-demoted (decisions: fence-list-tradeoff).
+    const openMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+    if (openMatch !== null) {
+      const fenceCh = openMatch[2][0];
+      // CommonMark: a BACKTICK fence's info string must not contain a backtick
+      // — a line like ``` `inline` ``` is not a fence opening (it is paragraph
+      // text), so the H1/H2 that follow must still be demoted. A tilde fence's
+      // info string has no such restriction. Without this rule a backtick fence
+      // whose info carried a backtick swallowed the rest of the deliverable,
+      // disabling heading demotion (reviewer finding).
+      if (fenceCh === "`" && openMatch[3].includes("`")) {
+        // Not a fence opening (backtick fence info must not contain a backtick);
+        // the line is paragraph text, kept verbatim, and heading demotion stays
+        // active for the lines that follow.
+        out.push(line);
+        continue;
+      }
+      inFence = true;
+      fenceChar = fenceCh;
+      fenceLen = openMatch[2].length;
+      fenceIndent = openMatch[1].length;
+      out.push(line);
+      continue;
+    }
+    const heading = /^( {0,3})(#{1,6})(?=[ \t]|$)(.*)$/.exec(line);
+    if (heading !== null) {
+      // Add two `#` to the marker: H1→H3, H2→H4 (under the `### <name>` heading);
+      // H5/H6 grow to 7/8 and naturally fall out of the outline.
+      out.push(`${heading[1]}##${heading[2]}${heading[3]}`);
+    } else {
+      out.push(line);
     }
   }
-  lines.push("");
-  return lines.join("\n");
+  // An UNCLOSED fence would swallow everything that follows the deliverable in
+  // the appendix — including the next Attempt's `### <name>` heading — into a
+  // code block. Force-close it with a run AT LEAST as long as the opening one
+  // (a ≥4-marker opener is not closed by a 3-marker line) so report structure
+  // after this output is never consumed (reviewer findings).
+  if (inFence) {
+    out.push(" ".repeat(fenceIndent) + fenceChar.repeat(Math.max(3, fenceLen)));
+  }
+  return out.join("\n");
 }
 
 function taskLine(task: ReviewTask): string {
@@ -196,4 +390,16 @@ export function writeCanonicalReviewReport(path: string, markdown: string): void
 /** Atomic copy to `--out`; the canonical artifact is already preserved. */
 export function writeReviewReportCopy(outPath: string, markdown: string): void {
   writeReportCopy(outPath, markdown);
+}
+
+/** Markdown inline-code span for a command: use a backtick fence one longer
+ * than the longest backtick run in the text (CommonMark rule) — a command
+ * containing `` ` `` or `` `` `` would otherwise close the span early
+ * (reviewer finding). */
+function codeSpan(text: string): string {
+  const runs = text.match(/`+/g);
+  const max = runs === null ? 0 : Math.max(...runs.map((r) => r.length));
+  if (max === 0) return "`" + text + "`";
+  const fence = "`".repeat(max + 1);
+  return `${fence} ${text} ${fence}`;
 }
