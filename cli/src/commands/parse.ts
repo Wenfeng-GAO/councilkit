@@ -86,8 +86,3 @@ export function parseIntFlag(raw: string | undefined, fieldName: string): number
 export function strOrEmpty(raw: string | undefined): string {
   return (raw ?? "").trim();
 }
-
-/** Shared flags every leaf accepts. */
-export const COMMON_FLAGS = {
-  json: { type: "boolean" as const },
-} satisfies Record<string, { type: "string" | "boolean" }>;
