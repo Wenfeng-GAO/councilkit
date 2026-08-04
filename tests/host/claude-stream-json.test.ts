@@ -297,6 +297,48 @@ async function createRig(
   return { driver, supervisor, participantId, prewarmResult };
 }
 
+/** In-memory DriverProcess seam driver builder (extracted from the H4 block so
+ * the CK-ROT-001 respawn test can reuse it). `onSpawn` fires synchronously when
+ * the supervisor's spawnDriver is called (before the returned promise settles),
+ * giving tests a deterministic "spawn initiated" signal. `spawnImpl`, when
+ * provided, overrides the resolved DriverProcess (e.g. a gated promise). */
+async function buildSeamDriver(
+  fakeProcess: DriverProcess,
+  onSpawn: () => void,
+  spawnImpl?: () => Promise<DriverProcess>,
+): Promise<{ participantId: string; driver: ParticipantDriver }> {
+  const participantId = "p-1";
+  const config: HostConfig = {
+    mode: "production",
+    hostname: "127.0.0.1",
+    port: 0,
+    hostHeader: "127.0.0.1",
+    distDir: tempRoot,
+    watchdogProgram: WATCHDOG_PROGRAM,
+    driverWorkRoot: join(tempRoot, "work"),
+  };
+  const logger = createLogger({ sink: () => {} });
+  const realSupervisor = createProcessSupervisor({ config, logger });
+  supervisors.push(realSupervisor);
+  const seamSupervisor: ProcessSupervisor = {
+    ...realSupervisor,
+    spawnDriver: () => {
+      onSpawn();
+      return spawnImpl ? spawnImpl() : Promise.resolve(fakeProcess);
+    },
+  };
+  const deps: DriverDeps = {
+    supervisor: seamSupervisor,
+    logger,
+    timeouts: BASE_TIMEOUTS,
+    workRoot: join(tempRoot, "work"),
+  };
+  const driver = createClaudeStreamJsonDriver(deps)(participantId);
+  drivers.push(driver);
+  await writeFixtureConfig(participantId, {});
+  return { participantId, driver };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -674,43 +716,6 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     };
   }
 
-  async function buildSeamDriver(
-    fakeProcess: DriverProcess,
-    onSpawn: () => void,
-    spawnImpl?: () => Promise<DriverProcess>,
-  ): Promise<{ participantId: string; driver: ParticipantDriver }> {
-    const participantId = "p-1";
-    const config: HostConfig = {
-      mode: "production",
-      hostname: "127.0.0.1",
-      port: 0,
-      hostHeader: "127.0.0.1",
-      distDir: tempRoot,
-      watchdogProgram: WATCHDOG_PROGRAM,
-      driverWorkRoot: join(tempRoot, "work"),
-    };
-    const logger = createLogger({ sink: () => {} });
-    const realSupervisor = createProcessSupervisor({ config, logger });
-    supervisors.push(realSupervisor);
-    const seamSupervisor: ProcessSupervisor = {
-      ...realSupervisor,
-      spawnDriver: () => {
-        onSpawn();
-        return spawnImpl ? spawnImpl() : Promise.resolve(fakeProcess);
-      },
-    };
-    const deps: DriverDeps = {
-      supervisor: seamSupervisor,
-      logger,
-      timeouts: BASE_TIMEOUTS,
-      workRoot: join(tempRoot, "work"),
-    };
-    const driver = createClaudeStreamJsonDriver(deps)(participantId);
-    drivers.push(driver);
-    await writeFixtureConfig(participantId, {});
-    return { participantId, driver };
-  }
-
   it("AC1: close() during an in-flight initialize rejects CANCELLED, not the plain crash label", async () => {
     // closeScopeInternal (controller-close / host closeAll / 30s creating-TTL
     // sweeper) → driver.close() SIGTERMs the process while the `initialize`
@@ -977,6 +982,162 @@ describe("claude-stream-json driver H4 close()-caught handshake", () => {
     // The spawn was never reached — no process adopted, no leak (P1/F2a).
     expect(spawnCount).toBe(0);
     expect(driver.capabilityState()).toBe("checking");
+    expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
+  });
+});
+
+/**
+ * CK-ROT-001 — a cancel the Host accepts (POST .../cancel returns
+ * state=cancelling) during the claude-stream-json safe-retry respawn window
+ * must abort the execution: attempt 2 must not dispatch the user frame, and the
+ * execution must terminate as interrupted(user_cancelled). In-memory seam: the
+ * respawn spawn is gated so cancel is provably called while the spawn is
+ * pending (activeTurn null, cancellingExecutions latched), then the gate is
+ * released — deterministic, no timing race.
+ */
+describe("claude-stream-json driver CK-ROT-001 cancel during respawn", () => {
+  /** A DriverProcess variant that handshakes: responds to a control_request
+   * initialize on stdin by pushing a control_response success frame (with a
+   * default-bearing model catalog) to its stdout Readable. Mirrors makeFakeProcess
+   * but adds the stdout handshake response. stdin lines are collected for the
+   * "no user frame" assertion. */
+  function makeHandshakingProcess(
+    participantId: string,
+    events: EventEmitter,
+    stdinLines: string[],
+    onShutdown?: () => void,
+  ): DriverProcess {
+    const stdout = new Readable({ read() {} });
+    const stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        for (const line of chunk.toString("utf8").split("\n")) {
+          if (line.length === 0) continue;
+          stdinLines.push(line);
+          try {
+            const frame = JSON.parse(line) as Record<string, unknown>;
+            if (frame.type === "control_request") {
+              const request = frame.request as Record<string, unknown> | undefined;
+              if (request?.subtype === "initialize") {
+                const responseFrame = JSON.stringify({
+                  type: "control_response",
+                  response: {
+                    request_id: frame.request_id,
+                    subtype: "success",
+                    response: {
+                      models: [{ value: "default", resolvedModel: MODEL_ID }],
+                    },
+                  },
+                });
+                stdout.push(`${responseFrame}\n`);
+              }
+            }
+          } catch {
+            // non-JSON line — ignore
+          }
+        }
+        callback();
+      },
+    });
+    return {
+      participantId,
+      pid: -1,
+      pgid: -1,
+      watchdogPid: -1,
+      stdin,
+      stdout,
+      stderr: new Readable({ read() {} }),
+      events,
+      waitSupervised: () => Promise.resolve(),
+      kill: () => {},
+      closeStdin: () => {},
+      shutdown: () =>
+        new Promise<void>((resolveShutdown) => {
+          setTimeout(() => {
+            onShutdown?.();
+            resolveShutdown();
+          }, 0);
+        }),
+      __testInjectControlLine: () => {},
+    };
+  }
+
+  it("CK-ROT-001: cancel during safe-retry respawn window aborts before attempt 2 dispatches", async () => {
+    const participantId = "p-1";
+
+    // First process: handshakes, then is killed (host view: crash while idle).
+    const firstEvents = new EventEmitter();
+    const firstStdin: string[] = [];
+    const firstProcess = makeHandshakingProcess(participantId, firstEvents, firstStdin);
+
+    // Second process: handshakes; reached only when the respawn gate is released.
+    const secondEvents = new EventEmitter();
+    const secondStdin: string[] = [];
+    const secondProcess = makeHandshakingProcess(participantId, secondEvents, secondStdin);
+
+    let spawnCount = 0;
+    let spawnImplCalls = 0;
+    let releaseRespawn: () => void = () => {};
+    const spawnImpl = (): Promise<DriverProcess> => {
+      spawnImplCalls += 1;
+      if (spawnImplCalls === 1) {
+        return Promise.resolve(firstProcess);
+      }
+      // Call 2+ (respawn): gated — resolves only when releaseRespawn() fires.
+      return new Promise<DriverProcess>((resolveSpawn) => {
+        releaseRespawn = () => resolveSpawn(secondProcess);
+      });
+    };
+    const { driver } = await buildSeamDriver(
+      firstProcess,
+      () => {
+        spawnCount += 1;
+      },
+      spawnImpl,
+    );
+
+    // prewarm: first process handshakes (responds to initialize). spawnCount===1.
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+    expect(spawnCount).toBe(1);
+
+    // Kill the first process externally (host view: driver crash while idle).
+    firstEvents.emit("exit", { code: null, signal: "SIGKILL" });
+    await waitFor(() => driver.sessionEpoch === 1, 5000);
+
+    // Start execute: attempt 1 fires the pre-dispatch guard synchronously
+    // (process null), emitWrapper swallows the failed event, respawn begins.
+    const run = executeCollecting(driver, execInput("exec-1", "Cancel during respawn."));
+
+    // Wait for the respawn spawn to be initiated. The gated Promise is pending
+    // — respawn is stuck at the spawn await, activeTurn is null.
+    await waitFor(() => spawnCount === 2, 5000);
+
+    // Cancel during respawn: cancellingExecutions latches the executionId;
+    // activeTurn is null so cancel returns immediately (no hang).
+    await driver.cancel("exec-1");
+
+    // Release the gate: the second process resolves, handshakes, state="ready".
+    // The retry loop iterates to attempt 2, the gate fires, emits
+    // interrupted(user_cancelled) to the outer emit, and returns.
+    releaseRespawn();
+    await run.done;
+
+    // Terminal: interrupted(user_cancelled, not_dispatched).
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("interrupted");
+    if (terminal.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+    expect(terminal.dispatchState).toBe("not_dispatched");
+
+    // The respawned (second) process's stdin NEVER received a user frame —
+    // only the control_request initialize for the handshake.
+    expect(secondStdin.some((line) => line.includes('"type":"user"'))).toBe(false);
+    expect(secondStdin.some((line) => line.includes('"subtype":"initialize"'))).toBe(true);
+
+    // The latched cancel flag is cleaned up by execute().finally.
     expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
   });
 });
