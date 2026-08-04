@@ -159,6 +159,10 @@ export function createClaudeStreamJsonDriver(
     let initVerified = false;
     let lastCumulative = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     let activeTurn: ActiveTurn | null = null;
+    /** Per-executionId cancel latch: survives the respawn window where
+     * activeTurn is null, so a cancel accepted before attempt 2 dispatches
+     * is honored by the retry-loop re-check gate. Cleared in execute().finally. */
+    const cancellingExecutions = new Set<string>();
     let requestCounter = 0;
     const pendingControls = new Map<string, PendingControl>();
     let stderrTail = "";
@@ -890,51 +894,69 @@ export function createClaudeStreamJsonDriver(
         // provably never happened (tools are verified empty, so a pre-dispatch
         // retry has no side effects).
         let attempt = 0;
-        for (;;) {
-          attempt += 1;
-          let failedRetryable = false;
-          const emitWrapper: Emit = (event) => {
-            if (
-              event.type === "failed" &&
-              event.dispatchState === "not_dispatched" &&
-              event.retryable &&
-              attempt === 1
-            ) {
-              failedRetryable = true;
-              return; // swallow first-attempt safe failure; retry below
-            }
-            emit(event);
-          };
-          await runTurn(input, emitWrapper, attempt === 1);
-          if (!failedRetryable || attempt >= 2) return;
-          logger.warn("claude.retry_once", { participantId, executionId: input.executionId });
-          if (!process) {
-            try {
-              await respawn("safe_retry");
-            } catch {
+        try {
+          for (;;) {
+            attempt += 1;
+            // CK-ROT-001: a cancel accepted during the respawn window (activeTurn
+            // was null, cancel latched cancellingExecutions) must abort before
+            // attempt 2 dispatches a user frame. Emits interrupted(user_cancelled)
+            // with not_dispatched (no frame was ever written for this execution).
+            if (attempt > 1 && cancellingExecutions.has(input.executionId)) {
               emit({
-                type: "failed",
-                error: makeError(
-                  "DRIVER_SPAWN_FAILED",
-                  "dispatch",
-                  "respawn failed during safe retry",
-                  {
-                    driverId: "claude-stream-json",
-                    executionId: input.executionId,
-                    participantId,
-                  },
-                ),
+                type: "interrupted",
+                reason: "user_cancelled",
                 dispatchState: "not_dispatched",
                 toolState: "none",
-                retryable: false,
-              } as DriverEvent);
+              });
               return;
             }
+            let failedRetryable = false;
+            const emitWrapper: Emit = (event) => {
+              if (
+                event.type === "failed" &&
+                event.dispatchState === "not_dispatched" &&
+                event.retryable &&
+                attempt === 1
+              ) {
+                failedRetryable = true;
+                return; // swallow first-attempt safe failure; retry below
+              }
+              emit(event);
+            };
+            await runTurn(input, emitWrapper, attempt === 1);
+            if (!failedRetryable || attempt >= 2) return;
+            logger.warn("claude.retry_once", { participantId, executionId: input.executionId });
+            if (!process) {
+              try {
+                await respawn("safe_retry");
+              } catch {
+                emit({
+                  type: "failed",
+                  error: makeError(
+                    "DRIVER_SPAWN_FAILED",
+                    "dispatch",
+                    "respawn failed during safe retry",
+                    {
+                      driverId: "claude-stream-json",
+                      executionId: input.executionId,
+                      participantId,
+                    },
+                  ),
+                  dispatchState: "not_dispatched",
+                  toolState: "none",
+                  retryable: false,
+                } as DriverEvent);
+                return;
+              }
+            }
           }
+        } finally {
+          cancellingExecutions.delete(input.executionId);
         }
       },
 
       async cancel(executionId: string): Promise<void> {
+        cancellingExecutions.add(executionId);
         const turn = activeTurn;
         if (!turn || turn.executionId !== executionId) return;
         turn.cancelling = true;
