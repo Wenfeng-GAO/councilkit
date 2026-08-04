@@ -81,8 +81,3 @@ export function parseIntFlag(raw: string | undefined, fieldName: string): number
   }
   return n;
 }
-
-/** Coerce a possibly-undefined string flag to a trimmed string ("" if absent). */
-export function strOrEmpty(raw: string | undefined): string {
-  return (raw ?? "").trim();
-}
