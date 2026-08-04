@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@shared/runtime/digest";
-import { makeError } from "@shared/runtime/errors";
 import type {
   ExecutionProfileDto,
   InstallationDto,
@@ -136,8 +135,4 @@ export function buildBinding(
       : {}),
   };
   return { readiness: { state: "ready", detail: null }, binding };
-}
-
-export function resolutionError(code: string, message: string): ReturnType<typeof makeError> {
-  return makeError(code as never, "prewarm", message);
 }
