@@ -397,7 +397,7 @@ export function SettingsPage() {
         ? { reasoningEffort: values.reasoningEffort.trim() }
         : {};
     }
-    // kimi-stream-json: no model/argv/token Profile options (strict empty {}).
+    // kimi-stream-json / grok-stream-json: no model/argv/token Profile options.
     return {};
   };
 

@@ -13,7 +13,17 @@ CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 
 `--json`：进度/诊断走 stderr，stdout 只出一个最终 JSON。退出码见 README CLI 章节（0/2/3/4/5/7/130）。
 
 ```bash
-# 1. 自检 Host + 实时模型闭集
+# 0. 一键写入默认审查班子（不经 Host；PATH 上有 cld/kimi/codex 才建对应 Agent）
+pnpm exec councilkit init --json
+# 之后审查不再手写 --agents JSON：
+pnpm exec councilkit review --council pr-jury --pr <url> --json
+# Host 运行时浏览器打开 http://127.0.0.1:43127/reports/<runId>
+```
+
+`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`）与 Council `pr-jury`（reporter = `review-correctness`，缺则用已发现的第一个）。已存在的同名记录默认复用；`--force` 先删 `pr-jury` 再重建默认组。
+
+```bash
+# 1. 自检 Host + 实时模型闭集（讨论 Run 才需要；review 不需要）
 pnpm exec councilkit doctor  --json
 pnpm exec councilkit models  --json
 ```
@@ -24,6 +34,7 @@ pnpm exec councilkit models  --json
 // models --json 片段
 { "driverId":"claude-stream-json", "route":"cfuse",  "catalog":["antchat/GLM-5.2[1m]", "..."], "error":null }
 { "driverId":"kimi-stream-json",   "route":null,     "catalog":["kimi-code/k3"],              "error":null }
+{ "driverId":"grok-stream-json",   "route":null,     "catalog":["grok-4.6","grok-4.5"],       "error":null }
 ```
 
 ```bash

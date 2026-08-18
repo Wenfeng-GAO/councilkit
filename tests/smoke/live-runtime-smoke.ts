@@ -84,6 +84,7 @@ import { followExecutionEvents } from "@/runtime/event-stream";
 import { loadConfig } from "@host/config";
 import { createClaudeStreamJsonDriver } from "@host/drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "@host/drivers/codex-app-server";
+import { createGrokStreamJsonDriver } from "@host/drivers/grok-stream-json";
 import { createKimiStreamJsonDriver } from "@host/drivers/kimi-stream-json";
 import type {
   DriverDeps,
@@ -591,6 +592,11 @@ async function createRealRig(logLines: string[]): Promise<Rig> {
       "kimi-stream-json",
       createKimiStreamJsonDriver(driverDeps),
     ),
+    "grok-stream-json": trackCapability(
+      capabilityByDriver,
+      "grok-stream-json",
+      createGrokStreamJsonDriver(driverDeps),
+    ),
   };
   const { host, scopeManager } = await assembleHost({
     installations,
@@ -742,6 +748,28 @@ const FAKE_INSTALLATIONS: Record<DriverId, { dto: InstallationDto; record: Insta
       detail: null,
     },
   },
+  "grok-stream-json": {
+    dto: {
+      installationId: "grok-fake00000000",
+      driverId: "grok-stream-json",
+      state: "trusted",
+      executablePath: "/fake/grok",
+      fingerprint: "sha256:00",
+      components: [],
+      detail: null,
+    },
+    record: {
+      installationId: "grok-fake00000000",
+      driverId: "grok-stream-json",
+      name: "grok",
+      discoveredPath: "/fake/grok",
+      realpath: "/fake/grok",
+      fingerprint: "sha256:00",
+      state: "trusted",
+      components: [],
+      detail: null,
+    },
+  },
 };
 
 function fakeInstallationRegistry(): InstallationRegistry {
@@ -794,6 +822,11 @@ async function createFakeRig(logLines: string[]): Promise<Rig> {
       capabilityByDriver,
       "kimi-stream-json",
       makeFactory("kimi-stream-json"),
+    ),
+    "grok-stream-json": trackCapability(
+      capabilityByDriver,
+      "grok-stream-json",
+      makeFactory("grok-stream-json"),
     ),
   };
   const { host, scopeManager } = await assembleHost({

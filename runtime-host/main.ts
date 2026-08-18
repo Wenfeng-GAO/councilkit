@@ -10,6 +10,7 @@ import {
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "./drivers/codex-app-server";
+import { createGrokStreamJsonDriver } from "./drivers/grok-stream-json";
 import { createKimiStreamJsonDriver } from "./drivers/kimi-stream-json";
 import type { DriverDeps, ParticipantDriver, PrewarmInput, PrewarmResult } from "./drivers/types";
 import { createExecutionRegistry } from "./executions/execution-registry";
@@ -17,6 +18,7 @@ import { createInstallationRegistry } from "./installations/registry";
 import { createLogger } from "./logging";
 import { createProcessSupervisor } from "./process/process-supervisor";
 import { createProfileProbe } from "./profiles/probe";
+import { cliRunsRoutes } from "./routes/cli-runs";
 import { diagnosticsRoutes } from "./routes/diagnostics";
 import { healthRoutes } from "./routes/health";
 import { installationRoutes } from "./routes/installations";
@@ -106,6 +108,11 @@ async function main(): Promise<void> {
       "kimi-stream-json",
       createKimiStreamJsonDriver(driverDeps),
     ),
+    "grok-stream-json": withCapabilityTracking(
+      capabilityByDriver,
+      "grok-stream-json",
+      createGrokStreamJsonDriver(driverDeps),
+    ),
   };
 
   const scopeManager = createScopeManager({
@@ -144,6 +151,7 @@ async function main(): Promise<void> {
     ...modelRoutes(services),
     ...scopeRoutes(services),
     ...diagnosticsRoutes(services),
+    ...cliRunsRoutes(),
   ];
 
   let viteMiddlewares:
