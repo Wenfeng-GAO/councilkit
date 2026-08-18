@@ -14,6 +14,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
   - `cld`（Runtime Driver `claude-stream-json`，支持 `cld ant glm5.2` / `cld moonshot` / `cld deepseek` / `cld cfuse` 四条 route；`cld cfuse` 经 `cfuse-claude-code` 后端透传，不依赖 `claude` binary）。
   - Codex CLI（Runtime Driver `codex-app-server`，即官方 `codex app-server`）。
   - 本地 `kimi` CLI + coding plan 登录（Runtime Driver `kimi-stream-json`，模型 `kimi-code/k3`，发现路径含 `~/.kimi-code/bin`）。
+  - 本地 `grok` CLI + `grok login`（Runtime Driver `grok-stream-json`，模型 `grok-4.6` / `grok-4.5`，发现路径含 `~/.grok/bin`）。
 
 认证统一为 `installation-managed`：本机 Runtime Installation 自行解析凭据，CouncilKit 从不读取或存储 API Key，也不提供 browser-direct fallback。
 
@@ -83,11 +84,12 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——除 `review` 外�
 ### 命令
 
 ```bash
+councilkit init [--force] [--json]                      # 发现本机 cld/kimi/codex，写入默认 pr-jury
 councilkit doctor [--json]                              # Host 可达性 + installations + catalog 摘要
 councilkit models [--json]                             # 当前可用 driver/route/model 闭集（实时 catalog）
 councilkit agent create \
   --name <name> --persona-prompt <text> \
-  --driver-id <claude-stream-json|codex-app-server|kimi-stream-json> \
+  --driver-id <claude-stream-json|codex-app-server|kimi-stream-json|grok-stream-json> \
   --options '<json>' --model-id <id> --color <#rrggbb> [--disabled] [--json]
 councilkit agent list|show <name|id>|delete <name|id> [--json]
 
@@ -105,6 +107,18 @@ councilkit review --agents '<["ref1","ref2"]>' --aggregator <ref> \
   [--timeout 45m] [--concurrency 3] [--out path] [--json]
 councilkit review --council <name|id> \
   (--pr <url|number> | --task "<text>") [--focus "<text>"] [--timeout 45m] [--concurrency 3] [--out path] [--json]
+
+councilkit runs list [--json]                           # 列出 CLI 报告
+councilkit runs open <run-id> [--json]                  # 打印 http://127.0.0.1:43127/reports/<id>
+councilkit runs gc [--keep <days>] [--dry-run] [--all]  # 只清 workspaces
+```
+
+首次使用审查：
+
+```bash
+pnpm exec councilkit init --json
+pnpm exec councilkit review --council pr-jury --pr <url> --json
+# Host 运行时打开 http://127.0.0.1:43127/reports
 ```
 
 - `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
@@ -205,7 +219,7 @@ TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx tests/smoke/live-runti
 - Web Lock + `leaseEpoch` fencing 保证一个 Execution Scope 同时只有一个 Scope Controller 可以执行 Host mutation 与 Dexie 提交；其他标签页只读观察。
 - 每个活跃 Participant 保持一个 Driver 实例和隔离的 Execution Session；Claude/Codex 为长期进程，Kimi 为每 turn 短进程 + `-S` 跨进程 resume（ADR-0012）；纯追加轮次只向健康 Session 下发增量 Context Snapshot。
 - 页面刷新使用同一 Scope 与 `executionId` 重连事件流，从最后收到的 `eventSeq` 继续，不重新调用模型。
-- V1 有三个内置 Runtime Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
+- V1 有四个内置 Runtime Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`、`grok-stream-json`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
 
 ## 管理面
 

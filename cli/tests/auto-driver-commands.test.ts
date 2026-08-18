@@ -39,6 +39,7 @@ const CLAUDE_CFUSE = {
 };
 const KIMI = { driverId: "kimi-stream-json" as const, options: {} };
 const CODEX = { driverId: "codex-app-server" as const, options: {} };
+const GROK = { driverId: "grok-stream-json" as const, options: {} };
 
 function captureError(fn: () => unknown): CliError {
   try {
@@ -55,7 +56,7 @@ describe("cli auto driver-commands", () => {
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "councilkit-dc-"));
     // Put a fake `cld`, `kimi`, `codex` on a temp PATH.
-    for (const name of ["cld", "kimi", "codex"]) {
+    for (const name of ["cld", "kimi", "codex", "grok"]) {
       const p = join(tmp, name);
       writeFileSync(p, "#!/bin/sh\necho hi\n");
       chmodSync(p, 0o755);
@@ -167,6 +168,30 @@ describe("cli auto driver-commands", () => {
       ]);
       expect(spec.argv.some((a) => a === "--auto" || a === "-y")).toBe(false);
       expect(spec.executable).toBe(join(tmp, "kimi"));
+    });
+
+    it("grok: json output, prompt in argv, always-approve on review, cwd set", () => {
+      const spec = buildSpawnSpec(agent(GROK, "grok-4.6"), {
+        attemptId: "attempt-0",
+        workspace: "/ws",
+        prompt: "review this",
+        env: env(tmp),
+      }) as AttemptSpec;
+      expect(spec.promptStdin).toBe(false);
+      expect(spec.executable).toBe(join(tmp, "grok"));
+      expect(spec.argv).toEqual([
+        "-m",
+        "grok-4.6",
+        "--output-format",
+        "json",
+        "-p",
+        "review this",
+        "--disable-web-search",
+        "--no-subagents",
+        "--always-approve",
+        "--cwd",
+        "/ws",
+      ]);
     });
 
     it("codex: stdin prompt, last-message file under workspace, skip-git-repo-check, --json", () => {
@@ -565,6 +590,15 @@ describe("cli auto driver-commands", () => {
         content: [{ type: "text", text: "block answer" }],
       });
       expect(extractFinalOutput("kimi-stream-json", stdout)).toBe("block answer");
+    });
+
+    it("grok: pretty-printed json .text is the deliverable", () => {
+      const stdout = JSON.stringify({ text: "COUNCILKIT_OK", sessionId: "s1" }, null, 2);
+      expect(extractFinalOutput("grok-stream-json", stdout)).toBe("COUNCILKIT_OK");
+    });
+
+    it("grok: returns null when text is missing", () => {
+      expect(extractFinalOutput("grok-stream-json", '{"sessionId":"s"}')).toBeNull();
     });
 
     it("codex: prefers the last-message file over stdout", () => {

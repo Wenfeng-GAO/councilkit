@@ -4,6 +4,7 @@ import {
   claudeStreamJsonOptionsSchema,
   codexAppServerOptionsSchema,
   type executionProfileSchema,
+  grokStreamJsonOptionsSchema,
   kimiStreamJsonOptionsSchema,
 } from "@shared/runtime/schemas";
 /**
@@ -36,6 +37,9 @@ export const driverSelectionSchema = z.discriminatedUnion("driverId", [
     .strict(),
   z
     .object({ driverId: z.literal("kimi-stream-json"), options: kimiStreamJsonOptionsSchema })
+    .strict(),
+  z
+    .object({ driverId: z.literal("grok-stream-json"), options: grokStreamJsonOptionsSchema })
     .strict(),
 ]);
 export type DriverSelection = z.infer<typeof driverSelectionSchema>;

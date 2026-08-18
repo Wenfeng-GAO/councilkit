@@ -112,6 +112,13 @@ export type CodexAppServerOptions = z.infer<typeof codexAppServerOptionsSchema>;
 export const kimiStreamJsonOptionsSchema = z.object({}).strict();
 export type KimiStreamJsonOptions = z.infer<typeof kimiStreamJsonOptionsSchema>;
 
+/**
+ * `grok-stream-json` options: model is the Agent's `modelId` against the
+ * closed grok catalog. Profile carries no model, argv or token fields.
+ */
+export const grokStreamJsonOptionsSchema = z.object({}).strict();
+export type GrokStreamJsonOptions = z.infer<typeof grokStreamJsonOptionsSchema>;
+
 /** Typed Execution Profile DTO. Strict by construction: no executable, argv,
  * shell, raw env or token fields can pass validation. */
 export const executionProfileSchema = z.discriminatedUnion("driverId", [
@@ -137,6 +144,14 @@ export const executionProfileSchema = z.discriminatedUnion("driverId", [
       installationId: z.string().min(1),
       credentialMode: z.literal(CREDENTIAL_MODE),
       options: kimiStreamJsonOptionsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      driverId: z.literal("grok-stream-json"),
+      installationId: z.string().min(1),
+      credentialMode: z.literal(CREDENTIAL_MODE),
+      options: grokStreamJsonOptionsSchema,
     })
     .strict(),
 ]);
@@ -411,6 +426,43 @@ export const diagnosticsResponseSchema = z
   })
   .strict();
 export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// CLI runs (session-authenticated read of ~/.config/councilkit/runs)
+// ---------------------------------------------------------------------------
+
+export const cliRunKindSchema = z.enum(["review", "discuss", "unknown"]);
+export const cliRunStatusSchema = z.enum([
+  "completed",
+  "failed",
+  "interrupted",
+  "running",
+  "unknown",
+]);
+
+export const cliRunSummarySchema = z
+  .object({
+    runId: z.string().min(1),
+    kind: cliRunKindSchema,
+    status: cliRunStatusSchema,
+    title: z.string(),
+    startedAt: z.string().nullable(),
+    endedAt: z.string().nullable(),
+    hasReport: z.boolean(),
+    reportUrl: z.string().min(1),
+  })
+  .strict();
+export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;
+export type CliRunStatusDto = z.infer<typeof cliRunStatusSchema>;
+
+export const cliRunsListResponseSchema = z.object({ runs: z.array(cliRunSummarySchema) }).strict();
+export type CliRunsListResponse = z.infer<typeof cliRunsListResponseSchema>;
+
+export const cliRunDetailResponseSchema = cliRunSummarySchema.extend({
+  markdown: z.string(),
+  truncated: z.boolean(),
+});
+export type CliRunDetailResponse = z.infer<typeof cliRunDetailResponseSchema>;
 
 // Re-export for handler convenience.
 export { LIMITS, usageSchema };

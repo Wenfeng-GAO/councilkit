@@ -46,6 +46,9 @@ export function Sidebar() {
         <NavLink to="/rooms/new" className={({ isActive }) => roundedLink(isActive)}>
           新建讨论
         </NavLink>
+        <NavLink to="/reports" className={({ isActive }) => roundedLink(isActive)}>
+          报告
+        </NavLink>
       </nav>
       <div className="border-t border-edge my-2" />
       <div className="flex flex-col gap-1 px-2">

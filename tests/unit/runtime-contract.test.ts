@@ -75,8 +75,13 @@ describe("runtime contract constants (compatibility pins)", () => {
     expect(CANONICAL_HOST_HEADER).toBe("127.0.0.1:43127");
   });
 
-  it("pins exactly the three V1 drivers", () => {
-    expect(DRIVER_IDS).toEqual(["claude-stream-json", "codex-app-server", "kimi-stream-json"]);
+  it("pins the V1 drivers", () => {
+    expect(DRIVER_IDS).toEqual([
+      "claude-stream-json",
+      "codex-app-server",
+      "kimi-stream-json",
+      "grok-stream-json",
+    ]);
   });
 
   it("pins V1 protocol limits", () => {
@@ -210,6 +215,22 @@ describe("execution profile schema", () => {
     expect(
       executionProfileSchema.safeParse({ ...kimi, options: { token: "sk-..." } }).success,
     ).toBe(false);
+  });
+
+  it("accepts a grok-stream-json profile with empty options and rejects extras", () => {
+    const grok = {
+      driverId: "grok-stream-json",
+      installationId: "grok-abc123",
+      credentialMode: "installation-managed",
+      options: {},
+    };
+    expect(executionProfileSchema.safeParse(grok).success).toBe(true);
+    expect(
+      executionProfileSchema.safeParse({ ...grok, options: { modelId: "grok-4.6" } }).success,
+    ).toBe(false);
+    expect(executionProfileSchema.safeParse({ ...grok, options: { token: "x" } }).success).toBe(
+      false,
+    );
   });
 });
 

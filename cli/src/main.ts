@@ -25,6 +25,7 @@ Usage:
   councilkit <command> [options] [--json]
 
 Commands:
+  init [--force]                      Discover local CLIs and write the default pr-jury roster.
   doctor                              Host reachability, installations, catalog summary.
   models                              Closed set of available driver/route/model.
   agent create|list|show|delete       Manage agents (name + persona + Driver Selection + modelId).
@@ -38,6 +39,8 @@ Commands:
       --aggregator <id>               then one synthesizes a report. Bypasses the Host.
       [--resume <run-id>]             Reuse successful attempts from a prior run.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
+  runs list                           List CLI runs (report.md + transcript).
+  runs open <run-id>                  Print the in-app URL for a run report.
 
 Global flags:
   --json     Machine-readable output: progress/diagnostics on stderr, one final JSON on stdout.
