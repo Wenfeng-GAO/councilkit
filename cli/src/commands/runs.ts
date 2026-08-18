@@ -13,6 +13,7 @@
  */
 import { type Stats, lstatSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { errors } from "../errors";
 import {
   type TrustedRoot,
@@ -51,7 +52,19 @@ export interface RunsDeps {
 }
 
 export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = {}): Promise<void> {
-  const { values, positionals } = parseFlags(
+  const sub = argv[0];
+  const rest = argv.slice(1);
+  if (sub === "list") return runList(rest, out);
+  if (sub === "open") return runOpen(rest, out);
+  if (sub !== "gc") {
+    throw errors.usage(
+      sub === undefined
+        ? "runs requires a subcommand: list|open|gc"
+        : `unknown runs subcommand "${sub}" (list|open|gc)`,
+    );
+  }
+
+  const { values } = parseFlags(
     {
       flags: {
         json: { type: "boolean" },
@@ -59,19 +72,10 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
         "dry-run": { type: "boolean" },
         all: { type: "boolean" },
       },
-      allowPositionals: 1,
+      allowPositionals: 0,
     },
-    argv,
+    rest,
   );
-
-  const sub = positionals[0];
-  if (sub !== "gc") {
-    throw errors.usage(
-      sub === undefined
-        ? "runs requires a subcommand: gc"
-        : `unknown runs subcommand "${sub}" (only "gc" exists)`,
-    );
-  }
 
   const all = values.all === true;
   const dryRun = values["dry-run"] === true;
@@ -118,6 +122,41 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
   }
   const outcome: RunsGcOutcome = { dryRun, all, keepDays, candidates };
   await out.finish(outcome, (d) => renderHuman(d as RunsGcOutcome));
+}
+
+async function runList(argv: string[], out: OutputSink): Promise<void> {
+  parseFlags({ flags: { json: { type: "boolean" } }, allowPositionals: 0 }, argv);
+  const runs = listCliRuns();
+  await out.finish({ runs }, (d) => {
+    const list = (d as { runs: ReturnType<typeof listCliRuns> }).runs;
+    if (list.length === 0) return "no CLI runs in this home";
+    return list
+      .map((r) => {
+        const report = r.hasReport ? "report" : "no-report";
+        return `${r.runId}  ${r.kind}  ${r.status}  ${report}  ${r.title}`;
+      })
+      .join("\n");
+  });
+}
+
+async function runOpen(argv: string[], out: OutputSink): Promise<void> {
+  const { positionals } = parseFlags(
+    { flags: { json: { type: "boolean" } }, allowPositionals: 1 },
+    argv,
+  );
+  const runId = positionals[0];
+  if (runId === undefined) throw errors.usage("runs open requires a run id");
+  if (!isCliRunId(runId)) {
+    throw errors.usage(`not a CLI run id: "${runId}"`);
+  }
+  const detail = readCliRun(runId);
+  if (detail === null) {
+    throw errors.usage(`no run found for ${runId}`);
+  }
+  const url = detail.reportUrl;
+  await out.finish({ runId, url, hasReport: detail.hasReport, title: detail.title }, () =>
+    [`${url}`, detail.hasReport ? `report: ${detail.title}` : "report.md is missing"].join("\n"),
+  );
 }
 
 /** Enumerate `<runsRoot>/<run-id>/workspaces` candidates under the BOUND root.

@@ -3,6 +3,8 @@ import {
   type AckRequest,
   type AckResponse,
   type ClaudeRoute,
+  type CliRunDetailResponse,
+  type CliRunsListResponse,
   type CloseScopeResponse,
   type ControllerRequest,
   type CreateScopeRequest,
@@ -21,6 +23,8 @@ import {
   type ScopeStatus,
   type TakeoverControllerResponse,
   ackResponseSchema,
+  cliRunDetailResponseSchema,
+  cliRunsListResponseSchema,
   closeScopeResponseSchema,
   createScopeResponseSchema,
   diagnosticsResponseSchema,
@@ -131,6 +135,20 @@ export class RuntimeClient {
   diagnostics(): Promise<DiagnosticsResponse> {
     return this.call("GET", "/api/v1/diagnostics", {
       schema: diagnosticsResponseSchema,
+      auth: "session",
+    });
+  }
+
+  listCliRuns(): Promise<CliRunsListResponse> {
+    return this.call("GET", "/api/v1/cli-runs", {
+      schema: cliRunsListResponseSchema,
+      auth: "session",
+    });
+  }
+
+  getCliRun(runId: string): Promise<CliRunDetailResponse> {
+    return this.call("GET", `/api/v1/cli-runs/${encodeURIComponent(runId)}`, {
+      schema: cliRunDetailResponseSchema,
       auth: "session",
     });
   }

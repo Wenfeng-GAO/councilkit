@@ -1,5 +1,7 @@
 import { HomePage } from "@/app/pages/HomePage";
 import { NewRoomPage } from "@/app/pages/NewRoomPage";
+import { ReportDetailPage } from "@/app/pages/ReportDetailPage";
+import { ReportsPage } from "@/app/pages/ReportsPage";
 import { RoomPage } from "@/app/pages/RoomPage";
 import { SettingsPage } from "@/app/pages/SettingsPage";
 import { AppShell } from "@/components/layout/AppShell";
@@ -16,4 +18,6 @@ export const router = createBrowserRouter([
   { path: "/rooms/:roomId", element: withShell(<RoomPage />) },
   { path: "/templates", element: withShell(templatesPage) },
   { path: "/settings", element: withShell(<SettingsPage />) },
+  { path: "/reports", element: withShell(<ReportsPage />) },
+  { path: "/reports/:runId", element: withShell(<ReportDetailPage />) },
 ]);

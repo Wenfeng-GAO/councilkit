@@ -53,7 +53,12 @@ export const TIMEOUTS = {
   creatingScopeTtlMs: 30_000,
 } as const;
 
-export const DRIVER_IDS = ["claude-stream-json", "codex-app-server", "kimi-stream-json"] as const;
+export const DRIVER_IDS = [
+  "claude-stream-json",
+  "codex-app-server",
+  "kimi-stream-json",
+  "grok-stream-json",
+] as const;
 export type DriverId = (typeof DRIVER_IDS)[number];
 
 /** Runtime Installation trust: only describes local path + fingerprint. */

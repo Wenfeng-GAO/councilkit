@@ -12,7 +12,7 @@ import type { DriverId } from "@shared/runtime/contracts";
  * the inherited PATH followed by the built-in macOS well-known directories.
  */
 
-export type InstallationName = "cld" | "codex" | "kimi";
+export type InstallationName = "cld" | "codex" | "kimi" | "grok";
 export type BinaryName = InstallationName | "claude" | "cfuse-claude-code";
 
 export interface DiscoveredCandidate {
@@ -45,12 +45,20 @@ export interface DiscoveryOptions {
   wellKnownDirs?: string[];
 }
 
-const BINARY_NAMES: readonly BinaryName[] = ["cld", "codex", "claude", "cfuse-claude-code", "kimi"];
+const BINARY_NAMES: readonly BinaryName[] = [
+  "cld",
+  "codex",
+  "claude",
+  "cfuse-claude-code",
+  "kimi",
+  "grok",
+];
 
 const DRIVER_BY_NAME: Record<InstallationName, DriverId> = {
   cld: "claude-stream-json",
   codex: "codex-app-server",
   kimi: "kimi-stream-json",
+  grok: "grok-stream-json",
 };
 
 function defaultWellKnownDirs(env: NodeJS.ProcessEnv): string[] {
@@ -63,6 +71,8 @@ function defaultWellKnownDirs(env: NodeJS.ProcessEnv): string[] {
     join(home, "bin"),
     // kimi-code installs its binary under its own data dir, not always on PATH.
     join(home, ".kimi-code", "bin"),
+    // grok TUI installs its binary under ~/.grok/bin (often not on PATH).
+    join(home, ".grok", "bin"),
   ];
 }
 
@@ -138,6 +148,16 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
       name: "kimi",
       driverId: DRIVER_BY_NAME.kimi,
       wrapper: kimi,
+      claude: null,
+      cfuse: null,
+    });
+  }
+  const grok = found.get("grok");
+  if (grok) {
+    installations.push({
+      name: "grok",
+      driverId: DRIVER_BY_NAME.grok,
+      wrapper: grok,
       claude: null,
       cfuse: null,
     });

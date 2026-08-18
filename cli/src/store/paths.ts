@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 /**
  * XDG-style data-home resolution (brief §2b, D1 §11). Priority:
  *   1. COUNCILKIT_HOME          (explicit override; tests pin a temp dir)
@@ -8,18 +10,12 @@
  * secret-free by construction, but the permissions still avoid needless local
  * exposure (D1 §11).
  */
-import { existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { CLI_STORE_DIR_NAME, resolveCouncilkitHome } from "@shared/runtime/cli-home";
 
-export const STORE_DIR_NAME = "councilkit";
+export const STORE_DIR_NAME = CLI_STORE_DIR_NAME;
 
 export function councilkitHome(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.COUNCILKIT_HOME;
-  if (override !== undefined && override.length > 0) return resolve(override);
-  const xdg = env.XDG_CONFIG_HOME;
-  if (xdg !== undefined && xdg.length > 0) return resolve(xdg, STORE_DIR_NAME);
-  return resolve(homedir(), ".config", STORE_DIR_NAME);
+  return resolveCouncilkitHome(env);
 }
 
 export interface StorePaths {

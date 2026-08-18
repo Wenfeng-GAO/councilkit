@@ -31,7 +31,10 @@
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DRIVER_IDS,
   type DispatchState,
@@ -60,6 +63,7 @@ import {
 } from "../../runtime-host/installations/registry";
 import { createLogger } from "../../runtime-host/logging";
 import { createProfileProbe } from "../../runtime-host/profiles/probe";
+import { cliRunsRoutes } from "../../runtime-host/routes/cli-runs";
 import { diagnosticsRoutes } from "../../runtime-host/routes/diagnostics";
 import { healthRoutes } from "../../runtime-host/routes/health";
 import { installationRoutes } from "../../runtime-host/routes/installations";
@@ -73,6 +77,39 @@ import { type HostServices, type Route, createRuntimeServer } from "../../runtim
 // Force production mode before loadConfig() reads the environment: the E2E
 // host must serve the built dist/ exactly like the shipped Host does.
 process.env.COUNCILKIT_MODE = "production";
+
+/** Isolated CLI home + one fixture report so /reports e2e does not read the
+ * developer's real ~/.config/councilkit. Honored only when COUNCILKIT_E2E=1
+ * (playwright webServer). */
+export const E2E_CLI_RUN_ID = "ck-review-00000000-0000-4000-8000-0000000000e2";
+if (process.env.COUNCILKIT_E2E === "1") {
+  const home = mkdtempSync(join(tmpdir(), "ck-e2e-cli-"));
+  process.env.COUNCILKIT_HOME = home;
+  const dir = join(home, "runs", E2E_CLI_RUN_ID);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "report.md"),
+    "# Autonomous Review Report\n\nE2E fixture body. `<script>alert(1)</script>` stays text.\n",
+  );
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId: E2E_CLI_RUN_ID,
+      startedAt: "2026-08-18T00:00:00.000Z",
+      task: { task: "e2e-fixture-review" },
+      attempts: [],
+      aggregator: {
+        attemptId: "a",
+        agentId: "a",
+        agentName: "A",
+        driverId: "kimi-stream-json",
+        modelId: "kimi-code/k3",
+      },
+    })}\n`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Scripted fake drivers
@@ -131,6 +168,7 @@ const DEFAULT_CATALOGS: Record<DriverId, string[]> = {
   "claude-stream-json": ["e2e-claude-model"],
   "codex-app-server": ["e2e-codex-model"],
   "kimi-stream-json": ["kimi-code/k3"],
+  "grok-stream-json": ["grok-4.6", "grok-4.5"],
 };
 
 const rigs = new Map<string, ParticipantRig>();
@@ -302,11 +340,12 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
 
 const FAKE_INSTALLATIONS: Record<
   string,
-  { driverId: DriverId; name: "cld" | "codex" | "kimi"; path: string }
+  { driverId: DriverId; name: "cld" | "codex" | "kimi" | "grok"; path: string }
 > = {
   "claude-e2e-fake01": { driverId: "claude-stream-json", name: "cld", path: "/fake/cld" },
   "codex-e2e-fake001": { driverId: "codex-app-server", name: "codex", path: "/fake/codex" },
   "kimi-e2e-fake001": { driverId: "kimi-stream-json", name: "kimi", path: "/fake/kimi" },
+  "grok-e2e-fake001": { driverId: "grok-stream-json", name: "grok", path: "/fake/grok" },
 };
 
 const installationStates = new Map<string, InstallationState>(
@@ -627,6 +666,8 @@ async function main(): Promise<void> {
       createScriptedDriver("codex-app-server", participantId),
     "kimi-stream-json": (participantId: string) =>
       createScriptedDriver("kimi-stream-json", participantId),
+    "grok-stream-json": (participantId: string) =>
+      createScriptedDriver("grok-stream-json", participantId),
   };
 
   const scopeManager = createScopeManager({
@@ -664,6 +705,7 @@ async function main(): Promise<void> {
     ...modelRoutes(services),
     ...withAckRecording(withEventStreamTracking(scopeRoutes(services))),
     ...diagnosticsRoutes(services),
+    ...cliRunsRoutes(),
     ...testRoutes(scopeManager, executions, profileProbe),
   ];
 

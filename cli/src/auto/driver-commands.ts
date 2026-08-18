@@ -49,17 +49,17 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
   "claude-stream-json": "cld",
   "kimi-stream-json": "kimi",
   "codex-app-server": "codex",
+  "grok-stream-json": "grok",
 };
 
 /** Resolve a bare executable name against PATH (X_OK regular file), or verify an
- * absolute/relative path directly. Throws a usage error (exit 2) when not found
- * so the command fails fast before spawning anything. Never shells out. */
-export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (name.length === 0) throw errors.usage("missing executable for driver");
+ * absolute/relative path directly. Returns null when missing — `init` uses this
+ * to discover which drivers exist without failing the whole command. */
+export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (name.length === 0) return null;
   if (name.includes("/")) {
     const abs = resolve(process.cwd(), name);
-    if (isExecutableFile(abs)) return abs;
-    throw errors.usage(`executable "${name}" not found or not executable`);
+    return isExecutableFile(abs) ? abs : null;
   }
   const pathDirs = (env.PATH ?? "").split(delimiter);
   for (const dir of pathDirs) {
@@ -68,6 +68,19 @@ export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process
     // executable path to the spawner.
     const candidate = resolve(dir, name);
     if (isExecutableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Resolve a bare executable name against PATH (X_OK regular file), or verify an
+ * absolute/relative path directly. Throws a usage error (exit 2) when not found
+ * so the command fails fast before spawning anything. Never shells out. */
+export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (name.length === 0) throw errors.usage("missing executable for driver");
+  const found = findExecutable(name, env);
+  if (found !== null) return found;
+  if (name.includes("/")) {
+    throw errors.usage(`executable "${name}" not found or not executable`);
   }
   throw errors.usage(`executable "${name}" not found on PATH (review needs it installed)`);
 }
@@ -138,6 +151,22 @@ function buildInvocation(
       // budget breach surfaces as a readable usage error instead of an E2BIG
       // crash from the kernel.
       const argv = ["-m", agent.modelId, "-p", prompt, "--output-format", "stream-json"];
+      assertArgvSafe(argv);
+      return { argv, promptStdin: false };
+    }
+    case "grok-stream-json": {
+      const argv = [
+        "-m",
+        agent.modelId,
+        "--output-format",
+        "json",
+        "-p",
+        prompt,
+        "--disable-web-search",
+        "--no-subagents",
+      ];
+      if (!opts.probe) argv.push("--always-approve");
+      if (opts.workspace) argv.push("--cwd", opts.workspace);
       assertArgvSafe(argv);
       return { argv, promptStdin: false };
     }
@@ -273,6 +302,8 @@ export function extractFinalOutput(
       return extractKimi(stdout);
     case "codex-app-server":
       return extractCodex(stdout, lastMessageFile);
+    case "grok-stream-json":
+      return extractGrok(stdout);
     default:
       return null;
   }
@@ -399,6 +430,27 @@ function extractKimiLine(line: string): string | null {
   if (obj === null) return null;
   if (obj.role !== "assistant") return null;
   return asText(obj.content);
+}
+
+/** Grok `--output-format json` is one object (often pretty-printed). `.text` is
+ * the deliverable. */
+function extractGrok(stdout: string): string | null {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return null;
+  const tryParse = (raw: string): string | null => {
+    try {
+      const obj = JSON.parse(raw) as { text?: unknown };
+      return asText(obj.text);
+    } catch {
+      return null;
+    }
+  };
+  const direct = tryParse(trimmed);
+  if (direct !== null) return direct;
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  return tryParse(trimmed.slice(start, end + 1));
 }
 
 /** codex: prefer the `-o` last-message file; fall back to the last
@@ -553,7 +605,11 @@ function shellTokens(text: string): string[] {
     else if (ch === '"' && !inSingle && prev !== "\\") inDouble = !inDouble;
     if (!inSingle && !inDouble && (ch === " " || ch === "\t" || ch === "\n")) {
       flush();
-    } else if (!inSingle && !inDouble && (ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">")) {
+    } else if (
+      !inSingle &&
+      !inDouble &&
+      (ch === ";" || ch === "|" || ch === "&" || ch === "<" || ch === ">")
+    ) {
       flush();
       // Merge a run of the same operator char (&&, ||, >>, …).
       let op = ch;

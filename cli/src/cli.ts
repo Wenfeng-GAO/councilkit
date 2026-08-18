@@ -6,6 +6,7 @@ import { runCouncilCmd } from "./commands/council";
  * owns its own strict parseArgs + zod validation; the router only selects.
  */
 import { runDoctor } from "./commands/doctor";
+import { runInit } from "./commands/init";
 import { runModels } from "./commands/models";
 import { runReview } from "./commands/review";
 import { runRun } from "./commands/run";
@@ -15,6 +16,8 @@ import type { OutputSink } from "./output";
 
 export async function dispatch(command: string, args: string[], out: OutputSink): Promise<void> {
   switch (command) {
+    case "init":
+      return runInit(args, out);
     case "doctor":
       return runDoctor(args, out);
     case "models":

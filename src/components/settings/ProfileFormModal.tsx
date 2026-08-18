@@ -160,8 +160,9 @@ export function ProfileFormModal({
           />
         ) : (
           <p className="text-xs text-muted">
-            Kimi 的模型在 Agent 中从闭集目录（kimi-code/k3）选择；Profile 不保存模型、argv
-            或凭据，无可编辑选项。
+            {driverId === "grok-stream-json"
+              ? "Grok 的模型在 Agent 中从闭集目录（grok-4.6 / grok-4.5）选择；Profile 不保存模型、argv 或凭据，无可编辑选项。"
+              : "Kimi 的模型在 Agent 中从闭集目录（kimi-code/k3）选择；Profile 不保存模型、argv 或凭据，无可编辑选项。"}
           </p>
         )}
         {error ? (

@@ -26,6 +26,7 @@ export default defineConfig({
     // (tests/e2e/host-entry.mts): real runtime server + scriptable fake
     // drivers on the canonical origin.
     command: "pnpm build && pnpm exec tsx tests/e2e/host-entry.mts",
+    env: { ...process.env, COUNCILKIT_E2E: "1" },
     url: "http://127.0.0.1:43127/api/v1/health",
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,

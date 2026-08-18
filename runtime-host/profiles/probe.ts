@@ -259,7 +259,7 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
         options: {},
       };
     } else {
-      // kimi-stream-json: empty options (model selected by the Agent's modelId).
+      // kimi-stream-json / grok-stream-json: empty options (model on the Agent).
       profile = {
         driverId,
         installationId,
