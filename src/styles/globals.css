@@ -15,6 +15,11 @@
   --color-warn: #d29922;
   --color-error: #f85149;
   --color-info: #58a6ff;
+  --color-brass: #c4a574;
+  --color-brass-dim: color-mix(in srgb, var(--color-brass) 35%, transparent);
+  --color-parchment: #efe4cf;
+  --font-display: "New York", "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+  --font-command: "SF Mono", Menlo, ui-monospace, SFMono-Regular, monospace;
 }
 
 @layer base {

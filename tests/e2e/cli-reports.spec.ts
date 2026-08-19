@@ -23,6 +23,7 @@ test("有 fixture 时能点进报告并看到标题；脚本标签保持为文�
   await fixture.click();
   await expect(page).toHaveURL(new RegExp(`/reports/${E2E_CLI_RUN_ID}`));
   await expect(page.getByRole("heading", { name: "Autonomous Review Report" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制修复 Prompt" })).toBeVisible();
   await expect(page.locator("script", { hasText: "alert(1)" })).toHaveCount(0);
   await expect(page.getByText("<script>alert(1)</script>")).toBeVisible();
 });

@@ -93,11 +93,15 @@ interface SafeMarkdownProps {
   /** Untrusted markdown source (message / summary / preview / error text). */
   content: string;
   className?: string;
+  /** `document` adds heading/list/code chrome for long reports. Default stays compact. */
+  variant?: "inline" | "document";
 }
 
-export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
+export function SafeMarkdown({ content, className = "", variant = "inline" }: SafeMarkdownProps) {
   return (
-    <div className={`break-words leading-relaxed ${className}`}>
+    <div
+      className={`break-words leading-relaxed ${variant === "document" ? "ck-doc" : ""} ${className}`}
+    >
       <ReactMarkdown urlTransform={urlTransform} components={components}>
         {stripControlChars(content)}
       </ReactMarkdown>

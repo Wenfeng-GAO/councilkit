@@ -1,0 +1,359 @@
+/* Homepage chamber. Color/type tokens live in globals.css. */
+:root {
+  --color-brass-dim: color-mix(in srgb, var(--color-brass) 35%, transparent);
+}
+
+.ck-landing {
+  position: relative;
+  isolation: isolate;
+}
+
+.ck-landing::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+      ellipse 70% 46% at 88% -8%,
+      rgba(196, 165, 116, 0.11),
+      transparent 58%
+    ), radial-gradient(ellipse 36% 32% at 0% 18%, rgba(99, 102, 241, 0.07), transparent 62%);
+}
+
+.ck-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-family: var(--font-command);
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-brass);
+}
+
+.ck-kicker::before {
+  content: "";
+  width: 1.4rem;
+  height: 1px;
+  background: var(--color-brass);
+}
+
+.ck-display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+  color: var(--color-parchment);
+}
+
+.ck-rule {
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-brass-dim), transparent 92%);
+}
+
+.ck-chamber {
+  position: relative;
+  display: grid;
+  grid-template:
+    ". north ." auto
+    "west docket east" auto
+    ". south ." auto
+    / 1fr minmax(8.5rem, 11rem) 1fr;
+  gap: 0.7rem 0.55rem;
+  min-height: 17.5rem;
+  padding: 0.75rem;
+}
+
+.ck-chamber-lines {
+  position: absolute;
+  inset: 18% 22%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.ck-chamber-lines line {
+  stroke: var(--color-brass);
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+}
+
+.ck-seat,
+.ck-docket {
+  position: relative;
+  z-index: 1;
+}
+
+.ck-seat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 6.6rem;
+  padding: 0.55rem 0.7rem 0.6rem;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 88%, black);
+  box-shadow: inset 0 1px 0 rgba(239, 228, 207, 0.04);
+}
+
+.ck-seat-n {
+  grid-area: north;
+  justify-self: center;
+}
+
+.ck-seat-s {
+  grid-area: south;
+  justify-self: center;
+}
+
+.ck-seat-w {
+  grid-area: west;
+  justify-self: end;
+  align-self: center;
+}
+
+.ck-seat-e {
+  grid-area: east;
+  justify-self: start;
+  align-self: center;
+}
+
+.ck-seat-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+
+.ck-pip {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+}
+
+.ck-seat-meta {
+  font-family: var(--font-command);
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  color: var(--color-muted);
+}
+
+.ck-docket {
+  grid-area: docket;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  min-height: 7.4rem;
+  padding: 1rem 0.85rem;
+  border: 1px solid var(--color-brass-dim);
+  background: linear-gradient(180deg, rgba(196, 165, 116, 0.08), transparent 42%),
+    var(--color-surface-2);
+}
+
+.ck-docket-label {
+  font-family: var(--font-command);
+  font-size: 0.6rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-brass);
+}
+
+.ck-docket-title {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--color-parchment);
+}
+
+.ck-docket-sub {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.ck-mode {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 1.15rem 1.2rem 1.25rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.ck-mode-discuss {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.07), transparent 38%),
+    var(--color-surface);
+}
+
+.ck-mode-jury {
+  background: linear-gradient(180deg, rgba(196, 165, 116, 0.08), transparent 38%),
+    var(--color-surface);
+}
+
+.ck-mode-flow {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.85rem 0 1rem;
+  font-family: var(--font-command);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+.ck-chip {
+  border: 1px solid var(--color-border);
+  padding: 0.22rem 0.42rem;
+  color: var(--color-fg);
+}
+
+.ck-arrow {
+  color: var(--color-brass);
+}
+
+.ck-cmd {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  background: #0a0c0f;
+}
+
+.ck-cmd pre {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0.7rem 0.85rem;
+  font-family: var(--font-command);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--color-parchment);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ck-cmd button {
+  flex-shrink: 0;
+  border: 0;
+  border-left: 1px solid var(--color-border);
+  background: transparent;
+  padding: 0 0.85rem;
+  font-size: 0.72rem;
+  color: var(--color-brass);
+}
+
+.ck-cmd button:hover {
+  background: rgba(196, 165, 116, 0.08);
+}
+
+.ck-step-index {
+  font-family: var(--font-display);
+  font-size: 1.55rem;
+  line-height: 1;
+  color: var(--color-brass);
+}
+
+.ck-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.62rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.ck-cta-primary {
+  background: var(--color-accent);
+  color: white;
+}
+
+.ck-cta-primary:hover {
+  opacity: 0.92;
+}
+
+.ck-cta-ghost {
+  border: 1px solid var(--color-brass-dim);
+  color: var(--color-parchment);
+}
+
+.ck-cta-ghost:hover {
+  border-color: var(--color-brass);
+}
+
+@media (max-width: 767px) {
+  .ck-chamber {
+    grid-template:
+      "docket docket" auto
+      "north west" auto
+      "east south" auto
+      / 1fr 1fr;
+    min-height: 0;
+  }
+
+  .ck-seat {
+    min-width: 0;
+  }
+
+  .ck-seat-n,
+  .ck-seat-s,
+  .ck-seat-w,
+  .ck-seat-e {
+    justify-self: stretch;
+  }
+
+  .ck-chamber-lines {
+    display: none;
+  }
+
+  .ck-mode-flow {
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ck-landing .ck-display,
+  .ck-chamber,
+  .ck-mode,
+  .ck-howto-row {
+    animation: ck-rise 640ms ease-out both;
+  }
+
+  .ck-chamber {
+    animation-delay: 80ms;
+  }
+
+  .ck-mode:nth-child(1) {
+    animation-delay: 140ms;
+  }
+
+  .ck-mode:nth-child(2) {
+    animation-delay: 200ms;
+  }
+
+  .ck-howto-row:nth-child(1) {
+    animation-delay: 160ms;
+  }
+
+  .ck-howto-row:nth-child(2) {
+    animation-delay: 220ms;
+  }
+
+  .ck-howto-row:nth-child(3) {
+    animation-delay: 280ms;
+  }
+}
+
+@keyframes ck-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

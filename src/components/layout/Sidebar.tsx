@@ -5,20 +5,25 @@ import { Link, NavLink } from "react-router-dom";
 import { useStore } from "zustand";
 
 /**
- * App sidebar (U6): navigation in domain language (讨论列表 / 新建讨论 / 设置)
+ * App sidebar (U6): navigation in domain language (首页 / 新建讨论 / 设置)
  * plus a tiny Host status indicator — dot + text label, never color-only —
  * linking to /settings where the repair actions live. The legacy 模板 (P1)
  * placeholder link was dropped; templates return post-V1.
  */
-export function Sidebar() {
-  const { sidebarOpen, toggleSidebar } = useStore(useUIStore);
+const NARROW_QUERY = "(max-width: 767px)";
+
+export function Sidebar({ overlay = false }: { overlay?: boolean }) {
+  const { sidebarOpen, toggleSidebar, setSidebarOpen } = useStore(useUIStore);
+  const closeIfNarrow = () => {
+    if (window.matchMedia(NARROW_QUERY).matches) setSidebarOpen(false);
+  };
 
   if (!sidebarOpen) {
     return (
       <button
         type="button"
         onClick={toggleSidebar}
-        className="border-r border-edge p-2 text-muted hover:text-fg"
+        className="flex items-start border-r border-edge px-2 pt-3 text-muted hover:text-fg"
         aria-label="展开侧边栏"
       >
         »
@@ -27,9 +32,13 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-edge bg-surface">
+    <aside
+      className={`flex w-64 shrink-0 flex-col border-r border-edge bg-surface ${
+        overlay ? "fixed inset-y-0 left-0 z-30" : ""
+      }`}
+    >
       <div className="flex items-center justify-between px-4 py-4">
-        <span className="text-sm font-semibold tracking-wide">CouncilKit</span>
+        <span className="font-display text-sm tracking-wide text-parchment">CouncilKit</span>
         <button
           type="button"
           onClick={toggleSidebar}
@@ -40,19 +49,36 @@ export function Sidebar() {
         </button>
       </div>
       <nav className="flex flex-1 flex-col gap-1 px-2">
-        <NavLink to="/" className={({ isActive }) => roundedLink(isActive)} end>
-          讨论列表
+        <NavLink
+          to="/"
+          className={({ isActive }) => roundedLink(isActive)}
+          end
+          onClick={closeIfNarrow}
+        >
+          首页
         </NavLink>
-        <NavLink to="/rooms/new" className={({ isActive }) => roundedLink(isActive)}>
+        <NavLink
+          to="/rooms/new"
+          className={({ isActive }) => roundedLink(isActive)}
+          onClick={closeIfNarrow}
+        >
           新建讨论
         </NavLink>
-        <NavLink to="/reports" className={({ isActive }) => roundedLink(isActive)}>
+        <NavLink
+          to="/reports"
+          className={({ isActive }) => roundedLink(isActive)}
+          onClick={closeIfNarrow}
+        >
           报告
         </NavLink>
       </nav>
       <div className="border-t border-edge my-2" />
       <div className="flex flex-col gap-1 px-2">
-        <NavLink to="/settings" className={({ isActive }) => roundedLink(isActive)}>
+        <NavLink
+          to="/settings"
+          className={({ isActive }) => roundedLink(isActive)}
+          onClick={closeIfNarrow}
+        >
           设置
         </NavLink>
         <HostStatusLink />

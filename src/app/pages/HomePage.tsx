@@ -1,3 +1,4 @@
+import { Landing } from "@/components/home/Landing";
 import { RoomListItem } from "@/components/room/RoomListItem";
 import { type UsageTotals, addUsage, emptyUsageTotals } from "@/components/room/UsageBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -195,137 +196,144 @@ export function HomePage() {
   };
 
   return (
-    <div className="px-6 py-8">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">讨论房间</h1>
-        <Link to="/rooms/new">
-          <Button>新建房间</Button>
-        </Link>
-      </div>
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <TextInput
-          label="搜索"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="话题或消息内容"
-          className="w-64"
-        />
-        <Select
-          label="排序"
-          value={sortOrder}
-          onChange={(event) => setSortOrder(event.target.value as RoomSortOrder)}
-          options={[
-            { value: "recent", label: "最近活跃" },
-            { value: "cost", label: "按成本排序" },
-          ]}
-        />
-      </div>
-      {duplicateError ? (
-        <p role="alert" className="mb-3 text-sm text-error">
-          {duplicateError}
-        </p>
-      ) : null}
-      {!rooms || rooms.length === 0 ? (
-        <EmptyState
-          title="还没有房间"
-          hint="新建一个房间来发起多 Agent 讨论。V1 不会导入旧版本地数据，但也没有删除它。"
-        />
-      ) : visibleRooms.length === 0 ? (
-        <EmptyState title="没有匹配的房间" hint="换个搜索关键词试试。" />
-      ) : (
-        <div className="grid gap-2">
-          {visibleRooms.map((room) => (
-            <div key={room.id} className="flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <RoomListItem room={room} />
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  variant="ghost"
-                  className="px-2 py-1 text-xs"
-                  onClick={() => openRename(room)}
-                >
-                  重命名
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="px-2 py-1 text-xs"
-                  disabled={duplicatingId === room.id}
-                  onClick={() => void handleDuplicate(room)}
-                >
-                  {duplicatingId === room.id ? "复制中…" : "复制"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="px-2 py-1 text-xs"
-                  onClick={() => openDelete(room)}
-                >
-                  删除
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Modal open={renaming !== null} onClose={closeRename} title="重命名房间">
-        <div className="flex flex-col gap-3">
-          <TextInput
-            label="新话题"
-            value={renameText}
-            onChange={(event) => {
-              setRenameText(event.target.value);
-              setRenameError(null);
-            }}
-          />
-          <p className="text-xs text-muted">
-            重命名会推进共享上下文版本；进行中的生成将因上下文过期而中断。
-          </p>
-          {renameError ? (
-            <p role="alert" className="text-sm text-error">
-              {renameError}
+    <div>
+      <Landing />
+      <div id="rooms" className="scroll-mt-6 border-t border-edge px-6 py-8 sm:px-8">
+        <div className="mx-auto max-w-6xl">
+          <div className="mb-6 flex items-center justify-between">
+            <h2 className="text-xl font-semibold">讨论房间</h2>
+            <Link to="/rooms/new">
+              <Button>新建房间</Button>
+            </Link>
+          </div>
+          <div className="mb-4 flex flex-wrap items-end gap-3">
+            <TextInput
+              label="搜索"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="话题或消息内容"
+              className="w-64"
+            />
+            <Select
+              label="排序"
+              value={sortOrder}
+              onChange={(event) => setSortOrder(event.target.value as RoomSortOrder)}
+              options={[
+                { value: "recent", label: "最近活跃" },
+                { value: "cost", label: "按成本排序" },
+              ]}
+            />
+          </div>
+          {duplicateError ? (
+            <p role="alert" className="mb-3 text-sm text-error">
+              {duplicateError}
             </p>
           ) : null}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={closeRename}>
-              取消
-            </Button>
-            <Button disabled={renamePending} onClick={() => void handleRenameSubmit()}>
-              {renamePending ? "保存中…" : "保存"}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal open={deleting !== null} onClose={closeDelete} title="删除房间？">
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-fg">
-            将删除房间「{deleting?.topic}
-            」的全部轮次、消息、总结、执行记录与报告。此操作不可撤销。
-          </p>
-          {deleteError ? (
-            <div className="flex flex-col gap-1">
-              <p role="alert" className="text-sm text-error">
-                {deleteError}
-              </p>
-              <p className="text-xs text-muted">请先恢复或终止该房间进行中的轮次，再重试删除。</p>
+          {!rooms || rooms.length === 0 ? (
+            <EmptyState
+              title="还没有房间"
+              hint="新建一个房间来发起多 Agent 讨论。V1 不会导入旧版本地数据，但也没有删除它。"
+            />
+          ) : visibleRooms.length === 0 ? (
+            <EmptyState title="没有匹配的房间" hint="换个搜索关键词试试。" />
+          ) : (
+            <div className="grid gap-2">
+              {visibleRooms.map((room) => (
+                <div key={room.id} className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <RoomListItem room={room} />
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1 text-xs"
+                      onClick={() => openRename(room)}
+                    >
+                      重命名
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1 text-xs"
+                      disabled={duplicatingId === room.id}
+                      onClick={() => void handleDuplicate(room)}
+                    >
+                      {duplicatingId === room.id ? "复制中…" : "复制"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1 text-xs"
+                      onClick={() => openDelete(room)}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
-          ) : null}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={closeDelete}>
-              取消
-            </Button>
-            <button
-              type="button"
-              disabled={deletePending}
-              onClick={() => void handleDeleteConfirm()}
-              className="rounded border border-error bg-error/10 px-3 py-1.5 text-sm font-medium text-error hover:bg-error/20 disabled:opacity-50"
-            >
-              {deletePending ? "删除中…" : "确认删除"}
-            </button>
-          </div>
+          )}
+
+          <Modal open={renaming !== null} onClose={closeRename} title="重命名房间">
+            <div className="flex flex-col gap-3">
+              <TextInput
+                label="新话题"
+                value={renameText}
+                onChange={(event) => {
+                  setRenameText(event.target.value);
+                  setRenameError(null);
+                }}
+              />
+              <p className="text-xs text-muted">
+                重命名会推进共享上下文版本；进行中的生成将因上下文过期而中断。
+              </p>
+              {renameError ? (
+                <p role="alert" className="text-sm text-error">
+                  {renameError}
+                </p>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={closeRename}>
+                  取消
+                </Button>
+                <Button disabled={renamePending} onClick={() => void handleRenameSubmit()}>
+                  {renamePending ? "保存中…" : "保存"}
+                </Button>
+              </div>
+            </div>
+          </Modal>
+
+          <Modal open={deleting !== null} onClose={closeDelete} title="删除房间？">
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-fg">
+                将删除房间「{deleting?.topic}
+                」的全部轮次、消息、总结、执行记录与报告。此操作不可撤销。
+              </p>
+              {deleteError ? (
+                <div className="flex flex-col gap-1">
+                  <p role="alert" className="text-sm text-error">
+                    {deleteError}
+                  </p>
+                  <p className="text-xs text-muted">
+                    请先恢复或终止该房间进行中的轮次，再重试删除。
+                  </p>
+                </div>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={closeDelete}>
+                  取消
+                </Button>
+                <button
+                  type="button"
+                  disabled={deletePending}
+                  onClick={() => void handleDeleteConfirm()}
+                  className="rounded border border-error bg-error/10 px-3 py-1.5 text-sm font-medium text-error hover:bg-error/20 disabled:opacity-50"
+                >
+                  {deletePending ? "删除中…" : "确认删除"}
+                </button>
+              </div>
+            </div>
+          </Modal>
         </div>
-      </Modal>
+      </div>
     </div>
   );
 }

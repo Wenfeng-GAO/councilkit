@@ -17,6 +17,12 @@ export default {
         warn: "var(--color-warn)",
         error: "var(--color-error)",
         info: "var(--color-info)",
+        brass: "var(--color-brass)",
+        parchment: "var(--color-parchment)",
+      },
+      fontFamily: {
+        display: ["var(--font-display)", "Georgia", "serif"],
+        command: ["var(--font-command)", "ui-monospace", "monospace"],
       },
     },
   },
