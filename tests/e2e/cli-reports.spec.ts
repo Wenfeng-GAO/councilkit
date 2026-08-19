@@ -23,9 +23,18 @@ test("有 fixture 时能点进报告并看到标题；脚本标签保持为文�
   await fixture.click();
   await expect(page).toHaveURL(new RegExp(`/reports/${E2E_CLI_RUN_ID}`));
   await expect(page.getByRole("heading", { name: "Autonomous Review Report" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制 apply 命令" })).toBeVisible();
   await expect(page.getByRole("button", { name: "复制修复 Prompt" })).toBeVisible();
   await expect(page.locator("script", { hasText: "alert(1)" })).toHaveCount(0);
   await expect(page.getByText("<script>alert(1)</script>")).toBeVisible();
+});
+
+test("已有 CLI 报告时详情页能复制 apply 命令", async ({ page }) => {
+  await page.goto("/reports");
+  const reportLink = page.locator('a[href^="/reports/ck-review-"]').first();
+  if ((await reportLink.count()) === 0) return;
+  await reportLink.click();
+  await expect(page.getByRole("button", { name: "复制 apply 命令" })).toBeVisible();
 });
 
 test("深链 /reports/:runId 能直接打开 fixture", async ({ page }) => {

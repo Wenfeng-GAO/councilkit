@@ -1,4 +1,5 @@
 import { runAgent } from "./commands/agent";
+import { runApply } from "./commands/apply";
 import { runCouncilCmd } from "./commands/council";
 /**
  * Command router (plan-a §8). `main.ts` strips the global flags (--json/
@@ -32,6 +33,8 @@ export async function dispatch(command: string, args: string[], out: OutputSink)
       return runRuns(args, out);
     case "review":
       return runReview(args, out);
+    case "apply":
+      return runApply(args, out);
     default:
       throw errors.usage(
         command === undefined

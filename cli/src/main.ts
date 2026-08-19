@@ -1,4 +1,5 @@
 import { dispatch } from "./cli";
+import { ApplyExit } from "./commands/apply";
 import { ReviewExit } from "./commands/review";
 import { RunExit } from "./commands/run";
 /**
@@ -35,10 +36,12 @@ Commands:
   runs gc [--keep <days>] [--dry-run] [--all]
                                       Delete old runs/<id>/workspaces only
                                       (report.md/transcript.jsonl are always kept).
+  review <pr-url>                     Review a PR with default council pr-jury.
   review --agents '<json-array>'      N autonomous agents independently review one task,
       --aggregator <id>               then one synthesizes a report. Bypasses the Host.
       [--resume <run-id>]             Reuse successful attempts from a prior run.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
+  apply --run <ck-review-id>          Apply a review report on the same PR branch (default grok, default push).
   runs list                           List CLI runs (report.md + transcript).
   runs open <run-id>                  Print the in-app URL for a run report.
 
@@ -106,6 +109,9 @@ function main(argv: string[]): void {
         process.exit(error.exitCode);
       }
       if (error instanceof ReviewExit) {
+        process.exit(error.exitCode);
+      }
+      if (error instanceof ApplyExit) {
         process.exit(error.exitCode);
       }
       if (error instanceof CliError) {

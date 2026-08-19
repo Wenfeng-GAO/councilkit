@@ -659,8 +659,10 @@ const ACTIVITY_LINE_CAP = 16 * 1024 * 1024;
  *    (`role:"tool"` results are not calls); commands come from
  *    `args.command/cmd`, including a JSON-string `function.arguments`.
  *  - codex: `item.completed` events of a known tool type (`command_execution`,
- *    `mcp_tool_call`, `web_search`); `item.started` is ignored to avoid
- *    started/completed double counting; commands come from `item.command`.
+ *    `mcp_tool_call`, `web_search`); `item.started` is ignored for counts
+ *    (avoid started/completed double counting) but is kept as the live
+ *    in-progress command so a long Codex exec is observable mid-attempt;
+ *    completed commands come from `item.command`.
  * Non-JSON decoration lines are ignored, never fatal. `summary()` returns
  * `undefined` when no KNOWN event shape was seen (claude assistant/result,
  * kimi assistant/tool/meta, codex item.*) — an arbitrary JSON object with a
@@ -675,6 +677,8 @@ export class DriverActivityCollector {
   private readonly commands: string[] = [];
   private sawEvent = false;
   private sawStrippedProxy = false;
+  /** Codex `item.started` command currently in flight (not counted yet). */
+  private inProgress: string | null = null;
 
   constructor(private readonly driverId: string) {}
 
@@ -718,6 +722,14 @@ export class DriverActivityCollector {
       commands: [...this.commands],
       strippedProxy: this.sawStrippedProxy || undefined,
     };
+  }
+
+  /** Best-effort live hint for status.json. Independent of `summary()`. */
+  liveActivity(): string | null {
+    if (this.inProgress !== null && this.inProgress.length > 0) return this.inProgress;
+    if (this.commands.length > 0) return this.commands[this.commands.length - 1];
+    if (this.toolCalls > 0) return `${this.toolCalls} 次工具调用`;
+    return null;
   }
 
   private consider(line: string): void {
@@ -789,17 +801,23 @@ export class DriverActivityCollector {
     // NOT count (reviewer finding).
     if (typeof obj.type !== "string" || !obj.type.startsWith("item.")) return;
     this.sawEvent = true;
-    if (obj.type !== "item.completed") return;
     const item = obj.item as { type?: unknown; command?: unknown } | undefined;
-    if (
-      item?.type !== "command_execution" &&
-      item?.type !== "mcp_tool_call" &&
-      item?.type !== "web_search"
-    ) {
+    const isTool =
+      item?.type === "command_execution" ||
+      item?.type === "mcp_tool_call" ||
+      item?.type === "web_search";
+    if (obj.type === "item.started") {
+      if (!isTool) return;
+      const formatted = this.formatCommand(item?.command);
+      this.inProgress =
+        formatted ?? (typeof item?.type === "string" ? item.type : "command_execution");
       return;
     }
+    if (obj.type !== "item.completed") return;
+    if (!isTool) return;
+    this.inProgress = null;
     this.toolCalls++;
-    this.pushCommand(item.command);
+    this.pushCommand(item?.command);
   }
 
   /** Fold whitespace, truncate to 80 code points, keep the first 10 in order.
@@ -808,7 +826,14 @@ export class DriverActivityCollector {
    * truncating first would let a long prefix eat the actual command (reviewer
    * finding); the flag is surfaced via `strippedProxy` on the summary. */
   private pushCommand(raw: unknown): void {
-    if (typeof raw !== "string") return;
+    const formatted = this.formatCommand(raw);
+    if (formatted === null) return;
+    if (this.commands.length >= ACTIVITY_MAX_COMMANDS) return;
+    this.commands.push(formatted);
+  }
+
+  private formatCommand(raw: unknown): string | null {
+    if (typeof raw !== "string") return null;
     // Trim leading whitespace BEFORE stripping: a quoted heredoc-style command
     // (`  NO_PROXY='*' antcode …`) is still prefix-shaped, and stripping must
     // happen before the 80-char cap or the prefix eats the real command
@@ -816,13 +841,10 @@ export class DriverActivityCollector {
     const { text, stripped } = stripProxyPrefix(raw.trimStart());
     if (stripped) this.sawStrippedProxy = true;
     const folded = text.replace(/\s+/g, " ").trim();
-    if (folded.length === 0) return;
-    if (this.commands.length >= ACTIVITY_MAX_COMMANDS) return;
+    if (folded.length === 0) return null;
     const chars = Array.from(folded);
-    this.commands.push(
-      chars.length > ACTIVITY_COMMAND_MAX_CHARS
-        ? chars.slice(0, ACTIVITY_COMMAND_MAX_CHARS).join("")
-        : folded,
-    );
+    return chars.length > ACTIVITY_COMMAND_MAX_CHARS
+      ? chars.slice(0, ACTIVITY_COMMAND_MAX_CHARS).join("")
+      : folded;
   }
 }

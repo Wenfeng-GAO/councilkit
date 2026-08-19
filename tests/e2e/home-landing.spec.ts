@@ -6,7 +6,8 @@ test("首页突出两种能力与三条用法", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "讨论：共享上下文，按序发言" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "陪审：隔离并行，再对比汇总" })).toBeVisible();
   await expect(page.getByText("councilkit init", { exact: true })).toBeVisible();
-  await expect(page.getByText("councilkit review --council pr-jury --pr <url>")).toBeVisible();
+  await expect(page.getByText("councilkit review <url>")).toBeVisible();
+  await expect(page.getByText("councilkit apply --run <id>")).toBeVisible();
   await expect(page.getByRole("heading", { name: "讨论房间" })).toBeVisible();
 });
 

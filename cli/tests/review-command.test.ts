@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
@@ -151,7 +151,22 @@ describe("cli review command — argument matrix", () => {
   });
 
   it("rejects when neither --pr nor --task is given", async () => {
-    await expectUsage(["--agents", "[]"], "one of --pr or --task");
+    await expectUsage(["--agents", "[]"], "one of a PR URL, --pr, or --task");
+  });
+
+  it("rejects a non-URL positional", async () => {
+    await expectUsage(["not-a-url"], "must be a PR URL");
+  });
+
+  it("rejects a positional URL together with --pr", async () => {
+    await expectUsage(
+      ["https://example.com/p/1", "--pr", "https://example.com/p/1"],
+      "positional or --pr, not both",
+    );
+  });
+
+  it("defaults to pr-jury and errors when it is missing", async () => {
+    await expectUsage(["https://example.com/p/1"], "default pr-jury is missing");
   });
 
   it("rejects --council with --agents", async () => {
@@ -345,6 +360,42 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(
       typeof aggRec?.output === "string" && (aggRec.output as string).includes("## Overview"),
     ).toBe(true);
+
+    const statusPath = join(dirname(outcome.transcriptPath), "status.json");
+    expect(existsSync(statusPath)).toBe(true);
+    const live = JSON.parse(readFileSync(statusPath, "utf8")) as {
+      status: string;
+      progress: { phase: string; attempts: unknown[] };
+    };
+    expect(live.status).toBe("completed");
+    expect(live.progress.phase).toBe("done");
+    expect(live.progress.attempts.length).toBe(4);
+  });
+
+  it("positional PR URL uses default pr-jury", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const store = new Store();
+    const reporter = store.getAgent(aggregatorName);
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "jury",
+      background: "bg",
+      targetOutput: "out",
+      agentIds,
+      rounds: 1,
+      reporterAgentId: reporter.id,
+    });
+    const sink = makeSink();
+    let exitCode = -1;
+    try {
+      await runReview(["https://github.com/acme/repo/pull/9"], sink, { spawnImpl: fakeSpawn() });
+    } catch (e) {
+      expect(e).toBeInstanceOf(ReviewExit);
+      exitCode = (e as ReviewExit).exitCode;
+    }
+    expect(exitCode).toBe(0);
+    const outcome = sink.finished as { status: string };
+    expect(outcome.status).toBe("completed");
   });
 
   it("SIGINT during aggregation → interrupted, exit 130, transcript/report persisted", async () => {
@@ -1714,7 +1765,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(fake.activeCount()).toBe(0);
   });
 
-  it("--json emits no human heartbeat lines", async () => {
+  it("--json emits no human heartbeat lines but writes status.json mid-attempt", async () => {
     const store = new Store();
     const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
     const a = store.createAgent({
@@ -1727,12 +1778,32 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     const fake = makeFakeTimers();
     const sink = makeSink();
     sink.json = true;
+    let midStatus = "";
+    let midDuration: number | null = null;
+    let midActivity: string | null = null;
     const spawn: SpawnImpl = async (input) => {
       const kind = classify(input);
       if (kind === "probe") return claudeEnvelope("ok");
       if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      input.onActivity?.("git fetch origin");
       fake.advance(60_000);
       fake.fire();
+      const runs = readdirSync(join(home, "runs"));
+      const statusPath = join(home, "runs", runs[0], "status.json");
+      const live = JSON.parse(readFileSync(statusPath, "utf8")) as {
+        status: string;
+        progress: {
+          attempts: Array<{
+            status: string;
+            durationMs: number | null;
+            lastActivity: string | null;
+          }>;
+        };
+      };
+      midStatus = live.status;
+      const running = live.progress.attempts.find((row) => row.status === "running");
+      midDuration = running?.durationMs ?? null;
+      midActivity = running?.lastActivity ?? null;
       return attemptEnvelope("Alice");
     };
     const exitCode = await runCapturing(
@@ -1743,6 +1814,9 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(exitCode).toBe(0);
     expect(sink.lines.filter((l) => l.includes("仍在运行"))).toHaveLength(0);
     expect(fake.activeCount()).toBe(0);
+    expect(midStatus).toBe("running");
+    expect(midDuration).toBe(60_000);
+    expect(midActivity).toBe("git fetch origin");
   });
 
   it("transient EXIT <120s retries once: two transcript records, one final result, 45min default", async () => {
@@ -1763,7 +1837,9 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       }
       return attemptEnvelope("Alice");
     };
-    const exitCode = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink, { spawnImpl: spawn });
+    const exitCode = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink, {
+      spawnImpl: spawn,
+    });
     expect(exitCode).toBe(0);
     const outcome = sink.finished as {
       attempts: Array<{ agentName: string; durationMs: number }>;

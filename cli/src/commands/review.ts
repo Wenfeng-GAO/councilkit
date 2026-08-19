@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import { type Stats, lstatSync, mkdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import {
+  CLI_RUN_STATUS_FILE,
+  type CliRunLiveHeartbeat,
+  liveStateFromRecords,
+  withLiveHeartbeats,
+} from "@shared/runtime/cli-run-progress";
 /**
  * `councilkit review` — N fully-autonomous agents independently review the same
  * task in isolated workspaces, then one of them (the Aggregator) synthesizes a
@@ -8,12 +17,11 @@
  * Two forms:
  *  - `--agents '[id,...]' --aggregator <id>` : explicit attempt set + aggregator.
  *  - `--council <ref>` : map council.agentIds → Attempts, reporter → Aggregator.
- * `--pr <url|number>` and `--task "<text>"` are mutually exclusive and one is
- * required. Exit codes follow the existing table (0/2/4/5/130).
+ * `--pr <url>` / a positional PR URL and `--task "<text>"` are mutually
+ * exclusive; one is required. A positional HTTP(S) URL is the same as `--pr`.
+ * With neither `--council` nor `--agents`, the default council is `pr-jury`.
+ * Exit codes follow the existing table (0/2/4/5/130).
  */
-import { randomUUID } from "node:crypto";
-import { type Stats, lstatSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 import {
   renderReviewReport,
@@ -59,11 +67,13 @@ import {
   bindTrustedRoot,
   revalidateTrustedRoot,
 } from "../fs-safe";
+import { PR_JURY_COUNCIL_NAME } from "../init/defaults";
 import type { OutputSink } from "../output";
+import { atomicWriteFile } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
 import { Store } from "../store/store";
-import { parseFlags, parseJsonFlag } from "./parse";
+import { parseFlags, parseJsonFlag, parseTimeoutMs } from "./parse";
 
 const agentRefsSchema = z.array(z.string().min(1).max(128)).min(1);
 
@@ -95,7 +105,7 @@ export async function runReview(
   out: OutputSink,
   deps: ReviewDeps = {},
 ): Promise<void> {
-  const { values } = parseFlags(
+  const { values, positionals } = parseFlags(
     {
       flags: {
         json: { type: "boolean" },
@@ -110,28 +120,38 @@ export async function runReview(
         out: { type: "string" },
         resume: { type: "string" },
       },
-      allowPositionals: 0,
+      allowPositionals: 1,
     },
     argv,
   );
 
   // --- task (mutually exclusive, one required, non-blank) -----------------
-  const hasPr = values.pr !== undefined;
+  const positionalPr = positionals[0];
+  if (positionalPr !== undefined) {
+    if (!isHttpUrl(positionalPr)) {
+      throw errors.usage(`positional argument must be a PR URL (got "${positionalPr}")`);
+    }
+    if (values.pr !== undefined) {
+      throw errors.usage("pass the PR URL as a positional or --pr, not both");
+    }
+  }
+  const prRaw = positionalPr ?? (values.pr as string | undefined);
+  const hasPr = prRaw !== undefined;
   const hasTask = values.task !== undefined;
   if (hasPr && hasTask) {
     throw errors.usage("--pr and --task are mutually exclusive");
   }
   if (!hasPr && !hasTask) {
-    throw errors.usage("one of --pr or --task is required");
+    throw errors.usage("one of a PR URL, --pr, or --task is required");
   }
-  if (hasPr && (values.pr as string).trim().length === 0) {
+  if (hasPr && prRaw.trim().length === 0) {
     throw errors.usage("--pr must not be empty or whitespace");
   }
   if (hasTask && (values.task as string).trim().length === 0) {
     throw errors.usage("--task must not be empty or whitespace");
   }
   const task: ReviewTask = {
-    pr: hasPr ? (values.pr as string).trim() : undefined,
+    pr: hasPr ? prRaw.trim() : undefined,
     task: hasTask ? (values.task as string).trim() : undefined,
     focus: values.focus !== undefined ? (values.focus as string) : undefined,
     councilTopic: undefined,
@@ -144,11 +164,27 @@ export async function runReview(
   let aggregatorAgent: AgentRecord;
   let councilTopic: string | undefined;
 
-  if (values.council !== undefined) {
+  const defaultedCouncil =
+    values.council === undefined && values.agents === undefined && values.aggregator === undefined;
+  const councilRef = defaultedCouncil
+    ? PR_JURY_COUNCIL_NAME
+    : (values.council as string | undefined);
+
+  if (councilRef !== undefined) {
     if (values.agents !== undefined || values.aggregator !== undefined) {
       throw errors.usage("--council is mutually exclusive with --agents/--aggregator");
     }
-    const council = store.getCouncil(values.council as string);
+    let council: CouncilRecord;
+    try {
+      council = store.getCouncil(councilRef);
+    } catch (error) {
+      if (defaultedCouncil) {
+        throw errors.usage(
+          "no --council/--agents given and default pr-jury is missing; run `councilkit init` or pass --council/--agents",
+        );
+      }
+      throw error;
+    }
     councilTopic = council.topic.trim().length > 0 ? council.topic : undefined;
     task.councilTopic = councilTopic;
     attemptAgents = council.agentIds.map((id) => store.getAgent(id));
@@ -185,7 +221,7 @@ export async function runReview(
   }
 
   // --- options ------------------------------------------------------------
-  const timeoutMs = parseTimeout(values.timeout as string | undefined);
+  const timeoutMs = parseTimeoutMs(values.timeout as string | undefined);
   const concurrencyRaw = values.concurrency as string | undefined;
   const concurrency =
     concurrencyRaw !== undefined ? parsePositiveInt(concurrencyRaw, "concurrency") : undefined;
@@ -302,9 +338,10 @@ export async function runReview(
           // 「第 1 次尝试（失败，已重试）」 mark across a resume (plan §"瞬态重试").
           attemptNumber: rec.attemptNumber,
           retryOf: rec.retryOf,
-          resumedAfterFailure: (rec as { resumedAfterFailure?: boolean }).resumedAfterFailure === true
-            ? true
-            : undefined,
+          resumedAfterFailure:
+            (rec as { resumedAfterFailure?: boolean }).resumedAfterFailure === true
+              ? true
+              : undefined,
         });
       }
     }
@@ -464,7 +501,8 @@ export async function runReview(
     };
     transcript.push(resumedRecord);
   }
-  flushTranscript(transcriptPath, transcript, resumeRoot);
+  const liveBeats = new Map<string, CliRunLiveHeartbeat>();
+  flushTranscript(transcriptPath, transcript, resumeRoot, liveBeats);
 
   /** Single writer for real AND synthetic attempt results (plan: one helper so
    * transcript / progress / outcome can never drift apart). */
@@ -489,7 +527,8 @@ export async function runReview(
       resumedAfterFailure: r.resumedAfterFailure === true ? true : undefined,
     };
     transcript.push(rec);
-    flushTranscript(transcriptPath, transcript, resumeRoot);
+    liveBeats.delete(r.attemptId);
+    flushTranscript(transcriptPath, transcript, resumeRoot, liveBeats);
     out.progress(
       `  attempt ${r.agentName} -> ${r.status} (exit ${r.exitCode ?? "n/a"}, ${formatDurationMs(r.durationMs)})`,
     );
@@ -645,10 +684,11 @@ export async function runReview(
       resumeRoot,
       trustedRoot,
       resumedAfterFailureIds,
-      // Human-mode heartbeat only (plan: JSON mode emits no human heartbeat).
-      heartbeat: out.json
-        ? undefined
-        : { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
+      liveBeats,
+      // Heartbeat always writes status.json (including --json). Human mode
+      // also prints a 仍在运行 line; JSON mode stays silent on stderr.
+      heartbeat: { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
+      humanHeartbeat: !out.json,
     };
   }
 }
@@ -694,8 +734,11 @@ interface ExecuteParams {
    * aggregator-unreachable path that finalizes without spawning. Used to rebuild
    * a pristine workspace before the transient-retry spawn (reviewer finding). */
   trustedRoot: TrustedRoot | null;
-  /** Human heartbeat config; undefined in JSON mode. */
+  /** Heartbeat timers (always set so status.json updates mid-attempt). */
   heartbeat?: { intervalMs?: number; timers?: RunnerTimers };
+  /** Print human 仍在运行 lines (false in --json). */
+  humanHeartbeat?: boolean;
+  liveBeats: Map<string, CliRunLiveHeartbeat>;
 }
 
 async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<ReviewOutcome> {
@@ -710,12 +753,20 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     spawnImpl: p.spawnImpl,
     heartbeatIntervalMs: p.heartbeat?.intervalMs,
     timers: p.heartbeat?.timers,
-    onHeartbeat:
-      p.heartbeat === undefined
-        ? undefined
-        : (_attemptId: string, agentName: string, elapsedMs: number) => {
-            p.out.progress(`  attempt ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
-          },
+    onHeartbeat: (
+      attemptId: string,
+      agentName: string,
+      elapsedMs: number,
+      snapshot?: { lastActivity: string | null },
+    ) => {
+      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null);
+      if (p.humanHeartbeat === true) {
+        p.out.progress(`  attempt ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
+      }
+    },
+    onActivity: (attemptId: string, lastActivity: string) => {
+      noteLiveBeat(p, attemptId, undefined, lastActivity);
+    },
     onAttemptFinish: (r: AttemptResult) => {
       // Mark resume-rerun results BEFORE persistence — assigning after
       // runAttempts returns would leave attempt.finished without the flag, and
@@ -843,6 +894,22 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     timeoutMs: p.timeoutMs,
     signal: p.signal,
     spawnImpl: p.spawnImpl,
+    heartbeatIntervalMs: p.heartbeat?.intervalMs,
+    timers: p.heartbeat?.timers,
+    onHeartbeat: (
+      attemptId: string,
+      agentName: string,
+      elapsedMs: number,
+      snapshot?: { lastActivity: string | null },
+    ) => {
+      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null);
+      if (p.humanHeartbeat === true) {
+        p.out.progress(`  aggregator ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
+      }
+    },
+    onActivity: (attemptId, lastActivity) => {
+      noteLiveBeat(p, attemptId, undefined, lastActivity);
+    },
   });
 
   const aggRec: AggregationFinishedRecord = {
@@ -860,7 +927,8 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   };
   p.transcript.push(aggRec);
   try {
-    flushTranscript(p.transcriptPath, p.transcript, p.resumeRoot);
+    p.liveBeats.delete(aggregation.attemptId);
+    flushTranscript(p.transcriptPath, p.transcript, p.resumeRoot, p.liveBeats);
   } catch (error) {
     // Persisting aggregation.finished failed: route through finalize so the run
     // still produces an INCOMPLETE report + ReviewOutcome (exit 5; 130 if the
@@ -1033,7 +1101,8 @@ async function finalize(
   };
   p.transcript.push(finished);
   try {
-    flushTranscript(p.transcriptPath, p.transcript, p.resumeRoot);
+    p.liveBeats.clear();
+    flushTranscript(p.transcriptPath, p.transcript, p.resumeRoot, p.liveBeats);
   } catch (error) {
     // The final transcript rewrite is itself an artifact-IO failure: map it to
     // exit 5 and surface it in the outcome (the canonical report, if written,
@@ -1157,41 +1226,51 @@ function flushTranscript(
   path: string,
   records: ReviewTranscriptRecord[],
   root?: TrustedRoot | null,
+  beats?: Map<string, CliRunLiveHeartbeat>,
 ): void {
   // A resume carries the runs-root binding from its entry; revalidate it
   // before EVERY transcript write (fail-closed exit 5 when the root was
   // swapped after entry) instead of rebinding the current root.
   if (root != null) revalidateTrustedRoot(root);
   writeReviewTranscript(path, records);
+  persistLiveStatus(dirname(path), records, beats);
 }
 
-function parseTimeout(raw: string | undefined): number {
-  // Default 45min (plan §"默认 45 分钟"): a real PR review needs more than the
-  // previous 30min to fetch/checkout/build; probe (60s) and explicit --timeout
-  // are unchanged.
-  if (raw === undefined) return 45 * 60 * 1000;
-  const match = /^(\d+)(ms|s|m|h)$/.exec(raw);
-  if (match === null) {
-    throw errors.usage(`--timeout must look like 30m|600s|1h|5000ms, got "${raw}"`);
-  }
-  const n = Number(match[1]);
-  const unit = match[2];
-  const ms = n * (unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : 3_600_000);
-  if (!Number.isSafeInteger(ms) || ms <= 0) {
-    throw errors.usage(`--timeout must be a positive duration, got "${raw}"`);
-  }
-  // Node schedules setTimeout with a 32-bit signed delay; larger values fire
-  // after ~1ms (TimeoutOverflowWarning), which would instantly "time out" every
-  // full-permission Attempt (reviewer finding). Reject instead of clamping so a
-  // typo surfaces.
-  if (ms > MAX_TIMEOUT_MS) {
-    throw errors.usage(`--timeout must be <= ${MAX_TIMEOUT_MS}ms, got "${raw}"`);
-  }
-  return ms;
+function persistLiveStatus(
+  runDir: string,
+  records: ReviewTranscriptRecord[],
+  beats?: Map<string, CliRunLiveHeartbeat>,
+): void {
+  const live = liveStateFromRecords(records, new Date().toISOString());
+  if (live === null) return;
+  const next =
+    beats === undefined || beats.size === 0 ? live : withLiveHeartbeats(live, beats.values());
+  next.progress.updatedAt = new Date().toISOString();
+  atomicWriteFile(join(runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(next)}\n`);
 }
 
-/** Node's setTimeout 32-bit signed ceiling (2^31 - 1 ms ≈ 24.8 days). */
-const MAX_TIMEOUT_MS = 2_147_483_647;
+function noteLiveBeat(
+  p: Pick<ExecuteParams, "runDir" | "transcript" | "liveBeats">,
+  attemptId: string,
+  elapsedMs: number | undefined,
+  lastActivity: string | null,
+): void {
+  const prev = p.liveBeats.get(attemptId);
+  p.liveBeats.set(attemptId, {
+    attemptId,
+    elapsedMs: elapsedMs ?? prev?.elapsedMs,
+    lastActivity,
+  });
+  try {
+    persistLiveStatus(p.runDir, p.transcript, p.liveBeats);
+  } catch {
+    // Live status is a sidecar; never fail the review because of it.
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
 
 function parsePositiveInt(raw: string, fieldName: string): number {
   if (!/^[1-9][0-9]*$/.test(raw)) {

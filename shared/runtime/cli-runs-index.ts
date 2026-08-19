@@ -10,7 +10,16 @@
 import { type Stats, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveCliRunsRoot } from "./cli-home";
+import {
+  CLI_RUN_STATUS_FILE,
+  type CliRunProgress,
+  liveStateFromRecords,
+  parseLiveStateJson,
+} from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
+
+export type { CliRunAttemptProgress, CliRunProgress } from "./cli-run-progress";
+export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
 
 export const CLI_RUN_ID_RE =
   /^ck-(?:run|review)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -29,6 +38,7 @@ export interface CliRunSummary {
   endedAt: string | null;
   hasReport: boolean;
   reportUrl: string;
+  progress: CliRunProgress | null;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -107,17 +117,45 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
       ? readCapped(transcriptPath, 256 * 1024).text
       : "";
   const parsed = parseTranscriptMeta(transcriptText, runId);
+  const live = readLiveState(join(dir, CLI_RUN_STATUS_FILE));
+  const derived =
+    live?.progress ??
+    liveStateFromRecords(parseTranscriptRecords(transcriptText), live?.progress.updatedAt ?? null)
+      ?.progress ??
+    null;
 
   return {
     runId,
     kind: parsed.kind,
-    status: parsed.status,
+    status: live?.status ?? parsed.status,
     title: parsed.title,
     startedAt: parsed.startedAt,
     endedAt: parsed.endedAt,
     hasReport,
     reportUrl: cliReportUrl(runId),
+    progress: derived,
   };
+}
+
+function readLiveState(path: string): ReturnType<typeof parseLiveStateJson> {
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
+  const { text } = readCapped(path, 64 * 1024);
+  return parseLiveStateJson(text);
+}
+
+function parseTranscriptRecords(text: string): unknown[] {
+  const records: unknown[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      records.push(JSON.parse(trimmed));
+    } catch {
+      // skip a corrupt JSONL line
+    }
+  }
+  return records;
 }
 
 export function parseTranscriptMeta(

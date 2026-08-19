@@ -34,8 +34,6 @@ export interface ParsedReviewReport {
   verdict: "approve" | "changes-requested" | "comment" | null;
 }
 
-const SEVERITIES = new Set(["critical", "major", "minor", "nit"]);
-
 export function parseReviewReport(markdown: string): ParsedReviewReport | null {
   const text = markdown.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   if (!/^# Autonomous Review Report\s*$/m.test(text)) return null;

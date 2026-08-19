@@ -1,3 +1,4 @@
+import { CompareReportsPage } from "@/app/pages/CompareReportsPage";
 import { HomePage } from "@/app/pages/HomePage";
 import { NewRoomPage } from "@/app/pages/NewRoomPage";
 import { ReportDetailPage } from "@/app/pages/ReportDetailPage";
@@ -19,5 +20,6 @@ export const router = createBrowserRouter([
   { path: "/templates", element: withShell(templatesPage) },
   { path: "/settings", element: withShell(<SettingsPage />) },
   { path: "/reports", element: withShell(<ReportsPage />) },
+  { path: "/reports/compare/:leftId/:rightId", element: withShell(<CompareReportsPage />) },
   { path: "/reports/:runId", element: withShell(<ReportDetailPage />) },
 ]);

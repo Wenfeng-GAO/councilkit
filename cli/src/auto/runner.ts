@@ -12,7 +12,6 @@
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { redact } from "../redact";
-import { formatDurationMs } from "./duration";
 import {
   type AttemptActivity,
   type AttemptSpec,
@@ -20,6 +19,7 @@ import {
   FinalEventLineCollector,
   extractFinalOutput,
 } from "./driver-commands";
+import { formatDurationMs } from "./duration";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const STDOUT_CAP = 8 * 1024 * 1024;
@@ -89,6 +89,8 @@ export interface SpawnInput {
   /** Driver id; when claude/kimi, `defaultSpawn` streams stdout line-by-line to
    * capture the final-event line whole (bypassing the head+tail cap). */
   driverId?: string;
+  /** Called when the activity collector observes a new live command/tool hint. */
+  onActivity?: (lastActivity: string) => void;
 }
 
 export interface SpawnOutput {
@@ -156,9 +158,15 @@ export interface RunnerOptions {
   onAttemptFinish?: (result: AttemptResult) => void;
   /** Heartbeat cadence for `onHeartbeat` (defaults to 30s). */
   heartbeatIntervalMs?: number;
-  /** Called once per heartbeat while an Attempt is still running. Not used for
-   * the Aggregator spawn (aggregation is not an Attempt). */
-  onHeartbeat?: (attemptId: string, agentName: string, elapsedMs: number) => void;
+  /** Called once per heartbeat while an Attempt (or Aggregator) is still running. */
+  onHeartbeat?: (
+    attemptId: string,
+    agentName: string,
+    elapsedMs: number,
+    snapshot?: { lastActivity: string | null },
+  ) => void;
+  /** Called when stream-json reports a new in-flight command/tool. */
+  onActivity?: (attemptId: string, lastActivity: string) => void;
   timers?: RunnerTimers;
   /** Rebuild an Attempt's workspace to a pristine empty dir BEFORE the retry
    * spawn (reviewer finding: the retry reused the first try's dirty cwd, so a
@@ -319,6 +327,10 @@ export async function spawnOnce(
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     signal: opts.signal ?? NEVER_ABORTED,
     spawnImpl: opts.spawnImpl,
+    heartbeatIntervalMs: opts.heartbeatIntervalMs,
+    onHeartbeat: opts.onHeartbeat,
+    onActivity: opts.onActivity,
+    timers: opts.timers,
   });
 }
 
@@ -329,22 +341,27 @@ async function runOne(
     signal: AbortSignal;
     spawnImpl?: SpawnImpl;
     heartbeatIntervalMs?: number;
-    onHeartbeat?: (attemptId: string, agentName: string, elapsedMs: number) => void;
+    onHeartbeat?: RunnerOptions["onHeartbeat"];
+    onActivity?: RunnerOptions["onActivity"];
     timers?: RunnerTimers;
   },
 ): Promise<AttemptResult> {
   const timers = opts.timers ?? defaultTimers;
   const started = timers.now();
   const spawnFn = opts.spawnImpl ?? defaultSpawn;
+  let lastActivity: string | null = null;
 
-  // Human heartbeat (P2-1): a "仍在运行" line every heartbeatIntervalMs while
-  // the Attempt runs. Always cleared in finally so a finished Attempt never
-  // heartbeats again and the timer cannot leak.
+  // Heartbeat (P2-1): every heartbeatIntervalMs while the Attempt runs.
+  // Always cleared in finally so a finished Attempt never heartbeats again
+  // and the timer cannot leak. JSON mode still heartbeats so status.json
+  // can show elapsed time / last tool without writing human stderr lines.
   let heartbeat: unknown;
   if (opts.onHeartbeat !== undefined) {
     const intervalMs = opts.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     heartbeat = timers.setInterval(() => {
-      opts.onHeartbeat?.(spec.attemptId, spec.agentName, timers.now() - started);
+      opts.onHeartbeat?.(spec.attemptId, spec.agentName, timers.now() - started, {
+        lastActivity,
+      });
     }, intervalMs);
   }
 
@@ -359,6 +376,10 @@ async function runOne(
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
       driverId: spec.driverId,
+      onActivity: (hint) => {
+        lastActivity = hint;
+        opts.onActivity?.(spec.attemptId, hint);
+      },
     });
   } finally {
     if (heartbeat !== undefined) timers.clearInterval(heartbeat);
@@ -634,6 +655,8 @@ export function defaultSpawn(
       stdoutColl.feed(chunk);
       lineColl?.feed(chunk);
       activityColl?.feed(chunk);
+      const hint = activityColl?.liveActivity();
+      if (hint) input.onActivity?.(hint);
     });
     child.stderr?.on("data", (chunk: Buffer) => stderrColl.feed(chunk));
 

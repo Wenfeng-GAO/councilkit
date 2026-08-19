@@ -440,6 +440,27 @@ export const cliRunStatusSchema = z.enum([
   "unknown",
 ]);
 
+export const cliRunAttemptProgressSchema = z
+  .object({
+    attemptId: z.string().min(1),
+    agentName: z.string().min(1),
+    driverId: z.string().min(1),
+    modelId: z.string().min(1),
+    role: z.enum(["attempt", "aggregator"]),
+    status: z.enum(["pending", "running", "success", "failure"]),
+    durationMs: z.number().int().nonnegative().nullable(),
+    lastActivity: z.string().max(240).nullable().optional(),
+  })
+  .strict();
+
+export const cliRunProgressSchema = z
+  .object({
+    phase: z.enum(["attempts", "aggregating", "done"]),
+    attempts: z.array(cliRunAttemptProgressSchema),
+    updatedAt: z.string().nullable(),
+  })
+  .strict();
+
 export const cliRunSummarySchema = z
   .object({
     runId: z.string().min(1),
@@ -450,6 +471,7 @@ export const cliRunSummarySchema = z
     endedAt: z.string().nullable(),
     hasReport: z.boolean(),
     reportUrl: z.string().min(1),
+    progress: cliRunProgressSchema.nullable(),
   })
   .strict();
 export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;

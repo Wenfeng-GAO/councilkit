@@ -6,6 +6,7 @@
  */
 import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
+import { buildApplyPrompt } from "../src/auto/templates/apply";
 import {
   AGGREGATE_PROMPT_BUDGET,
   MAX_ATTEMPT_OUTPUT_IN_PROMPT,
@@ -252,5 +253,22 @@ describe("cli auto templates — access hint (P1-2)", () => {
   it("a non-URL --pr adds no hint to the attempt prompt", () => {
     const attempt = buildAttemptPrompt({ agentName: "A", personaPrompt: "", task: { pr: "1443" } });
     expect(attempt).not.toContain("## 访问提示");
+  });
+});
+
+describe("cli auto templates — apply prompt", () => {
+  it("asks the agent to commit locally and forbids PR comments / new PRs / push", () => {
+    const prompt = buildApplyPrompt({
+      agentName: "review-adversarial",
+      prUrl: "https://github.com/acme/repo/pull/9",
+      branch: "feat-x",
+      reportFile: "COUNCILKIT-REVIEW.md",
+    });
+    expect(prompt).toContain("feat-x");
+    expect(prompt).toContain("COUNCILKIT-REVIEW.md");
+    expect(prompt).toContain("不要 `git push`");
+    expect(prompt).toContain("不要在 PR 上发评论");
+    expect(prompt).toContain("不要创建新 PR");
+    expect(prompt).toContain("https://github.com/acme/repo/pull/9");
   });
 });

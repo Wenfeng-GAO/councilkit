@@ -79,7 +79,7 @@ pnpm exec councilkit --help
 
 CLI 不 spawn Runtime Host，也不直连模型供应商——除 `review` 外，所有执行仍经过本机前台运行的 Runtime Host（与浏览器共用同一个 `http://127.0.0.1:43127`）。所以先 `pnpm start`（或 `pnpm dev`）让 Host 跑起来，再开 CLI；浏览器可以关。Host 不可达时 `doctor`/`run` 以退出码 3 失败，CLI 永不自动拉起 Host。CLI 只保证与**同 checkout** 的 Host 互通（版本绑定）。
 
-**例外：`councilkit review` 不经 Host**——它直接按 PATH 解析 `cld`/`kimi`/`codex` 并 spawn（见下「自主并行审查」），因此跑 `review` 不需要 Host 运行，也不受退出码 3 约束。
+**例外：`councilkit review` / `councilkit apply` 不经 Host**——它们直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok` 并 spawn（见下「自主并行审查」），因此不需要 Host 运行，也不受退出码 3 约束。
 
 ### 命令
 
@@ -102,11 +102,13 @@ councilkit run --council <name|id> [--rounds N] [--out path] [--json]
 councilkit run --agents '<["ref1","ref2"]>' --topic <text> --reporter <ref> \
   [--background <text>] [--target-output <text>] [--rounds N] [--out path] [--json]
 
+councilkit review <pr-url> [--council <name|id>] [--timeout 45m] [--concurrency 3] [--json]
 councilkit review --agents '<["ref1","ref2"]>' --aggregator <ref> \
   (--pr <url|number> | --task "<text>") [--focus "<text>"] \
   [--timeout 45m] [--concurrency 3] [--out path] [--json]
 councilkit review --council <name|id> \
   (--pr <url|number> | --task "<text>") [--focus "<text>"] [--timeout 45m] [--concurrency 3] [--out path] [--json]
+councilkit apply --run <ck-review-id> [--agent <ref>] [--no-push] [--timeout 45m] [--json]
 
 councilkit runs list [--json]                           # 列出 CLI 报告
 councilkit runs open <run-id> [--json]                  # 打印 http://127.0.0.1:43127/reports/<id>
@@ -117,8 +119,9 @@ councilkit runs gc [--keep <days>] [--dry-run] [--all]  # 只清 workspaces
 
 ```bash
 pnpm exec councilkit init --json
-pnpm exec councilkit review --council pr-jury --pr <url> --json
+pnpm exec councilkit review <url> --json
 # Host 运行时打开 http://127.0.0.1:43127/reports
+pnpm exec councilkit apply --run <ck-review-id> --json   # 默认 grok，默认 push；--no-push 只改隔离目录
 ```
 
 - `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
@@ -134,6 +137,14 @@ pnpm exec councilkit review --council pr-jury --pr <url> --json
 - **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
 - `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
 - 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 形如 `30m|600s|1h|5000ms`，`--concurrency` 默认 `min(3, N)`。
+
+#### `councilkit apply` — 把审查报告落到同一条 PR（不经 Host）
+
+读已完成的 `ck-review-*` 报告，在隔离目录检出该 PR 源分支，默认用 **Grok**（`review-adversarial`，可用 `--agent` 覆盖）按报告改代码并 `git commit`，然后 **默认 `git push`** 回同一条源分支。`--no-push` 只留本地改动。不发 PR 评论、不另开 PR、不 force-push。
+
+- GitHub 需要 `gh` + `git`；AntCode 需要 `antcode` + `git`（`antcode` 那条命令会清代理）。
+- 工作区在 `runs/<review-id>/workspaces/apply/`，结果写 `apply.json`。
+- 审查进行中时 `status.json` 会写入席位耗时和最近一条工具/命令（包括 `--json`）；浏览器报告页轮询展示。
 
 ### 报告位置与凭据生命周期
 

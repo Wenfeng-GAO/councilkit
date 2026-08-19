@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import "@/styles/landing.css";
 
 const INIT_CMD = "councilkit init";
-const REVIEW_CMD = "councilkit review --council pr-jury --pr <url>";
+const REVIEW_CMD = "councilkit review <url>";
+const APPLY_CMD = "councilkit apply --run <id>";
 const RUN_CMD = "councilkit run --council <name> --rounds 2";
 const START_CMD = "pnpm start";
 
@@ -126,7 +127,9 @@ export function Landing() {
             </p>
             <p className="mt-4 text-xs text-muted">
               <code className="font-command">councilkit review</code>
-              ，不经 Host，浏览器可关。默认陪审团是 <code className="font-command">pr-jury</code>。
+              ，不经 Host，浏览器可关。默认陪审团是 <code className="font-command">pr-jury</code>
+              。报告落地后用 <code className="font-command">apply</code> 在隔离目录改同一条 PR（默认
+              Grok，默认 push）。
             </p>
           </article>
         </div>
@@ -153,6 +156,7 @@ export function Landing() {
               <code className="font-command">{START_CMD}</code>。
             </p>
             <CommandCopy value={REVIEW_CMD} />
+            <CommandCopy value={APPLY_CMD} />
             <CommandCopy value={RUN_CMD} />
           </HowToStep>
           <HowToStep index="03" title="读报告，不要再自己拼结论">

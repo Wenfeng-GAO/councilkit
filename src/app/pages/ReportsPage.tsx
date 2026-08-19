@@ -1,5 +1,6 @@
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
+import { groupCliRuns } from "@/lib/report-groups";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { CliRunStatusDto, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useQuery } from "@tanstack/react-query";
@@ -28,10 +29,12 @@ export function ReportsPage() {
     queryKey: ["cli-runs"],
     queryFn: () => client.listCliRuns(),
     retry: false,
+    refetchInterval: (current) =>
+      current.state.data?.runs.some((run) => run.status === "running") ? 2000 : false,
   });
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-8">
+    <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-8 sm:px-8">
       <header>
         <h1 className="text-lg font-semibold text-fg">CLI 报告</h1>
         <p className="mt-1 text-sm text-muted">
@@ -45,17 +48,36 @@ export function ReportsPage() {
       {query.isSuccess && query.data.runs.length === 0 ? (
         <EmptyState
           title="还没有 CLI 报告"
-          hint="先运行 councilkit init，再 councilkit review --council pr-jury --pr <url>。"
+          hint="先运行 councilkit init，再 councilkit review <pr-url>。"
         />
       ) : null}
-      {query.isSuccess ? (
-        <ul className="flex flex-col gap-2">
-          {query.data.runs.map((run) => (
-            <li key={run.runId}>
-              <RunRow run={run} />
-            </li>
+      {query.isSuccess && query.data.runs.length > 0 ? (
+        <div className="flex flex-col gap-8">
+          {groupCliRuns(query.data.runs).map((group) => (
+            <section key={group.key}>
+              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="min-w-0 truncate font-display text-lg text-parchment">
+                  {group.label}
+                </h2>
+                {group.runs.length >= 2 ? (
+                  <Link
+                    to={`/reports/compare/${group.runs[0].runId}/${group.runs[1].runId}`}
+                    className="shrink-0 text-xs text-accent hover:underline"
+                  >
+                    对比最近两次
+                  </Link>
+                ) : null}
+              </div>
+              <ul className="flex flex-col gap-2">
+                {group.runs.map((run) => (
+                  <li key={run.runId}>
+                    <RunRow run={run} />
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       ) : null}
     </div>
   );
@@ -78,6 +100,17 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
       <p className="mt-1 font-mono text-xs text-muted">{run.runId}</p>
       {run.startedAt ? (
         <p className="text-xs text-muted">{new Date(run.startedAt).toLocaleString()}</p>
+      ) : null}
+      {run.status === "running" && run.progress ? (
+        <p className="mt-2 text-xs text-info">
+          {
+            run.progress.attempts.filter(
+              (row) => row.status === "success" || row.status === "failure",
+            ).length
+          }
+          /{run.progress.attempts.length} 席位已结束
+          {run.progress.phase === "aggregating" ? " · 正在汇总" : ""}
+        </p>
       ) : null}
     </Link>
   );

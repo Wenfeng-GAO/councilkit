@@ -451,6 +451,31 @@ describe("cli auto driver-commands", () => {
       expect(coll.summary()).toEqual({ toolCalls: 3, commands: ["ls"] });
     });
 
+    it("codex: item.started is live activity without counting a tool call", () => {
+      const coll = new DriverActivityCollector("codex-app-server");
+      coll.feed(
+        Buffer.from(
+          `${JSON.stringify({
+            type: "item.started",
+            item: { type: "command_execution", command: "pnpm test" },
+          })}\n`,
+        ),
+      );
+      expect(coll.liveActivity()).toBe("pnpm test");
+      expect(coll.summary()).toEqual({ toolCalls: 0, commands: [] });
+      coll.feed(
+        Buffer.from(
+          `${JSON.stringify({
+            type: "item.completed",
+            item: { type: "command_execution", command: "pnpm test" },
+          })}\n`,
+        ),
+      );
+      coll.end();
+      expect(coll.summary()).toEqual({ toolCalls: 1, commands: ["pnpm test"] });
+      expect(coll.liveActivity()).toBe("pnpm test");
+    });
+
     it("recognized stream without tool calls → { toolCalls: 0, commands: [] }", () => {
       const coll = new DriverActivityCollector("claude-stream-json");
       feedLines(coll, `${JSON.stringify({ type: "result", subtype: "success", result: "ok" })}\n`);

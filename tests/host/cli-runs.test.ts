@@ -79,11 +79,20 @@ describe("cli-runs route", () => {
     const list = await fetch(`${host.baseUrl}/api/v1/cli-runs`, { headers: authedHeaders(host) });
     const listed = (await list.json()) as {
       ok: true;
-      data: { runs: Array<{ runId: string; title: string }> };
+      data: {
+        runs: Array<{
+          runId: string;
+          title: string;
+          status: string;
+          progress: { phase: string } | null;
+        }>;
+      };
     };
     expect(listed.data.runs).toHaveLength(1);
     expect(listed.data.runs[0].runId).toBe(RUN_ID);
     expect(listed.data.runs[0].title).toBe("host-fixture");
+    expect(listed.data.runs[0].status).toBe("running");
+    expect(listed.data.runs[0].progress?.phase).toBe("attempts");
 
     const detail = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}`, {
       headers: authedHeaders(host),

@@ -65,6 +65,34 @@ export function parseJsonFlag<T>(
   return parsed.data;
 }
 
+/** Default autonomous-run budget (review/apply). */
+export const DEFAULT_AUTONOMOUS_TIMEOUT_MS = 45 * 60 * 1000;
+
+/** Node's setTimeout 32-bit signed ceiling (2^31 - 1 ms ≈ 24.8 days). */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/** Parse `--timeout 30m|600s|1h|5000ms`. `undefined` → `defaultMs`. */
+export function parseTimeoutMs(
+  raw: string | undefined,
+  defaultMs: number = DEFAULT_AUTONOMOUS_TIMEOUT_MS,
+): number {
+  if (raw === undefined) return defaultMs;
+  const match = /^(\d+)(ms|s|m|h)$/.exec(raw);
+  if (match === null) {
+    throw errors.usage(`--timeout must look like 30m|600s|1h|5000ms, got "${raw}"`);
+  }
+  const n = Number(match[1]);
+  const unit = match[2];
+  const ms = n * (unit === "ms" ? 1 : unit === "s" ? 1000 : unit === "m" ? 60_000 : 3_600_000);
+  if (!Number.isSafeInteger(ms) || ms <= 0) {
+    throw errors.usage(`--timeout must be a positive duration, got "${raw}"`);
+  }
+  if (ms > MAX_TIMEOUT_MS) {
+    throw errors.usage(`--timeout must be <= ${MAX_TIMEOUT_MS}ms, got "${raw}"`);
+  }
+  return ms;
+}
+
 /** Parse a positive-integer flag. Strict: the raw string must be a bare
  * decimal positive integer (no trailing garbage, no decimals, no sign), then it
  * is coerced via `Number` and verified as a safe integer. `Number.parseInt`
