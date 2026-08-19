@@ -310,7 +310,13 @@ export function createProcessSupervisor(deps: {
   function settleDriver(record: DriverRecord, code: number | null, signal: string | null): void {
     if (record.driverSettled) return;
     record.driverSettled = true;
-    byParticipant.delete(record.spec.participantId);
+    // Ownership-checked delete: a newer record can already hold the same
+    // participantId slot (e.g. a per-turn respawn that did not await old
+    // watchdog teardown). Only clobber the slot when it still points at THIS
+    // record, so the duplicate guard in `spawnDriver` stays authoritative.
+    if (byParticipant.get(record.spec.participantId) === record) {
+      byParticipant.delete(record.spec.participantId);
+    }
     record.events.emit("exit", { code, signal });
     supervisorEvents.emit("driver-exit", record.spec.participantId, code, signal);
   }
@@ -460,7 +466,13 @@ export function createProcessSupervisor(deps: {
     for (const waiter of record.exitWaiters) waiter();
     record.exitWaiters.clear();
     records.delete(record);
-    byParticipant.delete(record.spec.participantId);
+    // Ownership-checked delete (see `settleDriver`): the watchdog OS process can
+    // exit well after the driver `exit` control frame already settled this
+    // record and freed the slot. A newer record reclaiming the same
+    // participantId must not be clobbered by the stale watchdog exit.
+    if (byParticipant.get(record.spec.participantId) === record) {
+      byParticipant.delete(record.spec.participantId);
+    }
   }
 
   function waitForWatchdogExit(record: DriverRecord, timeoutMs: number): Promise<boolean> {
