@@ -23,9 +23,12 @@ export type AttemptLiveEvent = AttemptLiveEventPayload & {
 
 export function clipLiveSummary(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length === 0) return "";
-  const chars = Array.from(trimmed);
-  return chars.length > LIVE_SUMMARY_MAX ? chars.slice(0, LIVE_SUMMARY_MAX).join("") : trimmed;
+  if (trimmed.length <= LIVE_SUMMARY_MAX) return trimmed;
+  // Host zod `.max(240)` counts UTF-16 code units (JS string.length), not code points.
+  let end = LIVE_SUMMARY_MAX;
+  const unit = trimmed.charCodeAt(end - 1);
+  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
+  return trimmed.slice(0, end);
 }
 
 export function parseAttemptLiveEventLine(line: string): AttemptLiveEvent | null {

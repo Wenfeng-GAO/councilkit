@@ -581,7 +581,13 @@ export function defaultSpawn(
       // every settle path (success, error, timeout) — a killed Attempt still
       // carries the process data gathered before the kill.
       activityColl?.end();
-      emitLive(liveColl?.end() ?? []);
+      if (liveColl !== null) {
+        try {
+          emitLive(liveColl.end());
+        } catch {
+          // live transcript is observational
+        }
+      }
       const activity = activityColl?.summary();
       const finalOut = activity === undefined ? out : { ...out, activity };
       if (killInitiated) {
@@ -685,7 +691,13 @@ export function defaultSpawn(
       stdoutColl.feed(chunk);
       lineColl?.feed(chunk);
       activityColl?.feed(chunk);
-      if (liveColl !== null) emitLive(liveColl.feed(chunk));
+      if (liveColl !== null) {
+        try {
+          emitLive(liveColl.feed(chunk));
+        } catch {
+          // live transcript is observational
+        }
+      }
       const hint = activityColl?.liveActivity();
       if (hint) input.onActivity?.(hint);
     });
