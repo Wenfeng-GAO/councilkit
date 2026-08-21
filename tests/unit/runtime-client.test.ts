@@ -66,6 +66,26 @@ function makeClient(fetchFn: typeof fetch): RuntimeClient {
   return new RuntimeClient({ baseUrl: "", csrfToken: "csrf-token", fetchFn });
 }
 
+describe("RuntimeClient CLI run attempt live", () => {
+  it("getCliRunAttemptLive: GET session call with afterSeq", async () => {
+    const { fetchFn, calls } = stubFetch(
+      okResponse({
+        events: [{ seq: 2, at: "t", type: "text.delta", text: "hi" }],
+        nextSeq: 2,
+        done: false,
+      }),
+    );
+    const client = makeClient(fetchFn);
+    const result = await client.getCliRunAttemptLive("ck-review-1", "attempt-0", 1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("/api/v1/cli-runs/ck-review-1/attempts/attempt-0/live?afterSeq=1");
+    expect(calls[0]?.headers[CSRF_HEADER_NAME]).toBeUndefined();
+    expect(result.nextSeq).toBe(2);
+    expect(result.events).toHaveLength(1);
+  });
+});
+
 describe("RuntimeClient installations / profile readiness (U6)", () => {
   it("listInstallations: GET session call, parses the installations envelope data", async () => {
     const { fetchFn, calls } = stubFetch(okResponse({ installations: [INSTALLATION] }));

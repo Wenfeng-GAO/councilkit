@@ -124,7 +124,9 @@ export function ReportDetailPage() {
               ) : null}
             </p>
           ) : null}
-          {query.data.status === "running" ? <LiveReviewProgress run={query.data} /> : null}
+          {query.data.status === "running" || query.data.progress !== null ? (
+            <LiveReviewProgress run={query.data} />
+          ) : null}
           {!query.data.hasReport || query.data.markdown.trim().length === 0 ? (
             query.data.status === "running" ? null : (
               <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />

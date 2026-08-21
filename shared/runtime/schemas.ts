@@ -486,5 +486,59 @@ export const cliRunDetailResponseSchema = cliRunSummarySchema.extend({
 });
 export type CliRunDetailResponse = z.infer<typeof cliRunDetailResponseSchema>;
 
+const attemptLiveEventSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      seq: z.number().int().nonnegative(),
+      at: z.string().min(1),
+      type: z.literal("text.delta"),
+      text: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      seq: z.number().int().nonnegative(),
+      at: z.string().min(1),
+      type: z.literal("thinking.delta"),
+      text: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      seq: z.number().int().nonnegative(),
+      at: z.string().min(1),
+      type: z.literal("tool.started"),
+      name: z.string().min(1),
+      summary: z.string().max(240),
+    })
+    .strict(),
+  z
+    .object({
+      seq: z.number().int().nonnegative(),
+      at: z.string().min(1),
+      type: z.literal("tool.completed"),
+      name: z.string().min(1),
+      summary: z.string().max(240),
+    })
+    .strict(),
+  z
+    .object({
+      seq: z.number().int().nonnegative(),
+      at: z.string().min(1),
+      type: z.literal("truncated"),
+      dropped: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+
+export const cliRunAttemptLiveResponseSchema = z
+  .object({
+    events: z.array(attemptLiveEventSchema),
+    nextSeq: z.number().int().nonnegative(),
+    done: z.boolean(),
+  })
+  .strict();
+export type CliRunAttemptLiveResponse = z.infer<typeof cliRunAttemptLiveResponseSchema>;
+
 // Re-export for handler convenience.
 export { LIMITS, usageSchema };
