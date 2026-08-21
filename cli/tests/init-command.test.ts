@@ -98,8 +98,8 @@ describe("councilkit init", () => {
     expect(readMaybe(resolvePaths().councils)).toBeNull();
   });
 
-  it("creates three default agents and pr-jury when cld, kimi and codex exist", async () => {
-    stub(["cld", "kimi", "codex"]);
+  it("creates four default agents and pr-jury when cld, kimi and grok exist", async () => {
+    stub(["cld", "kimi", "grok"]);
     const sink = makeSink();
     await runInit([], sink);
     const out = sink.finished as {
@@ -108,6 +108,7 @@ describe("councilkit init", () => {
       next: string;
     };
     expect(out.createdAgents.map((a) => a.name).sort()).toEqual([
+      "review-adversarial",
       "review-correctness",
       "review-maintainability",
       "review-security",
@@ -117,15 +118,15 @@ describe("councilkit init", () => {
       modelId: "antchat/GLM-5.2[1m]",
     });
     expect(out.createdAgents.find((a) => a.name === "review-correctness")).toMatchObject({
-      driverId: "codex-app-server",
-      modelId: "gpt-5",
+      driverId: "grok-stream-json",
+      modelId: "grok-4.6",
     });
     expect(out.createdAgents.find((a) => a.name === "review-maintainability")).toMatchObject({
       driverId: "kimi-stream-json",
       modelId: "kimi-code/k3",
     });
     expect(out.createdCouncil.name).toBe("pr-jury");
-    expect(out.createdCouncil.reporter).toBe("review-correctness");
+    expect(out.createdCouncil.reporter).toBe("review-adversarial");
     expect(out.next).toContain("review --council pr-jury");
 
     const store = new Store();
@@ -136,12 +137,12 @@ describe("councilkit init", () => {
       options: { route: "cfuse" },
     });
     const council = store.getCouncil("pr-jury");
-    expect(council.agentIds).toHaveLength(3);
-    expect(council.reporterAgentId).toBe(store.getAgent("review-correctness").id);
+    expect(council.agentIds).toHaveLength(4);
+    expect(council.reporterAgentId).toBe(store.getAgent("review-adversarial").id);
   });
 
   it("adds review-adversarial to pr-jury when grok is on PATH", async () => {
-    stub(["cld", "kimi", "codex", "grok"]);
+    stub(["cld", "kimi", "grok"]);
     const sink = makeSink();
     await runInit([], sink);
     const out = sink.finished as { createdAgents: Array<{ name: string; driverId: string }> };
@@ -149,7 +150,27 @@ describe("councilkit init", () => {
     expect(out.createdAgents.find((a) => a.name === "review-adversarial")?.driverId).toBe(
       "grok-stream-json",
     );
-    expect(new Store().getCouncil("pr-jury").agentIds).toHaveLength(4);
+    const store = new Store();
+    expect(store.getCouncil("pr-jury").agentIds).toHaveLength(4);
+    expect(store.getCouncil("pr-jury").reporterAgentId).toBe(
+      store.getAgent("review-adversarial").id,
+    );
+  });
+
+  it("a later init with grok on PATH adds adversarial and switches reporter", async () => {
+    stub(["cld", "kimi"]);
+    await runInit([], makeSink());
+    expect(new Store().getCouncil("pr-jury").reporterAgentId).toBe(
+      new Store().getAgent("review-security").id,
+    );
+    stub(["cld", "kimi", "grok"]);
+    await runInit([], makeSink());
+    const store = new Store();
+    expect(store.listAgents().map((a) => a.name)).toContain("review-adversarial");
+    expect(store.getCouncil("pr-jury").reporterAgentId).toBe(
+      store.getAgent("review-adversarial").id,
+    );
+    expect(store.getCouncil("pr-jury").agentIds).toHaveLength(4);
   });
 
   it("creates a one-agent pr-jury when only kimi is on PATH", async () => {
@@ -163,11 +184,26 @@ describe("councilkit init", () => {
     };
     expect(out.createdAgents.map((a) => a.name)).toEqual(["review-maintainability"]);
     expect(out.createdCouncil.reporter).toBe("review-maintainability");
-    expect(out.missingDrivers.sort()).toEqual(["cld", "codex", "grok"]);
+    expect(out.missingDrivers.sort()).toEqual(["cld", "grok"]);
+  });
+
+  it("migrates an existing correctness seat off codex onto grok", async () => {
+    stub(["cld", "kimi", "grok"]);
+    await runInit([], makeSink());
+    const store = new Store();
+    store.updateAgent("review-correctness", {
+      modelId: "gpt-5",
+      driverSelection: { driverId: "codex-app-server", options: {} },
+    });
+    expect(store.getAgent("review-correctness").driverSelection.driverId).toBe("codex-app-server");
+    await runInit([], makeSink());
+    const migrated = new Store().getAgent("review-correctness");
+    expect(migrated.driverSelection.driverId).toBe("grok-stream-json");
+    expect(migrated.modelId).toBe("grok-4.6");
   });
 
   it("is idempotent: a second init reuses names and does not duplicate", async () => {
-    stub(["cld", "kimi", "codex"]);
+    stub(["cld", "kimi", "grok"]);
     await runInit([], makeSink());
     const first = new Store().getAgent("review-security").id;
     const sink = makeSink();
@@ -179,22 +215,22 @@ describe("councilkit init", () => {
       createdCouncil: unknown;
     };
     expect(out.createdAgents).toEqual([]);
-    expect(out.reusedAgents).toHaveLength(3);
+    expect(out.reusedAgents).toHaveLength(4);
     expect(out.reusedCouncil?.name).toBe("pr-jury");
     expect(out.createdCouncil).toBeNull();
     expect(new Store().getAgent("review-security").id).toBe(first);
-    expect(new Store().listAgents()).toHaveLength(3);
+    expect(new Store().listAgents()).toHaveLength(4);
     expect(new Store().listCouncils()).toHaveLength(1);
   });
 
   it("--force recreates default agents after deleting pr-jury", async () => {
-    stub(["cld", "kimi", "codex"]);
+    stub(["cld", "kimi", "grok"]);
     await runInit([], makeSink());
     const firstId = new Store().getAgent("review-security").id;
     await runInit(["--force"], makeSink());
     const secondId = new Store().getAgent("review-security").id;
     expect(secondId).not.toBe(firstId);
-    expect(new Store().listAgents()).toHaveLength(3);
+    expect(new Store().listAgents()).toHaveLength(4);
     expect(new Store().getCouncil("pr-jury").name).toBe("pr-jury");
   });
 

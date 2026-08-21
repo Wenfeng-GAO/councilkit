@@ -8,6 +8,13 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { buildApplyPrompt } from "../src/auto/templates/apply";
 import {
+  buildPlanDraftPrompt,
+  buildPlanReviewPrompt,
+  extractConsensusPlan,
+  extractVerdictToken,
+  looksLikePlanDocument,
+} from "../src/auto/templates/plan";
+import {
   AGGREGATE_PROMPT_BUDGET,
   MAX_ATTEMPT_OUTPUT_IN_PROMPT,
   buildAccessHint,
@@ -34,6 +41,20 @@ describe("cli auto templates — attempt prompt", () => {
     expect(prompt).toMatch(/最终消息即交付物/);
   });
 
+  it("injects a finding ledger for --against reviews", () => {
+    const prompt = buildAttemptPrompt({
+      agentName: "A",
+      personaPrompt: "",
+      task: {
+        pr: "https://example.com/pr/1",
+        against: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        againstLedger: "open (1)\n- foo--bar [major] still open",
+      },
+    });
+    expect(prompt).toContain("## Finding 账本");
+    expect(prompt).toContain("foo--bar");
+  });
+
   it("injects focus and council topic when provided", () => {
     const prompt = buildAttemptPrompt({
       agentName: "A",
@@ -42,6 +63,18 @@ describe("cli auto templates — attempt prompt", () => {
     });
     expect(prompt).toContain("security");
     expect(prompt).toContain("auth redesign");
+  });
+
+  it("worktree mode tells the agent not to clone", () => {
+    const prompt = buildAttemptPrompt({
+      agentName: "A",
+      personaPrompt: "",
+      task: { pr: "https://github.com/acme/repo/pull/1" },
+      workspaceMode: "worktree",
+    });
+    expect(prompt).toContain("隔离 git worktree");
+    expect(prompt).toContain("不要再 clone");
+    expect(prompt).not.toContain("空目录中完全自主工作");
   });
 
   it("uses --task free text when no --pr", () => {
@@ -270,5 +303,85 @@ describe("cli auto templates — apply prompt", () => {
     expect(prompt).toContain("不要在 PR 上发评论");
     expect(prompt).toContain("不要创建新 PR");
     expect(prompt).toContain("https://github.com/acme/repo/pull/9");
+  });
+
+  it("when a consensus plan is present, forbids extra mechanisms and follows 落地顺序", () => {
+    const prompt = buildApplyPrompt({
+      agentName: "review-adversarial",
+      prUrl: "https://github.com/acme/repo/pull/9",
+      branch: "feat-x",
+      reportFile: "COUNCILKIT-REVIEW.md",
+      planFile: "COUNCILKIT-PLAN.md",
+    });
+    expect(prompt).toContain("COUNCILKIT-PLAN.md");
+    expect(prompt).toContain("落地顺序");
+    expect(prompt).toContain("本轮不落地");
+    expect(prompt).toContain("不要加方案没要求的重试、WaitGroup、新锁");
+  });
+
+  it("scopes an apply to one locked cluster", () => {
+    const prompt = buildApplyPrompt({
+      agentName: "review-adversarial",
+      prUrl: "https://github.com/acme/repo/pull/9",
+      branch: "feat-x",
+      reportFile: "COUNCILKIT-REVIEW.md",
+      planFile: "COUNCILKIT-PLAN.md",
+      cluster: {
+        id: "eventlog-short-write",
+        files: ["pkg/eventlog/log.go"],
+        closes: ["pkg.eventlog.log.go--torn-line"],
+        gates: ["go test ./pkg/eventlog -run TestShortWrite"],
+      },
+    });
+    expect(prompt).toContain("只落地集群 `eventlog-short-write`");
+    expect(prompt).toContain("pkg/eventlog/log.go");
+    expect(prompt).not.toContain("落地顺序");
+  });
+});
+
+describe("cli auto templates — plan prompts", () => {
+  it("draft prompt ranks delete / fail-closed over new locks", () => {
+    const prompt = buildPlanDraftPrompt({
+      agentName: "review-adversarial",
+      prUrl: "https://github.com/acme/repo/pull/9",
+      reportFile: "COUNCILKIT-REVIEW.md",
+      round: 1,
+    });
+    expect(prompt).toContain("失败即停");
+    expect(prompt).toContain("最后才");
+    expect(prompt).toContain("## 落地顺序");
+    expect(prompt).toContain("不要改业务代码");
+  });
+
+  it("plan-review prompt forbids re-reviewing the whole PR", () => {
+    const prompt = buildPlanReviewPrompt({
+      agentName: "review-correctness",
+      personaPrompt: "找逻辑错误",
+      prUrl: "https://github.com/acme/repo/pull/9",
+      reportFile: "COUNCILKIT-REVIEW.md",
+      planFile: "COUNCILKIT-PLAN.md",
+    });
+    expect(prompt).toContain("而不是重新审查整个 PR");
+    expect(prompt).toContain("approve | changes-requested | comment");
+    expect(prompt).toContain("找逻辑错误");
+  });
+
+  it("extracts the consensus plan and verdict from aggregator output", () => {
+    const markdown = [
+      "## 概览",
+      "ok",
+      "## 共识计划",
+      "# 修复方案",
+      "",
+      "## 不变量",
+      "1. jsonl never torn",
+      "## 落地顺序",
+      "### 集群 1: log",
+      "## 结论",
+      "approve",
+    ].join("\n");
+    expect(extractVerdictToken(markdown)).toBe("approve");
+    expect(extractConsensusPlan(markdown)).toContain("jsonl never torn");
+    expect(looksLikePlanDocument(extractConsensusPlan(markdown) ?? "")).toBe(true);
   });
 });

@@ -12,8 +12,12 @@ function run(
     startedAt: null,
     endedAt: null,
     hasReport: true,
+    hasPlan: false,
+    hasFindings: false,
+    hasPlanLock: false,
     reportUrl: `http://127.0.0.1:43127/reports/${partial.runId}`,
     progress: null,
+    pipeline: null,
     ...partial,
   };
 }

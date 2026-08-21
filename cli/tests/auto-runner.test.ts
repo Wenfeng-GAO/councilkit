@@ -107,13 +107,13 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(obs.maxConcurrent).toBeGreaterThanOrEqual(2);
   });
 
-  it("defaults concurrency to min(3, N)", async () => {
+  it("defaults concurrency to 10 (capped by N)", async () => {
     const obs = { calls: [] as string[], maxConcurrent: 0, nowConcurrent: 0 };
     const specs = [spec("0"), spec("1"), spec("2"), spec("3"), spec("4")];
     await runAttempts(specs, {
       spawnImpl: scriptedSpawn({ "0": { text: "x" } }, obs),
     });
-    expect(obs.maxConcurrent).toBeLessThanOrEqual(3);
+    expect(obs.maxConcurrent).toBe(5);
   });
 
   it("tolerates a single EXIT failure, retrying it once (transient <120s, non-zero)", async () => {
@@ -871,7 +871,15 @@ describe("cli auto runner — process-group cleanup on natural close", () => {
     };
     const start = Date.now();
     const out = await defaultSpawn(
-      { executable: "x", argv: [], cwd: "/tmp/ck-fake-ws", prompt: "hi", promptStdin: true, timeoutMs: 60000, signal: NEVER_ABORT },
+      {
+        executable: "x",
+        argv: [],
+        cwd: "/tmp/ck-fake-ws",
+        prompt: "hi",
+        promptStdin: true,
+        timeoutMs: 60000,
+        signal: NEVER_ABORT,
+      },
       fakeSpawnFn(child),
       killFn,
     );
@@ -891,7 +899,14 @@ describe("cli auto runner — fast SPAWN_ERROR is NOT retried (frozen brief)", (
     let calls = 0;
     const spawnImpl: SpawnImpl = async () => {
       calls++;
-      return { stdout: "", stderr: "", exitCode: null, timedOut: false, aborted: false, error: "EPIPE" };
+      return {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        timedOut: false,
+        aborted: false,
+        error: "EPIPE",
+      };
     };
     const { results } = await runAttempts([spec("no-retry-spawn")], { spawnImpl });
     expect(calls).toBe(1);

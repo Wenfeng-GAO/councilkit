@@ -11,15 +11,31 @@ import { type Stats, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveCliRunsRoot } from "./cli-home";
 import {
+  CLI_RUN_FINDINGS_FILE,
+  CLI_RUN_LANDINGS_FILE,
+  CLI_RUN_PLAN_LOCK_FILE,
+  type FindingsFile,
+  type LandingRecord,
+  type LedgerFinding,
+  type PlanLockFile,
+  parseFindingsFile,
+  parseLandingsText,
+  parsePlanLockFile,
+} from "./cli-ledger";
+import {
   CLI_RUN_STATUS_FILE,
+  type CliRunPipeline,
   type CliRunProgress,
   liveStateFromRecords,
   parseLiveStateJson,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
 
-export type { CliRunAttemptProgress, CliRunProgress } from "./cli-run-progress";
+export type { CliRunAttemptProgress, CliRunPipeline, CliRunProgress } from "./cli-run-progress";
 export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
+
+export const CLI_RUN_PLAN_FILE = "plan.md";
+export { CLI_RUN_FINDINGS_FILE, CLI_RUN_LANDINGS_FILE, CLI_RUN_PLAN_LOCK_FILE };
 
 export const CLI_RUN_ID_RE =
   /^ck-(?:run|review)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,13 +53,22 @@ export interface CliRunSummary {
   startedAt: string | null;
   endedAt: string | null;
   hasReport: boolean;
+  hasPlan: boolean;
+  hasFindings: boolean;
+  hasPlanLock: boolean;
   reportUrl: string;
   progress: CliRunProgress | null;
+  pipeline: CliRunPipeline | null;
 }
 
 export interface CliRunDetail extends CliRunSummary {
   markdown: string;
   truncated: boolean;
+  planMarkdown: string;
+  planTruncated: boolean;
+  findings: LedgerFinding[];
+  planLock: PlanLockFile | null;
+  landings: LandingRecord[];
 }
 
 export function isCliRunId(runId: string): boolean {
@@ -93,11 +118,29 @@ export function readCliRun(
   if (summary === null) return null;
   const reportPath = join(root, runId, "report.md");
   const reportStat = safeLstat(reportPath);
-  if (reportStat === null || !reportStat.isFile() || reportStat.isSymbolicLink()) {
-    return { ...summary, markdown: "", truncated: false };
-  }
-  const { text, truncated } = readCapped(reportPath, MAX_CLI_REPORT_BYTES);
-  return { ...summary, markdown: text, truncated };
+  const report =
+    reportStat?.isFile() && !reportStat.isSymbolicLink()
+      ? readCapped(reportPath, MAX_CLI_REPORT_BYTES)
+      : { text: "", truncated: false };
+  const planPath = join(root, runId, CLI_RUN_PLAN_FILE);
+  const planStat = safeLstat(planPath);
+  const plan =
+    planStat?.isFile() && !planStat.isSymbolicLink()
+      ? readCapped(planPath, MAX_CLI_REPORT_BYTES)
+      : { text: "", truncated: false };
+  const findings = readFindings(join(root, runId, CLI_RUN_FINDINGS_FILE));
+  const planLock = readPlanLock(join(root, runId, CLI_RUN_PLAN_LOCK_FILE));
+  const landings = readLandings(join(root, runId, CLI_RUN_LANDINGS_FILE));
+  return {
+    ...summary,
+    markdown: report.text,
+    truncated: report.truncated,
+    planMarkdown: plan.text,
+    planTruncated: plan.truncated,
+    findings: findings?.findings ?? [],
+    planLock,
+    landings,
+  };
 }
 
 function inspectRunDir(root: string, runId: string): CliRunSummary | null {
@@ -123,6 +166,15 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     liveStateFromRecords(parseTranscriptRecords(transcriptText), live?.progress.updatedAt ?? null)
       ?.progress ??
     null;
+  const planPath = join(dir, CLI_RUN_PLAN_FILE);
+  const planStat = safeLstat(planPath);
+  const hasPlan = Boolean(planStat?.isFile() && !planStat.isSymbolicLink());
+  const findingsPath = join(dir, CLI_RUN_FINDINGS_FILE);
+  const findingsStat = safeLstat(findingsPath);
+  const hasFindings = Boolean(findingsStat?.isFile() && !findingsStat.isSymbolicLink());
+  const lockPath = join(dir, CLI_RUN_PLAN_LOCK_FILE);
+  const lockStat = safeLstat(lockPath);
+  const hasPlanLock = Boolean(lockStat?.isFile() && !lockStat.isSymbolicLink());
 
   return {
     runId,
@@ -132,9 +184,31 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     startedAt: parsed.startedAt,
     endedAt: parsed.endedAt,
     hasReport,
+    hasPlan,
+    hasFindings,
+    hasPlanLock,
     reportUrl: cliReportUrl(runId),
     progress: derived,
+    pipeline: live?.pipeline ?? null,
   };
+}
+
+function readFindings(path: string): FindingsFile | null {
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
+  return parseFindingsFile(readCapped(path, 512 * 1024).text);
+}
+
+function readPlanLock(path: string): PlanLockFile | null {
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
+  return parsePlanLockFile(readCapped(path, 256 * 1024).text);
+}
+
+function readLandings(path: string): LandingRecord[] {
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return [];
+  return parseLandingsText(readCapped(path, 256 * 1024).text);
 }
 
 function readLiveState(path: string): ReturnType<typeof parseLiveStateJson> {

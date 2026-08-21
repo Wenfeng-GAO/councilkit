@@ -21,6 +21,17 @@ export interface OutputSink {
   finish(data: unknown, humanRender?: (data: unknown) => string): Promise<void>;
 }
 
+/** Forward progress/diagnostics, swallow finish — for nested apply/review
+ * inside `councilkit fix` so --json still emits one document. */
+export function progressOnlySink(out: OutputSink): OutputSink {
+  return {
+    json: out.json,
+    progress: (message) => out.progress(message),
+    diag: (message) => out.diag(message),
+    finish: () => Promise.resolve(),
+  };
+}
+
 export function createOutput(json: boolean): OutputSink {
   return {
     json,

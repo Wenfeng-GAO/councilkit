@@ -16,6 +16,7 @@ import {
   buildSpawnSpec,
   extractFinalOutput,
   resolveExecutable,
+  spawnEnvForDriver,
   stripProxyPrefix,
 } from "../src/auto/driver-commands";
 import type { CliError } from "../src/errors";
@@ -191,6 +192,8 @@ describe("cli auto driver-commands", () => {
         "--always-approve",
         "--cwd",
         "/ws",
+        "--leader-socket",
+        "/ws/.grok-leader.sock",
       ]);
     });
 
@@ -303,6 +306,41 @@ describe("cli auto driver-commands", () => {
       expect(spec.argv).toEqual(["exec", "--skip-git-repo-check", "-m", "gpt-5", "--json", "-"]);
       expect(spec.promptStdin).toBe(true);
       expect(spec.lastMessageFile).toBeUndefined();
+    });
+
+    it("grok: isolate probe cwd and cap turns so a live TUI cannot stall it", () => {
+      const spec = buildProbeSpec(agent(GROK, "grok-4.6"), probeOpts());
+      expect(spec.argv).toEqual([
+        "-m",
+        "grok-4.6",
+        "--output-format",
+        "json",
+        "-p",
+        DRIVER_PROBE_PROMPT,
+        "--disable-web-search",
+        "--no-subagents",
+        "--always-approve",
+        "--max-turns",
+        "1",
+        "--cwd",
+        "/probe-cwd",
+        "--leader-socket",
+        "/probe-cwd/.grok-leader.sock",
+      ]);
+      expect(spec.cwd).toBe("/probe-cwd");
+    });
+
+    it("grok spawn env drops TUI session vars and pins PWD to the isolated cwd", () => {
+      const env = spawnEnvForDriver("grok-stream-json", "/probe-cwd", {
+        PATH: "/bin",
+        GROK_AGENT: "1",
+        GROK_SESSION_ID: "parent-session",
+        PWD: "/Users/me/councilkit",
+      });
+      expect(env.PWD).toBe("/probe-cwd");
+      expect(env.GROK_AGENT).toBeUndefined();
+      expect(env.GROK_SESSION_ID).toBeUndefined();
+      expect(env.PATH).toBe("/bin");
     });
 
     it("claude non-cfuse route → usage error", () => {

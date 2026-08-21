@@ -3,6 +3,8 @@ import {
   type AckRequest,
   type AckResponse,
   type ClaudeRoute,
+  type CliRunActionRequest,
+  type CliRunActionResponse,
   type CliRunDetailResponse,
   type CliRunsListResponse,
   type CloseScopeResponse,
@@ -23,6 +25,7 @@ import {
   type ScopeStatus,
   type TakeoverControllerResponse,
   ackResponseSchema,
+  cliRunActionResponseSchema,
   cliRunDetailResponseSchema,
   cliRunsListResponseSchema,
   closeScopeResponseSchema,
@@ -109,6 +112,7 @@ export class RuntimeClient {
       headers: this.headers(auth),
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: options.signal ?? null,
+      credentials: "same-origin",
     });
     const envelope = (await response.json()) as {
       ok: boolean;
@@ -150,6 +154,18 @@ export class RuntimeClient {
     return this.call("GET", `/api/v1/cli-runs/${encodeURIComponent(runId)}`, {
       schema: cliRunDetailResponseSchema,
       auth: "session",
+    });
+  }
+
+  startCliRunAction(
+    runId: string,
+    action: CliRunActionRequest["action"],
+  ): Promise<CliRunActionResponse> {
+    const body: CliRunActionRequest = { action };
+    return this.call("POST", `/api/v1/cli-runs/${encodeURIComponent(runId)}/actions`, {
+      body,
+      schema: cliRunActionResponseSchema,
+      auth: "mutation",
     });
   }
 

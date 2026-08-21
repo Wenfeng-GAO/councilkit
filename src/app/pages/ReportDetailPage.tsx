@@ -1,29 +1,63 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import { FindingLedger } from "@/components/report/FindingLedger";
+import {
+  FixPipeline,
+  FixPlanDocument,
+  formatCliActionError,
+} from "@/components/report/FixPipeline";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
-import { buildFixFromReviewPrompt } from "@/lib/fix-prompt";
+import { buildFixFromReviewPrompt, buildReviewResumeCommand } from "@/lib/fix-prompt";
 import { buildPrComment, siblingRuns } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import "@/styles/report.css";
 
-type CopiedKind = "markdown" | "prompt" | "comment" | "apply" | null;
+type CopiedKind = "markdown" | "prompt" | "comment" | "apply" | "resume" | null;
 
 export function ReportDetailPage() {
   const { runId = "" } = useParams();
   const { client } = getAppRuntime();
+  const queryClient = useQueryClient();
   const [copied, setCopied] = useState<CopiedKind>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<"fix" | "re-review" | null>(null);
+  const [watchUntil, setWatchUntil] = useState(0);
   const query = useQuery({
     queryKey: ["cli-runs", runId],
     queryFn: () => client.getCliRun(runId),
     enabled: runId.length > 0,
     retry: false,
-    refetchInterval: (current) => (current.state.data?.status === "running" ? 2000 : false),
+    refetchInterval: (current) => {
+      const live = current.state.data;
+      if (live?.status === "running") return 2000;
+      if (live?.pipeline && live.pipeline.phase !== "done") return 2000;
+      if (Date.now() < watchUntil) return 2000;
+      return false;
+    },
+  });
+  const action = useMutation({
+    mutationFn: (kind: "fix" | "re-review") => client.startCliRunAction(runId, kind),
+    onMutate: (kind) => {
+      setActionError(null);
+      setPendingAction(kind);
+      setWatchUntil(Date.now() + 5 * 60 * 1000);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["cli-runs"] });
+    },
+    onError: (error) => {
+      setPendingAction(null);
+      setActionError(formatCliActionError(error));
+    },
+    onSettled: () => {
+      window.setTimeout(() => setPendingAction(null), 1500);
+    },
   });
   const listQuery = useQuery({
     queryKey: ["cli-runs"],
@@ -70,6 +104,21 @@ export function ReportDetailPage() {
   };
 
   const siblings = query.data && listQuery.data ? siblingRuns(listQuery.data.runs, query.data) : [];
+  const failedSeats =
+    query.data?.progress?.attempts.filter(
+      (row) => row.role === "attempt" && row.status === "failure",
+    ) ?? [];
+  const resumeCommand =
+    query.data && failedSeats.length > 0 && query.data.status !== "running"
+      ? buildReviewResumeCommand(query.data.runId, query.data.title, query.data.markdown)
+      : null;
+  const showSeats =
+    query.data?.status === "running" ||
+    Boolean(
+      query.data?.progress?.attempts.some(
+        (row) => row.status === "queued" || row.status === "running" || row.status === "failure",
+      ),
+    );
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-8 sm:px-8">
@@ -87,6 +136,11 @@ export function ReportDetailPage() {
             <Button variant="ghost" onClick={copyComment} disabled={!parsed}>
               {copied === "comment" ? "已复制评论" : "复制 PR 评论"}
             </Button>
+            {resumeCommand ? (
+              <Button variant="ghost" onClick={() => void copyText("resume", resumeCommand)}>
+                {copied === "resume" ? "已复制重跑" : "复制重跑失败席"}
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
               onClick={() => void copyText("apply", `councilkit apply --run ${query.data.runId}`)}
@@ -124,7 +178,30 @@ export function ReportDetailPage() {
               ) : null}
             </p>
           ) : null}
-          {query.data.status === "running" ? <LiveReviewProgress run={query.data} /> : null}
+          {resumeCommand ? (
+            <p className="text-sm text-warn">
+              {failedSeats.length} 个席位失败。复制「重跑失败席」只重跑失败的
+              Attempt，成功席会复用。
+            </p>
+          ) : null}
+          {query.data.kind === "review" && query.data.hasReport ? (
+            <FixPipeline
+              run={query.data}
+              busy={action.isPending || pendingAction !== null}
+              pendingAction={pendingAction}
+              error={actionError}
+              onFix={() => action.mutate("fix")}
+              onReReview={() => action.mutate("re-review")}
+            />
+          ) : null}
+          {showSeats && query.data.progress ? <LiveReviewProgress run={query.data} /> : null}
+          <FindingLedger run={query.data} />
+          {query.data.planMarkdown.trim().length > 0 ? (
+            <FixPlanDocument
+              markdown={query.data.planMarkdown}
+              truncated={query.data.planTruncated}
+            />
+          ) : null}
           {!query.data.hasReport || query.data.markdown.trim().length === 0 ? (
             query.data.status === "running" ? null : (
               <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />

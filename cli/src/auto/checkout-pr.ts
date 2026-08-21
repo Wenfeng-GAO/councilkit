@@ -147,6 +147,58 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
   });
 }
 
+/** Read PR metadata without cloning. Used by review worktrees. */
+export async function inspectPullRequest(
+  prUrl: string,
+  runCommand: RunCommand = defaultRunCommand,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<CheckedOutPr> {
+  const parsed = parseApplyPrUrl(prUrl);
+  if (parsed === null) {
+    throw errors.usage(`review/apply only supports GitHub or AntCode PR URLs, got "${prUrl}"`);
+  }
+  if (parsed.kind === "github") {
+    if (findExecutable("gh", env) === null) {
+      throw errors.usage("GitHub PRs need `gh` on PATH to resolve the source branch");
+    }
+    const view = await runCommand({
+      executable: "gh",
+      argv: ["pr", "view", parsed.url.toString(), "--json", GH_JSON_FIELDS],
+      cwd: process.cwd(),
+      env,
+    });
+    assertOk(view, "gh pr view");
+    const meta = parseGhPrView(view.stdout);
+    return {
+      prUrl: parsed.url.toString(),
+      host: "github",
+      branch: meta.branch,
+      cloneUrl: meta.nameWithOwner,
+    };
+  }
+  if (findExecutable("antcode", env) === null) {
+    throw errors.usage("AntCode PRs need `antcode` on PATH to resolve the source branch");
+  }
+  const ant = parseAntCodePrUrl(parsed.url);
+  if (ant === null) {
+    throw errors.usage(`could not parse AntCode PR URL: ${parsed.url.toString()}`);
+  }
+  const shown = await runCommand({
+    executable: "antcode",
+    argv: ["pr", "show", ant.iid, "-P", ant.project, "--json", "--raw", "--no-pager"],
+    cwd: process.cwd(),
+    env: internalToolEnv(env),
+  });
+  assertOk(shown, "antcode pr show");
+  const meta = parseAntCodePrShow(shown.stdout);
+  return {
+    prUrl: parsed.url.toString(),
+    host: "antcode",
+    branch: meta.branch,
+    cloneUrl: meta.cloneUrl,
+  };
+}
+
 export async function checkoutPullRequest(
   prUrl: string,
   cwd: string,

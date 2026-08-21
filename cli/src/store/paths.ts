@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { CLI_STORE_DIR_NAME, resolveCouncilkitHome } from "@shared/runtime/cli-home";
 /**
  * XDG-style data-home resolution (brief §2b, D1 §11). Priority:
  *   1. COUNCILKIT_HOME          (explicit override; tests pin a temp dir)
@@ -10,7 +11,11 @@ import { join } from "node:path";
  * secret-free by construction, but the permissions still avoid needless local
  * exposure (D1 §11).
  */
-import { CLI_STORE_DIR_NAME, resolveCouncilkitHome } from "@shared/runtime/cli-home";
+import {
+  CLI_RUN_FINDINGS_FILE,
+  CLI_RUN_LANDINGS_FILE,
+  CLI_RUN_PLAN_LOCK_FILE,
+} from "@shared/runtime/cli-ledger";
 
 export const STORE_DIR_NAME = CLI_STORE_DIR_NAME;
 
@@ -27,6 +32,9 @@ export interface StorePaths {
   runDir: (runId: string) => string;
   transcript: (runId: string) => string;
   report: (runId: string) => string;
+  findings: (runId: string) => string;
+  planLock: (runId: string) => string;
+  landings: (runId: string) => string;
 }
 
 export function resolvePaths(env: NodeJS.ProcessEnv = process.env): StorePaths {
@@ -40,6 +48,9 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): StorePaths {
     runDir: (runId) => join(runsRoot, runId),
     transcript: (runId) => join(runsRoot, runId, "transcript.jsonl"),
     report: (runId) => join(runsRoot, runId, "report.md"),
+    findings: (runId) => join(runsRoot, runId, CLI_RUN_FINDINGS_FILE),
+    planLock: (runId) => join(runsRoot, runId, CLI_RUN_PLAN_LOCK_FILE),
+    landings: (runId) => join(runsRoot, runId, CLI_RUN_LANDINGS_FILE),
   };
 }
 

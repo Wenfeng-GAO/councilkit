@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import {
   type RunCommand,
   checkoutPullRequest,
@@ -25,10 +26,33 @@ import {
   gitWorkingTreeDirty,
   pushCurrentBranch,
 } from "../auto/checkout-pr";
-import { DRIVER_PROBE_PROMPT, buildProbeSpec, buildSpawnSpec } from "../auto/driver-commands";
+import {
+  DRIVER_PROBE_PROMPT,
+  GROK_LEADER_SOCK,
+  buildProbeSpec,
+  buildSpawnSpec,
+} from "../auto/driver-commands";
 import { formatDurationMs } from "../auto/duration";
+import {
+  appendLanding,
+  attachClosesFromFindings,
+  buildClusterPlanMarkdown,
+  ensureFindings,
+  markFindingsClosed,
+  parsePlanDocument,
+  readFindings,
+  readLandings,
+  readPlanLock,
+  writeFindings,
+  writePlanLock,
+} from "../auto/ledger";
 import { type AttemptResult, type SpawnImpl, spawnOnce } from "../auto/runner";
-import { APPLY_REPORT_FILENAME, buildApplyPrompt } from "../auto/templates/apply";
+import {
+  APPLY_PLAN_FILENAME,
+  APPLY_REPORT_FILENAME,
+  buildApplyPrompt,
+} from "../auto/templates/apply";
+import { PLAN_RUN_FILE } from "../auto/templates/plan";
 import { readReviewTranscript } from "../auto/transcript";
 import { CliError, EXIT, errors } from "../errors";
 import {
@@ -69,6 +93,10 @@ export interface ApplyOutcome {
   pushed: boolean;
   commit: string | null;
   changed: boolean;
+  clusterId: string | null;
+  parentSha: string | null;
+  candidateSha: string | null;
+  closed: string[];
   summary: string;
   failure: { phase: string; code: string; message: string } | null;
 }
@@ -86,6 +114,8 @@ export async function runApply(
         agent: { type: "string" },
         timeout: { type: "string" },
         "no-push": { type: "boolean" },
+        cluster: { type: "string" },
+        "all-clusters": { type: "boolean" },
       },
       allowPositionals: 1,
     },
@@ -106,6 +136,11 @@ export async function runApply(
   }
 
   const push = values["no-push"] !== true;
+  const allClusters = values["all-clusters"] === true;
+  const clusterFlag = values.cluster as string | undefined;
+  if (allClusters && clusterFlag !== undefined) {
+    throw errors.usage("--cluster and --all-clusters are mutually exclusive");
+  }
   const timeoutMs = parseTimeoutMs(values.timeout as string | undefined);
   const runCommand = deps.runCommand ?? defaultRunCommand;
   const env = process.env;
@@ -145,6 +180,33 @@ export async function runApply(
     throw errors.usage(`report.md for ${runId} is empty`);
   }
 
+  const findings = ensureFindings({ runDir, runId, markdown: report });
+  let lock = readPlanLock(runDir);
+  let planMarkdown = "";
+  try {
+    planMarkdown = readFileSync(join(runDir, PLAN_RUN_FILE), "utf8");
+  } catch {
+    planMarkdown = "";
+  }
+  if (!lock && planMarkdown.trim().length > 0) {
+    lock = attachClosesFromFindings(
+      parsePlanDocument(planMarkdown, {
+        sourceRunId: runId,
+        approvedAt: new Date().toISOString(),
+        verdict: "approve",
+      }),
+      findings.findings,
+    );
+    if (lock.clusters.length > 0) writePlanLock(runDir, lock);
+  }
+  const landings = readLandings(runDir);
+  const target = resolveApplyTarget({
+    lock,
+    landings,
+    clusterFlag: clusterFlag?.trim(),
+    allClusters,
+  });
+
   const root = bindTrustedRoot(paths.runsRoot);
   if (root === null) {
     throw errors.io("the runs dir is missing (refusing to create an apply workspace)");
@@ -175,6 +237,10 @@ export async function runApply(
     pushed: false,
     commit: null as string | null,
     changed: false,
+    clusterId: target.clusterId,
+    parentSha: null as string | null,
+    candidateSha: null as string | null,
+    closed: [] as string[],
     summary: "",
   };
 
@@ -207,10 +273,17 @@ export async function runApply(
     out.progress(`  agent: ${agent.name} — ${agent.driverSelection.driverId}/${agent.modelId}`);
     out.progress(`  pr: ${pr}`);
     out.progress(`  push: ${push ? "yes (default)" : "no"}`);
+    if (target.cluster) {
+      out.progress(`  cluster: ${target.cluster.id}`);
+    } else if (target.mode === "all") {
+      out.progress("  cluster: all");
+    }
 
+    const probeCwd = join(runDir, "workspaces", "probe");
+    mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
     const probeSpec = buildProbeSpec(agent, {
       probeId: `probe-${agent.driverSelection.driverId}`,
-      cwd: process.cwd(),
+      cwd: probeCwd,
       prompt: DRIVER_PROBE_PROMPT,
     });
     const probe = await spawnOnce(probeSpec, {
@@ -240,18 +313,48 @@ export async function runApply(
     out.progress("  checking out PR into isolated workspace");
     const checked = await checkoutPullRequest(pr, workspace, runCommand, env);
     outcomeBase.branch = checked.branch;
-    excludeApplyReport(workspace);
+    excludeApplyArtifacts(workspace);
     writeFileSync(join(workspace, APPLY_REPORT_FILENAME), report, {
       encoding: "utf8",
       mode: 0o600,
     });
+    let planFile: string | undefined;
+    if (target.cluster && lock) {
+      writeFileSync(
+        join(workspace, APPLY_PLAN_FILENAME),
+        buildClusterPlanMarkdown(lock, target.cluster),
+        {
+          encoding: "utf8",
+          mode: 0o600,
+        },
+      );
+      planFile = APPLY_PLAN_FILENAME;
+      out.progress(`  using locked cluster ${target.cluster.id}`);
+    } else if (planMarkdown.trim().length > 0) {
+      writeFileSync(join(workspace, APPLY_PLAN_FILENAME), planMarkdown, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      planFile = APPLY_PLAN_FILENAME;
+      out.progress("  using consensus plan.md");
+    }
     const shaBefore = await gitHeadSha(workspace, runCommand, env);
+    outcomeBase.parentSha = shaBefore;
 
     const prompt = buildApplyPrompt({
       agentName: agent.name,
       prUrl: pr,
       branch: checked.branch,
       reportFile: APPLY_REPORT_FILENAME,
+      planFile,
+      cluster: target.cluster
+        ? {
+            id: target.cluster.id,
+            files: target.cluster.files,
+            closes: target.cluster.closes,
+            gates: target.cluster.gates,
+          }
+        : undefined,
     });
     const spec = buildSpawnSpec(agent, {
       attemptId: `apply-${randomUUID()}`,
@@ -285,20 +388,30 @@ export async function runApply(
       });
     }
 
-    const leftover = await gitWorkingTreeDirty(workspace, runCommand, env, [APPLY_REPORT_FILENAME]);
+    const leftover = await gitWorkingTreeDirty(workspace, runCommand, env, [
+      APPLY_REPORT_FILENAME,
+      APPLY_PLAN_FILENAME,
+      GROK_LEADER_SOCK,
+    ]);
+    const commitMessage = target.cluster
+      ? `fix(${target.cluster.id}): apply CouncilKit review ${runId}`
+      : `fix: apply CouncilKit review ${runId}`;
     if (leftover) {
-      await commitLeftoverChanges(
-        workspace,
-        `fix: apply CouncilKit review ${runId}`,
-        runCommand,
-        env,
-        [APPLY_REPORT_FILENAME],
-      );
+      await commitLeftoverChanges(workspace, commitMessage, runCommand, env, [
+        APPLY_REPORT_FILENAME,
+        APPLY_PLAN_FILENAME,
+        GROK_LEADER_SOCK,
+      ]);
     }
     const sha = await gitHeadSha(workspace, runCommand, env);
     const branch = await currentBranch(workspace, runCommand, env, checked.branch);
+    const closed =
+      target.cluster?.closes ??
+      (target.mode === "all" && lock ? lock.clusters.flatMap((cluster) => cluster.closes) : []);
     outcomeBase.branch = branch;
     outcomeBase.commit = sha;
+    outcomeBase.candidateSha = sha;
+    outcomeBase.closed = closed;
     outcomeBase.changed = leftover || (sha !== null && sha !== shaBefore);
     outcomeBase.summary = result.output;
 
@@ -308,6 +421,20 @@ export async function runApply(
       outcomeBase.pushed = true;
     } else {
       out.progress("  skipping git push (--no-push)");
+    }
+
+    appendLanding(runDir, {
+      at: new Date().toISOString(),
+      clusterId: target.clusterId ?? "unscoped",
+      parentSha: shaBefore,
+      candidateSha: sha,
+      closed,
+      runId,
+      pushed: outcomeBase.pushed,
+    });
+    if (closed.length > 0) {
+      const latest = readFindings(runDir) ?? findings;
+      writeFindings(runDir, markFindingsClosed(latest, closed));
     }
 
     out.progress(
@@ -428,14 +555,62 @@ function prepareApplyWorkspace(runDir: string, root: TrustedRoot): string {
   return workspace;
 }
 
-function excludeApplyReport(workspace: string): void {
+function excludeApplyArtifacts(workspace: string): void {
   const excludePath = join(workspace, ".git", "info", "exclude");
   try {
     mkdirSync(dirname(excludePath), { recursive: true, mode: 0o700 });
-    appendFileSync(excludePath, `\n${APPLY_REPORT_FILENAME}\n`, { encoding: "utf8" });
+    appendFileSync(
+      excludePath,
+      `\n${APPLY_REPORT_FILENAME}\n${APPLY_PLAN_FILENAME}\n${GROK_LEADER_SOCK}\n`,
+      {
+        encoding: "utf8",
+      },
+    );
   } catch {
-    // Best effort: the prompt also forbids committing the report file.
+    // Best effort: the prompt also forbids committing the report/plan files.
   }
+}
+
+function resolveApplyTarget(input: {
+  lock: ReturnType<typeof readPlanLock>;
+  landings: ReturnType<typeof readLandings>;
+  clusterFlag: string | undefined;
+  allClusters: boolean;
+}): {
+  mode: "unscoped" | "all" | "one";
+  clusterId: string | null;
+  cluster: NonNullable<ReturnType<typeof readPlanLock>>["clusters"][number] | null;
+} {
+  const lock = input.lock;
+  if (input.clusterFlag) {
+    if (!lock || lock.clusters.length === 0) {
+      throw errors.usage("--cluster requires plan.lock.json (run fix --plan-only first)");
+    }
+    const cluster = lock.clusters.find((item) => item.id === input.clusterFlag);
+    if (!cluster) {
+      throw errors.usage(
+        `unknown cluster "${input.clusterFlag}"; locked: ${lock.clusters.map((item) => item.id).join(", ")}`,
+      );
+    }
+    return { mode: "one", clusterId: cluster.id, cluster };
+  }
+  if (input.allClusters) {
+    return {
+      mode: lock && lock.clusters.length > 0 ? "all" : "unscoped",
+      clusterId: "all",
+      cluster: null,
+    };
+  }
+  if (lock && lock.clusters.length > 0) {
+    const next = nextUnlandedCluster(lock, input.landings);
+    if (!next) {
+      throw errors.usage(
+        "all clusters already landed; pass --cluster <id> to re-apply, or --all-clusters",
+      );
+    }
+    return { mode: "one", clusterId: next.id, cluster: next };
+  }
+  return { mode: "unscoped", clusterId: "unscoped", cluster: null };
 }
 
 function renderApplyHuman(data: unknown): string {
@@ -448,6 +623,9 @@ function renderApplyHuman(data: unknown): string {
     `  branch: ${o.branch || "(unknown)"}`,
     `  workspace: ${o.workspace}`,
     `  commit: ${o.commit ?? "(none)"}`,
+    `  cluster: ${o.clusterId ?? "unscoped"}`,
+    `  parent: ${o.parentSha ?? "(none)"}`,
+    `  candidate: ${o.candidateSha ?? "(none)"}`,
     `  pushed: ${o.pushed ? "yes" : "no"}`,
   ];
   if (o.failure) {

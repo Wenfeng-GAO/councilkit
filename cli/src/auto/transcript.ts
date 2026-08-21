@@ -62,6 +62,7 @@ export interface ReviewTaskRecord {
   task?: string;
   focus?: string;
   councilTopic?: string;
+  against?: string;
 }
 
 export const reviewStartedRecordSchema = z
@@ -76,6 +77,7 @@ export const reviewStartedRecordSchema = z
         task: z.string().optional(),
         focus: z.string().optional(),
         councilTopic: z.string().optional(),
+        against: z.string().optional(),
       })
       .strict(),
     attempts: z.array(

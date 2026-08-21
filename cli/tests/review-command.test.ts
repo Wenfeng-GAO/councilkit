@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 /**
  * review command: arg-validation matrix + an end-to-end run with a fake spawn
  * (zero real processes, plan §测试). Asserts the report's five aggregation
@@ -203,6 +204,31 @@ describe("cli review command — argument matrix", () => {
     await expect(dispatch("review", ["--agents", "[]"], sink)).rejects.toBeInstanceOf(CliError);
   });
 
+  it("rejects --against without a prior report", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    await expectUsage(
+      [
+        "--agents",
+        `["A"]`,
+        "--aggregator",
+        "A",
+        "--task",
+        "x",
+        "--against",
+        "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      ],
+      "no report.md or findings.json",
+    );
+  });
+
   it("rejects a disabled agent before any cost is incurred", async () => {
     const store = new Store();
     const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
@@ -219,6 +245,22 @@ describe("cli review command — argument matrix", () => {
 
   it("rejects blank --task (whitespace only)", async () => {
     await expectUsage(["--agents", "[]", "--task", "   "], "empty or whitespace");
+  });
+
+  it("PR review without --repo or a matching cwd clone is a usage error", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    await expectUsage(
+      ["--agents", `["A"]`, "--aggregator", "A", "--pr", "https://github.com/acme/other/pull/1"],
+      "no local clone",
+    );
   });
 
   it("rejects blank --pr (whitespace only)", async () => {
@@ -243,7 +285,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     writeFileSync(join(bin, "kimi"), "#!/bin/sh\nexit 0\n");
     writeFileSync(join(bin, "codex"), "#!/bin/sh\nexit 0\n");
     for (const name of ["cld", "kimi", "codex"]) chmodSync(join(bin, name), 0o755);
-    process.env.PATH = bin;
+    process.env.PATH = `${bin}${oldPath ? `:${oldPath}` : ""}`;
   });
   afterEach(() => {
     if (oldHome === undefined) process.env.COUNCILKIT_HOME = undefined;
@@ -256,6 +298,16 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       // ignore
     }
   });
+
+  function seedGitRepo(): string {
+    const dir = join(home, "src-repo");
+    mkdirSync(dir, { recursive: true });
+    execFileSync("git", ["init"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: dir });
+    return dir;
+  }
 
   function seed(): { agentIds: string[]; aggregatorName: string } {
     const store = new Store();
@@ -298,11 +350,13 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           aggregatorName,
           "--pr",
           "https://github.com/Wenfeng-GAO/councilkit/pull/1",
+          "--repo",
+          seedGitRepo(),
           "--out",
           outPath,
         ],
         sink,
-        { spawnImpl: fakeSpawn() },
+        { spawnImpl: fakeSpawn(), worktreeRef: "HEAD" },
       );
     } catch (e) {
       expect(e).toBeInstanceOf(ReviewExit);
@@ -388,7 +442,10 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     const sink = makeSink();
     let exitCode = -1;
     try {
-      await runReview(["https://github.com/acme/repo/pull/9"], sink, { spawnImpl: fakeSpawn() });
+      await runReview(["https://github.com/acme/repo/pull/9", "--repo", seedGitRepo()], sink, {
+        spawnImpl: fakeSpawn(),
+        worktreeRef: "HEAD",
+      });
     } catch (e) {
       expect(e).toBeInstanceOf(ReviewExit);
       exitCode = (e as ReviewExit).exitCode;
@@ -1859,5 +1916,78 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     // 45min default for attempts; probe stays 60s.
     expect(seen.find((s) => s.kind === "probe")?.timeoutMs).toBe(60_000);
     expect(seen.find((s) => s.kind === "attempt:Alice")?.timeoutMs).toBe(2_700_000);
+  });
+
+  it("codex seats default to 90m; claude stays 45m", async () => {
+    const store = new Store();
+    const alice = store.createAgent({
+      name: "Alice",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#111111",
+      driverSelection: { driverId: "claude-stream-json", options: { route: "cfuse" } },
+    });
+    const codex = store.createAgent({
+      name: "Codex",
+      personaPrompt: "p",
+      modelId: "gpt-5",
+      color: "#222222",
+      driverSelection: { driverId: "codex-app-server", options: {} },
+    });
+    const seen: Array<{ kind: SpawnKind; timeoutMs: number }> = [];
+    const envelope = (input: SpawnInput, text: string): SpawnOutput => {
+      if (input.driverId === "codex-app-server") {
+        return {
+          stdout: `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } })}\n`,
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+        };
+      }
+      return claudeEnvelope(text);
+    };
+    const spawn: SpawnImpl = async (input) => {
+      const kind = classify(input);
+      seen.push({ kind, timeoutMs: input.timeoutMs });
+      if (kind === "probe") return envelope(input, "ok");
+      if (kind === "aggregation") return envelope(input, AGGREGATION_TEXT);
+      const name = kind.startsWith("attempt:") ? kind.slice("attempt:".length) : "x";
+      return envelope(
+        input,
+        `## Findings\n- ok from ${name}\n## Verification\n未验证\n## Verdict\ncomment`,
+      );
+    };
+    const sink = makeSink();
+    const exitCode = await runCapturing(
+      ["--agents", JSON.stringify([alice.id, codex.id]), "--aggregator", "Codex", "--task", "x"],
+      sink,
+      { spawnImpl: spawn },
+    );
+    expect(exitCode).toBe(0);
+    expect(seen.find((s) => s.kind === "attempt:Alice")?.timeoutMs).toBe(2_700_000);
+    expect(seen.find((s) => s.kind === "attempt:Codex")?.timeoutMs).toBe(5_400_000);
+    expect(seen.find((s) => s.kind === "aggregation")?.timeoutMs).toBe(5_400_000);
+  });
+
+  it("incomplete outcome prints a --resume command that reuses successes", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink = makeSink();
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
+      return { stdout: "", exitCode: 0, timedOut: true, aborted: false };
+    };
+    const exitCode = await runCapturing(twoAgentArgs(aliceId, bobId, "the-task"), sink, {
+      spawnImpl: spawn,
+    });
+    expect(exitCode).toBe(4);
+    const outcome = sink.finished as {
+      resumeCommand: string | null;
+      runId: string;
+      incomplete: boolean;
+    };
+    expect(outcome.incomplete).toBe(true);
+    expect(outcome.resumeCommand).toBe(
+      `councilkit review --resume ${outcome.runId} --task "the-task"`,
+    );
   });
 });

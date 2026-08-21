@@ -6,6 +6,7 @@
  * argv, shell, env or token injection attempts — fail validation.
  */
 import { z } from "zod";
+import { landingRecordSchema, ledgerFindingSchema, planLockFileSchema } from "./cli-ledger";
 import {
   ACK_DISPOSITIONS,
   ACK_STATES,
@@ -447,7 +448,7 @@ export const cliRunAttemptProgressSchema = z
     driverId: z.string().min(1),
     modelId: z.string().min(1),
     role: z.enum(["attempt", "aggregator"]),
-    status: z.enum(["pending", "running", "success", "failure"]),
+    status: z.enum(["pending", "queued", "running", "success", "failure"]),
     durationMs: z.number().int().nonnegative().nullable(),
     lastActivity: z.string().max(240).nullable().optional(),
   })
@@ -455,9 +456,38 @@ export const cliRunAttemptProgressSchema = z
 
 export const cliRunProgressSchema = z
   .object({
-    phase: z.enum(["attempts", "aggregating", "done"]),
+    phase: z.enum([
+      "attempts",
+      "aggregating",
+      "done",
+      "planning",
+      "plan-review",
+      "plan-aggregating",
+      "applying",
+      "re-reviewing",
+    ]),
     attempts: z.array(cliRunAttemptProgressSchema),
     updatedAt: z.string().nullable(),
+  })
+  .strict();
+
+export const cliRunPipelineSchema = z
+  .object({
+    phase: z.enum([
+      "planning",
+      "plan-review",
+      "plan-aggregating",
+      "applying",
+      "re-reviewing",
+      "done",
+    ]),
+    round: z.number().int().nonnegative(),
+    maxRounds: z.number().int().positive(),
+    planVerdict: z.enum(["approve", "changes-requested", "comment"]).nullable(),
+    applyStatus: z.enum(["pending", "running", "success", "failure", "skipped"]).nullable(),
+    followUpRunId: z.string().min(1).nullable(),
+    summary: z.string().nullable(),
+    updatedAt: z.string().min(1),
   })
   .strict();
 
@@ -470,12 +500,17 @@ export const cliRunSummarySchema = z
     startedAt: z.string().nullable(),
     endedAt: z.string().nullable(),
     hasReport: z.boolean(),
+    hasPlan: z.boolean().default(false),
+    hasFindings: z.boolean().default(false),
+    hasPlanLock: z.boolean().default(false),
     reportUrl: z.string().min(1),
     progress: cliRunProgressSchema.nullable(),
+    pipeline: cliRunPipelineSchema.nullable().default(null),
   })
   .strict();
 export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;
 export type CliRunStatusDto = z.infer<typeof cliRunStatusSchema>;
+export type CliRunPipelineDto = z.infer<typeof cliRunPipelineSchema>;
 
 export const cliRunsListResponseSchema = z.object({ runs: z.array(cliRunSummarySchema) }).strict();
 export type CliRunsListResponse = z.infer<typeof cliRunsListResponseSchema>;
@@ -483,8 +518,29 @@ export type CliRunsListResponse = z.infer<typeof cliRunsListResponseSchema>;
 export const cliRunDetailResponseSchema = cliRunSummarySchema.extend({
   markdown: z.string(),
   truncated: z.boolean(),
+  planMarkdown: z.string().default(""),
+  planTruncated: z.boolean().default(false),
+  findings: z.array(ledgerFindingSchema).default([]),
+  planLock: planLockFileSchema.nullable().default(null),
+  landings: z.array(landingRecordSchema).default([]),
 });
 export type CliRunDetailResponse = z.infer<typeof cliRunDetailResponseSchema>;
+
+export const cliRunActionRequestSchema = z
+  .object({
+    action: z.enum(["fix", "re-review"]),
+  })
+  .strict();
+export type CliRunActionRequest = z.infer<typeof cliRunActionRequestSchema>;
+
+export const cliRunActionResponseSchema = z
+  .object({
+    action: z.enum(["fix", "re-review"]),
+    runId: z.string().min(1),
+    started: z.literal(true),
+  })
+  .strict();
+export type CliRunActionResponse = z.infer<typeof cliRunActionResponseSchema>;
 
 // Re-export for handler convenience.
 export { LIMITS, usageSchema };

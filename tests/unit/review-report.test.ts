@@ -1,4 +1,4 @@
-import { parseFindings, parseReviewReport } from "@/lib/review-report";
+import { parseFindingGroups, parseFindings, parseReviewReport } from "@/lib/review-report";
 import { describe, expect, it } from "vitest";
 
 const SAMPLE = `# Autonomous Review Report
@@ -105,5 +105,151 @@ describe("parseFindings", () => {
       qualifier: "必现",
       text: "`review-correctness` — 进程中断会把旧 partial 错误持久化。",
     });
+  });
+
+  it("reads numbered consensus items and space qualifiers", () => {
+    const findings = parseFindings(
+      [
+        "1. **[critical/major] EventLog 短写会撕裂 JSONL**  ",
+        "   共识来源：review-adversarial。",
+        "2. **[major 家族] Preview seq 契约不自洽**",
+      ].join("\n"),
+    );
+    expect(findings?.[0]).toMatchObject({
+      severity: "critical",
+      qualifier: "major",
+      text: expect.stringContaining("EventLog 短写会撕裂 JSONL"),
+    });
+    expect(findings?.[1]).toMatchObject({
+      severity: "major",
+      qualifier: "家族",
+      text: expect.stringContaining("Preview seq"),
+    });
+  });
+
+  it("groups unique findings by reviewer heading", () => {
+    const groups = parseFindingGroups(
+      [
+        "**review-correctness**",
+        "",
+        "- [major] WaitGroup Add/Wait 竞态",
+        "",
+        "**review-security**",
+        "",
+        "- [nit] Java seq 可空",
+      ].join("\n"),
+    );
+    expect(groups?.map((group) => group.title)).toEqual(["review-correctness", "review-security"]);
+    expect(groups?.[0]?.findings[0]?.severity).toBe("major");
+    expect(groups?.[1]?.findings[0]?.severity).toBe("nit");
+  });
+
+  it("splits a glued ## 概览 heading into its own chapter", () => {
+    const parsed = parseReviewReport(
+      [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "先核对元数据。## 概览",
+        "",
+        "这是概览。",
+        "",
+        "## 结论",
+        "",
+        "approve",
+      ].join("\n"),
+    );
+    expect(parsed?.sections.map((section) => section.title)).toEqual(["概览", "结论"]);
+    expect(parsed?.preface).toContain("先核对元数据。");
+  });
+
+  it("does not split #### appendix headings into top-level chapters", () => {
+    const parsed = parseReviewReport(
+      [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 附录:各审查者交付物",
+        "",
+        "### review-security",
+        "",
+        "#### 发现",
+        "",
+        "- [nit] hello",
+        "",
+        "## 结论",
+        "",
+        "comment",
+      ].join("\n"),
+    );
+    expect(parsed?.sections.map((section) => section.title)).toEqual([
+      "附录:各审查者交付物",
+      "结论",
+    ]);
+  });
+
+  it("parses the live #126 aggregator layout into cards", () => {
+    const parsed = parseReviewReport(
+      [
+        "# Autonomous Review Report",
+        "",
+        "- Run: ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "1. **[critical/major] EventLog 撕裂 JSONL**  ",
+        "   共识来源：adversarial。",
+        "",
+        "## 独有发现",
+        "",
+        "**review-correctness**",
+        "",
+        "- [major] WaitGroup 竞态",
+        "",
+        "## 分歧",
+        "",
+        "- **Verdict**：review-security 给 approve。",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+    );
+    expect(parsed?.sections.find((s) => s.title === "共识发现")?.findings?.[0]?.severity).toBe(
+      "critical",
+    );
+    expect(parsed?.sections.find((s) => s.title === "独有发现")?.groups?.[0]?.title).toBe(
+      "review-correctness",
+    );
+    expect(parsed?.sections.find((s) => s.title === "分歧")?.findings?.[0]?.severity).toBeNull();
+  });
+
+  it("does not treat 分歧 labels as severity tags", () => {
+    const parsed = parseReviewReport(
+      [
+        "# Autonomous Review Report",
+        "",
+        "- Run: ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        "",
+        "---",
+        "",
+        "## 分歧",
+        "",
+        "- **Verdict**：review-security 给 approve；其余三位给 changes-requested。",
+        "- **重试严重度**：adversarial = critical。",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+    );
+    const section = parsed?.sections.find((item) => item.title === "分歧");
+    expect(section?.groups).toBeNull();
+    expect(section?.findings?.every((item) => item.severity === null)).toBe(true);
+    expect(section?.body).toContain("**Verdict**");
   });
 });

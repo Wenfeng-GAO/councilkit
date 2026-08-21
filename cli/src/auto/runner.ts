@@ -18,10 +18,13 @@ import {
   DriverActivityCollector,
   FinalEventLineCollector,
   extractFinalOutput,
+  spawnEnvForDriver,
 } from "./driver-commands";
 import { formatDurationMs } from "./duration";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+/** Default parallel Attempt cap. Jury size is ≤8; 10 means "run the whole roster". */
+export const DEFAULT_CONCURRENCY = 10;
 const STDOUT_CAP = 8 * 1024 * 1024;
 const STDERR_CAP = 1 * 1024 * 1024;
 /** Grace window between SIGTERM and the SIGKILL upgrade. The run path awaits this
@@ -174,7 +177,7 @@ export interface RunnerOptions {
    * a real deliverable). Wired by the command layer to its fs-safe
    * delete-then-recreate path; absent for callers that don't own a workspace
    * (probe / Aggregator never retry, and tests can inject a fake). */
-  rebuildWorkspaceBeforeRetry?: (spec: AttemptSpec) => void;
+  rebuildWorkspaceBeforeRetry?: (spec: AttemptSpec) => void | Promise<void>;
 }
 
 export interface RunAttemptsOutcome {
@@ -192,7 +195,7 @@ export async function runAttempts(
 ): Promise<RunAttemptsOutcome> {
   const results: (AttemptResult | undefined)[] = new Array(specs.length);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const concurrency = Math.max(1, opts.concurrency ?? Math.min(3, specs.length));
+  const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
   let aborted = false;
 
   // Internal controller so a run-level failure (e.g. onAttemptFinish throwing on
@@ -243,7 +246,8 @@ export async function runAttempts(
    * probe and Aggregator (which use `spawnOnce` → `runOne` directly) are never
    * retried, and the per-execution callback can append each try to the transcript. */
   const runSpecWithRetry = async (spec: AttemptSpec): Promise<AttemptResult> => {
-    const subOpts = { ...opts, timeoutMs, signal: internal.signal };
+    const specTimeout = spec.timeoutMs ?? timeoutMs;
+    const subOpts = { ...opts, timeoutMs: specTimeout, signal: internal.signal };
     const first = await runOne(spec, subOpts);
     const firstResult: AttemptResult = { ...first, attemptNumber: 1 };
     opts.onAttemptFinish?.(firstResult);
@@ -255,7 +259,7 @@ export async function runAttempts(
       // (reviewer finding). The command layer owns the workspace lifecycle, so
       // it injects the fs-safe delete-then-recreate path here; a throw propagates
       // through the worker's try/catch and kills the pool like any run failure.
-      opts.rebuildWorkspaceBeforeRetry?.(spec);
+      await opts.rebuildWorkspaceBeforeRetry?.(spec);
       const second = await runOne(spec, subOpts);
       const secondResult: AttemptResult = { ...second, attemptNumber: 2, retryOf: 1 };
       opts.onAttemptFinish?.(secondResult);
@@ -522,7 +526,7 @@ export function defaultSpawn(
     try {
       child = spawnFn(input.executable, input.argv, {
         cwd: input.cwd,
-        env: process.env,
+        env: spawnEnvForDriver(input.driverId, input.cwd),
         shell: false,
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],

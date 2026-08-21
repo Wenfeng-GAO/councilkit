@@ -14,6 +14,15 @@ export interface FixPromptInput {
 const ANTCODE_HOST = "code.alipay.com";
 const GITHUB_HOST = "github.com";
 
+export function buildReviewResumeCommand(
+  runId: string,
+  ...texts: Array<string | undefined>
+): string {
+  const pr = extractPrUrl(...texts);
+  if (pr) return `councilkit review ${pr} --resume ${runId}`;
+  return `councilkit review --resume ${runId}`;
+}
+
 export function extractPrUrl(...texts: Array<string | undefined>): string | null {
   for (const text of texts) {
     if (!text) continue;

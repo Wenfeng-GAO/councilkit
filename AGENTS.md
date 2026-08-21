@@ -1,6 +1,6 @@
 # AGENTS.md — CouncilKit for coding agents
 
-CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `apply` 命令）不经 Runtime Host，直接 spawn 全能力 agent 子进程，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md`。
+CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `apply` / `fix` 命令）不经 Runtime Host 跑 agent，直接 spawn 全能力 agent 子进程，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md`。浏览器「立即修复」只是 Host spawn 同 checkout 的 `councilkit fix`。
 
 ## 前置
 
@@ -13,15 +13,17 @@ CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 
 `--json`：进度/诊断走 stderr，stdout 只出一个最终 JSON。退出码见 README CLI 章节（0/2/3/4/5/7/130）。
 
 ```bash
-# 0. 一键写入默认审查班子（不经 Host；PATH 上有 cld/kimi/codex 才建对应 Agent）
+# 0. 一键写入默认审查班子（不经 Host；PATH 上有 cld/kimi/grok 才建对应 Agent）
 pnpm exec councilkit init --json
 # 之后审查不再手写 --agents JSON：
 pnpm exec councilkit review <url> --json
 # Host 运行时浏览器打开 http://127.0.0.1:43127/reports/<runId>
-pnpm exec councilkit apply --run <ck-review-id> --json   # 默认 grok + push；--no-push 跳过推送
+pnpm exec councilkit fix --run <ck-review-id> --json     # 方案陪审 → 一集群 apply → 对照账本复审
+pnpm exec councilkit apply --run <ck-review-id> --json   # 默认第一个未落地集群；grok + push
+pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪审
 ```
 
-`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`）与 Council `pr-jury`（reporter = `review-correctness`，缺则用已发现的第一个）。已存在的同名记录默认复用；`--force` 先删 `pr-jury` 再重建默认组。
+`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`）与 Council `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个）。已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）。`--force` 先删 `pr-jury` 再重建。
 
 ```bash
 # 1. 自检 Host + 实时模型闭集（讨论 Run 才需要；review 不需要）

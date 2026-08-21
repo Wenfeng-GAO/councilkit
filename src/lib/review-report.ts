@@ -18,11 +18,17 @@ export interface ReviewFinding {
   text: string;
 }
 
+export interface ReviewFindingGroup {
+  title: string;
+  findings: ReviewFinding[];
+}
+
 export interface ReviewSection {
   id: string;
   title: string;
   body: string;
   findings: ReviewFinding[] | null;
+  groups: ReviewFindingGroup[] | null;
 }
 
 export interface ParsedReviewReport {
@@ -40,7 +46,11 @@ export function parseReviewReport(markdown: string): ParsedReviewReport | null {
 
   const dash = text.search(/\n---\n/);
   const header = dash >= 0 ? text.slice(0, dash) : text;
-  const rest = dash >= 0 ? text.slice(dash + 5) : "";
+  // Aggregators sometimes glue `## 概览` onto the previous sentence.
+  const rest = (dash >= 0 ? text.slice(dash + 5) : "").replace(
+    /([^\n#])(## (?:概览|共识发现|独有发现|分歧|结论|过程对比|附录))/g,
+    "$1\n$2",
+  );
 
   const meta: Record<string, string> = {};
   const leftover: string[] = [];
@@ -56,8 +66,11 @@ export function parseReviewReport(markdown: string): ParsedReviewReport | null {
   }
 
   const attempts = parseAttemptsTable(header);
-  const sections = splitH2Sections(rest);
-  const preface = leftover.join("\n").trim();
+  const split = splitH2Sections(rest);
+  const preface = [leftover.join("\n").trim(), split.lead]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  const sections = split.sections;
   const conclusion = sections.find((section) => section.title === "结论");
   const verdict = extractVerdict(conclusion?.body ?? "");
 
@@ -84,9 +97,10 @@ export function splitH3Blocks(markdown: string): Array<{ title: string; body: st
   return blocks.filter((block) => block.body.length > 0 || block.title.length > 0);
 }
 
-export function splitH2Sections(markdown: string): ReviewSection[] {
+export function splitH2Sections(markdown: string): { lead: string; sections: ReviewSection[] } {
   const lines = markdown.split("\n");
   const sections: ReviewSection[] = [];
+  const lead: string[] = [];
   let current: { title: string; lines: string[] } | null = null;
   for (const line of lines) {
     const heading = /^## (.+)$/.exec(line);
@@ -96,19 +110,27 @@ export function splitH2Sections(markdown: string): ReviewSection[] {
       continue;
     }
     if (current) current.lines.push(line);
+    else if (line.trim().length > 0) lead.push(line);
   }
   if (current) sections.push(toSection(current.title, current.lines.join("\n")));
-  return sections;
+  return { lead: lead.join("\n").trim(), sections };
 }
 
 function toSection(title: string, raw: string): ReviewSection {
   const body = raw.replace(/^\n+/, "").replace(/\n+$/, "");
+  const groups = parseFindingGroups(body);
+  const findings = groups === null ? parseFindings(body) : flattenGroups(groups);
   return {
     id: slugify(title),
     title,
     body,
-    findings: parseFindings(body),
+    findings,
+    groups,
   };
+}
+
+function flattenGroups(groups: ReviewFindingGroup[]): ReviewFinding[] {
+  return groups.flatMap((group) => group.findings);
 }
 
 export function parseFindings(body: string): ReviewFinding[] | null {
@@ -117,13 +139,68 @@ export function parseFindings(body: string): ReviewFinding[] | null {
   return items.map(parseFinding);
 }
 
+export function parseFindingGroups(body: string): ReviewFindingGroup[] | null {
+  const blocks = splitReviewerBlocks(body);
+  if (blocks.length === 0) return null;
+  const groups: ReviewFindingGroup[] = [];
+  for (const block of blocks) {
+    const findings = parseFindings(block.body);
+    if (findings !== null) {
+      groups.push({ title: block.title, findings });
+      continue;
+    }
+    if (block.body.trim().length === 0) continue;
+    groups.push({
+      title: block.title,
+      findings: [{ severity: null, qualifier: null, text: block.body }],
+    });
+  }
+  return groups.length > 0 ? groups : null;
+}
+
+function splitReviewerBlocks(body: string): Array<{ title: string; body: string }> {
+  const lines = body.split("\n");
+  const blocks: Array<{ title: string; body: string }> = [];
+  let current: { title: string; lines: string[] } | null = null;
+  const preface: string[] = [];
+  for (const line of lines) {
+    const heading = /^(?:### |\*\*)(.+?)(?:\*\*)?\s*$/.exec(line);
+    const isHeading =
+      heading !== null &&
+      (line.startsWith("### ") ||
+        (line.startsWith("**") &&
+          line.trim().endsWith("**") &&
+          !line.includes("[") &&
+          line.length < 80));
+    if (isHeading && heading) {
+      if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
+      current = { title: heading[1].replace(/\*\*$/, "").trim(), lines: [] };
+      continue;
+    }
+    if (current) current.lines.push(line);
+    else if (line.trim().length > 0) preface.push(line);
+  }
+  if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
+  if (preface.length > 0) {
+    blocks.unshift({ title: "", body: preface.join("\n").trim() });
+  }
+  return blocks.filter((block) => block.title.length > 0);
+}
+
 function parseFinding(item: string): ReviewFinding {
   const restLines = item.split("\n").slice(1).join("\n").trim();
-  const first = unwrapEmphasis((item.split("\n")[0] ?? item).replace(/^- /, "").trim());
+  const first = unwrapEmphasis(
+    (item.split("\n")[0] ?? item)
+      .replace(/^- /, "")
+      .replace(/^\d+\.\s+/, "")
+      .trim(),
+  );
   const severityMatch =
-    /\[((?:critical|major|minor|nit)(?:[\/，,][^\]]+)?)\](?:\[([^\]]+)\])?/i.exec(first);
+    /\[(critical|major|minor|nit)(?:[\/，,\s]+([^\]]+))?\](?:\[([^\]]+)\])?/i.exec(first);
   if (severityMatch && severityMatch.index !== undefined) {
-    const [severityRaw, inlineQualifier] = severityMatch[1].split(/[\/，,]/, 2);
+    const severityRaw = severityMatch[1];
+    const inlineQualifier = severityMatch[2];
+    const extraQualifier = severityMatch[3];
     const before = first
       .slice(0, severityMatch.index)
       .replace(/[：:\s]+$/u, "")
@@ -135,7 +212,7 @@ function parseFinding(item: string): ReviewFinding {
     const head = before.length > 0 && after.length > 0 ? `${before} — ${after}` : before || after;
     return {
       severity: severityRaw.toLowerCase() as NonNullable<ReviewFinding["severity"]>,
-      qualifier: severityMatch[2] ?? inlineQualifier ?? null,
+      qualifier: extraQualifier ?? inlineQualifier ?? null,
       text: [head, restLines].filter((part) => part.length > 0).join("\n"),
     };
   }
@@ -154,17 +231,24 @@ function parseFinding(item: string): ReviewFinding {
 }
 
 function unwrapEmphasis(text: string): string {
-  return text.replace(/^\*\*/, "").replace(/\*\*$/, "").trim();
+  return text
+    .replace(/^\*{1,2}\s*/, "")
+    .replace(/\s*\*{1,2}$/, "")
+    .trim();
+}
+
+function isListItem(line: string): boolean {
+  return line.startsWith("- ") || /^\d+\.\s/.test(line);
 }
 
 function splitTopLevelList(body: string): string[] | null {
   const trimmed = body.trim();
   if (trimmed.length === 0) return null;
-  if (!trimmed.startsWith("- ")) return null;
+  if (!isListItem(trimmed)) return null;
   const items: string[] = [];
   let current: string[] = [];
   for (const line of trimmed.split("\n")) {
-    if (line.startsWith("- ")) {
+    if (isListItem(line)) {
       if (current.length > 0) items.push(current.join("\n"));
       current = [line];
       continue;

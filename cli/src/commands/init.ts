@@ -41,11 +41,11 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const missingDrivers: string[] = [];
   for (const spec of DEFAULT_AGENT_SPECS) {
     if (findExecutable(spec.executable, env) !== null) available.push(spec);
-    else missingDrivers.push(spec.executable);
+    else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   if (available.length === 0) {
     throw errors.usage(
-      "no review drivers found on PATH (need at least one of: cld, kimi, codex). Install and login to a local CLI, then retry.",
+      "no review drivers found on PATH (need at least one of: cld, kimi, grok). Install and login to a local CLI, then retry.",
       { missingDrivers },
     );
   }
@@ -57,7 +57,18 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   for (const spec of available) {
     const existing = findByName(store, spec.name);
     if (existing !== null) {
-      reusedAgents.push(existing);
+      const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
+      const sameModel = existing.modelId === spec.modelId;
+      if (!sameDriver || !sameModel) {
+        reusedAgents.push(
+          store.updateAgent(existing.id, {
+            modelId: spec.modelId,
+            driverSelection: spec.driverSelection,
+          }),
+        );
+      } else {
+        reusedAgents.push(existing);
+      }
       continue;
     }
     createdAgents.push(
@@ -77,7 +88,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   let reusedCouncil: CouncilRecord | null = null;
   const existingCouncil = findCouncilByName(store, PR_JURY_COUNCIL_NAME);
   if (existingCouncil !== null) {
-    reusedCouncil = existingCouncil;
+    reusedCouncil = store.syncCouncilRoster(existingCouncil.id, roster, reporter.id);
   } else {
     createdCouncil = store.createCouncil({
       name: PR_JURY_COUNCIL_NAME,
@@ -110,7 +121,15 @@ function recreateDefaults(store: Store): void {
   }
 }
 
+const REPORTER_FALLBACK = ["review-adversarial", "review-correctness"] as const;
+
 function pickReporter(roster: AgentRecord[], available: DefaultAgentSpec[]): AgentRecord {
+  const availableNames = new Set(available.map((s) => s.name));
+  for (const name of REPORTER_FALLBACK) {
+    if (!availableNames.has(name)) continue;
+    const match = roster.find((a) => a.name === name);
+    if (match !== undefined) return match;
+  }
   const preferred = available.find((s) => s.preferredReporter)?.name;
   if (preferred !== undefined) {
     const match = roster.find((a) => a.name === preferred);

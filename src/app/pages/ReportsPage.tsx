@@ -30,7 +30,12 @@ export function ReportsPage() {
     queryFn: () => client.listCliRuns(),
     retry: false,
     refetchInterval: (current) =>
-      current.state.data?.runs.some((run) => run.status === "running") ? 2000 : false,
+      current.state.data?.runs.some(
+        (run) =>
+          run.status === "running" || (run.pipeline !== null && run.pipeline.phase !== "done"),
+      )
+        ? 2000
+        : false,
   });
 
   return (
@@ -95,6 +100,12 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
         <div className="flex items-center gap-1.5">
           <StatusPill tone="muted" text={KIND_LABEL[run.kind]} />
           <StatusPill tone={pill.tone} text={pill.text} />
+          {run.pipeline && run.pipeline.phase !== "done" ? (
+            <StatusPill tone="info" text="修复中" />
+          ) : null}
+          {run.pipeline?.applyStatus === "failure" ? (
+            <StatusPill tone="error" text="修复失败" />
+          ) : null}
         </div>
       </div>
       <p className="mt-1 font-mono text-xs text-muted">{run.runId}</p>
@@ -109,7 +120,17 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
             ).length
           }
           /{run.progress.attempts.length} 席位已结束
-          {run.progress.phase === "aggregating" ? " · 正在汇总" : ""}
+          {run.progress.phase === "aggregating" || run.progress.phase === "plan-aggregating"
+            ? " · 正在汇总"
+            : run.progress.phase === "planning"
+              ? " · 起草方案"
+              : run.progress.phase === "plan-review"
+                ? " · 方案陪审"
+                : run.progress.phase === "applying"
+                  ? " · 落地中"
+                  : run.progress.phase === "re-reviewing"
+                    ? " · 复审中"
+                    : ""}
         </p>
       ) : null}
     </Link>

@@ -151,7 +151,7 @@ async function main(): Promise<void> {
     ...modelRoutes(services),
     ...scopeRoutes(services),
     ...diagnosticsRoutes(services),
-    ...cliRunsRoutes(),
+    ...cliRunsRoutes(services),
   ];
 
   let viteMiddlewares:

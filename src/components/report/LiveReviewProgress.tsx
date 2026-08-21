@@ -5,10 +5,16 @@ const PHASE_LABEL = {
   attempts: "席位审查中",
   aggregating: "正在汇总",
   done: "已结束",
+  planning: "正在起草修复方案",
+  "plan-review": "方案陪审中",
+  "plan-aggregating": "正在汇总方案",
+  applying: "正在按方案落地",
+  "re-reviewing": "正在复审",
 } as const;
 
 const ATTEMPT_LABEL = {
   pending: "等待",
+  queued: "排队",
   running: "进行中",
   success: "完成",
   failure: "失败",
@@ -67,7 +73,9 @@ export function LiveReviewProgress({
                       ? "text-error"
                       : attempt.status === "running"
                         ? "text-info"
-                        : "text-muted"
+                        : attempt.status === "queued"
+                          ? "text-muted"
+                          : "text-muted"
                 }`}
               >
                 {ATTEMPT_LABEL[attempt.status]}

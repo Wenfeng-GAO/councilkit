@@ -5,6 +5,7 @@ import "@/styles/landing.css";
 const INIT_CMD = "councilkit init";
 const REVIEW_CMD = "councilkit review <url>";
 const APPLY_CMD = "councilkit apply --run <id>";
+const FIX_CMD = "councilkit fix --run <id>";
 const RUN_CMD = "councilkit run --council <name> --rounds 2";
 const START_CMD = "pnpm start";
 
@@ -19,7 +20,7 @@ const SEATS = [
   {
     area: "ck-seat-w",
     name: "正确性",
-    driver: "codex",
+    driver: "grok",
     color: "#4f6ef7",
     id: "review-correctness",
   },
@@ -128,8 +129,9 @@ export function Landing() {
             <p className="mt-4 text-xs text-muted">
               <code className="font-command">councilkit review</code>
               ，不经 Host，浏览器可关。默认陪审团是 <code className="font-command">pr-jury</code>
-              。报告落地后用 <code className="font-command">apply</code> 在隔离目录改同一条 PR（默认
-              Grok，默认 push）。
+              。报告落地后，在报告页点「立即修复」：先让陪审团锁定修复方案，再按方案落地，然后自动复审。CLI
+              等价于 <code className="font-command">councilkit fix --run &lt;id&gt;</code>
+              。仍可用 <code className="font-command">apply</code> 跳过方案陪审。
             </p>
           </article>
         </div>
@@ -141,10 +143,9 @@ export function Landing() {
           <HowToStep index="01" title="发现本机 CLI，写下默认陪审团">
             <p>
               扫描 PATH 上的 <code className="font-command">cld</code> /{" "}
-              <code className="font-command">codex</code> /{" "}
               <code className="font-command">kimi</code> /{" "}
               <code className="font-command">grok</code>
-              ，写入安全、正确性、可维护席位；若有 Grok 再加对抗席。Reporter 默认是正确性席。
+              ，写入安全、正确性、可维护、对抗席。正确性席默认 Grok。Aggregator 默认是 Grok 对抗席。
             </p>
             <CommandCopy value={INIT_CMD} />
           </HowToStep>
@@ -156,6 +157,7 @@ export function Landing() {
               <code className="font-command">{START_CMD}</code>。
             </p>
             <CommandCopy value={REVIEW_CMD} />
+            <CommandCopy value={FIX_CMD} />
             <CommandCopy value={APPLY_CMD} />
             <CommandCopy value={RUN_CMD} />
           </HowToStep>

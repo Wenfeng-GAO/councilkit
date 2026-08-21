@@ -1,5 +1,6 @@
 import { dispatch } from "./cli";
 import { ApplyExit } from "./commands/apply";
+import { FixExit } from "./commands/fix";
 import { ReviewExit } from "./commands/review";
 import { RunExit } from "./commands/run";
 /**
@@ -39,9 +40,14 @@ Commands:
   review <pr-url>                     Review a PR with default council pr-jury.
   review --agents '<json-array>'      N autonomous agents independently review one task,
       --aggregator <id>               then one synthesizes a report. Bypasses the Host.
-      [--resume <run-id>]             Reuse successful attempts from a prior run.
+      [--resume <run-id>]             Re-run failed seats; reuse successful ones.
+      [--repo <path>]                 Local clone of the PR repo (remembered).
+      [--timeout 45m] [--codex-timeout 90m] [--concurrency 10]
+      [--against <run-id>]            Incremental jury vs that run's findings.json.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
-  apply --run <ck-review-id>          Apply a review report on the same PR branch (default grok, default push).
+  apply --run <ck-review-id>          Apply one locked cluster (default first unlanded), grok + push.
+      [--cluster <id>|--all-clusters]
+  fix --run <ck-review-id>            Plan-jury a repair, apply one cluster, then re-review vs the ledger.
   runs list                           List CLI runs (report.md + transcript).
   runs open <run-id>                  Print the in-app URL for a run report.
 
@@ -112,6 +118,9 @@ function main(argv: string[]): void {
         process.exit(error.exitCode);
       }
       if (error instanceof ApplyExit) {
+        process.exit(error.exitCode);
+      }
+      if (error instanceof FixExit) {
         process.exit(error.exitCode);
       }
       if (error instanceof CliError) {

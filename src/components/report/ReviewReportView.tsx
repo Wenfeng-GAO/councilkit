@@ -16,10 +16,10 @@ const VERDICT_LABEL: Record<NonNullable<ParsedReviewReport["verdict"]>, string> 
 };
 
 const SEVERITY_LABEL: Record<NonNullable<ReviewFinding["severity"]>, string> = {
-  critical: "critical",
-  major: "major",
-  minor: "minor",
-  nit: "nit",
+  critical: "致命",
+  major: "重大",
+  minor: "次要",
+  nit: "琐碎",
 };
 
 export function ReviewReportView({ report }: { report: ParsedReviewReport }) {
@@ -161,23 +161,22 @@ function SectionBlock({ section }: { section: ReviewSection }) {
       {section.title === "结论" ? <VerdictBody body={section.body} /> : null}
       {section.title === "过程对比" ? (
         <ProcessBody body={section.body} />
-      ) : section.findings && !appendix ? (
-        <ul className="flex flex-col gap-2">
-          {section.findings.map((finding) => (
-            <FindingCard
-              key={`${section.id}-${finding.severity}-${finding.text.slice(0, 64)}`}
-              finding={finding}
-            />
-          ))}
-        </ul>
       ) : appendix ? (
         <AppendixBody body={section.body} />
-      ) : (
+      ) : section.title === "分歧" ? (
+        <DisagreementBody body={section.body} />
+      ) : section.groups?.some((group) => group.title.length > 0) ? (
+        <GroupedFindings groups={section.groups ?? []} />
+      ) : section.findings?.some((finding) => finding.severity) ? (
+        <FindingList findings={section.findings} sectionId={section.id} />
+      ) : section.title === "结论" ? (
         <SafeMarkdown
           className="text-sm"
           variant="document"
-          content={section.title === "结论" ? stripVerdictLine(section.body) : section.body}
+          content={stripVerdictLine(section.body)}
         />
+      ) : (
+        <SafeMarkdown className="text-sm" variant="document" content={section.body} />
       )}
     </section>
   );
@@ -309,21 +308,103 @@ function AppendixBody({ body }: { body: string }) {
   );
 }
 
+function FindingList({
+  findings,
+  sectionId,
+}: {
+  findings: ReviewFinding[];
+  sectionId: string;
+}) {
+  return (
+    <ul className="flex flex-col gap-2">
+      {findings.map((finding) => (
+        <FindingCard
+          key={`${sectionId}-${finding.severity}-${finding.text.slice(0, 64)}`}
+          finding={finding}
+        />
+      ))}
+    </ul>
+  );
+}
+
+function GroupedFindings({
+  groups,
+}: {
+  groups: NonNullable<ReviewSection["groups"]>;
+}) {
+  return (
+    <div className="flex flex-col gap-6">
+      {groups.map((group) => (
+        <div key={group.title || "ungrouped"}>
+          {group.title ? (
+            <h3 className="mb-3 font-command text-[0.72rem] uppercase tracking-[0.14em] text-brass">
+              {group.title}
+            </h3>
+          ) : null}
+          <FindingList findings={group.findings} sectionId={group.title || "group"} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DisagreementBody({ body }: { body: string }) {
+  const items = parseDisagreements(body);
+  if (items === null) {
+    return <SafeMarkdown className="text-sm" variant="document" content={body} />;
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {items.map((item) => (
+        <li key={item.title || item.body.slice(0, 48)} className="ck-finding ck-finding-nit">
+          {item.title ? (
+            <p className="mb-2 font-command text-[0.72rem] uppercase tracking-[0.14em] text-brass">
+              {item.title}
+            </p>
+          ) : null}
+          <SafeMarkdown className="text-sm" variant="document" content={item.body} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function parseDisagreements(body: string): Array<{ title: string; body: string }> | null {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith("- ")) return null;
+  const items: Array<{ title: string; body: string }> = [];
+  let current: string[] = [];
+  for (const line of trimmed.split("\n")) {
+    if (line.startsWith("- ")) {
+      if (current.length > 0) items.push(asDisagreement(current.join("\n")));
+      current = [line.slice(2)];
+      continue;
+    }
+    if (current.length === 0) return null;
+    current.push(line);
+  }
+  if (current.length > 0) items.push(asDisagreement(current.join("\n")));
+  return items.length > 0 ? items : null;
+}
+
+function asDisagreement(item: string): { title: string; body: string } {
+  const match = /^\*\*(.+?)\*\*[：:]?\s*([\s\S]*)$/.exec(item.trim());
+  if (!match) return { title: "", body: item.trim() };
+  return { title: match[1].trim(), body: match[2].trim() };
+}
+
 function FindingCard({ finding }: { finding: ReviewFinding }) {
   const tone = finding.severity ?? "nit";
   return (
     <li className={`ck-finding ck-finding-${tone}`}>
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         {finding.severity ? (
-          <span className="font-command text-[0.62rem] uppercase tracking-[0.12em] text-brass">
+          <span className={`ck-sev ck-sev-${finding.severity}`}>
             {SEVERITY_LABEL[finding.severity]}
+            <span className="ck-sev-en">{finding.severity}</span>
           </span>
         ) : null}
-        {finding.qualifier ? (
-          <span className="border border-edge px-1.5 py-0.5 font-command text-[0.62rem] text-muted">
-            {finding.qualifier}
-          </span>
-        ) : null}
+        {finding.qualifier ? <span className="ck-sev-note">{finding.qualifier}</span> : null}
       </div>
       <SafeMarkdown className="text-sm" variant="document" content={finding.text} />
     </li>

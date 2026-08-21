@@ -105,6 +105,26 @@ export class Store {
     return parsed.data;
   }
 
+  updateAgent(
+    ref: string,
+    patch: { modelId?: string; driverSelection?: unknown; personaPrompt?: string },
+  ): AgentRecord {
+    const current = this.getAgent(ref);
+    const parsed = agentRecordSchema.safeParse({
+      ...current,
+      modelId: patch.modelId ?? current.modelId,
+      personaPrompt: patch.personaPrompt ?? current.personaPrompt,
+      driverSelection: patch.driverSelection ?? current.driverSelection,
+    });
+    if (!parsed.success) {
+      throw errors.usage(zodFailureMessage(parsed.error.issues, "invalid agent"));
+    }
+    const file = this.readAgents();
+    file.agents = file.agents.map((row) => (row.id === current.id ? parsed.data : row));
+    this.writeAgents(file);
+    return parsed.data;
+  }
+
   deleteAgent(ref: string): { deletedId: string; freed: true } {
     const agent = this.getAgent(ref);
     const councils = this.readCouncils().councils;
@@ -208,6 +228,33 @@ export class Store {
     file.councils.push(rec);
     this.writeCouncils(file);
     return rec;
+  }
+
+  /** Add missing roster agents and set the reporter. Used by `init` to keep
+   * pr-jury aligned with discovered drivers without `--force`. */
+  syncCouncilRoster(councilRef: string, roster: AgentRecord[], reporterId: string): CouncilRecord {
+    const council = this.getCouncil(councilRef);
+    const ids = [...council.agentIds];
+    for (const agent of roster) {
+      if (!ids.includes(agent.id)) ids.push(agent.id);
+    }
+    if (!ids.includes(reporterId)) {
+      throw errors.usage("reporter must be among council agents");
+    }
+    if (
+      ids.length === council.agentIds.length &&
+      ids.every((id, i) => id === council.agentIds[i]) &&
+      council.reporterAgentId === reporterId
+    ) {
+      return council;
+    }
+    const file = this.readCouncils();
+    const idx = file.councils.findIndex((c) => c.id === council.id);
+    if (idx < 0) throw errors.usage(`no council matches ref "${redactName(councilRef)}"`);
+    const next: CouncilRecord = { ...council, agentIds: ids, reporterAgentId: reporterId };
+    file.councils[idx] = next;
+    this.writeCouncils(file);
+    return next;
   }
 
   deleteCouncil(ref: string): { deletedId: string; freed: true } {

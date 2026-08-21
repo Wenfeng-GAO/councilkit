@@ -219,6 +219,33 @@ describe("cli apply command", () => {
     }
   });
 
+  it("follows plan.md when the consensus plan is present", async () => {
+    seedGrok();
+    seedReviewRun();
+    writeFileSync(
+      join(home, "runs", RUN_ID, "plan.md"),
+      "# 修复方案\n\n## 落地顺序\n\n### 集群 1: log\n",
+    );
+    const prompts: string[] = [];
+    const spawnImpl: SpawnImpl = async (input) => {
+      prompts.push(input.prompt);
+      if (input.prompt === DRIVER_PROBE_PROMPT) return grokEnvelope("ok");
+      return grokEnvelope("已按方案修改并提交。");
+    };
+    const git = fakeGit();
+    const sink = makeSink();
+    const code = await runCapturing(["--run", RUN_ID, "--no-push"], sink, {
+      runCommand: git.runCommand,
+      spawnImpl,
+    });
+    expect(code).toBe(0);
+    expect(prompts.some((p) => p.includes("COUNCILKIT-PLAN.md") && p.includes("只落地集群"))).toBe(
+      true,
+    );
+    const landings = readFileSync(join(home, "runs", RUN_ID, "landings.jsonl"), "utf8");
+    expect(landings).toContain('"clusterId":"log"');
+  });
+
   it("defaults to review-adversarial, checks out the PR, and pushes", async () => {
     seedGrok();
     seedReviewRun();
@@ -247,6 +274,30 @@ describe("cli apply command", () => {
       pushed: boolean;
     };
     expect(applyJson.pushed).toBe(true);
+  });
+
+  it("refuses a second default apply after the only cluster landed", async () => {
+    seedGrok();
+    seedReviewRun();
+    writeFileSync(
+      join(home, "runs", RUN_ID, "plan.md"),
+      "# 修复方案\n\n## 落地顺序\n\n### 集群 1: log\n",
+    );
+    const git = fakeGit();
+    const first = await runCapturing(["--run", RUN_ID, "--no-push"], makeSink(), {
+      runCommand: git.runCommand,
+    });
+    expect(first).toBe(0);
+    try {
+      await runApply(["--run", RUN_ID, "--no-push"], makeSink(), {
+        spawnImpl: fakeSpawn(),
+        runCommand: git.runCommand,
+      });
+      throw new Error("expected usage");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).message).toContain("already landed");
+    }
   });
 
   it("--no-push skips git push", async () => {

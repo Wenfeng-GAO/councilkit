@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Stats, lstatSync, mkdirSync, rmSync } from "node:fs";
+import { type Stats, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CLI_RUN_STATUS_FILE,
@@ -28,6 +28,7 @@ import {
   writeCanonicalReviewReport,
   writeReviewReportCopy,
 } from "../auto/aggregate";
+import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
 import {
   type AttemptSpec,
   DRIVER_PROBE_PROMPT,
@@ -35,6 +36,15 @@ import {
   buildSpawnSpec,
 } from "../auto/driver-commands";
 import { formatDurationMs } from "../auto/duration";
+import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
+import {
+  againstDiffRange,
+  formatLedgerForPrompt,
+  loadAgainstContext,
+  persistFindingsFromReport,
+  type FindingsFile,
+} from "../auto/ledger";
+import { type LocalRepo, resolveLocalRepo } from "../auto/local-repo";
 import {
   type AttemptResult,
   type RunAttemptsOutcome,
@@ -73,7 +83,7 @@ import { atomicWriteFile } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
 import { Store } from "../store/store";
-import { parseFlags, parseJsonFlag, parseTimeoutMs } from "./parse";
+import { DEFAULT_CODEX_TIMEOUT_MS, parseFlags, parseJsonFlag, parseTimeoutMs } from "./parse";
 
 const agentRefsSchema = z.array(z.string().min(1).max(128)).min(1);
 
@@ -87,6 +97,11 @@ export interface ReviewDeps {
   timers?: RunnerTimers;
   /** Override the 30s heartbeat cadence (tests). */
   heartbeatIntervalMs?: number;
+  runCommand?: RunCommand;
+  /** Skip remote fetch; use this git ref in `--repo` (tests use HEAD). */
+  worktreeRef?: string;
+  /** Called as soon as the run id is known (fresh or resumed). */
+  onRunCreated?: (runId: string) => void;
 }
 
 /** Health-probe timeout (P-1): a driver that cannot answer a minimal prompt
@@ -116,9 +131,12 @@ export async function runReview(
         task: { type: "string" },
         focus: { type: "string" },
         timeout: { type: "string" },
+        "codex-timeout": { type: "string" },
         concurrency: { type: "string" },
         out: { type: "string" },
         resume: { type: "string" },
+        repo: { type: "string" },
+        against: { type: "string" },
       },
       allowPositionals: 1,
     },
@@ -220,8 +238,42 @@ export async function runReview(
     }
   }
 
+  const againstRaw = values.against as string | undefined;
+  let againstFindings: FindingsFile | null = null;
+  if (againstRaw !== undefined) {
+    const againstId = againstRaw.trim();
+    if (!RUN_ID_PATTERN.test(againstId)) {
+      throw errors.usage(`--against must be a ck-review-<uuid> run id, got "${againstRaw}"`);
+    }
+    if (!existsSync(paths.report(againstId)) && !existsSync(paths.findings(againstId))) {
+      throw errors.usage(`--against ${againstId} has no report.md or findings.json`);
+    }
+    task.against = againstId;
+    const againstCtx = loadAgainstContext(paths.runDir(againstId), againstId);
+    againstFindings = againstCtx.findings;
+    task.againstRange = againstCtx.range ?? undefined;
+    task.againstLedger = formatLedgerForPrompt(againstCtx.findings, againstCtx.range);
+  }
+
   // --- options ------------------------------------------------------------
   const timeoutMs = parseTimeoutMs(values.timeout as string | undefined);
+  const codexTimeoutMs = parseTimeoutMs(
+    values["codex-timeout"] as string | undefined,
+    DEFAULT_CODEX_TIMEOUT_MS,
+    "codex-timeout",
+  );
+  const runCommand = deps.runCommand ?? defaultRunCommand;
+  const env = process.env;
+  let localRepo: LocalRepo | null = null;
+  if (task.pr) {
+    localRepo = await resolveLocalRepo({
+      pr: task.pr,
+      repoFlag: values.repo as string | undefined,
+      runCommand,
+      env,
+    });
+    out.progress(`  local repo: ${localRepo.path} (${localRepo.source})`);
+  }
   const concurrencyRaw = values.concurrency as string | undefined;
   const concurrency =
     concurrencyRaw !== undefined ? parsePositiveInt(concurrencyRaw, "concurrency") : undefined;
@@ -311,6 +363,9 @@ export async function runReview(
     if ((started.task.councilTopic ?? undefined) !== councilTopic) {
       throw errors.usage("council topic must match the resumed run");
     }
+    if ((started.task.against ?? undefined) !== task.against) {
+      throw errors.usage("--against must match the resumed run");
+    }
     priorStartedAt = started.startedAt;
     // The LAST terminal record per attempt wins (a later resume may have
     // re-failed an attempt an earlier run had succeeded).
@@ -359,10 +414,12 @@ export async function runReview(
   // transcript and report.md is re-rendered, never a parallel run.
   const runId =
     resumeRaw !== undefined ? (resumeRaw as string).trim() : `ck-review-${randomUUID()}`;
+  deps.onRunCreated?.(runId);
   const runDir = paths.runDir(runId);
   const transcriptPath = paths.transcript(runId);
   const reportPath = paths.report(runId);
   const startedAt = priorStartedAt ?? new Date().toISOString();
+  let reviewedSha: string | null = null;
   // The run dir must exist before the first transcript flush — but
   // `workspaces/` is created only AFTER probing, for attempts that will
   // actually spawn (a probe must be able to prove no workspace existed yet).
@@ -373,6 +430,9 @@ export async function runReview(
   // Cost-informed attempt list (printed before any workspace/spawn).
   out.progress(`review ${runId} starting${resumeRaw !== undefined ? " (resumed)" : ""}`);
   out.progress(`  task: ${task.pr ? `PR ${task.pr}` : "<task text>"}`);
+  if (task.against) {
+    out.progress(`  against: ${task.against}${task.againstRange ? ` ${task.againstRange}` : ""}`);
+  }
   let attemptIndexCounter = 0;
   for (const a of attemptAgents) {
     const attemptId = `attempt-${attemptIndexCounter++}`;
@@ -406,8 +466,11 @@ export async function runReview(
         agentName: a.name,
         personaPrompt: a.personaPrompt,
         task,
+        workspaceMode: localRepo !== null ? "worktree" : "empty",
       });
-      rerunSpecs.push(buildSpawnSpec(a, { attemptId, workspace, prompt }));
+      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt });
+      spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
+      rerunSpecs.push(spec);
       rerunAgents.push(a);
     }
     index++;
@@ -440,10 +503,12 @@ export async function runReview(
   probeAgents.set(aggregatorAgent.driverSelection.driverId, aggregatorAgent);
 
   const probeResults: DriverProbeRecord[] = [];
+  const probeCwd = join(runDir, "probe");
+  mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
   for (const [driverId, probeAgent] of probeAgents) {
     const spec = buildProbeSpec(probeAgent, {
       probeId: `probe-${driverId}`,
-      cwd: process.cwd(),
+      cwd: probeCwd,
       prompt: DRIVER_PROBE_PROMPT,
     });
     const result = await spawnOnce(spec, {
@@ -476,6 +541,7 @@ export async function runReview(
         task: task.task,
         focus: task.focus,
         councilTopic,
+        against: task.against,
       },
       attempts: attemptMetas,
       aggregator: {
@@ -637,7 +703,62 @@ export async function runReview(
         throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
       }
       trustedRoot = trustedRootBound;
-      for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
+      if (localRepo !== null && task.pr) {
+        let branch = "HEAD";
+        if (deps.worktreeRef === undefined) {
+          const meta = await inspectPullRequest(task.pr, runCommand, env);
+          branch = meta.branch;
+          out.progress(`  worktree branch: ${branch}`);
+        }
+        const sha = await resolveLocalPrSha({
+          repo: localRepo.path,
+          branch,
+          pinnedRef: deps.worktreeRef,
+          runCommand,
+          env,
+        });
+        reviewedSha = sha;
+        out.progress(`  worktree ${sha.slice(0, 12)}`);
+        if (againstFindings?.sha) {
+          const widened = againstDiffRange({
+            findingsSha: againstFindings.sha,
+            currentSha: sha,
+            fallback: task.againstRange ?? null,
+          });
+          if (widened && widened !== task.againstRange) {
+            task.againstRange = widened;
+            task.againstLedger = formatLedgerForPrompt(againstFindings, widened);
+            for (let i = 0; i < rerunSpecs.length; i++) {
+              const agent = rerunAgents[i];
+              const spec = rerunSpecs[i];
+              if (!agent || !spec) continue;
+              spec.prompt = buildAttemptPrompt({
+                agentName: agent.name,
+                personaPrompt: agent.personaPrompt,
+                task,
+                workspaceMode: "worktree",
+              });
+            }
+            out.progress(`  against range: ${widened}`);
+          }
+        }
+        createWorkspace(join(runDir, "workspaces"));
+        for (const spec of runnableSpecs) {
+          spec.sourceRepo = localRepo.path;
+          spec.sourceSha = sha;
+          await addDetachedWorktree({
+            repo: localRepo.path,
+            dest: spec.cwd,
+            sha,
+            runDir,
+            root: trustedRoot,
+            runCommand,
+            env,
+          });
+        }
+      } else {
+        for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
+      }
       recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
       const params = buildExecuteParams();
       outcome = await executeReview(params, runnableSpecs);
@@ -675,6 +796,7 @@ export async function runReview(
       task,
       councilTopic,
       timeoutMs,
+      codexTimeoutMs,
       concurrency,
       signal: controller.signal,
       spawnImpl: deps.spawnImpl,
@@ -685,6 +807,8 @@ export async function runReview(
       trustedRoot,
       resumedAfterFailureIds,
       liveBeats,
+      runCommand,
+      reviewedSha,
       // Heartbeat always writes status.json (including --json). Human mode
       // also prints a 仍在运行 line; JSON mode stays silent on stderr.
       heartbeat: { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
@@ -715,6 +839,7 @@ interface ExecuteParams {
   task: ReviewTask;
   councilTopic?: string;
   timeoutMs: number;
+  codexTimeoutMs: number;
   concurrency?: number;
   signal: AbortSignal;
   spawnImpl?: SpawnImpl;
@@ -739,6 +864,8 @@ interface ExecuteParams {
   /** Print human 仍在运行 lines (false in --json). */
   humanHeartbeat?: boolean;
   liveBeats: Map<string, CliRunLiveHeartbeat>;
+  runCommand: RunCommand;
+  reviewedSha: string | null;
 }
 
 async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<ReviewOutcome> {
@@ -753,19 +880,22 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     spawnImpl: p.spawnImpl,
     heartbeatIntervalMs: p.heartbeat?.intervalMs,
     timers: p.heartbeat?.timers,
+    onAttemptStart: (attemptId: string) => {
+      noteLiveBeat(p, attemptId, 0, null, true);
+    },
     onHeartbeat: (
       attemptId: string,
       agentName: string,
       elapsedMs: number,
       snapshot?: { lastActivity: string | null },
     ) => {
-      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null);
+      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null, true);
       if (p.humanHeartbeat === true) {
         p.out.progress(`  attempt ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
       }
     },
     onActivity: (attemptId: string, lastActivity: string) => {
-      noteLiveBeat(p, attemptId, undefined, lastActivity);
+      noteLiveBeat(p, attemptId, undefined, lastActivity, true);
     },
     onAttemptFinish: (r: AttemptResult) => {
       // Mark resume-rerun results BEFORE persistence — assigning after
@@ -792,9 +922,21 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     rebuildWorkspaceBeforeRetry:
       p.trustedRoot === null
         ? undefined
-        : (s: AttemptSpec) => {
+        : async (s: AttemptSpec) => {
             try {
-              recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot);
+              if (s.sourceRepo && s.sourceSha) {
+                await addDetachedWorktree({
+                  repo: s.sourceRepo,
+                  dest: s.cwd,
+                  sha: s.sourceSha,
+                  runDir: p.runDir,
+                  root: p.trustedRoot as TrustedRoot,
+                  runCommand: p.runCommand,
+                  env: process.env,
+                });
+              } else {
+                recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot);
+              }
             } catch (error) {
               if (error instanceof CliError) {
                 throw new CliError({
@@ -890,8 +1032,13 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   });
 
   p.out.progress(`  aggregator ${p.aggregatorAgent.name} synthesizing`);
+  noteLiveBeat(p, "aggregator", 0, null, true);
   const aggregation = await spawnOnce(aggregatorSpec, {
-    timeoutMs: p.timeoutMs,
+    timeoutMs: timeoutForDriver(
+      p.aggregatorAgent.driverSelection.driverId,
+      p.timeoutMs,
+      p.codexTimeoutMs,
+    ),
     signal: p.signal,
     spawnImpl: p.spawnImpl,
     heartbeatIntervalMs: p.heartbeat?.intervalMs,
@@ -902,13 +1049,13 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       elapsedMs: number,
       snapshot?: { lastActivity: string | null },
     ) => {
-      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null);
+      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null, true);
       if (p.humanHeartbeat === true) {
         p.out.progress(`  aggregator ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
       }
     },
     onActivity: (attemptId, lastActivity) => {
-      noteLiveBeat(p, attemptId, undefined, lastActivity);
+      noteLiveBeat(p, attemptId, undefined, lastActivity, true);
     },
   });
 
@@ -1048,6 +1195,23 @@ async function finalize(
       message: error instanceof Error ? error.message : "canonical report write failed",
     };
   }
+  if (ioFailure === undefined) {
+    try {
+      persistFindingsFromReport({
+        runDir: p.runDir,
+        runId: p.runId,
+        markdown,
+        sha: p.reviewedSha,
+        againstRunId: p.task.against ?? null,
+        againstRange: p.task.againstRange ?? null,
+        prior: p.task.against
+          ? loadAgainstContext(join(dirname(p.runDir), p.task.against), p.task.against).findings
+          : null,
+      });
+    } catch {
+      // Ledger is derived from report.md; a sidecar write must not fail the review.
+    }
+  }
   if (p.outPath !== undefined && ioFailure === undefined) {
     try {
       writeReviewReportCopy(p.outPath, markdown);
@@ -1135,6 +1299,10 @@ async function finalize(
       })),
     incomplete: outcomeFields.incomplete,
     failure: outcomeFields.failure,
+    resumeCommand:
+      outcomeFields.incomplete && results.some((r) => r.status === "failure")
+        ? buildResumeCommand(p.runId, p.task)
+        : null,
   };
 }
 
@@ -1249,17 +1417,33 @@ function persistLiveStatus(
   atomicWriteFile(join(runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(next)}\n`);
 }
 
+function timeoutForDriver(driverId: string, timeoutMs: number, codexTimeoutMs: number): number {
+  return driverId === "codex-app-server" ? codexTimeoutMs : timeoutMs;
+}
+
+function buildResumeCommand(runId: string, task: ReviewTask): string {
+  if (task.pr && task.pr.trim().length > 0) {
+    return `councilkit review ${task.pr.trim()} --resume ${runId}`;
+  }
+  if (task.task && task.task.trim().length > 0) {
+    return `councilkit review --resume ${runId} --task ${JSON.stringify(task.task.trim())}`;
+  }
+  return `councilkit review --resume ${runId}`;
+}
+
 function noteLiveBeat(
   p: Pick<ExecuteParams, "runDir" | "transcript" | "liveBeats">,
   attemptId: string,
   elapsedMs: number | undefined,
   lastActivity: string | null,
+  started = false,
 ): void {
   const prev = p.liveBeats.get(attemptId);
   p.liveBeats.set(attemptId, {
     attemptId,
     elapsedMs: elapsedMs ?? prev?.elapsedMs,
-    lastActivity,
+    lastActivity: lastActivity ?? prev?.lastActivity ?? null,
+    started: started || prev?.started === true,
   });
   try {
     persistLiveStatus(p.runDir, p.transcript, p.liveBeats);
@@ -1303,6 +1487,10 @@ function renderHuman(o: ReviewOutcome): string {
   if (o.incomplete) lines.push("  (INCOMPLETE — see report.md)");
   if (o.failure)
     lines.push(`  failure: [${o.failure.phase}] ${o.failure.code} — ${o.failure.message}`);
+  if (o.resumeCommand) {
+    lines.push("  rerun failed seats (reuses successes):");
+    lines.push(`    ${o.resumeCommand}`);
+  }
   return lines.join("\n");
 }
 
@@ -1321,6 +1509,8 @@ export interface ReviewOutcome {
   attemptFailures: Array<{ agentId: string; agentName: string; code: string; message: string }>;
   incomplete: boolean;
   failure?: { phase: string; code: string; message: string };
+  /** Set when some Attempts failed; `--resume` reuses successful seats. */
+  resumeCommand?: string | null;
 }
 
 // Re-exported for the CLI router.

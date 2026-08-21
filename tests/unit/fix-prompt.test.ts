@@ -1,4 +1,4 @@
-import { buildFixFromReviewPrompt, extractPrUrl } from "@/lib/fix-prompt";
+import { buildFixFromReviewPrompt, buildReviewResumeCommand, extractPrUrl } from "@/lib/fix-prompt";
 import { describe, expect, it } from "vitest";
 
 describe("extractPrUrl", () => {
@@ -11,6 +11,19 @@ describe("extractPrUrl", () => {
   it("strips a trailing period", () => {
     expect(extractPrUrl("see https://github.com/acme/repo/pull/3.")).toBe(
       "https://github.com/acme/repo/pull/3",
+    );
+  });
+});
+
+describe("buildReviewResumeCommand", () => {
+  it("includes the PR URL and --resume", () => {
+    expect(
+      buildReviewResumeCommand(
+        "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        "https://code.alipay.com/paas-core/agentrun/pull_requests/126",
+      ),
+    ).toBe(
+      "councilkit review https://code.alipay.com/paas-core/agentrun/pull_requests/126 --resume ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
     );
   });
 });

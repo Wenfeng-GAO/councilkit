@@ -102,13 +102,14 @@ councilkit run --council <name|id> [--rounds N] [--out path] [--json]
 councilkit run --agents '<["ref1","ref2"]>' --topic <text> --reporter <ref> \
   [--background <text>] [--target-output <text>] [--rounds N] [--out path] [--json]
 
-councilkit review <pr-url> [--council <name|id>] [--timeout 45m] [--concurrency 3] [--json]
+councilkit review <pr-url> [--repo <path>] [--council <name|id>] [--against <run-id>] [--timeout 45m] [--codex-timeout 90m] [--concurrency 10] [--json]
 councilkit review --agents '<["ref1","ref2"]>' --aggregator <ref> \
-  (--pr <url|number> | --task "<text>") [--focus "<text>"] \
-  [--timeout 45m] [--concurrency 3] [--out path] [--json]
+  (--pr <url|number> | --task "<text>") [--focus "<text>"] [--against <run-id>] \
+  [--timeout 45m] [--codex-timeout 90m] [--concurrency 10] [--out path] [--json]
 councilkit review --council <name|id> \
-  (--pr <url|number> | --task "<text>") [--focus "<text>"] [--timeout 45m] [--concurrency 3] [--out path] [--json]
-councilkit apply --run <ck-review-id> [--agent <ref>] [--no-push] [--timeout 45m] [--json]
+  (--pr <url|number> | --task "<text>") [--focus "<text>"] [--against <run-id>] [--timeout 45m] [--codex-timeout 90m] [--concurrency 10] [--out path] [--json]
+councilkit apply --run <ck-review-id> [--cluster <id>] [--all-clusters] [--agent <ref>] [--no-push] [--timeout 45m] [--json]
+councilkit fix --run <ck-review-id> [--plan-only] [--no-re-review] [--no-push] [--json]
 
 councilkit runs list [--json]                           # 列出 CLI 报告
 councilkit runs open <run-id> [--json]                  # 打印 http://127.0.0.1:43127/reports/<id>
@@ -121,7 +122,9 @@ councilkit runs gc [--keep <days>] [--dry-run] [--all]  # 只清 workspaces
 pnpm exec councilkit init --json
 pnpm exec councilkit review <url> --json
 # Host 运行时打开 http://127.0.0.1:43127/reports
-pnpm exec councilkit apply --run <ck-review-id> --json   # 默认 grok，默认 push；--no-push 只改隔离目录
+pnpm exec councilkit fix --run <ck-review-id> --json     # 方案陪审 → 一集群落地 → 对照账本复审
+pnpm exec councilkit apply --run <ck-review-id> --json   # 默认落地第一个未落地集群（grok + push）
+pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪审：closed / 回归 / 新洞
 ```
 
 - `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
@@ -131,16 +134,21 @@ pnpm exec councilkit apply --run <ck-review-id> --json   # 默认 grok，默认 
 
 #### `councilkit review` — 自主并行审查（不经 Host）
 
-同一任务由 N 个全能力 agent（Attempt）在**隔离空 cwd**（`runs/<run-id>/workspaces/<attemptId>/`）中独立并行做一遍，再由 Aggregator 对比汇总，产出 `report.md`（确定性头部含 Attempts 五列表格 + 中文五章节聚合正文 + `## 过程对比` + `## 附录:各审查者交付物`）+ `transcript.jsonl`。
+同一任务由 N 个全能力 agent（Attempt）在**隔离 git worktree**（`runs/<run-id>/workspaces/<attemptId>/`，同一 PR commit，不各自 clone）中独立并行做一遍，再由 Aggregator 对比汇总，产出 `report.md`（确定性头部含 Attempts 五列表格 + 中文五章节聚合正文 + `## 过程对比` + `## 附录:各审查者交付物`）+ `transcript.jsonl`。PR 审查需要本机已有该仓库：`--repo <path>`、`repos.json` 记忆，或在匹配 remote 的 clone 里直接跑。`--task` 仍用空 cwd。
 
 - **不经 Runtime Host**：CLI 直接按 PATH 解析 `cld`/`kimi`/`codex` 并 spawn，绕过 scope/SSE/ACK。claude 仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）；kimi 用 `-p`（无 `--auto`，自主权限由 config 提供）；codex 用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`。
 - **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
-- `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
-- 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 形如 `30m|600s|1h|5000ms`，`--concurrency` 默认 `min(3, N)`。
+- `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。默认 Aggregator 是 grok（`review-adversarial`）。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
+- 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 默认 45m（cld/kimi/grok），`--codex-timeout` 默认 90m。`--concurrency` 默认 10。失败席：`councilkit review <url> --resume <run-id>` 只重跑失败 Attempt，成功席复用。
+- **Finding 账本**：每次 review 从 `report.md` 抽出 `findings.json`（id = path--slug，状态 `open|closed|accepted|regress`）。`--against <prior-run>` 对照上一份账本做增量陪审，而不是整 PR 相对 master 再发现一遍。`fix` 的复审默认带 `--against`。
 
-#### `councilkit apply` — 把审查报告落到同一条 PR（不经 Host）
+#### `councilkit fix` — 方案陪审 → 一集群落地 → 对照账本复审
 
-读已完成的 `ck-review-*` 报告，在隔离目录检出该 PR 源分支，默认用 **Grok**（`review-adversarial`，可用 `--agent` 覆盖）按报告改代码并 `git commit`，然后 **默认 `git push`** 回同一条源分支。`--no-push` 只留本地改动。不发 PR 评论、不另开 PR、不 force-push。
+审查找出问题之后，不要直接「按报告全改」。`fix` 先让 planner（默认 Grok）起草修复方案，同一套 pr-jury **审方案本身**（方案 Aggregator 默认是 correctness，避免自己批自己），最多两轮修订；**只有 approve 才 apply**。共识方案写入 `plan.lock.json`（每个集群有 `closes/files/gates`）。落地默认只做第一个未落地集群（一刀一 SHA，记入 `landings.jsonl`）；若 lock 里还有未落地集群，再次 `fix` 会跳过方案陪审直接下一刀。落地后默认再开一轮 jury，对照账本标 closed / 回归 / 新洞。浏览器报告页的「立即修复 / 只再审一遍」会让 **Host spawn 同 checkout 的 CLI**（Host 不跑 agent）。`--plan-only` 只出方案；`--no-re-review` 落地后不复审；`--re-review-only` 只开复审。
+
+#### `councilkit apply` — 把锁定的一刀落到同一条 PR（不经 Host）
+
+读已完成的 `ck-review-*` 报告，在隔离目录检出该 PR 源分支，默认用 **Grok**（`review-adversarial`，可用 `--agent` 覆盖）只落地 **第一个未落地集群** 并 `git commit`，然后 **默认 `git push`** 回同一条源分支。`--cluster <id>` 指定集群；`--all-clusters` 才一次做完全部（旧行为）。`--no-push` 只留本地改动。不发 PR 评论、不另开 PR、不 force-push。每刀在 `landings.jsonl` 记 `parentSha → candidateSha` 和声称关闭的 finding id。
 
 - GitHub 需要 `gh` + `git`；AntCode 需要 `antcode` + `git`（`antcode` 那条命令会清代理）。
 - 工作区在 `runs/<review-id>/workspaces/apply/`，结果写 `apply.json`。

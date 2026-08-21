@@ -37,11 +37,19 @@ export interface ReviewTask {
   focus?: string;
   /** Injected only under `--council` when the Council has a non-empty topic. */
   councilTopic?: string;
+  /** Prior run id whose findings.json this review classifies against. */
+  against?: string;
+  /** `parentSha...candidateSha` when the prior run has a landing. */
+  againstRange?: string;
+  /** Prompt-only ledger dump; not persisted on the transcript. */
+  againstLedger?: string;
 }
 
 export interface AttemptPromptInput {
   agentName: string;
   personaPrompt: string;
+  /** PR reviews with a local clone use a detached worktree; otherwise empty cwd. */
+  workspaceMode?: "empty" | "worktree";
   task: ReviewTask;
 }
 
@@ -143,17 +151,27 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
   if (focus && focus.length > 0) {
     lines.push("", "审查重点：", focus);
   }
+  if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
+    lines.push("", "## Finding 账本", "", input.task.againstLedger.trim());
+  }
   if (input.task.councilTopic && input.task.councilTopic.trim().length > 0) {
     lines.push("", "上下文议题：", input.task.councilTopic.trim());
   }
-  lines.push(
-    "",
-    "## 工作方式",
-    "",
-    "你在空目录中完全自主工作：自行 fetch/clone/checkout 代码，自行跑测试、lint、构建或任何你认为必要的验证。没有人为你准备环境，一切由你自己完成。",
-    "不可信 PR 等同于 PR 代码会被执行（与 CI 同级风险）。",
-    "全量 build 前先评估时长，优先定向测试。",
-  );
+  lines.push("", "## 工作方式", "");
+  if (input.workspaceMode === "worktree") {
+    lines.push(
+      "当前目录已经是该 PR 源分支的隔离 git worktree（与本地仓库同一 commit）。不要再 clone，不要改源仓库主工作区。",
+      "在本目录阅读代码并跑你认为必要的测试、lint 或构建。",
+      "不可信 PR 等同于 PR 代码会被执行（与 CI 同级风险）。",
+      "全量 build 前先评估时长，优先定向测试。",
+    );
+  } else {
+    lines.push(
+      "你在空目录中完全自主工作：自行 fetch/clone/checkout 代码，自行跑测试、lint、构建或任何你认为必要的验证。没有人为你准备环境，一切由你自己完成。",
+      "不可信 PR 等同于 PR 代码会被执行（与 CI 同级风险）。",
+      "全量 build 前先评估时长，优先定向测试。",
+    );
+  }
   // The diff-to-file guidance is PR-specific (gh pr diff / antcode pr diff):
   // under `--task` there is no PR target, so asking the reviewer to land a PR
   // diff first is meaningless noise (reviewer finding: it was injected
@@ -199,6 +217,9 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
   const taskLines: string[] = ["", "## 原始任务", "", taskStatement(input.task)];
   const focus = input.task.focus?.trim();
   if (focus && focus.length > 0) taskLines.push("", "审查重点：", focus);
+  if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
+    taskLines.push("", "## Finding 账本", "", input.task.againstLedger.trim());
+  }
   if (input.task.councilTopic && input.task.councilTopic.trim().length > 0) {
     taskLines.push("", "上下文议题：", input.task.councilTopic.trim());
   }
@@ -224,6 +245,9 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "reviewer 可能使用 Findings/Verification/Verdict 等英文标题，请按语义理解，不要当作格式错误。",
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
     "结论章节给出单行英文 verdict token：approve | changes-requested | comment。",
+    input.task.against
+      ? "若有 Finding 账本：在「共识发现」里用原 id 标注仍成立或回归的项；新洞另起条目；不要把账本已关闭且本区间未再出现的项再写一遍。"
+      : "",
     "最终消息即交付物，只输出下面的 Markdown 五章节结构：",
     "",
     AGGREGATE_STRUCTURE,

@@ -43,6 +43,11 @@ export interface AttemptSpec {
   cwd: string;
   /** codex: path to the `-o` last-message file (also read for extraction). */
   lastMessageFile?: string;
+  /** Per-Attempt timeout; the runner falls back to its pool default when absent. */
+  timeoutMs?: number;
+  /** Local clone + commit for a git worktree workspace (PR reviews). */
+  sourceRepo?: string;
+  sourceSha?: string;
 }
 
 const EXECUTABLE_BY_DRIVER: Record<string, string> = {
@@ -51,6 +56,26 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
   "codex-app-server": "codex",
   "grok-stream-json": "grok",
 };
+
+export const GROK_LEADER_SOCK = ".grok-leader.sock";
+
+export function grokLeaderSocket(workspace: string): string {
+  return join(workspace, GROK_LEADER_SOCK);
+}
+
+/** Env for a driver subprocess. Grok must not inherit the caller's TUI session
+ * (`GROK_AGENT` / `GROK_SESSION_ID`); `PWD` must match the isolated cwd. */
+export function spawnEnvForDriver(
+  driverId: string | undefined,
+  cwd: string,
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  if (driverId === "grok-stream-json") {
+    const { GROK_AGENT: _agent, GROK_SESSION_ID: _session, ...rest } = base;
+    return { ...rest, PWD: cwd };
+  }
+  return { ...base, PWD: cwd };
+}
 
 /** Resolve a bare executable name against PATH (X_OK regular file), or verify an
  * absolute/relative path directly. Returns null when missing — `init` uses this
@@ -155,6 +180,9 @@ function buildInvocation(
       return { argv, promptStdin: false };
     }
     case "grok-stream-json": {
+      // A live grok TUI holds ~/.grok/leader.sock (and GROK_SESSION_ID). A child
+      // `grok -p` that joins that leader deadlocks: the TUI waits for councilkit,
+      // councilkit waits for the probe. Isolate cwd + a private leader socket.
       const argv = [
         "-m",
         agent.modelId,
@@ -164,9 +192,12 @@ function buildInvocation(
         prompt,
         "--disable-web-search",
         "--no-subagents",
+        "--always-approve",
       ];
-      if (!opts.probe) argv.push("--always-approve");
-      if (opts.workspace) argv.push("--cwd", opts.workspace);
+      if (opts.probe) argv.push("--max-turns", "1");
+      if (opts.workspace) {
+        argv.push("--cwd", opts.workspace, "--leader-socket", grokLeaderSocket(opts.workspace));
+      }
       assertArgvSafe(argv);
       return { argv, promptStdin: false };
     }
@@ -250,7 +281,7 @@ export function buildProbeSpec(
     throw errors.usage(`unsupported driver "${driverId}" for review`);
   }
   const executable = resolveExecutable(exeName, env);
-  const invocation = buildInvocation(agent, { prompt, probe: true });
+  const invocation = buildInvocation(agent, { prompt, workspace: cwd, probe: true });
   return {
     attemptId: probeId,
     agentId: agent.id,

@@ -6,8 +6,39 @@
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 
-export type CliRunProgressPhase = "attempts" | "aggregating" | "done";
-export type CliRunAttemptLiveStatus = "pending" | "running" | "success" | "failure";
+export type CliRunProgressPhase =
+  | "attempts"
+  | "aggregating"
+  | "done"
+  | "planning"
+  | "plan-review"
+  | "plan-aggregating"
+  | "applying"
+  | "re-reviewing";
+
+export type CliRunPipelinePhase =
+  | "planning"
+  | "plan-review"
+  | "plan-aggregating"
+  | "applying"
+  | "re-reviewing"
+  | "done";
+
+export type CliRunPlanVerdict = "approve" | "changes-requested" | "comment";
+
+export type CliRunApplyStatus = "pending" | "running" | "success" | "failure" | "skipped";
+
+export interface CliRunPipeline {
+  phase: CliRunPipelinePhase;
+  round: number;
+  maxRounds: number;
+  planVerdict: CliRunPlanVerdict | null;
+  applyStatus: CliRunApplyStatus | null;
+  followUpRunId: string | null;
+  summary: string | null;
+  updatedAt: string;
+}
+export type CliRunAttemptLiveStatus = "pending" | "queued" | "running" | "success" | "failure";
 
 export interface CliRunAttemptProgress {
   attemptId: string;
@@ -26,6 +57,8 @@ export interface CliRunLiveHeartbeat {
   attemptId: string;
   elapsedMs?: number;
   lastActivity?: string | null;
+  /** Promote a queued seat to running when the worker actually claims it. */
+  started?: boolean;
 }
 
 const LAST_ACTIVITY_MAX = 240;
@@ -40,6 +73,7 @@ export interface CliRunLiveState {
   version: 1;
   status: "completed" | "failed" | "interrupted" | "running" | "unknown";
   progress: CliRunProgress;
+  pipeline?: CliRunPipeline | null;
 }
 
 export function liveStateFromRecords(
@@ -91,6 +125,14 @@ export function liveStateFromRecords(
       if (attemptId.length === 0 || status === null) continue;
       const durationMs = typeof row.durationMs === "number" ? row.durationMs : 0;
       finished.set(attemptId, { status, durationMs });
+    } else if (kind === "review.resumed") {
+      const rerun = Array.isArray(row.rerunAttemptIds) ? row.rerunAttemptIds : [];
+      for (const id of rerun) {
+        if (typeof id === "string") finished.delete(id);
+      }
+      aggregation = null;
+      sawFinished = false;
+      runStatus = "running";
     } else if (kind === "aggregation.finished") {
       const status = row.status === "success" || row.status === "failure" ? row.status : null;
       if (status === null) continue;
@@ -112,7 +154,7 @@ export function liveStateFromRecords(
     return {
       ...meta,
       role: "attempt",
-      status: done?.status ?? "running",
+      status: done?.status ?? "queued",
       durationMs: done?.durationMs ?? null,
       lastActivity: null,
     };
@@ -149,6 +191,7 @@ export function liveStateFromRecords(
     version: 1,
     status: runStatus,
     progress: { phase, attempts: attemptRows, updatedAt },
+    pipeline: null,
   };
 }
 
@@ -156,6 +199,9 @@ export function liveStateFromRecords(
 export function applyLiveHeartbeat(live: CliRunLiveState, beat: CliRunLiveHeartbeat): void {
   for (const row of live.progress.attempts) {
     if (row.attemptId !== beat.attemptId) continue;
+    if (beat.started && (row.status === "queued" || row.status === "pending")) {
+      row.status = "running";
+    }
     if (row.status !== "running") continue;
     if (beat.elapsedMs !== undefined) row.durationMs = Math.max(0, beat.elapsedMs);
     if (beat.lastActivity !== undefined) {
@@ -176,6 +222,7 @@ export function withLiveHeartbeats(
       updatedAt: live.progress.updatedAt,
       attempts: live.progress.attempts.map((row) => ({ ...row })),
     },
+    pipeline: live.pipeline ? { ...live.pipeline } : live.pipeline,
   };
   for (const beat of beats) applyLiveHeartbeat(next, beat);
   return next;
@@ -211,14 +258,89 @@ export function parseLiveStateJson(text: string): CliRunLiveState | null {
   }
   const progress = parseProgress(row.progress);
   if (progress === null) return null;
-  return { version: 1, status, progress };
+  const pipeline = parsePipeline(row.pipeline);
+  return { version: 1, status, progress, pipeline };
+}
+
+export function parsePipeline(value: unknown): CliRunPipeline | null {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  if (typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const phase = row.phase;
+  if (
+    phase !== "planning" &&
+    phase !== "plan-review" &&
+    phase !== "plan-aggregating" &&
+    phase !== "applying" &&
+    phase !== "re-reviewing" &&
+    phase !== "done"
+  ) {
+    return null;
+  }
+  const round = typeof row.round === "number" && Number.isInteger(row.round) ? row.round : null;
+  const maxRounds =
+    typeof row.maxRounds === "number" && Number.isInteger(row.maxRounds) ? row.maxRounds : null;
+  if (round === null || round < 0 || maxRounds === null || maxRounds < 1) return null;
+  const planVerdict =
+    row.planVerdict === "approve" ||
+    row.planVerdict === "changes-requested" ||
+    row.planVerdict === "comment"
+      ? row.planVerdict
+      : row.planVerdict === null
+        ? null
+        : undefined;
+  if (planVerdict === undefined) return null;
+  const applyStatus =
+    row.applyStatus === "pending" ||
+    row.applyStatus === "running" ||
+    row.applyStatus === "success" ||
+    row.applyStatus === "failure" ||
+    row.applyStatus === "skipped"
+      ? row.applyStatus
+      : row.applyStatus === null
+        ? null
+        : undefined;
+  if (applyStatus === undefined) return null;
+  const followUpRunId =
+    typeof row.followUpRunId === "string"
+      ? row.followUpRunId
+      : row.followUpRunId === null
+        ? null
+        : undefined;
+  if (followUpRunId === undefined) return null;
+  const summary =
+    typeof row.summary === "string" ? row.summary : row.summary === null ? null : undefined;
+  if (summary === undefined) return null;
+  if (typeof row.updatedAt !== "string" || row.updatedAt.length === 0) return null;
+  return {
+    phase,
+    round,
+    maxRounds,
+    planVerdict,
+    applyStatus,
+    followUpRunId,
+    summary,
+    updatedAt: row.updatedAt,
+  };
 }
 
 function parseProgress(value: unknown): CliRunProgress | null {
   if (value === null || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   const phase = row.phase;
-  if (phase !== "attempts" && phase !== "aggregating" && phase !== "done") return null;
+  if (
+    phase !== "attempts" &&
+    phase !== "aggregating" &&
+    phase !== "done" &&
+    phase !== "planning" &&
+    phase !== "plan-review" &&
+    phase !== "plan-aggregating" &&
+    phase !== "applying" &&
+    phase !== "re-reviewing"
+  ) {
+    return null;
+  }
   if (!Array.isArray(row.attempts)) return null;
   const attempts: CliRunAttemptProgress[] = [];
   for (const item of row.attempts) {
@@ -236,6 +358,7 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
   const role = row.role === "aggregator" ? "aggregator" : row.role === "attempt" ? "attempt" : null;
   const status =
     row.status === "pending" ||
+    row.status === "queued" ||
     row.status === "running" ||
     row.status === "success" ||
     row.status === "failure"
