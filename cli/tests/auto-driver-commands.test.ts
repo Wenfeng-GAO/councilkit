@@ -172,7 +172,7 @@ describe("cli auto driver-commands", () => {
       expect(spec.executable).toBe(join(tmp, "kimi"));
     });
 
-    it("grok: json output, prompt in argv, always-approve on review, cwd set", () => {
+    it("grok: streaming-messages-json output on review, prompt in argv, always-approve, cwd set", () => {
       const spec = buildSpawnSpec(agent(GROK, "grok-4.6"), {
         attemptId: "attempt-0",
         workspace: "/ws",
@@ -185,7 +185,8 @@ describe("cli auto driver-commands", () => {
         "-m",
         "grok-4.6",
         "--output-format",
-        "json",
+        "streaming-messages-json",
+        "--include-partial-messages",
         "-p",
         "review this",
         "--disable-web-search",
@@ -490,6 +491,22 @@ describe("cli auto driver-commands", () => {
       expect(coll.summary()).toEqual({ toolCalls: 3, commands: ["ls"] });
     });
 
+    it("grok: shares the claude parser for streaming-messages-json frames", () => {
+      const lines = [
+        JSON.stringify({ type: "system", subtype: "init" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", name: "Bash", input: { command: "git status" } }],
+          },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", result: "done" }),
+      ].join("\n");
+      const coll = new DriverActivityCollector("grok-stream-json");
+      feedLines(coll, `${lines}\n`);
+      expect(coll.summary()).toEqual({ toolCalls: 1, commands: ["git status"] });
+    });
+
     it("codex: item.started is live activity without counting a tool call", () => {
       const coll = new DriverActivityCollector("codex-app-server");
       coll.feed(
@@ -659,6 +676,32 @@ describe("cli auto driver-commands", () => {
     it("grok: pretty-printed json .text is the deliverable", () => {
       const stdout = JSON.stringify({ text: "COUNCILKIT_OK", sessionId: "s1" }, null, 2);
       expect(extractFinalOutput("grok-stream-json", stdout)).toBe("COUNCILKIT_OK");
+    });
+
+    it("grok: streaming-messages-json result frame is the deliverable", () => {
+      const stdout = [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "ok" }] },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", result: "COUNCILKIT_OK" }),
+      ].join("\n");
+      expect(extractFinalOutput("grok-stream-json", stdout)).toBe("COUNCILKIT_OK");
+    });
+
+    it("grok: captured final line wins over a truncated stream; unusable line falls back", () => {
+      const stdout = `${JSON.stringify({ type: "result", subtype: "success", result: "from-stream" })}`;
+      const captured = JSON.stringify({ type: "result", subtype: "success", result: "from-line" });
+      expect(extractFinalOutput("grok-stream-json", stdout, undefined, captured)).toBe("from-line");
+      const unusable = JSON.stringify({ type: "result", subtype: "error" });
+      expect(extractFinalOutput("grok-stream-json", stdout, undefined, unusable)).toBe(
+        "from-stream",
+      );
     });
 
     it("grok: returns null when text is missing", () => {

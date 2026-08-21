@@ -74,6 +74,9 @@ export class LiveEventCollector {
     if (obj === null) return;
     switch (this.driverId) {
       case "claude-stream-json":
+      // grok review/apply/fix streams the same Anthropic-wire frames
+      // (streaming-messages-json), so it shares the claude parser.
+      case "grok-stream-json":
         this.considerClaude(obj, out);
         return;
       case "kimi-stream-json":

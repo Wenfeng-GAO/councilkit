@@ -513,7 +513,7 @@ class CappedCollector {
 
 /** Default real spawn: detached process group, stdin prompt delivery, stdout
  * capped at 8MB (head+tail) plus a streaming final-event line collector for
- * claude/kimi, stderr drained to a 1MB cap (head+tail) so the pipe never blocks,
+ * claude/kimi/grok, stderr drained to a 1MB cap (head+tail) so the pipe never blocks,
  * timeout + abort both kill the group (SIGTERM → grace → SIGKILL). The optional
  * `spawnFn` lets tests drive this path with a fake ChildProcess; `killFn` lets
  * tests assert the kill sequence without touching the real `process.kill`. */
@@ -530,7 +530,9 @@ export function defaultSpawn(
     const stdoutColl = new CappedCollector(STDOUT_CAP, STDOUT_CAP / 2, STDOUT_CAP / 2);
     const stderrColl = new CappedCollector(STDERR_CAP, STDERR_CAP / 2, STDERR_CAP / 2);
     const lineColl =
-      input.driverId === "claude-stream-json" || input.driverId === "kimi-stream-json"
+      input.driverId === "claude-stream-json" ||
+      input.driverId === "kimi-stream-json" ||
+      input.driverId === "grok-stream-json"
         ? new FinalEventLineCollector(input.driverId)
         : null;
     // Incremental process observer (P2-1): fed with the same stdout chunks, so

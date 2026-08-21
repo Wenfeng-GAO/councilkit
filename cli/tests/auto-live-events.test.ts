@@ -119,7 +119,40 @@ describe("LiveEventCollector", () => {
     ]);
   });
 
-  it("grok produces no events", () => {
+  it("grok: shares the claude parser (thinking/text deltas + tool_use from assistant frames)", () => {
+    const coll = new LiveEventCollector("grok-stream-json");
+    const events = feedLines(
+      coll,
+      `${[
+        JSON.stringify({ type: "system", subtype: "init" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "thinking_delta", thinking: "想" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "答" } },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", name: "Bash", input: { command: "ls -la" } }],
+          },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", result: "答" }),
+      ].join("\n")}\n`,
+    );
+    expect(events).toEqual([
+      { type: "thinking.delta", text: "想" },
+      { type: "text.delta", text: "答" },
+      { type: "tool.completed", name: "Bash", summary: "ls -la" },
+    ]);
+  });
+
+  it("grok: legacy single-object json output produces no events", () => {
     const coll = new LiveEventCollector("grok-stream-json");
     expect(feedLines(coll, `${JSON.stringify({ text: "hi" })}\n`)).toEqual([]);
   });

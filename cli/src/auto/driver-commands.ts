@@ -185,17 +185,16 @@ function buildInvocation(
       // A live grok TUI holds ~/.grok/leader.sock (and GROK_SESSION_ID). A child
       // `grok -p` that joins that leader deadlocks: the TUI waits for councilkit,
       // councilkit waits for the probe. Isolate cwd + a private leader socket.
-      const argv = [
-        "-m",
-        agent.modelId,
-        "--output-format",
-        "json",
-        "-p",
-        prompt,
-        "--disable-web-search",
-        "--no-subagents",
-        "--always-approve",
-      ];
+      // Review/apply/fix stream Anthropic-wire frames (stream_event deltas +
+      // assistant/result) so the live transcript can surface grok's process;
+      // the probe keeps the single-object `json` format (no stream needed).
+      const argv = ["-m", agent.modelId];
+      if (opts.probe) {
+        argv.push("--output-format", "json");
+      } else {
+        argv.push("--output-format", "streaming-messages-json", "--include-partial-messages");
+      }
+      argv.push("-p", prompt, "--disable-web-search", "--no-subagents", "--always-approve");
       if (opts.probe) argv.push("--max-turns", "1");
       if (opts.workspace) {
         argv.push("--cwd", opts.workspace, "--leader-socket", grokLeaderSocket(opts.workspace));
@@ -336,6 +335,9 @@ export function extractFinalOutput(
     case "codex-app-server":
       return extractCodex(stdout, lastMessageFile);
     case "grok-stream-json":
+      if (capturedFinalLine !== undefined && capturedFinalLine !== null) {
+        return extractGrokLine(capturedFinalLine) ?? extractGrok(stdout);
+      }
       return extractGrok(stdout);
     default:
       return null;
@@ -343,8 +345,9 @@ export function extractFinalOutput(
 }
 
 /** Streaming line scanner retained by `defaultSpawn`. Holds the last complete
- * final-event line emitted by claude (`{"type":"result"}`) or kimi
- * (`{"role":"assistant"}`) without imposing the stdout head+tail cap, so the
+ * final-event line emitted by claude (`{"type":"result"}`), kimi
+ * (`{"role":"assistant"}`) or grok streaming-messages-json (`{"type":"result"}`)
+ * without imposing the stdout head+tail cap, so the
  * final deliverable — which lives at the end of the stream — survives even when
  * it alone exceeds the cap. A single line longer than `lineCap` is dropped
  * (unrecoverable) and the in-flight buffer is bounded so memory never grows
@@ -420,6 +423,8 @@ export class FinalEventLineCollector {
       if (extractClaudeLine(line) !== null) this.lastLine = line;
     } else if (this.driverId === "kimi-stream-json" && obj.role === "assistant") {
       if (extractKimiLine(line) !== null) this.lastLine = line;
+    } else if (this.driverId === "grok-stream-json" && obj.type === "result") {
+      if (extractGrokLine(line) !== null) this.lastLine = line;
     }
   }
 }
@@ -465,11 +470,18 @@ function extractKimiLine(line: string): string | null {
   return asText(obj.content);
 }
 
-/** Grok `--output-format json` is one object (often pretty-printed). `.text` is
- * the deliverable. */
+/** Grok streaming-messages-json (review/apply/fix path): NDJSON; the
+ * deliverable is the last `{"type":"result",…,"result":…}` frame's `.result`.
+ * Legacy `--output-format json` (probe path): one object, `.text`. */
 function extractGrok(stdout: string): string | null {
   const trimmed = stdout.trim();
   if (trimmed.length === 0) return null;
+  let last: string | null = null;
+  for (const line of splitLines(trimmed)) {
+    const text = extractGrokLine(line);
+    if (text !== null) last = text;
+  }
+  if (last !== null) return last;
   const tryParse = (raw: string): string | null => {
     try {
       const obj = JSON.parse(raw) as { text?: unknown };
@@ -484,6 +496,13 @@ function extractGrok(stdout: string): string | null {
   const end = trimmed.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
   return tryParse(trimmed.slice(start, end + 1));
+}
+
+/** A grok `{"type":"result"}` NDJSON frame's `.result` text; null otherwise. */
+function extractGrokLine(line: string): string | null {
+  const obj = parseJsonLine(line);
+  if (obj === null || obj.type !== "result") return null;
+  return asText(obj.result);
 }
 
 /** codex: prefer the `-o` last-message file; fall back to the last
@@ -770,6 +789,9 @@ export class DriverActivityCollector {
     if (obj === null) return;
     switch (this.driverId) {
       case "claude-stream-json":
+      // grok review/apply/fix streams the same Anthropic-wire frames
+      // (streaming-messages-json), so it shares the claude parser.
+      case "grok-stream-json":
         this.considerClaude(obj);
         return;
       case "kimi-stream-json":
