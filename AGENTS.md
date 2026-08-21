@@ -94,6 +94,7 @@ pnpm exec councilkit run --agents '["<A-id>","<B-id>"]' --topic "..." \
 - 凭据（cookie/CSRF）只存进程内存，Host 重启自动重取一次；不落盘、不出现在任何输出。
 - CLI 只保证与**同 checkout** Host 互通；与浏览器数据不互通；V1.1 无 `--resume`。
 - live smoke 与 Host 共用 43127、独占串行；端口被占只 `lsof` 记录，不 kill 非自身进程。
+- **Live Transcript**：review/apply/fix 的每个 attempt 会把 driver 过程事件（text/thinking/tool call）增量写入 `runs/<runId>/live/<attemptId>.jsonl`（CLI 侧 `cli/src/auto/live-events.ts`，写失败静默、2MB 上限；grok 协议无过程数据不透出）。Host 端点 `GET /api/v1/cli-runs/:runId/attempts/:attemptId/live?afterSeq=N`（分页 + 坏行容忍）；`/reports/<runId>` 的 attempt 卡片展开「过程」即可看实时输出。该 sidecar 是观察层，不进 transcript/report。
 
 ## 目录速览
 
