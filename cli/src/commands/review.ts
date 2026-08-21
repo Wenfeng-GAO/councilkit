@@ -38,12 +38,13 @@ import {
 import { formatDurationMs } from "../auto/duration";
 import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
 import {
+  type FindingsFile,
   againstDiffRange,
   formatLedgerForPrompt,
   loadAgainstContext,
   persistFindingsFromReport,
-  type FindingsFile,
 } from "../auto/ledger";
+import { LiveEventWriter, type RawLiveEvent } from "../auto/live-events";
 import { type LocalRepo, resolveLocalRepo } from "../auto/local-repo";
 import {
   type AttemptResult,
@@ -873,6 +874,10 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   // finalize a report with the Attempts that DID complete (reviewer finding:
   // finalizing with [] wrote a false "no attempts ran" report).
   const completed: AttemptResult[] = [];
+  const liveWriter = new LiveEventWriter(p.runDir);
+  const onLiveEvent = (attemptId: string, events: readonly RawLiveEvent[]): void => {
+    liveWriter.append(attemptId, events);
+  };
   const runnerOpts = {
     timeoutMs: p.timeoutMs,
     concurrency: p.concurrency,
@@ -897,7 +902,9 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     onActivity: (attemptId: string, lastActivity: string) => {
       noteLiveBeat(p, attemptId, undefined, lastActivity, true);
     },
+    onLiveEvent,
     onAttemptFinish: (r: AttemptResult) => {
+      liveWriter.flush(r.attemptId);
       // Mark resume-rerun results BEFORE persistence — assigning after
       // runAttempts returns would leave attempt.finished without the flag, and
       // the next resume would silently lose the history (reviewer finding).
@@ -1057,7 +1064,9 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     onActivity: (attemptId, lastActivity) => {
       noteLiveBeat(p, attemptId, undefined, lastActivity, true);
     },
+    onLiveEvent,
   });
+  liveWriter.flush(aggregation.attemptId);
 
   const aggRec: AggregationFinishedRecord = {
     kind: "aggregation.finished",

@@ -167,7 +167,9 @@ function buildInvocation(
         );
       }
       const argv = ["cfuse", "--print", "--verbose", "--output-format", "stream-json"];
-      if (!opts.probe) argv.push("--dangerously-skip-permissions");
+      if (!opts.probe) {
+        argv.push("--include-partial-messages", "--dangerously-skip-permissions");
+      }
       return { argv, promptStdin: true };
     }
     case "kimi-stream-json": {

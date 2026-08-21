@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AttemptSpec } from "../src/auto/driver-commands";
+import { LiveEventCollector, type RawLiveEvent } from "../src/auto/live-events";
 import {
   type AttemptResult,
   type RunnerTimers,
@@ -891,6 +892,108 @@ describe("cli auto runner — process-group cleanup on natural close", () => {
       { target: -child.pid, signal: "SIGTERM" },
       { target: -child.pid, signal: "SIGKILL" },
     ]);
+  });
+});
+
+describe("cli auto runner — onLiveEvent wiring", () => {
+  it("forwards fake spawnImpl live events with the attemptId", async () => {
+    const seen: Array<{ id: string; events: RawLiveEvent[] }> = [];
+    const spawn: SpawnImpl = async (input) => {
+      input.onLiveEvent?.([{ type: "text.delta", text: "hi" }]);
+      return {
+        stdout: JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "ok",
+        }),
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    await runAttempts([spec("attempt-0")], {
+      spawnImpl: spawn,
+      onLiveEvent: (id, events) => seen.push({ id, events }),
+    });
+    expect(seen).toEqual([{ id: "attempt-0", events: [{ type: "text.delta", text: "hi" }] }]);
+  });
+
+  it("defaultSpawn feeds LiveEventCollector from stdout chunks", async () => {
+    const child = new FakeChild();
+    child.emitSpawn();
+    const line = JSON.stringify({
+      type: "stream_event",
+      event: { type: "content_block_delta", delta: { type: "text_delta", text: "chunk" } },
+    });
+    setImmediate(() => {
+      child.stdout.write(`${line}\n`);
+      child.stdout.end();
+      setImmediate(() => child.emit("close", 0));
+    });
+    const seen: RawLiveEvent[][] = [];
+    await defaultSpawn(
+      {
+        executable: "x",
+        argv: [],
+        cwd: "/tmp",
+        prompt: "",
+        promptStdin: false,
+        timeoutMs: 5000,
+        signal: NEVER_ABORT,
+        driverId: "claude-stream-json",
+        onLiveEvent: (events) => seen.push(events),
+      },
+      fakeSpawnFn(child),
+    );
+    expect(seen.flat()).toEqual([{ type: "text.delta", text: "chunk" }]);
+  });
+
+  it("swallows LiveEventCollector.feed/end throws so defaultSpawn still resolves", async () => {
+    const origFeed = LiveEventCollector.prototype.feed;
+    const origEnd = LiveEventCollector.prototype.end;
+    LiveEventCollector.prototype.feed = (): RawLiveEvent[] => {
+      throw new Error("live-boom-feed");
+    };
+    LiveEventCollector.prototype.end = (): RawLiveEvent[] => {
+      throw new Error("live-boom-end");
+    };
+    try {
+      const child = new FakeChild();
+      child.emitSpawn();
+      const line = JSON.stringify({
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "chunk" } },
+      });
+      setImmediate(() => {
+        child.stdout.write(`${line}\n`);
+        child.stdout.end();
+        setImmediate(() => child.emit("close", 0));
+      });
+      const seen: RawLiveEvent[][] = [];
+      const out = await defaultSpawn(
+        {
+          executable: "x",
+          argv: [],
+          cwd: "/tmp",
+          prompt: "",
+          promptStdin: false,
+          timeoutMs: 5000,
+          signal: NEVER_ABORT,
+          driverId: "claude-stream-json",
+          onLiveEvent: (events) => seen.push(events),
+        },
+        fakeSpawnFn(child),
+      );
+      expect(out.exitCode).toBe(0);
+      expect(out.timedOut).toBe(false);
+      expect(out.aborted).toBe(false);
+      expect(out.error).toBeUndefined();
+      expect(seen).toEqual([]);
+    } finally {
+      LiveEventCollector.prototype.feed = origFeed;
+      LiveEventCollector.prototype.end = origEnd;
+    }
   });
 });
 

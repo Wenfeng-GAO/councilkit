@@ -21,6 +21,7 @@ import {
   spawnEnvForDriver,
 } from "./driver-commands";
 import { formatDurationMs } from "./duration";
+import { LiveEventCollector, type RawLiveEvent } from "./live-events";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 /** Default parallel Attempt cap. Jury size is ≤8; 10 means "run the whole roster". */
@@ -94,6 +95,8 @@ export interface SpawnInput {
   driverId?: string;
   /** Called when the activity collector observes a new live command/tool hint. */
   onActivity?: (lastActivity: string) => void;
+  /** Observational live-transcript events; must not throw. */
+  onLiveEvent?: (events: RawLiveEvent[]) => void;
 }
 
 export interface SpawnOutput {
@@ -170,6 +173,8 @@ export interface RunnerOptions {
   ) => void;
   /** Called when stream-json reports a new in-flight command/tool. */
   onActivity?: (attemptId: string, lastActivity: string) => void;
+  /** Observational live-transcript events keyed by attemptId. */
+  onLiveEvent?: (attemptId: string, events: RawLiveEvent[]) => void;
   timers?: RunnerTimers;
   /** Rebuild an Attempt's workspace to a pristine empty dir BEFORE the retry
    * spawn (reviewer finding: the retry reused the first try's dirty cwd, so a
@@ -334,6 +339,7 @@ export async function spawnOnce(
     heartbeatIntervalMs: opts.heartbeatIntervalMs,
     onHeartbeat: opts.onHeartbeat,
     onActivity: opts.onActivity,
+    onLiveEvent: opts.onLiveEvent,
     timers: opts.timers,
   });
 }
@@ -347,6 +353,7 @@ async function runOne(
     heartbeatIntervalMs?: number;
     onHeartbeat?: RunnerOptions["onHeartbeat"];
     onActivity?: RunnerOptions["onActivity"];
+    onLiveEvent?: RunnerOptions["onLiveEvent"];
     timers?: RunnerTimers;
   },
 ): Promise<AttemptResult> {
@@ -384,6 +391,16 @@ async function runOne(
         lastActivity = hint;
         opts.onActivity?.(spec.attemptId, hint);
       },
+      onLiveEvent:
+        opts.onLiveEvent === undefined
+          ? undefined
+          : (events) => {
+              try {
+                opts.onLiveEvent?.(spec.attemptId, events);
+              } catch {
+                // live transcript is observational
+              }
+            },
     });
   } finally {
     if (heartbeat !== undefined) timers.clearInterval(heartbeat);
@@ -521,6 +538,18 @@ export function defaultSpawn(
     // of the stream. Unknown driver ids simply never match an event shape.
     const activityColl =
       input.driverId !== undefined ? new DriverActivityCollector(input.driverId) : null;
+    const liveColl =
+      input.onLiveEvent !== undefined && input.driverId !== undefined
+        ? new LiveEventCollector(input.driverId)
+        : null;
+    const emitLive = (events: RawLiveEvent[]): void => {
+      if (events.length === 0) return;
+      try {
+        input.onLiveEvent?.(events);
+      } catch {
+        // live transcript is observational
+      }
+    };
 
     let child: ReturnType<typeof spawn>;
     try {
@@ -556,6 +585,13 @@ export function defaultSpawn(
       // every settle path (success, error, timeout) — a killed Attempt still
       // carries the process data gathered before the kill.
       activityColl?.end();
+      if (liveColl !== null) {
+        try {
+          emitLive(liveColl.end());
+        } catch {
+          // live transcript is observational
+        }
+      }
       const activity = activityColl?.summary();
       const finalOut = activity === undefined ? out : { ...out, activity };
       if (killInitiated) {
@@ -659,6 +695,13 @@ export function defaultSpawn(
       stdoutColl.feed(chunk);
       lineColl?.feed(chunk);
       activityColl?.feed(chunk);
+      if (liveColl !== null) {
+        try {
+          emitLive(liveColl.feed(chunk));
+        } catch {
+          // live transcript is observational
+        }
+      }
       const hint = activityColl?.liveActivity();
       if (hint) input.onActivity?.(hint);
     });

@@ -1,5 +1,8 @@
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
+import { AttemptLiveTranscript } from "./AttemptLiveTranscript";
+
+type AttemptRow = NonNullable<CliRunSummaryDto["progress"]>["attempts"][number];
 
 const PHASE_LABEL = {
   attempts: "席位审查中",
@@ -23,7 +26,7 @@ const ATTEMPT_LABEL = {
 export function LiveReviewProgress({
   run,
 }: {
-  run: Pick<CliRunSummaryDto, "status" | "startedAt" | "progress"> | CliRunDetailResponse;
+  run: Pick<CliRunSummaryDto, "runId" | "status" | "startedAt" | "progress"> | CliRunDetailResponse;
 }) {
   const progress = run.progress;
   const startedAt = run.startedAt;
@@ -97,10 +100,34 @@ export function LiveReviewProgress({
                 {attempt.lastActivity}
               </p>
             ) : null}
+            <AttemptProcess runId={run.runId} attempt={attempt} />
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+function AttemptProcess({ runId, attempt }: { runId: string; attempt: AttemptRow }) {
+  const [open, setOpen] = useState(attempt.status === "running");
+  useEffect(() => {
+    if (attempt.status === "running") setOpen(true);
+  }, [attempt.status]);
+  return (
+    <details
+      className="mt-2"
+      open={open}
+      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer font-command text-[0.68rem] text-brass">过程</summary>
+      {open ? (
+        <AttemptLiveTranscript
+          runId={runId}
+          attemptId={attempt.attemptId}
+          active={attempt.status === "running"}
+        />
+      ) : null}
+    </details>
   );
 }
 

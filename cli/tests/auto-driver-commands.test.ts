@@ -146,6 +146,7 @@ describe("cli auto driver-commands", () => {
         "--verbose",
         "--output-format",
         "stream-json",
+        "--include-partial-messages",
         "--dangerously-skip-permissions",
       ]);
       expect(spec.executable).toBe(join(tmp, "cld"));

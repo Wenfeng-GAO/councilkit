@@ -141,6 +141,99 @@ describe("cli-runs route", () => {
     expect(body.data.findings[0]?.status).toBe("open");
   });
 
+  it("serves attempt live events with afterSeq paging and skips bad/partial lines", async () => {
+    seed();
+    const liveDir = join(home, "runs", RUN_ID, "live");
+    mkdirSync(liveDir, { recursive: true });
+    writeFileSync(
+      join(liveDir, "attempt-0.jsonl"),
+      [
+        JSON.stringify({ seq: 1, at: "t1", type: "text.delta", text: "a" }),
+        "{broken",
+        JSON.stringify({ seq: 2, at: "t2", type: "tool.completed", name: "Bash", summary: "ls" }),
+        '{"seq":3,"at":"t3","type":"text.delta","text":"partial',
+      ].join("\n"),
+    );
+    host = await boot();
+    const first = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/live`, {
+      headers: authedHeaders(host),
+    });
+    expect(first.status).toBe(200);
+    const body = (await first.json()) as {
+      ok: true;
+      data: { events: Array<{ seq: number; type: string }>; nextSeq: number; done: boolean };
+    };
+    expect(body.data.events.map((e) => e.seq)).toEqual([1, 2]);
+    expect(body.data.nextSeq).toBe(2);
+    expect(body.data.done).toBe(false);
+
+    const page = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/live?afterSeq=1`,
+      { headers: authedHeaders(host) },
+    );
+    const paged = (await page.json()) as {
+      ok: true;
+      data: { events: Array<{ seq: number }>; nextSeq: number };
+    };
+    expect(paged.data.events.map((e) => e.seq)).toEqual([2]);
+    expect(paged.data.nextSeq).toBe(2);
+  });
+
+  it("returns empty events when the live sidecar is missing", async () => {
+    seed();
+    host = await boot();
+    const res = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/live?afterSeq=4`,
+      { headers: authedHeaders(host) },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: true;
+      data: { events: unknown[]; nextSeq: number; done: boolean };
+    };
+    expect(body.data.events).toEqual([]);
+    expect(body.data.nextSeq).toBe(4);
+    expect(body.data.done).toBe(false);
+  });
+
+  it("rejects an illegal attemptId with 400", async () => {
+    seed();
+    host = await boot();
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt.0/live`, {
+      headers: authedHeaders(host),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-integer afterSeq with 400", async () => {
+    seed();
+    host = await boot();
+    const res = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/live?afterSeq=-1`,
+      { headers: authedHeaders(host) },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("marks done when the run is no longer running", async () => {
+    seed();
+    writeFileSync(
+      join(home, "runs", RUN_ID, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "completed",
+        progress: { phase: "done", attempts: [], updatedAt: "t" },
+      })}\n`,
+    );
+    host = await boot();
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/aggregator/live`, {
+      headers: authedHeaders(host),
+    });
+    const body = (await res.json()) as { ok: true; data: { done: boolean; events: unknown[] } };
+    expect(body.data.done).toBe(true);
+    expect(body.data.events).toEqual([]);
+  });
+
   it("rejects path traversal and skips a symlinked run dir", async () => {
     seed();
     const outside = join(home, "outside");

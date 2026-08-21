@@ -5,6 +5,7 @@ import {
   type ClaudeRoute,
   type CliRunActionRequest,
   type CliRunActionResponse,
+  type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
   type CliRunsListResponse,
   type CloseScopeResponse,
@@ -26,6 +27,7 @@ import {
   type TakeoverControllerResponse,
   ackResponseSchema,
   cliRunActionResponseSchema,
+  cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
   cliRunsListResponseSchema,
   closeScopeResponseSchema,
@@ -167,6 +169,19 @@ export class RuntimeClient {
       schema: cliRunActionResponseSchema,
       auth: "mutation",
     });
+  }
+
+  getCliRunAttemptLive(
+    runId: string,
+    attemptId: string,
+    afterSeq = 0,
+  ): Promise<CliRunAttemptLiveResponse> {
+    const query = new URLSearchParams({ afterSeq: String(afterSeq) });
+    return this.call(
+      "GET",
+      `/api/v1/cli-runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attemptId)}/live?${query}`,
+      { schema: cliRunAttemptLiveResponseSchema, auth: "session" },
+    );
   }
 
   listInstallations(): Promise<InstallationsResponse> {
