@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CliRunLaunchRequest } from "@host/cli-launcher";
 import { cliRunsRoutes } from "@host/routes/cli-runs";
 import { CANONICAL_HOST_HEADER } from "@shared/runtime/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -394,12 +395,12 @@ describe("cli-runs route", () => {
         incomplete: false,
       })}\n`,
     );
-    const launches: Array<{ action: string; runId: string }> = [];
+    const launches: CliRunLaunchRequest[] = [];
     host = await createTestHost({
       routesFactory: (services) => {
         services.cliRunLauncher = {
-          start: (input: { action: string; runId: string }) => {
-            launches.push({ action: input.action, runId: input.runId });
+          start: (input: CliRunLaunchRequest) => {
+            launches.push(input);
             return { pid: 4242 };
           },
         };
@@ -415,7 +416,11 @@ describe("cli-runs route", () => {
     const body = (await res.json()) as { ok: true; data: { started: boolean; action: string } };
     expect(body.data.started).toBe(true);
     expect(body.data.action).toBe("fix");
-    expect(launches).toEqual([{ action: "fix", runId: RUN_ID }]);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.action).toBe("fix");
+    expect(launches[0]?.runId).toBe(RUN_ID);
+    expect(existsSync(join(dir, "pipeline.pid"))).toBe(true);
+    expect(readFileSync(join(dir, "pipeline.pid"), "utf8").trim()).toBe("4242");
     const live = JSON.parse(readFileSync(join(home, "runs", RUN_ID, "status.json"), "utf8")) as {
       status: string;
       pipeline: { phase: string; summary: string };
@@ -475,13 +480,6 @@ describe("cli-runs route", () => {
 
 const GH_PR = "https://github.com/acme/repo/pull/1";
 
-type StartReviewLaunch = {
-  action: string;
-  runId: string;
-  pr?: string;
-  repo?: string;
-};
-
 function seedPrJury(): void {
   writeFileSync(
     join(home, "councils.json"),
@@ -504,14 +502,14 @@ function seedPrJury(): void {
   );
 }
 
-async function bootStartReview(start?: (input: StartReviewLaunch) => { pid: number }): Promise<{
-  launches: StartReviewLaunch[];
+async function bootStartReview(start?: (input: CliRunLaunchRequest) => { pid: number }): Promise<{
+  launches: CliRunLaunchRequest[];
 }> {
-  const launches: StartReviewLaunch[] = [];
+  const launches: CliRunLaunchRequest[] = [];
   host = await createTestHost({
     routesFactory: (services) => {
       services.cliRunLauncher = {
-        start: (input: StartReviewLaunch) => {
+        start: (input: CliRunLaunchRequest) => {
           launches.push(input);
           return start ? start(input) : { pid: 4242 };
         },
