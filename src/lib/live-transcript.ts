@@ -215,6 +215,7 @@ export function displayLastActivity(raw: string | null | undefined): string | nu
   const text = unwrapShellSummary(raw).trim();
   if (!text || text.toLowerCase() === "tool") return null;
   if (text.startsWith("{") && text.includes("schema_version")) return null;
+  if (text.length <= 2 && /^[{}\[\]:,."']+$/.test(text)) return null;
   return shortenActivityPath(text);
 }
 

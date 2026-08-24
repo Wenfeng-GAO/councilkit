@@ -228,6 +228,7 @@ describe("displayLastActivity", () => {
     expect(displayLastActivity('{"schema_version":1,"run_id":"verify-0"}')).toBeNull();
     expect(displayLastActivity("tool")).toBeNull();
     expect(displayLastActivity('/bin/zsh -c "go test ./pkg/events"')).toBe("go test ./pkg/events");
+    expect(displayLastActivity("}")).toBeNull();
   });
 
   it("shortens a bare absolute path", () => {
