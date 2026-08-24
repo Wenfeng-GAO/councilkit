@@ -7,6 +7,7 @@ import {
   hasUnmatchedFence,
   isDeliverableText,
   isPathTool,
+  shortenActivityPath,
   showsTick,
   silentToolTally,
   unwrapShellSummary,
@@ -102,6 +103,31 @@ describe("foldLiveEvents", () => {
       { kind: "tool", name: "Read", summary: "a.go", status: "completed", at: "t2" },
     ]);
   });
+
+  it("pairs a generic completed tool onto the last open seat", () => {
+    const blocks = foldLiveEvents([
+      { seq: 1, at: "t0", type: "tool.started", name: "read", summary: "Read" },
+      {
+        seq: 2,
+        at: "t1",
+        type: "tool.completed",
+        name: "tool",
+        summary: "/tmp/squad/planner-a.json",
+      },
+    ]);
+    expect(blocks).toEqual([
+      {
+        kind: "tool",
+        name: "read",
+        summary: "/tmp/squad/planner-a.json",
+        status: "completed",
+        at: "t0",
+        endAt: "t1",
+      },
+    ]);
+    expect(silentToolTally(blocks).tally).toEqual([]);
+    expect(silentToolTally(blocks).timeline).toHaveLength(1);
+  });
 });
 
 describe("formatElapsed", () => {
@@ -182,6 +208,15 @@ describe("displayLastActivity", () => {
     expect(displayLastActivity('{"schema_version":1,"run_id":"verify-0"}')).toBeNull();
     expect(displayLastActivity("tool")).toBeNull();
     expect(displayLastActivity('/bin/zsh -c "go test ./pkg/events"')).toBe("go test ./pkg/events");
+  });
+
+  it("shortens a bare absolute path", () => {
+    expect(
+      displayLastActivity(
+        "/Users/hengzhuo/code/ant/agentrun/.squad/20260824-pr126-cmfix-k4p2/planner-a.json",
+      ),
+    ).toBe("20260824-pr126-cmfix-k4p2/planner-a.json");
+    expect(shortenActivityPath("sed -n '1,80p' /tmp/brief.md")).toBe("sed -n '1,80p' /tmp/brief.md");
   });
 });
 

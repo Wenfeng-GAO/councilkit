@@ -41,12 +41,14 @@ export function foldLiveEvents(events: readonly AttemptLiveEvent[]): TimelineBlo
       });
     } else if (event.type === "tool.completed") {
       const open = findOpenTool(blocks, event.name);
-      if (open >= 0) {
-        const prev = blocks[open];
+      const fallback = isGenericToolName(event.name) ? findLastOpenTool(blocks) : -1;
+      const idx = open >= 0 ? open : fallback;
+      if (idx >= 0) {
+        const prev = blocks[idx];
         if (prev?.kind === "tool") {
-          blocks[open] = {
+          blocks[idx] = {
             kind: "tool",
-            name: event.name,
+            name: isGenericToolName(event.name) ? prev.name : event.name,
             summary: event.summary.length > 0 ? event.summary : prev.summary,
             status: "completed",
             at: prev.at,
@@ -80,10 +82,7 @@ export function silentToolTally(blocks: readonly TimelineBlock[]): {
   const counts = new Map<string, number>();
   const timeline: TimelineBlock[] = [];
   for (const block of blocks) {
-    if (
-      block.kind === "tool" &&
-      (block.summary.length === 0 || block.name.toLowerCase() === "tool")
-    ) {
+    if (block.kind === "tool" && block.summary.length === 0) {
       counts.set(block.name, (counts.get(block.name) ?? 0) + 1);
       continue;
     }
@@ -126,10 +125,23 @@ export function isJsonDeliverable(text: string): boolean {
   }
 }
 
+function isGenericToolName(name: string): boolean {
+  const token = name.trim().toLowerCase();
+  return token.length === 0 || token === "tool";
+}
+
 function findOpenTool(blocks: readonly TimelineBlock[], name: string): number {
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
     const block = blocks[i];
     if (block.kind === "tool" && block.name === name && block.status === "started") return i;
+  }
+  return -1;
+}
+
+function findLastOpenTool(blocks: readonly TimelineBlock[]): number {
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block.kind === "tool" && block.status === "started") return i;
   }
   return -1;
 }
@@ -170,7 +182,16 @@ export function displayLastActivity(raw: string | null | undefined): string | nu
   const text = unwrapShellSummary(raw).trim();
   if (!text || text.toLowerCase() === "tool") return null;
   if (text.startsWith("{") && text.includes("schema_version")) return null;
-  return text;
+  return shortenActivityPath(text);
+}
+
+/** Collapse a bare absolute path to the last two segments for seat cards. */
+export function shortenActivityPath(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/") || /[\s;|&]/.test(trimmed)) return trimmed;
+  const parts = trimmed.split("/").filter((part) => part.length > 0);
+  if (parts.length <= 2) return trimmed;
+  return parts.slice(-2).join("/");
 }
 
 export function displayToolName(name: string): string {
