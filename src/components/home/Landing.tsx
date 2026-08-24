@@ -70,6 +70,9 @@ export function Landing() {
             <Link to="/reports" className="ck-cta ck-cta-ghost">
               查看 CLI 报告
             </Link>
+            <Link to="/reports#review" className="ck-cta ck-cta-ghost">
+              贴 URL 开审查
+            </Link>
             <Link to="/settings" className="ck-cta ck-cta-ghost">
               检查 Host
             </Link>

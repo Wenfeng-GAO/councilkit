@@ -53,7 +53,9 @@ test("/reports 开始审查表单在有 fixture 时也可见", async ({ page }) 
 
 test("/reports 本地仓库路径默认收在关闭的高级里", async ({ page }) => {
   await page.goto("/reports");
-  const advanced = page.locator("details").filter({ has: page.locator("summary", { hasText: "高级" }) });
+  const advanced = page
+    .locator("details")
+    .filter({ has: page.locator("summary", { hasText: "高级" }) });
   await expect(advanced).toBeVisible();
   await expect(advanced).not.toHaveAttribute("open");
   await expect(page.locator("#review-repo-path")).toBeHidden();
