@@ -128,6 +128,26 @@ describe("foldLiveEvents", () => {
     expect(silentToolTally(blocks).tally).toEqual([]);
     expect(silentToolTally(blocks).timeline).toHaveLength(1);
   });
+
+  it("does not close execute with a later path completion", () => {
+    const blocks = foldLiveEvents([
+      { seq: 1, at: "t0", type: "tool.started", name: "execute", summary: "Bash" },
+      { seq: 2, at: "t1", type: "tool.started", name: "read", summary: "Read" },
+      {
+        seq: 3,
+        at: "t2",
+        type: "tool.completed",
+        name: "tool",
+        summary: "/tmp/pkg/runtime/acp/session.go",
+      },
+    ]);
+    expect(blocks[0]).toMatchObject({ name: "execute", status: "started" });
+    expect(blocks[1]).toMatchObject({
+      name: "read",
+      status: "completed",
+      summary: "/tmp/pkg/runtime/acp/session.go",
+    });
+  });
 });
 
 describe("formatElapsed", () => {

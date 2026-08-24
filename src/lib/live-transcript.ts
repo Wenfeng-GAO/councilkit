@@ -41,7 +41,9 @@ export function foldLiveEvents(events: readonly AttemptLiveEvent[]): TimelineBlo
       });
     } else if (event.type === "tool.completed") {
       const open = findOpenTool(blocks, event.name);
-      const fallback = isGenericToolName(event.name) ? findLastOpenTool(blocks) : -1;
+      const fallback = isGenericToolName(event.name)
+        ? findGenericCompletionTarget(blocks, event.summary)
+        : -1;
       const idx = open >= 0 ? open : fallback;
       if (idx >= 0) {
         const prev = blocks[idx];
@@ -144,6 +146,37 @@ function findLastOpenTool(blocks: readonly TimelineBlock[]): number {
     if (block.kind === "tool" && block.status === "started") return i;
   }
   return -1;
+}
+
+function looksLikePath(summary: string): boolean {
+  const trimmed = summary.trim();
+  if (trimmed.startsWith("/") || trimmed.startsWith("./") || trimmed.startsWith("../")) {
+    return true;
+  }
+  return /^[\w./-]+\.\w{1,8}$/.test(trimmed);
+}
+
+function findGenericCompletionTarget(
+  blocks: readonly TimelineBlock[],
+  summary: string,
+): number {
+  const pathish = looksLikePath(summary);
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block.kind !== "tool" || block.status !== "started") continue;
+    const name = block.name.toLowerCase();
+    if (pathish && isPathTool(block.name)) return i;
+    if (
+      !pathish &&
+      (name === "execute" ||
+        name === "shell" ||
+        name === "bash" ||
+        name === "command_execution")
+    ) {
+      return i;
+    }
+  }
+  return findLastOpenTool(blocks);
 }
 
 /** True when a markdown code fence is still open — keep `<pre>` while streaming. */

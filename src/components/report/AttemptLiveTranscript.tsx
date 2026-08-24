@@ -10,6 +10,7 @@ import {
   isJsonDeliverable,
   isPathTool,
   originAt,
+  shortenActivityPath,
   showsTick,
   silentToolTally,
   unwrapShellSummary,
@@ -226,7 +227,9 @@ function ToolRow({
 }) {
   const path = isPathTool(block.name);
   const span = block.endAt ? formatSpan(block.at, block.endAt) : "";
-  const summary = unwrapShellSummary(block.summary);
+  const summary = path
+    ? shortenActivityPath(unwrapShellSummary(block.summary))
+    : unwrapShellSummary(block.summary);
   return (
     <div className="ck-inspector-tool">
       <div className="ck-inspector-tool-head">
