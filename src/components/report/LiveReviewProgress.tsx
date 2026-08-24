@@ -74,7 +74,7 @@ export function LiveReviewProgress({
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
-            {(run.kind === "squad" ? SQUAD_PHASE_LABEL : PHASE_LABEL)[progress.phase]}
+            {phaseHeading(run.kind, run.status, progress.phase)}
           </p>
           <p className="mt-1 text-sm text-muted">
             {done}/{progress.attempts.length} 席位已结束
@@ -120,6 +120,18 @@ export function LiveReviewProgress({
       </ul>
     </section>
   );
+}
+
+function phaseHeading(
+  kind: CliRunSummaryDto["kind"] | undefined,
+  status: CliRunSummaryDto["status"],
+  phase: NonNullable<CliRunSummaryDto["progress"]>["phase"],
+): string {
+  if (status === "completed") return "已结束";
+  if (status === "interrupted") return kind === "squad" ? "已结束" : "已中断";
+  if (status === "failed") return "失败";
+  const table = kind === "squad" ? SQUAD_PHASE_LABEL : PHASE_LABEL;
+  return table[phase];
 }
 
 function isEndedAttempt(status: AttemptRow["status"]): boolean {
