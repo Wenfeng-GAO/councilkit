@@ -1,7 +1,11 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { Button } from "@/components/ui/Button";
 import { RuntimeClientError } from "@/runtime/client";
-import type { CliRunDetailResponse, CliRunPipelineDto } from "@shared/runtime/schemas";
+import type {
+  CliRunDetailResponse,
+  CliRunPipelineDto,
+  CliRunSummaryDto,
+} from "@shared/runtime/schemas";
 import { Link } from "react-router-dom";
 
 const STEPS: Array<{ phase: CliRunPipelineDto["phase"]; label: string }> = [
@@ -27,6 +31,7 @@ export function FixPipeline({
   busy,
   pendingAction,
   error,
+  followUpRun = null,
   onFix,
   onReReview,
 }: {
@@ -34,6 +39,7 @@ export function FixPipeline({
   busy: boolean;
   pendingAction: "fix" | "re-review" | null;
   error: string | null;
+  followUpRun?: Pick<CliRunSummaryDto, "runId" | "status"> | null;
   onFix: () => void;
   onReReview: () => void;
 }) {
@@ -42,8 +48,12 @@ export function FixPipeline({
     busy || run.status === "running" || (pipeline !== null && pipeline.phase !== "done");
   const canAct = run.kind === "review" && run.hasReport && !inFlight;
   const followUp = pipeline?.followUpRunId ?? null;
+  const followUpStatus = followUpRun?.status ?? null;
+  const followUpFailed = followUpStatus === "failed" || followUpStatus === "interrupted";
+  const followUpRunning = followUpStatus === "running";
   const failed =
     pipeline?.applyStatus === "failure" ||
+    followUpFailed ||
     (pipeline?.phase === "done" && Boolean(pipeline.summary?.includes("failed")));
   const liveHint = liveStatusText({
     busy,
@@ -51,6 +61,8 @@ export function FixPipeline({
     pipeline,
     error,
     failed,
+    followUpFailed,
+    followUpRunning,
   });
 
   return (
@@ -105,9 +117,15 @@ export function FixPipeline({
         {followUp ? (
           <Link
             to={`/reports/${followUp}`}
-            className="inline-flex items-center rounded px-3 py-2 text-sm text-accent hover:underline"
+            className={`inline-flex items-center rounded px-3 py-2 text-sm hover:underline ${
+              followUpFailed ? "text-error" : "text-accent"
+            }`}
           >
-            打开复审报告
+            {followUpFailed
+              ? "查看失败的复审"
+              : followUpRunning
+                ? "打开进行中的复审"
+                : "打开复审报告"}
           </Link>
         ) : null}
       </div>
@@ -121,6 +139,8 @@ function liveStatusText(input: {
   pipeline: CliRunPipelineDto | null;
   error: string | null;
   failed: boolean;
+  followUpFailed: boolean;
+  followUpRunning: boolean;
 }): { tone: "info" | "error" | "success"; text: string } | null {
   if (input.error) return { tone: "error", text: input.error };
   if (input.busy) {
@@ -139,6 +159,12 @@ function liveStatusText(input: {
       text: `${PHASE_HINT[pipeline.phase]}${pipeline.summary ? ` · ${pipeline.summary}` : ""}。进度每 2 秒刷新。`,
     };
   }
+  if (input.followUpFailed) {
+    return { tone: "error", text: "复审没有完成，代码没有改动。" };
+  }
+  if (input.followUpRunning) {
+    return { tone: "info", text: "复审还在跑。" };
+  }
   if (input.failed) {
     return {
       tone: "error",
@@ -150,7 +176,9 @@ function liveStatusText(input: {
   if (pipeline?.applyStatus === "success") {
     return { tone: "success", text: pipeline.summary ?? "已按共识方案落地。" };
   }
-  if (pipeline?.summary) return { tone: "info", text: pipeline.summary };
+  if (pipeline?.summary && !pipeline.summary.startsWith("follow-up review")) {
+    return { tone: "info", text: pipeline.summary };
+  }
   return null;
 }
 

@@ -48,6 +48,19 @@ describe("LiveEventCollector", () => {
     ]);
   });
 
+  it("claude: Read file_path becomes the tool summary", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", name: "Read", input: { file_path: "pkg/foo.go" } }],
+      },
+    });
+    const coll = new LiveEventCollector("claude-stream-json");
+    expect(feedLines(coll, `${line}\n`)).toEqual([
+      { type: "tool.completed", name: "Read", summary: "pkg/foo.go" },
+    ]);
+  });
+
   it("claude: does not emit assistant text/thinking blocks (covered by stream_event)", () => {
     const line = JSON.stringify({
       type: "assistant",
@@ -62,7 +75,7 @@ describe("LiveEventCollector", () => {
     expect(feedLines(coll, `${line}\n`)).toEqual([]);
   });
 
-  it("kimi: tool_calls plus intermediate content; skips the last assistant content frame", () => {
+  it("kimi: tool_calls plus intermediate content; last frame is flushed on end", () => {
     const lines = [
       JSON.stringify({
         role: "assistant",
@@ -75,6 +88,7 @@ describe("LiveEventCollector", () => {
     expect(feedLines(coll, `${lines}\n`)).toEqual([
       { type: "tool.completed", name: "bash", summary: "ls" },
       { type: "text.delta", text: "working" },
+      { type: "text.delta", text: "final deliverable" },
     ]);
   });
 

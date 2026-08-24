@@ -27,6 +27,7 @@ import {
   type CliRunPipeline,
   type CliRunProgress,
   liveStateFromRecords,
+  mergeLiveProgress,
   parseLiveStateJson,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
@@ -161,11 +162,11 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
       : "";
   const parsed = parseTranscriptMeta(transcriptText, runId);
   const live = readLiveState(join(dir, CLI_RUN_STATUS_FILE));
-  const derived =
-    live?.progress ??
+  const derived = mergeLiveProgress(
+    live?.progress ?? null,
     liveStateFromRecords(parseTranscriptRecords(transcriptText), live?.progress.updatedAt ?? null)
-      ?.progress ??
-    null;
+      ?.progress ?? null,
+  );
   const planPath = join(dir, CLI_RUN_PLAN_FILE);
   const planStat = safeLstat(planPath);
   const hasPlan = Boolean(planStat?.isFile() && !planStat.isSymbolicLink());

@@ -102,6 +102,85 @@ describe("cli-runs route", () => {
     expect(body.data.markdown).toBe(MARKDOWN);
   });
 
+  it("refills empty status.json attempts from the transcript so process stays inspectable", async () => {
+    seed();
+    writeFileSync(
+      join(home, "runs", RUN_ID, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: RUN_ID,
+        startedAt: "2026-08-01T00:00:00.000Z",
+        task: { task: "host-fixture" },
+        attempts: [
+          {
+            attemptId: "attempt-0",
+            agentId: "a",
+            agentName: "review-security",
+            driverId: "claude-stream-json",
+            modelId: "m",
+          },
+        ],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "a",
+          agentName: "review-security",
+          driverId: "claude-stream-json",
+          modelId: "m",
+        },
+      })}\n${JSON.stringify({
+        kind: "attempt.finished",
+        attemptId: "attempt-0",
+        status: "success",
+        durationMs: 12,
+      })}\n${JSON.stringify({
+        kind: "aggregation.finished",
+        status: "success",
+        durationMs: 4,
+      })}\n`,
+    );
+    writeFileSync(
+      join(home, "runs", RUN_ID, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "completed",
+        progress: { phase: "done", attempts: [], updatedAt: "t-done" },
+        pipeline: {
+          phase: "done",
+          round: 0,
+          maxRounds: 2,
+          planVerdict: null,
+          applyStatus: "skipped",
+          followUpRunId: "ck-review-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          summary: "follow-up",
+          updatedAt: "t-done",
+        },
+      })}\n`,
+    );
+    host = await boot();
+    const detail = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}`, {
+      headers: authedHeaders(host),
+    });
+    expect(detail.status).toBe(200);
+    const body = (await detail.json()) as {
+      ok: true;
+      data: {
+        status: string;
+        progress: {
+          phase: string;
+          attempts: Array<{ attemptId: string; agentName: string; status: string }>;
+        } | null;
+      };
+    };
+    expect(body.data.status).toBe("completed");
+    expect(body.data.progress?.phase).toBe("done");
+    expect(body.data.progress?.attempts.map((row) => row.attemptId)).toEqual([
+      "attempt-0",
+      "aggregator",
+    ]);
+    expect(body.data.progress?.attempts[0]?.status).toBe("success");
+  });
+
   it("returns findings.json on the detail payload", async () => {
     seed();
     writeFileSync(

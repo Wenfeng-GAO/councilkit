@@ -1,6 +1,7 @@
 import {
   applyLiveHeartbeat,
   liveStateFromRecords,
+  mergeLiveProgress,
   parseLiveStateJson,
 } from "@shared/runtime/cli-run-progress";
 import { describe, expect, it } from "vitest";
@@ -142,6 +143,69 @@ describe("liveStateFromRecords", () => {
     expect(live?.status).toBe("completed");
     expect(live?.progress.phase).toBe("done");
     expect(live?.progress.attempts[2]?.status).toBe("success");
+  });
+});
+
+describe("mergeLiveProgress", () => {
+  it("refills empty status.json attempts from the transcript", () => {
+    const fromTranscript = liveStateFromRecords(
+      [
+        started,
+        {
+          kind: "attempt.finished",
+          attemptId: "attempt-0",
+          status: "success",
+          durationMs: 10,
+        },
+        {
+          kind: "attempt.finished",
+          attemptId: "attempt-1",
+          status: "success",
+          durationMs: 20,
+        },
+        {
+          kind: "aggregation.finished",
+          status: "success",
+          durationMs: 5,
+        },
+        { kind: "review.finished", status: "completed" },
+      ],
+      "t-done",
+    )?.progress;
+    expect(fromTranscript?.attempts.length).toBeGreaterThan(0);
+    const merged = mergeLiveProgress(
+      { phase: "done", attempts: [], updatedAt: "t-pipe" },
+      fromTranscript ?? null,
+    );
+    expect(merged?.phase).toBe("done");
+    expect(merged?.updatedAt).toBe("t-pipe");
+    expect(merged?.attempts.map((row) => row.attemptId)).toEqual([
+      "attempt-0",
+      "attempt-1",
+      "aggregator",
+    ]);
+  });
+
+  it("keeps live attempts when they are already present", () => {
+    const live = {
+      phase: "attempts" as const,
+      attempts: [
+        {
+          attemptId: "live-0",
+          agentName: "A",
+          driverId: "kimi-stream-json",
+          modelId: "k",
+          role: "attempt" as const,
+          status: "running" as const,
+          durationMs: 1,
+          lastActivity: "grep",
+        },
+      ],
+      updatedAt: "t-live",
+    };
+    const merged = mergeLiveProgress(live, liveStateFromRecords([started], "t0")?.progress ?? null);
+    expect(merged?.attempts).toHaveLength(1);
+    expect(merged?.attempts[0]?.attemptId).toBe("live-0");
   });
 });
 

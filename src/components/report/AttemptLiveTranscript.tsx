@@ -1,34 +1,62 @@
+import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import {
+  type TimelineBlock,
+  foldLiveEvents,
+  formatElapsed,
+  formatSpan,
+  hasUnmatchedFence,
+  isDeliverableText,
+  isPathTool,
+  originAt,
+  showsTick,
+  silentToolTally,
+} from "@/lib/live-transcript";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
 import { useEffect, useRef, useState } from "react";
 
 const POLL_MS = 2000;
-
-type TimelineBlock =
-  | { kind: "text"; text: string }
-  | { kind: "thinking"; text: string }
-  | { kind: "tool"; name: string; summary: string; status: "started" | "completed" }
-  | { kind: "truncated"; dropped: number };
+const PIN_THRESHOLD_PX = 48;
 
 export function AttemptLiveTranscript({
   runId,
   attemptId,
   active,
+  collapseDeliverable = false,
+  className = "",
 }: {
   runId: string;
   attemptId: string;
   active: boolean;
+  collapseDeliverable?: boolean;
+  className?: string;
 }) {
   const [events, setEvents] = useState<AttemptLiveEvent[]>([]);
   const [done, setDone] = useState(false);
   const [ready, setReady] = useState(false);
   const afterSeqRef = useRef(0);
   const eventsRef = useRef<AttemptLiveEvent[]>([]);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const pinToBottomRef = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
     const client = getAppRuntime().client;
+    afterSeqRef.current = 0;
+    eventsRef.current = [];
+    setEvents([]);
+    setDone(false);
+    setReady(false);
+    pinToBottomRef.current = active;
+
+    const stickToBottom = () => {
+      window.requestAnimationFrame(() => {
+        if (cancelled || !pinToBottomRef.current) return;
+        const el = scrollerRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    };
 
     const pull = async (): Promise<void> => {
       try {
@@ -40,6 +68,7 @@ export function AttemptLiveTranscript({
         }
         afterSeqRef.current = res.nextSeq;
         setReady(true);
+        stickToBottom();
         if (res.done) {
           setDone(true);
           return;
@@ -67,74 +96,100 @@ export function AttemptLiveTranscript({
     };
   }, [runId, attemptId, active]);
 
+  const onScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    pinToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
+  };
+
   if (!ready) {
-    return <p className="mt-2 font-command text-[0.68rem] text-muted">读取过程…</p>;
+    return (
+      <div ref={scrollerRef} className={className}>
+        <p className="font-command text-[0.68rem] text-muted">读取过程…</p>
+      </div>
+    );
   }
   if (events.length === 0) {
     return (
-      <p className="mt-2 font-command text-[0.68rem] text-muted">
-        {active && !done ? "等待过程输出…" : "该 driver 无过程输出"}
-      </p>
+      <div ref={scrollerRef} className={className}>
+        <p className="font-command text-[0.68rem] text-muted">
+          {active && !done ? "等待过程输出…" : "该 driver 无过程输出"}
+        </p>
+      </div>
     );
   }
 
-  const blocks = foldEvents(events);
+  const origin = originAt(events);
+  const { tally, timeline } = silentToolTally(foldLiveEvents(events));
+  const last = timeline.length - 1;
   return (
-    <div className="mt-2 flex flex-col gap-2">
-      {blocks.map((block, index) => (
-        <TimelineItem key={`${block.kind}-${index}`} block={block} />
-      ))}
+    <div ref={scrollerRef} className={className} onScroll={onScroll}>
+      <div className="flex flex-col gap-2.5">
+        {tally.length > 0 ? (
+          <p className="ck-inspector-tally">
+            {tally.map((row) => `${row.name} ${row.count}`).join(" · ")}
+            {" · "}无路径/命令摘要
+          </p>
+        ) : null}
+        {timeline.map((block, index) => (
+          <div key={`${block.kind}-${index}`} className="ck-inspector-step">
+            <span className="ck-inspector-tick">
+              {showsTick(block, collapseDeliverable) ? formatElapsed(origin, block.at) : ""}
+            </span>
+            <div className="min-w-0">
+              <TimelineItem
+                block={block}
+                streaming={active && !done && index === last}
+                collapseDeliverable={collapseDeliverable}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-function foldEvents(events: readonly AttemptLiveEvent[]): TimelineBlock[] {
-  const blocks: TimelineBlock[] = [];
-  for (const event of events) {
-    const last = blocks[blocks.length - 1];
-    if (event.type === "text.delta") {
-      if (last?.kind === "text") last.text += event.text;
-      else blocks.push({ kind: "text", text: event.text });
-    } else if (event.type === "thinking.delta") {
-      if (last?.kind === "thinking") last.text += event.text;
-      else blocks.push({ kind: "thinking", text: event.text });
-    } else if (event.type === "tool.started") {
-      blocks.push({
-        kind: "tool",
-        name: event.name,
-        summary: event.summary,
-        status: "started",
-      });
-    } else if (event.type === "tool.completed") {
-      blocks.push({
-        kind: "tool",
-        name: event.name,
-        summary: event.summary,
-        status: "completed",
-      });
-    } else if (event.type === "truncated") {
-      blocks.push({ kind: "truncated", dropped: event.dropped });
-    }
-  }
-  return blocks;
-}
-
-function TimelineItem({ block }: { block: TimelineBlock }) {
+function TimelineItem({
+  block,
+  streaming,
+  collapseDeliverable,
+}: {
+  block: TimelineBlock;
+  streaming: boolean;
+  collapseDeliverable: boolean;
+}) {
   if (block.kind === "text") {
-    return (
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-command text-[0.72rem] text-fg">
-        {block.text}
-      </pre>
-    );
+    const asPre = streaming && hasUnmatchedFence(block.text);
+    if (asPre) {
+      return (
+        <pre className="whitespace-pre-wrap break-words font-command text-[0.78rem] leading-5 text-fg">
+          {block.text}
+        </pre>
+      );
+    }
+    const markdown = <SafeMarkdown className="text-sm" variant="document" content={block.text} />;
+    if (!streaming && collapseDeliverable && isDeliverableText(block.text)) {
+      const n = Array.from(block.text).length;
+      return (
+        <details className="ck-inspector-think">
+          <summary className="cursor-pointer font-command text-[0.68rem] text-brass">
+            席位交付物 · {n} 字<span className="ml-2 text-muted">· 与报告正文重复</span>
+          </summary>
+          <div className="mt-2">{markdown}</div>
+        </details>
+      );
+    }
+    return markdown;
   }
   if (block.kind === "thinking") {
     const n = Array.from(block.text).length;
     return (
-      <details className="border border-edge bg-surface">
-        <summary className="cursor-pointer px-2 py-1 font-command text-[0.68rem] text-brass">
+      <details className="ck-inspector-think">
+        <summary className="cursor-pointer font-command text-[0.68rem] text-brass">
           思考 · {n} 字
         </summary>
-        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all px-2 pb-2 font-command text-[0.72rem] text-muted">
+        <pre className="mt-1.5 max-h-[min(24rem,50vh)] overflow-auto whitespace-pre-wrap break-words font-command text-[0.72rem] leading-5 text-muted">
           {block.text}
         </pre>
       </details>
@@ -147,17 +202,64 @@ function TimelineItem({ block }: { block: TimelineBlock }) {
       </p>
     );
   }
+  return <ToolRow block={block} />;
+}
+
+function ToolRow({
+  block,
+}: {
+  block: Extract<TimelineBlock, { kind: "tool" }>;
+}) {
+  const path = isPathTool(block.name);
+  const span = block.endAt ? formatSpan(block.at, block.endAt) : "";
   return (
-    <div className="border border-edge px-2 py-1">
-      <p className="font-command text-[0.68rem] text-brass">
-        {block.name}
-        <span className="ml-2 text-muted">{block.status === "started" ? "进行中" : "完成"}</span>
-      </p>
-      {block.summary.length > 0 ? (
-        <p className="truncate font-command text-[0.68rem] text-muted" title={block.summary}>
-          {block.summary}
+    <div className="ck-inspector-tool">
+      <div className="ck-inspector-tool-head">
+        <p className="font-command text-[0.68rem] text-brass">
+          {block.name}
+          <span className="ml-2 text-muted">
+            {block.status === "started" ? "进行中" : "完成"}
+            {span ? ` · ${span}` : ""}
+          </span>
         </p>
+        {block.summary.length > 0 ? <CopyCommand text={block.summary} /> : null}
+      </div>
+      {block.summary.length > 0 ? (
+        <pre className="ck-inspector-cmd">
+          {path ? <span className="mr-2 text-muted">路径</span> : null}
+          {block.summary}
+        </pre>
       ) : null}
     </div>
+  );
+}
+
+function CopyCommand({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+  return (
+    <button
+      type="button"
+      className="shrink-0 font-command text-[0.62rem] text-muted hover:text-parchment"
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(
+          () => {
+            setCopied(true);
+            if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+            timerRef.current = window.setTimeout(() => setCopied(false), 1600);
+          },
+          () => {
+            setCopied(false);
+          },
+        );
+      }}
+    >
+      {copied ? "已复制" : "复制"}
+    </button>
   );
 }

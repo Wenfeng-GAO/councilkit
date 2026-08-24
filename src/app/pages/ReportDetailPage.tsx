@@ -7,6 +7,7 @@ import {
 } from "@/components/report/FixPipeline";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
+import { SeatInspector } from "@/components/report/SeatInspector";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { buildFixFromReviewPrompt, buildReviewResumeCommand } from "@/lib/fix-prompt";
@@ -28,6 +29,7 @@ export function ReportDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"fix" | "re-review" | null>(null);
   const [watchUntil, setWatchUntil] = useState(0);
+  const [inspectId, setInspectId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["cli-runs", runId],
     queryFn: () => client.getCliRun(runId),
@@ -190,11 +192,20 @@ export function ReportDetailPage() {
               busy={action.isPending || pendingAction !== null}
               pendingAction={pendingAction}
               error={actionError}
+              followUpRun={
+                query.data.pipeline?.followUpRunId
+                  ? (listQuery.data?.runs.find(
+                      (row) => row.runId === query.data.pipeline?.followUpRunId,
+                    ) ?? null)
+                  : null
+              }
               onFix={() => action.mutate("fix")}
               onReReview={() => action.mutate("re-review")}
             />
           ) : null}
-          {showSeats && query.data.progress ? <LiveReviewProgress run={query.data} /> : null}
+          {showSeats && query.data.progress ? (
+            <LiveReviewProgress run={query.data} onInspect={setInspectId} />
+          ) : null}
           <FindingLedger run={query.data} />
           {query.data.planMarkdown.trim().length > 0 ? (
             <FixPlanDocument
@@ -207,12 +218,26 @@ export function ReportDetailPage() {
               <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />
             )
           ) : parsed ? (
-            <ReviewReportView report={parsed} />
+            <ReviewReportView
+              report={parsed}
+              liveAttempts={query.data.progress?.attempts ?? []}
+              onInspect={setInspectId}
+            />
           ) : (
             <article className="border border-edge bg-surface px-5 py-5 sm:px-7 sm:py-6">
               <SafeMarkdown variant="document" content={query.data.markdown} />
             </article>
           )}
+          {query.data.progress ? (
+            <SeatInspector
+              open={inspectId !== null}
+              onClose={() => setInspectId(null)}
+              runId={query.data.runId}
+              attempts={query.data.progress.attempts}
+              selectedId={inspectId}
+              onSelect={setInspectId}
+            />
+          ) : null}
         </>
       ) : null}
     </div>

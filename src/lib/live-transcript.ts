@@ -1,0 +1,159 @@
+import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
+
+export type TimelineBlock =
+  | { kind: "text"; text: string; at: string }
+  | { kind: "thinking"; text: string; at: string }
+  | {
+      kind: "tool";
+      name: string;
+      summary: string;
+      status: "started" | "completed";
+      at: string;
+      endAt?: string;
+    }
+  | { kind: "truncated"; dropped: number; at: string };
+
+export interface SilentToolTally {
+  name: string;
+  count: number;
+}
+
+const PATH_TOOL_NAMES = new Set(["read", "readfile", "glob", "listdir", "searchfiles"]);
+
+/** Fold deltas and pair tool.started with the matching tool.completed. */
+export function foldLiveEvents(events: readonly AttemptLiveEvent[]): TimelineBlock[] {
+  const blocks: TimelineBlock[] = [];
+  for (const event of events) {
+    const last = blocks[blocks.length - 1];
+    if (event.type === "text.delta") {
+      if (last?.kind === "text") last.text += event.text;
+      else blocks.push({ kind: "text", text: event.text, at: event.at });
+    } else if (event.type === "thinking.delta") {
+      if (last?.kind === "thinking") last.text += event.text;
+      else blocks.push({ kind: "thinking", text: event.text, at: event.at });
+    } else if (event.type === "tool.started") {
+      blocks.push({
+        kind: "tool",
+        name: event.name,
+        summary: event.summary,
+        status: "started",
+        at: event.at,
+      });
+    } else if (event.type === "tool.completed") {
+      const open = findOpenTool(blocks, event.name);
+      if (open >= 0) {
+        const prev = blocks[open];
+        if (prev?.kind === "tool") {
+          blocks[open] = {
+            kind: "tool",
+            name: event.name,
+            summary: event.summary.length > 0 ? event.summary : prev.summary,
+            status: "completed",
+            at: prev.at,
+            endAt: event.at,
+          };
+        }
+      } else {
+        blocks.push({
+          kind: "tool",
+          name: event.name,
+          summary: event.summary,
+          status: "completed",
+          at: event.at,
+        });
+      }
+    } else if (event.type === "truncated") {
+      blocks.push({ kind: "truncated", dropped: event.dropped, at: event.at });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Tools with no path/command don't earn a timeline row. Count them for a
+ * header strip so 27 empty Reads don't bury the actual commands.
+ */
+export function silentToolTally(blocks: readonly TimelineBlock[]): {
+  tally: SilentToolTally[];
+  timeline: TimelineBlock[];
+} {
+  const counts = new Map<string, number>();
+  const timeline: TimelineBlock[] = [];
+  for (const block of blocks) {
+    if (block.kind === "tool" && block.summary.length === 0 && block.status === "completed") {
+      counts.set(block.name, (counts.get(block.name) ?? 0) + 1);
+      continue;
+    }
+    timeline.push(block);
+  }
+  return {
+    tally: [...counts].map(([name, count]) => ({ name, count })),
+    timeline,
+  };
+}
+
+const JURY_HEADING =
+  /^(?:# Autonomous Review Report\b|## (?:概览|共识发现|独有发现|分歧|结论)(?:\s|$))/m;
+
+/** Long multi-heading markdown that restates the jury report. */
+export function isDeliverableText(text: string): boolean {
+  if (JURY_HEADING.test(text) && Array.from(text).length >= 280) return true;
+  const headings = text.match(/^#{1,3} .+/gm) ?? [];
+  return headings.length >= 2 && Array.from(text).length >= 800;
+}
+
+function findOpenTool(blocks: readonly TimelineBlock[], name: string): number {
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i];
+    if (block.kind === "tool" && block.name === name && block.status === "started") return i;
+  }
+  return -1;
+}
+
+/** True when a markdown code fence is still open — keep `<pre>` while streaming. */
+export function hasUnmatchedFence(text: string): boolean {
+  let count = 0;
+  for (const line of text.split("\n")) {
+    if (line.trimStart().startsWith("```")) count += 1;
+  }
+  return count % 2 === 1;
+}
+
+export function isPathTool(name: string): boolean {
+  return PATH_TOOL_NAMES.has(name.toLowerCase().replace(/[-_]/g, ""));
+}
+
+/** Elapsed from the first sidecar event, second resolution. Empty if unparseable. */
+export function formatElapsed(originAt: string, at: string): string {
+  const start = Date.parse(originAt);
+  const then = Date.parse(at);
+  if (!Number.isFinite(start) || !Number.isFinite(then) || then < start) return "";
+  const total = Math.floor((then - start) / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+export function formatSpan(startAt: string, endAt: string): string {
+  const start = Date.parse(startAt);
+  const end = Date.parse(endAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
+  const total = Math.floor((end - start) / 1000);
+  if (total < 1) return "";
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}m${String(s).padStart(2, "0")}s`;
+}
+
+export function originAt(events: readonly { at: string }[]): string {
+  return events[0]?.at ?? "";
+}
+
+export function showsTick(block: TimelineBlock, collapseDeliverable: boolean): boolean {
+  if (block.kind === "tool") return true;
+  if (block.kind === "text" && collapseDeliverable && isDeliverableText(block.text)) return true;
+  return false;
+}

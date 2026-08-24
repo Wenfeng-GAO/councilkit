@@ -1,6 +1,6 @@
+import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
-import { AttemptLiveTranscript } from "./AttemptLiveTranscript";
 
 type AttemptRow = NonNullable<CliRunSummaryDto["progress"]>["attempts"][number];
 
@@ -25,8 +25,10 @@ const ATTEMPT_LABEL = {
 
 export function LiveReviewProgress({
   run,
+  onInspect,
 }: {
   run: Pick<CliRunSummaryDto, "runId" | "status" | "startedAt" | "progress"> | CliRunDetailResponse;
+  onInspect: (attemptId: string) => void;
 }) {
   const progress = run.progress;
   const startedAt = run.startedAt;
@@ -68,19 +70,7 @@ export function LiveReviewProgress({
                   <span className="ml-2 font-command text-[0.62rem] text-brass">Aggregator</span>
                 ) : null}
               </p>
-              <span
-                className={`font-command text-[0.68rem] ${
-                  attempt.status === "success"
-                    ? "text-success"
-                    : attempt.status === "failure"
-                      ? "text-error"
-                      : attempt.status === "running"
-                        ? "text-info"
-                        : attempt.status === "queued"
-                          ? "text-muted"
-                          : "text-muted"
-                }`}
-              >
+              <span className={`font-command text-[0.68rem] ${statusClass(attempt.status)}`}>
                 {ATTEMPT_LABEL[attempt.status]}
               </span>
             </div>
@@ -88,7 +78,7 @@ export function LiveReviewProgress({
               {attempt.driverId}/{attempt.modelId}
             </p>
             {attempt.durationMs !== null ? (
-              <p className="mt-2 text-xs text-muted">{formatMs(attempt.durationMs)}</p>
+              <p className="mt-2 text-xs text-muted">{formatAttemptMs(attempt.durationMs)}</p>
             ) : attempt.status === "running" ? (
               <p className="mt-2 text-xs text-muted">审查中…</p>
             ) : null}
@@ -100,7 +90,7 @@ export function LiveReviewProgress({
                 {attempt.lastActivity}
               </p>
             ) : null}
-            <AttemptProcess runId={run.runId} attempt={attempt} />
+            <InspectButton attempt={attempt} onInspect={onInspect} />
           </li>
         ))}
       </ul>
@@ -108,27 +98,33 @@ export function LiveReviewProgress({
   );
 }
 
-function AttemptProcess({ runId, attempt }: { runId: string; attempt: AttemptRow }) {
-  const [open, setOpen] = useState(attempt.status === "running");
-  useEffect(() => {
-    if (attempt.status === "running") setOpen(true);
-  }, [attempt.status]);
+function InspectButton({
+  attempt,
+  onInspect,
+}: {
+  attempt: AttemptRow;
+  onInspect: (attemptId: string) => void;
+}) {
+  const running = attempt.status === "running";
   return (
-    <details
-      className="mt-2"
-      open={open}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+    <button
+      type="button"
+      className="mt-2 inline-flex items-center gap-1.5 font-command text-[0.68rem] text-brass hover:text-parchment"
+      aria-haspopup="dialog"
+      aria-label={`${running ? "过程进行中" : "查看过程"}：${attempt.agentName}`}
+      onClick={() => onInspect(attempt.attemptId)}
     >
-      <summary className="cursor-pointer font-command text-[0.68rem] text-brass">过程</summary>
-      {open ? (
-        <AttemptLiveTranscript
-          runId={runId}
-          attemptId={attempt.attemptId}
-          active={attempt.status === "running"}
-        />
-      ) : null}
-    </details>
+      {running ? <span className="ck-live-dot" aria-hidden /> : null}
+      {running ? "过程进行中" : "查看过程"}
+    </button>
   );
+}
+
+function statusClass(status: AttemptRow["status"]): string {
+  if (status === "success") return "text-success";
+  if (status === "failure") return "text-error";
+  if (status === "running") return "text-info";
+  return "text-muted";
 }
 
 function useElapsed(startedAt: string | null, live: boolean): string | null {
@@ -141,13 +137,5 @@ function useElapsed(startedAt: string | null, live: boolean): string | null {
   if (!startedAt) return null;
   const start = new Date(startedAt).getTime();
   if (!Number.isFinite(start)) return null;
-  return formatMs(Math.max(0, now - start));
-}
-
-function formatMs(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  if (m === 0) return `${s}s`;
-  return `${m}m${String(s).padStart(2, "0")}s`;
+  return formatAttemptMs(Math.max(0, now - start));
 }

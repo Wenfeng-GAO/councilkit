@@ -43,3 +43,19 @@ test("深链 /reports/:runId 能直接打开 fixture", async ({ page }) => {
   const missing = page.getByText("找不到这份报告");
   await expect(title.or(missing)).toBeVisible();
 });
+
+test("查看过程打开右侧检查器，Esc 关闭", async ({ page }) => {
+  await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
+  const inspect = page.getByRole("button", { name: /查看过程/ }).first();
+  if ((await inspect.count()) === 0) {
+    test
+      .info()
+      .annotations.push({ type: "skip-reason", description: "fixture has no live attempts" });
+    return;
+  }
+  await inspect.click();
+  const dialog = page.getByRole("dialog", { name: "过程" });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+});

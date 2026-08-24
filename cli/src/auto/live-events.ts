@@ -64,8 +64,12 @@ export class LiveEventCollector {
     } else if (rest.length > 0 && rest.length <= LINE_CAP) {
       this.consider(rest, out);
     }
-    // Drop the last kimi assistant content frame (extractFinalOutput owns it).
-    this.pendingKimiContent = null;
+    // Live sidecar is observational: flush the last kimi frame so the inspector
+    // can show the deliverable. extractFinalOutput still reads stdout itself.
+    if (this.pendingKimiContent !== null) {
+      out.push({ type: "text.delta", text: this.pendingKimiContent });
+      this.pendingKimiContent = null;
+    }
     return out;
   }
 
@@ -116,9 +120,7 @@ export class LiveEventCollector {
       const b = asRecord(block);
       if (b === null || b.type !== "tool_use") continue;
       const name = typeof b.name === "string" && b.name.length > 0 ? b.name : "tool";
-      const input = asRecord(b.input);
-      const raw = input === null ? undefined : (input.command ?? input.cmd);
-      out.push({ type: "tool.completed", name, summary: formatSummary(raw) });
+      out.push({ type: "tool.completed", name, summary: pickToolSummary(asRecord(b.input)) });
     }
   }
 
@@ -139,13 +141,11 @@ export class LiveEventCollector {
         (typeof c.name === "string" && c.name.length > 0 ? c.name : null) ??
         (fn !== null && typeof fn.name === "string" && fn.name.length > 0 ? fn.name : null) ??
         "tool";
-      const args = asRecord(c.args);
-      let command: unknown = args?.command ?? args?.cmd;
-      if (command === undefined && fn !== null && typeof fn.arguments === "string") {
-        const parsed = parseJsonLine(fn.arguments);
-        command = parsed?.command ?? parsed?.cmd;
+      let summary = pickToolSummary(asRecord(c.args));
+      if (summary.length === 0 && fn !== null && typeof fn.arguments === "string") {
+        summary = pickToolSummary(parseJsonLine(fn.arguments));
       }
-      out.push({ type: "tool.completed", name, summary: formatSummary(command) });
+      out.push({ type: "tool.completed", name, summary });
     }
   }
 
@@ -161,7 +161,7 @@ export class LiveEventCollector {
       out.push({
         type: "tool.started",
         name: toolName(item, itemType),
-        summary: formatSummary(item.command ?? item.query ?? item.cmd),
+        summary: pickToolSummary(item),
       });
       return;
     }
@@ -170,7 +170,7 @@ export class LiveEventCollector {
       out.push({
         type: "tool.completed",
         name: toolName(item, itemType),
-        summary: formatSummary(item.command ?? item.query ?? item.cmd),
+        summary: pickToolSummary(item),
       });
       return;
     }
@@ -421,6 +421,27 @@ function toolName(item: Record<string, unknown>, fallback: string): string {
   if (typeof item.name === "string" && item.name.length > 0) return item.name;
   if (typeof item.tool === "string" && item.tool.length > 0) return item.tool;
   return fallback.length > 0 ? fallback : "tool";
+}
+
+const TOOL_SUMMARY_KEYS = [
+  "command",
+  "cmd",
+  "file_path",
+  "target_file",
+  "path",
+  "file",
+  "query",
+  "pattern",
+  "glob",
+] as const;
+
+function pickToolSummary(source: Record<string, unknown> | null): string {
+  if (source === null) return "";
+  for (const key of TOOL_SUMMARY_KEYS) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim().length > 0) return formatSummary(value);
+  }
+  return "";
 }
 
 function formatSummary(raw: unknown): string {

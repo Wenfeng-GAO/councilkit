@@ -26,3 +26,4 @@ test-results/
 
 # GSD planning artifacts (local-only)
 .planning/
+.gstack/

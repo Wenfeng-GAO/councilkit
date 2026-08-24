@@ -195,6 +195,19 @@ export function liveStateFromRecords(
   };
 }
 
+/** Prefer status.json; if a pipeline wiped attempts, refill from transcript. */
+export function mergeLiveProgress(
+  live: CliRunProgress | null,
+  fromTranscript: CliRunProgress | null,
+): CliRunProgress | null {
+  if (live === null) return fromTranscript;
+  if (live.attempts.length > 0) return live;
+  if (fromTranscript && fromTranscript.attempts.length > 0) {
+    return { ...live, attempts: fromTranscript.attempts };
+  }
+  return live;
+}
+
 /** Overlay elapsed time / last tool onto still-running seats. Mutates `live`. */
 export function applyLiveHeartbeat(live: CliRunLiveState, beat: CliRunLiveHeartbeat): void {
   for (const row of live.progress.attempts) {

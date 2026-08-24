@@ -6,6 +6,7 @@ import {
   type ReviewSection,
   splitH3Blocks,
 } from "@/lib/review-report";
+import { type SeatAttemptRef, matchSeatAttempt } from "@/lib/seat-inspector";
 import { useEffect, useState } from "react";
 import "@/styles/report.css";
 
@@ -22,7 +23,15 @@ const SEVERITY_LABEL: Record<NonNullable<ReviewFinding["severity"]>, string> = {
   nit: "琐碎",
 };
 
-export function ReviewReportView({ report }: { report: ParsedReviewReport }) {
+export function ReviewReportView({
+  report,
+  liveAttempts = [],
+  onInspect,
+}: {
+  report: ParsedReviewReport;
+  liveAttempts?: readonly SeatAttemptRef[];
+  onInspect?: (attemptId: string) => void;
+}) {
   const [active, setActive] = useState(report.sections[0]?.id ?? "");
 
   useEffect(() => {
@@ -86,7 +95,12 @@ export function ReviewReportView({ report }: { report: ParsedReviewReport }) {
           </h2>
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">
             {report.attempts.map((attempt) => (
-              <AttemptCard key={`${attempt.name}-${attempt.driver}`} attempt={attempt} />
+              <AttemptCard
+                key={`${attempt.name}-${attempt.driver}`}
+                attempt={attempt}
+                live={matchSeatAttempt(liveAttempts, attempt.name, attempt.driver)}
+                onInspect={onInspect}
+              />
             ))}
           </ul>
         </section>
@@ -115,7 +129,12 @@ export function ReviewReportView({ report }: { report: ParsedReviewReport }) {
           </nav>
           <div className="flex min-w-0 flex-col gap-8">
             {report.sections.map((section) => (
-              <SectionBlock key={section.id} section={section} />
+              <SectionBlock
+                key={section.id}
+                section={section}
+                liveAttempts={liveAttempts}
+                onInspect={onInspect}
+              />
             ))}
           </div>
         </div>
@@ -124,7 +143,15 @@ export function ReviewReportView({ report }: { report: ParsedReviewReport }) {
   );
 }
 
-function AttemptCard({ attempt }: { attempt: ReviewAttemptRow }) {
+function AttemptCard({
+  attempt,
+  live,
+  onInspect,
+}: {
+  attempt: ReviewAttemptRow;
+  live?: SeatAttemptRef;
+  onInspect?: (attemptId: string) => void;
+}) {
   const ok = attempt.result === "ok";
   return (
     <li className="border border-edge bg-surface px-4 py-3">
@@ -146,11 +173,30 @@ function AttemptCard({ attempt }: { attempt: ReviewAttemptRow }) {
         <span className="mx-1.5 text-edge">·</span>
         {attempt.tools === "无过程数据" ? "无过程数据" : `工具 ${attempt.tools}`}
       </p>
+      {live && onInspect ? (
+        <button
+          type="button"
+          className="mt-2 font-command text-[0.68rem] text-brass hover:text-parchment"
+          aria-haspopup="dialog"
+          aria-label={`查看过程：${attempt.name}`}
+          onClick={() => onInspect(live.attemptId)}
+        >
+          查看过程
+        </button>
+      ) : null}
     </li>
   );
 }
 
-function SectionBlock({ section }: { section: ReviewSection }) {
+function SectionBlock({
+  section,
+  liveAttempts,
+  onInspect,
+}: {
+  section: ReviewSection;
+  liveAttempts: readonly SeatAttemptRef[];
+  onInspect?: (attemptId: string) => void;
+}) {
   const appendix = section.id.startsWith("附录") || section.title.startsWith("附录");
   return (
     <section id={section.id} className="scroll-mt-6">
@@ -160,7 +206,7 @@ function SectionBlock({ section }: { section: ReviewSection }) {
       </div>
       {section.title === "结论" ? <VerdictBody body={section.body} /> : null}
       {section.title === "过程对比" ? (
-        <ProcessBody body={section.body} />
+        <ProcessBody body={section.body} liveAttempts={liveAttempts} onInspect={onInspect} />
       ) : appendix ? (
         <AppendixBody body={section.body} />
       ) : section.title === "分歧" ? (
@@ -220,7 +266,15 @@ function parseProcessLine(line: string): ProcessRow | null {
   };
 }
 
-function ProcessBody({ body }: { body: string }) {
+function ProcessBody({
+  body,
+  liveAttempts,
+  onInspect,
+}: {
+  body: string;
+  liveAttempts: readonly SeatAttemptRef[];
+  onInspect?: (attemptId: string) => void;
+}) {
   const notes: string[] = [];
   const rows: ProcessRow[] = [];
   for (const line of body.split("\n")) {
@@ -245,35 +299,54 @@ function ProcessBody({ body }: { body: string }) {
           {note}
         </p>
       ))}
-      {rows.map((row) => (
-        <article
-          key={`${row.name}-${row.driver}`}
-          className="border border-edge bg-surface px-4 py-3"
-        >
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <p className="text-sm font-medium text-fg">{row.name}</p>
-            <p className="font-command text-[0.68rem] text-muted">
-              {row.duration}
-              {row.tools ? ` · 工具 ${row.tools}` : " · 无过程数据"}
-            </p>
-          </div>
-          <p className="mt-1 font-command text-[0.68rem] text-muted">{row.driver}</p>
-          {row.commands.length > 0 ? (
-            <details className="mt-2">
-              <summary className="cursor-pointer text-xs text-brass">
-                查看 {row.commands.length} 条命令
-              </summary>
-              <ol className="mt-2 flex list-decimal flex-col gap-1 pl-4 font-command text-[0.68rem] leading-5 text-parchment">
-                {row.commands.map((command) => (
-                  <li key={command} className="break-all">
-                    {command}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          ) : null}
-        </article>
-      ))}
+      {rows.map((row) => {
+        const live = matchSeatAttempt(liveAttempts, row.name, row.driver);
+        return (
+          <article
+            key={`${row.name}-${row.driver}`}
+            className="border border-edge bg-surface px-4 py-3"
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-sm font-medium text-fg">{row.name}</p>
+              <p className="font-command text-[0.68rem] text-muted">
+                {row.duration}
+                {row.tools ? ` · 工具 ${row.tools}` : " · 无过程数据"}
+              </p>
+            </div>
+            <p className="mt-1 font-command text-[0.68rem] text-muted">{row.driver}</p>
+            {live && onInspect ? (
+              <button
+                type="button"
+                className="mt-2 font-command text-[0.68rem] text-brass hover:text-parchment"
+                aria-haspopup="dialog"
+                aria-label={`查看过程：${row.name}`}
+                onClick={() => onInspect(live.attemptId)}
+              >
+                查看过程
+              </button>
+            ) : null}
+            {live && row.commands.length === 0 && row.tools ? (
+              <p className="mt-1 font-command text-[0.62rem] text-muted">
+                命令未写入报告摘要，完整时间线在过程里。
+              </p>
+            ) : null}
+            {row.commands.length > 0 ? (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-brass">
+                  查看 {row.commands.length} 条命令
+                </summary>
+                <ol className="mt-2 flex list-decimal flex-col gap-1 pl-4 font-command text-[0.68rem] leading-5 text-parchment">
+                  {row.commands.map((command) => (
+                    <li key={command} className="break-all">
+                      {command}
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            ) : null}
+          </article>
+        );
+      })}
     </div>
   );
 }
