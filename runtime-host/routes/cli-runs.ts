@@ -90,8 +90,9 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         }
         const runId = `ck-review-${randomUUID()}`;
         const logPath = join(tmpdir(), `councilkit-host-review-${runId}.log`);
+        let started: { pid: number };
         try {
-          await Promise.resolve(
+          started = await Promise.resolve(
             launcher.start({
               action: "review",
               runId,
@@ -102,6 +103,12 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
           );
         } catch (error) {
           throw mapReviewSpawnError(error, body.pr);
+        }
+        if (!isPidAlive(started.pid)) {
+          throw mapReviewSpawnError(
+            new Error("councilkit review exited before handshake completed"),
+            body.pr,
+          );
         }
         writeRunningStub(runId);
         return { runId, started: true };

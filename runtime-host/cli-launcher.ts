@@ -60,14 +60,15 @@ export function defaultCliRunLauncher(): CliRunLauncher {
           env: process.env,
           cwd: process.cwd(),
         });
-        if (child.pid === undefined) {
+        const pid = child.pid;
+        if (pid === undefined) {
           throw new Error("failed to spawn councilkit (no pid)");
         }
         if (input.action !== "review") {
           child.unref();
-          return { pid: child.pid };
+          return { pid };
         }
-        return handshakeReview(child, input);
+        return handshakeReview(child, input, pid);
       } finally {
         try {
           closeSync(logFd);
@@ -96,16 +97,14 @@ function launchArgs(input: CliRunLaunchRequest): string[] {
   return ["fix", "--run", input.runId];
 }
 
-async function handshakeReview(
+/** Exported for tests: fail if the child already died, even when the run dir exists. */
+export async function handshakeReview(
   child: ChildProcess,
   input: CliRunLaunchRequest,
+  pid: number,
 ): Promise<{ pid: number }> {
-  const pid = child.pid;
-  if (pid === undefined) {
-    throw new Error("failed to spawn councilkit (no pid)");
-  }
-  let exited = false;
-  let exitCode: number | null = null;
+  let exited = child.exitCode !== null;
+  let exitCode: number | null = child.exitCode;
   child.once("exit", (code) => {
     exited = true;
     exitCode = code;
@@ -113,19 +112,33 @@ async function handshakeReview(
   const runDir = join(resolveCliRunsRoot(), input.runId);
   const deadline = Date.now() + REVIEW_HANDSHAKE_MS;
   while (Date.now() < deadline) {
-    if (isRealDir(runDir)) {
-      child.unref();
-      return { pid };
-    }
     if (exited) {
       throw new Error(logTail(input.logPath) || `councilkit review exited ${String(exitCode)}`);
     }
+    if (isRealDir(runDir) && isPidAlive(pid)) {
+      child.unref();
+      return { pid };
+    }
     await sleep(REVIEW_HANDSHAKE_POLL_MS);
   }
-  child.unref();
+  stopDetachedChild(child, pid);
   throw Object.assign(new Error("review handshake timed out waiting for the run directory"), {
     code: "HANDSHAKE_TIMEOUT",
   });
+}
+
+function stopDetachedChild(child: ChildProcess, pid: number): void {
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // already gone
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // already gone
+  }
+  child.unref();
 }
 
 function isRealDir(path: string): boolean {
