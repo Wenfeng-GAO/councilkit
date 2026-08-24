@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cliRunsRoutes } from "@host/routes/cli-runs";
@@ -426,5 +434,270 @@ describe("cli-runs route", () => {
       body: JSON.stringify({ action: "merge" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("POST /actions still 409 when that run's pipeline pid is alive", async () => {
+    seed();
+    const dir = join(home, "runs", RUN_ID);
+    const transcript = readFileSync(join(dir, "transcript.jsonl"), "utf8");
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${transcript}${JSON.stringify({
+        kind: "review.finished",
+        version: 1,
+        status: "completed",
+        endedAt: "2026-08-01T01:00:00.000Z",
+        incomplete: false,
+      })}\n`,
+    );
+    writeFileSync(join(dir, "pipeline.pid"), `${String(process.pid)}\n`);
+    host = await createTestHost({
+      routesFactory: (services) => {
+        services.cliRunLauncher = {
+          start: () => {
+            throw new Error("launcher must not start when pipeline pid is alive");
+          },
+        };
+        return cliRunsRoutes(services);
+      },
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/actions`, {
+      method: "POST",
+      headers: authedHeaders(host),
+      body: JSON.stringify({ action: "fix" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: false; error: { code: string; message: string } };
+    expect(body.error.code).toBe("EXECUTION_CONFLICT");
+    expect(body.error.message).toContain("already running");
+  });
+});
+
+const GH_PR = "https://github.com/acme/repo/pull/1";
+
+type StartReviewLaunch = {
+  action: string;
+  runId: string;
+  pr?: string;
+  repo?: string;
+};
+
+function seedPrJury(): void {
+  writeFileSync(
+    join(home, "councils.json"),
+    `${JSON.stringify({
+      format: "councilkit-councils",
+      version: 1,
+      councils: [
+        {
+          id: "pr-jury",
+          name: "pr-jury",
+          topic: "jury",
+          background: "",
+          targetOutput: "",
+          agentIds: ["a"],
+          rounds: 1,
+          reporterAgentId: "a",
+        },
+      ],
+    })}\n`,
+  );
+}
+
+async function bootStartReview(start?: (input: StartReviewLaunch) => { pid: number }): Promise<{
+  launches: StartReviewLaunch[];
+}> {
+  const launches: StartReviewLaunch[] = [];
+  host = await createTestHost({
+    routesFactory: (services) => {
+      services.cliRunLauncher = {
+        start: (input: StartReviewLaunch) => {
+          launches.push(input);
+          return start ? start(input) : { pid: 4242 };
+        },
+      };
+      return cliRunsRoutes(services);
+    },
+  });
+  return { launches };
+}
+
+describe("POST /api/v1/cli-runs start review", () => {
+  it("POST /api/v1/cli-runs without session cookie returns 401 UNAUTHENTICATED", async () => {
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: {
+        Host: CANONICAL_HOST_HEADER,
+        Origin: "http://127.0.0.1:43127",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { ok: false; error: { code: string } };
+    expect(body.error.code).toBe("UNAUTHENTICATED");
+    expect(launches).toEqual([]);
+  });
+
+  it("POST /api/v1/cli-runs with session but missing x-councilkit-csrf returns 403 CSRF_MISMATCH", async () => {
+    const { launches } = await bootStartReview();
+    const headers = authedHeaders(host as TestHost);
+    const { "x-councilkit-csrf": _csrf, ...withoutCsrf } = headers;
+    void _csrf;
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: withoutCsrf,
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { ok: false; error: { code: string } };
+    expect(body.error.code).toBe("CSRF_MISMATCH");
+    expect(launches).toEqual([]);
+  });
+
+  it("POST /api/v1/cli-runs body { pr, extra: 1 } returns 400 (strict DTO)", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, extra: 1 }),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toEqual([]);
+  });
+
+  it("POST /api/v1/cli-runs rejects a non GitHub/AntCode URL before spawn", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: "https://example.com/x" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { code: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(launches).toEqual([]);
+  });
+
+  it("POST /api/v1/cli-runs with a GitHub PR and pr-jury returns 200 and spawns review", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: true;
+      data: { runId: string; started: true };
+    };
+    expect(body.data.started).toBe(true);
+    expect(body.data.runId).toMatch(/^ck-review-[0-9a-fA-F-]+$/);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.action).toBe("review");
+    expect(launches[0]?.pr).toBe(GH_PR);
+    expect(launches[0]?.runId).toBe(body.data.runId);
+    expect(launches[0]?.action).not.toBe("fix");
+  });
+
+  it("POST /api/v1/cli-runs passes repo through to launcher.start", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const repo = "/abs/path/to/checkout";
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, repo }),
+    });
+    expect(res.status).toBe(200);
+    expect(launches[0]?.repo).toBe(repo);
+  });
+
+  it("POST /api/v1/cli-runs rejects repo --against (argv-injection guard)", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, repo: "--against" }),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toEqual([]);
+  });
+
+  it("two overlapping POST /api/v1/cli-runs both return 200 with distinct runIds and no pipeline.pid", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const headers = authedHeaders(host as TestHost);
+    const [first, second] = await Promise.all([
+      fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ pr: GH_PR }),
+      }),
+      fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ pr: "https://github.com/acme/other/pull/2" }),
+      }),
+    ]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const a = (await first.json()) as { ok: true; data: { runId: string } };
+    const b = (await second.json()) as { ok: true; data: { runId: string } };
+    expect(a.data.runId).not.toBe(b.data.runId);
+    expect(launches).toHaveLength(2);
+    expect(existsSync(join(home, "runs", a.data.runId, "pipeline.pid"))).toBe(false);
+    expect(existsSync(join(home, "runs", b.data.runId, "pipeline.pid"))).toBe(false);
+  });
+
+  it("POST /api/v1/cli-runs create still 200 when another ck-review fixture is running", async () => {
+    seed();
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: true; data: { runId: string } };
+    expect(body.data.runId).not.toBe(RUN_ID);
+    expect(launches).toHaveLength(1);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
+  });
+
+  it("POST /api/v1/cli-runs missing councils.json tells the user to run councilkit init", async () => {
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { message: string } };
+    expect(body.error.message).toContain("councilkit init");
+    expect(launches).toEqual([]);
+  });
+
+  it("POST /api/v1/cli-runs maps no local clone to 400 with project key and CLI hint", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview(() => {
+      throw new Error("no local clone for acme/repo");
+    });
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { message: string } };
+    expect(body.error.message).toContain("acme/repo");
+    expect(body.error.message).toContain("councilkit review");
+    expect(launches).toHaveLength(1);
   });
 });

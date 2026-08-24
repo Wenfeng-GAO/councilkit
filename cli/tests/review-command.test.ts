@@ -266,6 +266,52 @@ describe("cli review command — argument matrix", () => {
   it("rejects blank --pr (whitespace only)", async () => {
     await expectUsage(["--agents", "[]", "--pr", "  "], "empty or whitespace");
   });
+
+  it("rejects --run-id together with --resume", async () => {
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9";
+    await expectUsage(
+      [
+        "--agents",
+        "[]",
+        "--aggregator",
+        "A",
+        "--task",
+        "x",
+        "--run-id",
+        runId,
+        "--resume",
+        runId,
+      ],
+      "mutually exclusive",
+    );
+  });
+
+  it("rejects --run-id that is not a ck-review-uuid", async () => {
+    await expectUsage(
+      ["--agents", "[]", "--aggregator", "A", "--task", "x", "--run-id", "not-a-run-id"],
+      "ck-review-",
+    );
+  });
+
+  it("rejects --run-id when transcript.jsonl already exists", async () => {
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9";
+    const dir = join(home, "runs", runId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "transcript.jsonl"), "{}\n");
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    await expectUsage(
+      ["--agents", `["A"]`, "--aggregator", "A", "--task", "x", "--run-id", runId],
+      "already exists",
+    );
+  });
 });
 
 describe("cli review command — end-to-end (fake spawn)", () => {
@@ -424,6 +470,43 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(live.status).toBe("completed");
     expect(live.progress.phase).toBe("done");
     expect(live.progress.attempts.length).toBe(4);
+  });
+
+  it("honors --run-id for a new run (onRunCreated / report path)", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const sink = makeSink();
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9";
+    let created: string | undefined;
+    let exitCode = -1;
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--run-id",
+          runId,
+        ],
+        sink,
+        {
+          spawnImpl: fakeSpawn(),
+          onRunCreated: (id) => {
+            created = id;
+          },
+        },
+      );
+    } catch (e) {
+      expect(e).toBeInstanceOf(ReviewExit);
+      exitCode = (e as ReviewExit).exitCode;
+    }
+    expect(exitCode).toBe(0);
+    expect(created).toBe(runId);
+    const outcome = sink.finished as { runId: string; reportPath: string };
+    expect(outcome.runId).toBe(runId);
+    expect(outcome.reportPath).toContain(runId);
   });
 
   it("positional PR URL uses default pr-jury", async () => {

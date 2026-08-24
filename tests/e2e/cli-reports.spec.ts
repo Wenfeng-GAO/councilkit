@@ -44,6 +44,29 @@ test("深链 /reports/:runId 能直接打开 fixture", async ({ page }) => {
   await expect(title.or(missing)).toBeVisible();
 });
 
+test("/reports 开始审查表单在有 fixture 时也可见", async ({ page }) => {
+  await page.goto("/reports");
+  await expect(page.getByRole("heading", { name: "CLI 报告" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始审查" })).toBeVisible();
+  await expect(page.getByLabel("PR URL")).toBeVisible();
+  await expect(page.getByLabel("本地仓库路径")).toBeVisible();
+});
+
+test("开始审查提交无效 URL 留在 /reports 并显示错误", async ({ page }) => {
+  await page.goto("/reports");
+  await page.getByLabel("PR URL").fill("https://example.com/nope");
+  await page.getByRole("button", { name: "开始审查" }).click();
+  await expect(page).toHaveURL(/\/reports\/?$/);
+  await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("开始审查提交 GitHub PR 后导航到 /reports/<runId>", async ({ page }) => {
+  await page.goto("/reports");
+  await page.getByLabel("PR URL").fill("https://github.com/acme/repo/pull/1");
+  await page.getByRole("button", { name: "开始审查" }).click();
+  await expect(page).toHaveURL(/\/reports\/ck-review-[0-9a-fA-F-]+/);
+});
+
 test("查看过程打开右侧检查器，Esc 关闭", async ({ page }) => {
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
   const inspect = page.getByRole("button", { name: /查看过程/ }).first();
