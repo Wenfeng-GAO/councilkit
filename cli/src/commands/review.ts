@@ -136,6 +136,7 @@ export async function runReview(
         concurrency: { type: "string" },
         out: { type: "string" },
         resume: { type: "string" },
+        "run-id": { type: "string" },
         repo: { type: "string" },
         against: { type: "string" },
       },
@@ -175,6 +176,18 @@ export async function runReview(
     focus: values.focus !== undefined ? (values.focus as string) : undefined,
     councilTopic: undefined,
   };
+
+  const assignedRunIdRaw = values["run-id"] as string | undefined;
+  const resumeRaw = values.resume as string | undefined;
+  if (assignedRunIdRaw !== undefined && resumeRaw !== undefined) {
+    throw errors.usage("--run-id and --resume are mutually exclusive");
+  }
+  if (assignedRunIdRaw !== undefined) {
+    const assigned = assignedRunIdRaw.trim();
+    if (!RUN_ID_PATTERN.test(assigned)) {
+      throw errors.usage(`--run-id must be a ck-review-<uuid> run id, got "${assignedRunIdRaw}"`);
+    }
+  }
 
   // --- agents / aggregator resolution -------------------------------------
   const store = new Store();
@@ -280,7 +293,6 @@ export async function runReview(
     concurrencyRaw !== undefined ? parsePositiveInt(concurrencyRaw, "concurrency") : undefined;
 
   // --- resume: load the prior run + validate immutable inputs (P2-2) -------
-  const resumeRaw = values.resume as string | undefined;
   let priorRecords: ReviewTranscriptRecord[] = [];
   let priorStartedAt: string | undefined;
   const reusedByAttemptId = new Map<string, AttemptResult>();
@@ -413,8 +425,16 @@ export async function runReview(
   // --- run scaffold -------------------------------------------------------
   // A resume CONTINUES the same run id: records are appended to the existing
   // transcript and report.md is re-rendered, never a parallel run.
+  const assignedRunId = assignedRunIdRaw !== undefined ? assignedRunIdRaw.trim() : undefined;
   const runId =
-    resumeRaw !== undefined ? (resumeRaw as string).trim() : `ck-review-${randomUUID()}`;
+    assignedRunId !== undefined
+      ? assignedRunId
+      : resumeRaw !== undefined
+        ? resumeRaw.trim()
+        : `ck-review-${randomUUID()}`;
+  if (assignedRunId !== undefined && existsSync(paths.transcript(runId))) {
+    throw errors.usage(`--run-id ${runId} already exists`);
+  }
   deps.onRunCreated?.(runId);
   const runDir = paths.runDir(runId);
   const transcriptPath = paths.transcript(runId);

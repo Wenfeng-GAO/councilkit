@@ -16,6 +16,9 @@
  */
 
 import { Buffer } from "node:buffer";
+import { parseAntCodePrUrl } from "@shared/runtime/pr-url";
+
+export { parseAntCodePrUrl };
 
 /** Upper bound on a single Attempt's output embedded in the aggregate prompt.
  * Keeps the whole prompt well under ARG_MAX even with many Attempts. */
@@ -77,24 +80,6 @@ const PROXY_RULE =
 /** Hosts for which a copy-pasteable access hint exists (P1-2). */
 const GITHUB_HOST = "github.com";
 const ANTCODE_HOST = "code.alipay.com";
-
-/** Safe AntCode project path segment (group/subgroup/project). Anything else
- * (shell metachars, dots-only, empty) disqualifies the hint — a user-supplied
- * URL must never become an injectable shell command. */
-const ANTCODE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
-
-/** Parse `/<group.../project>/pull_requests/<iid>` from an AntCode PR URL.
- * Returns null for any other shape (or unsafe characters) → no hint. */
-export function parseAntCodePrUrl(url: URL): { project: string; iid: string } | null {
-  const segments = url.pathname.split("/").filter((s) => s.length > 0);
-  const prIdx = segments.indexOf("pull_requests");
-  if (prIdx < 1 || prIdx !== segments.length - 2) return null;
-  const iid = segments[prIdx + 1];
-  if (!/^[0-9]+$/.test(iid)) return null;
-  const projectSegments = segments.slice(0, prIdx);
-  if (!projectSegments.every((s) => ANTCODE_SEGMENT.test(s))) return null;
-  return { project: projectSegments.join("/"), iid };
-}
 
 /** Build the「访问提示」block for a `--pr` value (P1-2), or null when the host
  * is unknown / the value is not a URL / the URL is unsafe to echo as a shell

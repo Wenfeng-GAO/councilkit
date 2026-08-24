@@ -1,9 +1,12 @@
 /**
- * Session-authenticated read of the CLI run library, plus POST actions that
- * spawn the same-checkout `councilkit` CLI (fix / re-review). The Host never
- * writes agents/councils and never runs review agents itself.
+ * Session-authenticated read of the CLI run library, plus POST create-review
+ * and POST actions that spawn the same-checkout `councilkit` CLI
+ * (review / fix / re-review). The Host never writes agents/councils and never
+ * runs review agents itself.
  */
-import { type Stats, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { type Stats, existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   type AttemptLiveEvent,
@@ -11,17 +14,23 @@ import {
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
+import { CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { makeError } from "@shared/runtime/errors";
+import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunStartReviewRequest,
+  type CliRunStartReviewResponse,
   type CliRunsListResponse,
   cliRunActionRequestSchema,
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunStartReviewRequestSchema,
+  cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
 } from "@shared/runtime/schemas";
 import { type CliRunLauncher, defaultCliRunLauncher, isPidAlive } from "../cli-launcher";
@@ -38,6 +47,65 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       auth: "session",
       responseSchema: cliRunsListResponseSchema,
       handler: (): CliRunsListResponse => ({ runs: listCliRuns(process.env) }),
+    },
+    {
+      method: "POST",
+      pattern: "/api/v1/cli-runs",
+      auth: "mutation",
+      bodySchema: cliRunStartReviewRequestSchema,
+      responseSchema: cliRunStartReviewResponseSchema,
+      handler: async (ctx): Promise<CliRunStartReviewResponse> => {
+        const body = ctx.body as CliRunStartReviewRequest;
+        if (body.repo?.startsWith("-")) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "repo must be a filesystem path, not a flag.", {
+              retryable: false,
+            }),
+          );
+        }
+        if (parseApplyPrUrl(body.pr) === null) {
+          throw httpError(
+            400,
+            makeError(
+              "BAD_REQUEST",
+              "discovery",
+              "PR URL must be a GitHub or AntCode pull request.",
+              {
+                retryable: false,
+              },
+            ),
+          );
+        }
+        if (!hasPrJuryCouncil()) {
+          throw httpError(
+            400,
+            makeError(
+              "BAD_REQUEST",
+              "discovery",
+              "default pr-jury is missing; run `councilkit init`",
+              { retryable: false },
+            ),
+          );
+        }
+        const runId = `ck-review-${randomUUID()}`;
+        const logPath = join(tmpdir(), `councilkit-host-review-${runId}.log`);
+        try {
+          await Promise.resolve(
+            launcher.start({
+              action: "review",
+              runId,
+              pr: body.pr,
+              repo: body.repo,
+              logPath,
+            }),
+          );
+        } catch (error) {
+          throw mapReviewSpawnError(error, body.pr);
+        }
+        writeRunningStub(runId);
+        return { runId, started: true };
+      },
     },
     {
       method: "GET",
@@ -106,7 +174,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       auth: "mutation",
       bodySchema: cliRunActionRequestSchema,
       responseSchema: cliRunActionResponseSchema,
-      handler: (ctx): CliRunActionResponse => {
+      handler: async (ctx): Promise<CliRunActionResponse> => {
         const runId = ctx.params.runId ?? "";
         if (!isCliRunId(runId) || !runId.startsWith("ck-review-")) {
           throw httpError(
@@ -148,7 +216,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         writeStartingStatus(runDir, body.action);
         let started: { pid: number };
         try {
-          started = launcher.start({ action: body.action, runId, logPath });
+          started = await Promise.resolve(launcher.start({ action: body.action, runId, logPath }));
         } catch (error) {
           throw httpError(
             500,
@@ -169,6 +237,75 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       },
     },
   ];
+}
+
+function hasPrJuryCouncil(): boolean {
+  try {
+    const home = resolveCouncilkitHome(process.env);
+    const raw = readFileSync(join(home, "councils.json"), "utf8");
+    const parsed = JSON.parse(raw) as { councils?: Array<{ id?: unknown; name?: unknown }> };
+    if (!Array.isArray(parsed.councils)) return false;
+    return parsed.councils.some(
+      (council) => council.name === "pr-jury" || council.id === "pr-jury",
+    );
+  } catch {
+    return false;
+  }
+}
+
+function mapReviewSpawnError(error: unknown, pr: string): never {
+  const message = error instanceof Error ? error.message : "failed to spawn councilkit";
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code: unknown }).code)
+      : "";
+  if (code === "HANDSHAKE_TIMEOUT" || message.includes("HANDSHAKE_TIMEOUT")) {
+    throw httpError(
+      500,
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", message.slice(0, 1024), { retryable: true }),
+    );
+  }
+  if (/no local clone/i.test(message)) {
+    const project = projectKeyFromPr(pr) ?? "unknown";
+    throw httpError(
+      400,
+      makeError(
+        "BAD_REQUEST",
+        "discovery",
+        `no local clone for ${project}. Run: councilkit review ${pr} --repo <path>`,
+        { retryable: false },
+      ),
+    );
+  }
+  if (message.includes("pr-jury")) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "default pr-jury is missing; run `councilkit init`", {
+        retryable: false,
+      }),
+    );
+  }
+  throw httpError(
+    500,
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", message.slice(0, 1024), { retryable: false }),
+  );
+}
+
+function writeRunningStub(runId: string): void {
+  const statusPath = join(resolveCliRunsRoot(), runId, CLI_RUN_STATUS_FILE);
+  if (existsSync(statusPath)) return;
+  const now = new Date().toISOString();
+  const live = {
+    version: 1 as const,
+    status: "running" as const,
+    progress: { phase: "attempts" as const, attempts: [] as const, updatedAt: now },
+    pipeline: null,
+  };
+  try {
+    writeFileSync(statusPath, `${JSON.stringify(live)}\n`, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // CLI will write status.json as soon as it boots
+  }
 }
 
 function resolveLauncher(services?: HostServices): CliRunLauncher {

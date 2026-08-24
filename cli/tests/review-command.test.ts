@@ -270,18 +270,7 @@ describe("cli review command — argument matrix", () => {
   it("rejects --run-id together with --resume", async () => {
     const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9";
     await expectUsage(
-      [
-        "--agents",
-        "[]",
-        "--aggregator",
-        "A",
-        "--task",
-        "x",
-        "--run-id",
-        runId,
-        "--resume",
-        runId,
-      ],
+      ["--agents", "[]", "--aggregator", "A", "--task", "x", "--run-id", runId, "--resume", runId],
       "mutually exclusive",
     );
   });

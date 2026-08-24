@@ -549,6 +549,22 @@ export const cliRunActionResponseSchema = z
   .strict();
 export type CliRunActionResponse = z.infer<typeof cliRunActionResponseSchema>;
 
+export const cliRunStartReviewRequestSchema = z
+  .object({
+    pr: z.string().min(1),
+    repo: z.string().min(1).optional(),
+  })
+  .strict();
+export type CliRunStartReviewRequest = z.infer<typeof cliRunStartReviewRequestSchema>;
+
+export const cliRunStartReviewResponseSchema = z
+  .object({
+    runId: z.string().min(1),
+    started: z.literal(true),
+  })
+  .strict();
+export type CliRunStartReviewResponse = z.infer<typeof cliRunStartReviewResponseSchema>;
+
 const attemptLiveEventSchema = z.discriminatedUnion("type", [
   z
     .object({

@@ -3,9 +3,11 @@
  * Used by `councilkit apply`. Never shells out; argv is passed to spawn.
  */
 import { spawn } from "node:child_process";
+import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
 import { errors } from "../errors";
 import { findExecutable, resolveExecutable } from "./driver-commands";
-import { parseAntCodePrUrl } from "./templates/review";
+
+export { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl };
 
 export interface RunCommandInput {
   executable: string;
@@ -32,39 +34,8 @@ export interface CheckedOutPr {
 }
 
 const DEFAULT_CMD_TIMEOUT_MS = 5 * 60 * 1000;
-const GITHUB_HOST = "github.com";
-const ANTCODE_HOST = "code.alipay.com";
 const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
 const GH_JSON_FIELDS = "headRefName,headRepository,headRepositoryOwner,isCrossRepository,url";
-
-export function parseGitHubPrUrl(url: URL): { owner: string; repo: string; number: string } | null {
-  const segments = url.pathname.split("/").filter((s) => s.length > 0);
-  const pullIdx = segments.indexOf("pull");
-  if (pullIdx !== 2 || segments.length < 4) return null;
-  const owner = segments[0];
-  const repo = segments[1];
-  const number = segments[3];
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(owner)) return null;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(repo)) return null;
-  if (!/^[0-9]+$/.test(number)) return null;
-  return { owner, repo, number };
-}
-
-export function parseApplyPrUrl(pr: string): { kind: "github" | "antcode"; url: URL } | null {
-  let url: URL;
-  try {
-    url = new URL(pr);
-  } catch {
-    return null;
-  }
-  if (url.host === GITHUB_HOST && parseGitHubPrUrl(url) !== null) {
-    return { kind: "github", url };
-  }
-  if (url.host === ANTCODE_HOST && parseAntCodePrUrl(url) !== null) {
-    return { kind: "antcode", url };
-  }
-  return null;
-}
 
 /** Env for internal CLIs (antcode): strip proxies on that one command only. */
 export function internalToolEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

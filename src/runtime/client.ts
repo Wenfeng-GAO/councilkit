@@ -7,6 +7,8 @@ import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunStartReviewRequest,
+  type CliRunStartReviewResponse,
   type CliRunsListResponse,
   type CloseScopeResponse,
   type ControllerRequest,
@@ -29,6 +31,7 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
   closeScopeResponseSchema,
   createScopeResponseSchema,
@@ -167,6 +170,14 @@ export class RuntimeClient {
     return this.call("POST", `/api/v1/cli-runs/${encodeURIComponent(runId)}/actions`, {
       body,
       schema: cliRunActionResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  startCliReview(body: CliRunStartReviewRequest): Promise<CliRunStartReviewResponse> {
+    return this.call("POST", "/api/v1/cli-runs", {
+      body,
+      schema: cliRunStartReviewResponseSchema,
       auth: "mutation",
     });
   }

@@ -11,11 +11,13 @@
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { projectKeyFromPr } from "@shared/runtime/pr-url";
 import { errors } from "../errors";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
-import { type RunCommand, parseApplyPrUrl, parseGitHubPrUrl } from "./checkout-pr";
-import { parseAntCodePrUrl } from "./templates/review";
+import type { RunCommand } from "./checkout-pr";
+
+export { projectKeyFromPr };
 
 export interface LocalRepo {
   path: string;
@@ -27,17 +29,6 @@ interface ReposFile {
   format: "councilkit-repos";
   version: 1;
   repos: Array<{ project: string; path: string }>;
-}
-
-export function projectKeyFromPr(pr: string): string | null {
-  const parsed = parseApplyPrUrl(pr);
-  if (parsed === null) return null;
-  if (parsed.kind === "github") {
-    const gh = parseGitHubPrUrl(parsed.url);
-    return gh ? `${gh.owner}/${gh.repo}` : null;
-  }
-  const ant = parseAntCodePrUrl(parsed.url);
-  return ant ? ant.project : null;
 }
 
 /** Extract `group/project` from a git remote URL. */

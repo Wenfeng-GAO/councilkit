@@ -109,6 +109,25 @@ if (process.env.COUNCILKIT_E2E === "1") {
       },
     })}\n`,
   );
+  writeFileSync(
+    join(home, "councils.json"),
+    `${JSON.stringify({
+      format: "councilkit-councils",
+      version: 1,
+      councils: [
+        {
+          id: "pr-jury",
+          name: "pr-jury",
+          topic: "e2e",
+          background: "",
+          targetOutput: "",
+          agentIds: ["a"],
+          rounds: 1,
+          reporterAgentId: "a",
+        },
+      ],
+    })}\n`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +717,46 @@ async function main(): Promise<void> {
     driverCapabilities: () =>
       DRIVER_IDS.map((driverId) => ({ driverId, capability: "ready" as const })),
   };
+  if (process.env.COUNCILKIT_E2E === "1") {
+    services.cliRunLauncher = {
+      start: (input: { action: string; runId: string }) => {
+        const home = process.env.COUNCILKIT_HOME;
+        if (home === undefined || home.length === 0) {
+          throw new Error("COUNCILKIT_HOME missing in e2e host");
+        }
+        const runDir = join(home, "runs", input.runId);
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+          join(runDir, "transcript.jsonl"),
+          `${JSON.stringify({
+            kind: "review.started",
+            version: 1,
+            runId: input.runId,
+            startedAt: new Date().toISOString(),
+            task: { task: "e2e-started-review" },
+            attempts: [],
+            aggregator: {
+              attemptId: "a",
+              agentId: "a",
+              agentName: "A",
+              driverId: "kimi-stream-json",
+              modelId: "kimi-code/k3",
+            },
+          })}\n`,
+        );
+        writeFileSync(
+          join(runDir, "status.json"),
+          `${JSON.stringify({
+            version: 1,
+            status: "running",
+            progress: { phase: "attempts", attempts: [], updatedAt: new Date().toISOString() },
+            pipeline: null,
+          })}\n`,
+        );
+        return { pid: 4242 };
+      },
+    };
+  }
 
   const routes: Route[] = [
     ...healthRoutes(services),
@@ -705,7 +764,7 @@ async function main(): Promise<void> {
     ...modelRoutes(services),
     ...withAckRecording(withEventStreamTracking(scopeRoutes(services))),
     ...diagnosticsRoutes(services),
-    ...cliRunsRoutes(),
+    ...cliRunsRoutes(services),
     ...testRoutes(scopeManager, executions, profileProbe),
   ];
 

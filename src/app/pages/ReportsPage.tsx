@@ -1,3 +1,4 @@
+import { StartReviewForm } from "@/components/report/StartReviewForm";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { groupCliRuns } from "@/lib/report-groups";
@@ -47,15 +48,13 @@ export function ReportsPage() {
           读取本机 CLI 落盘的 report.md（与浏览器讨论房间不互通）。
         </p>
       </header>
+      <StartReviewForm />
       {query.isPending ? <p className="text-sm text-muted">正在读取报告…</p> : null}
       {query.isError ? (
         <EmptyState title="无法读取 CLI 报告" hint="确认 Runtime Host 在线，且本机有 CLI runs。" />
       ) : null}
       {query.isSuccess && query.data.runs.length === 0 ? (
-        <EmptyState
-          title="还没有 CLI 报告"
-          hint="先运行 councilkit init，再 councilkit review <pr-url>。"
-        />
+        <EmptyState title="还没有 CLI 报告" hint="在上方粘贴 PR URL 开始审查。" />
       ) : null}
       {query.isSuccess && query.data.runs.length > 0 ? (
         <div className="flex flex-col gap-8">
@@ -150,9 +149,7 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
           {
             run.progress.attempts.filter(
               (row) =>
-                row.status === "success" ||
-                row.status === "failure" ||
-                row.status === "cancelled",
+                row.status === "success" || row.status === "failure" || row.status === "cancelled",
             ).length
           }
           /{run.progress.attempts.length} 席位已结束
