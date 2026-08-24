@@ -1,3 +1,4 @@
+import { StartReviewForm } from "@/components/report/StartReviewForm";
 import { type CSSProperties, type ReactNode, useState } from "react";
 import { Link } from "react-router-dom";
 import "@/styles/landing.css";
@@ -63,15 +64,20 @@ export function Landing() {
             组成讨论席或陪审团。它们要么轮流挑战彼此，要么在隔离目录里独立审查。产物是一份可归档的
             Markdown，不是又一个聊天窗口。
           </p>
-          <div className="mt-7 flex flex-wrap gap-3">
-            <Link to="/rooms/new" className="ck-cta ck-cta-primary">
+          <div className="mt-7 max-w-xl">
+            <p className="font-command text-[0.62rem] uppercase tracking-[0.16em] text-brass">
+              审查一个 PR
+            </p>
+            <div className="mt-3">
+              <StartReviewForm />
+            </div>
+          </div>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link to="/rooms/new" className="ck-cta ck-cta-ghost">
               去新建房间
             </Link>
             <Link to="/reports" className="ck-cta ck-cta-ghost">
               查看 CLI 报告
-            </Link>
-            <Link to="/reports#review" className="ck-cta ck-cta-ghost">
-              贴 URL 开审查
             </Link>
             <Link to="/settings" className="ck-cta ck-cta-ghost">
               检查 Host
