@@ -89,6 +89,18 @@ describe("foldLiveEvents", () => {
       ],
     });
   });
+
+  it("lifts nameless empty tools even when still started", () => {
+    const blocks = foldLiveEvents([
+      { seq: 1, at: "t0", type: "tool.started", name: "tool", summary: "" },
+      { seq: 2, at: "t1", type: "tool.completed", name: "tool", summary: "" },
+      { seq: 3, at: "t2", type: "tool.completed", name: "Read", summary: "a.go" },
+    ]);
+    expect(silentToolTally(blocks).tally).toEqual([{ name: "tool", count: 1 }]);
+    expect(silentToolTally(blocks).timeline).toEqual([
+      { kind: "tool", name: "Read", summary: "a.go", status: "completed", at: "t2" },
+    ]);
+  });
 });
 
 describe("formatElapsed", () => {

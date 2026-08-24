@@ -80,7 +80,10 @@ export function silentToolTally(blocks: readonly TimelineBlock[]): {
   const counts = new Map<string, number>();
   const timeline: TimelineBlock[] = [];
   for (const block of blocks) {
-    if (block.kind === "tool" && block.summary.length === 0 && block.status === "completed") {
+    if (
+      block.kind === "tool" &&
+      (block.summary.length === 0 || block.name.toLowerCase() === "tool")
+    ) {
       counts.set(block.name, (counts.get(block.name) ?? 0) + 1);
       continue;
     }

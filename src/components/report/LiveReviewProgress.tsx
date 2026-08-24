@@ -1,3 +1,4 @@
+import { unwrapShellSummary } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
@@ -105,12 +106,12 @@ export function LiveReviewProgress({
                 {run.kind === "squad" ? "进行中…" : "审查中…"}
               </p>
             ) : null}
-            {attempt.status === "running" && attempt.lastActivity ? (
+            {attempt.status === "running" && activityLabel(attempt.lastActivity) ? (
               <p
                 className="mt-1 truncate font-command text-[0.68rem] text-muted"
-                title={attempt.lastActivity}
+                title={activityLabel(attempt.lastActivity) ?? undefined}
               >
-                {attempt.lastActivity}
+                {activityLabel(attempt.lastActivity)}
               </p>
             ) : null}
             <InspectButton attempt={attempt} onInspect={onInspect} />
@@ -119,6 +120,13 @@ export function LiveReviewProgress({
       </ul>
     </section>
   );
+}
+
+function activityLabel(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const text = unwrapShellSummary(raw).trim();
+  if (!text || text.toLowerCase() === "tool") return null;
+  return text;
 }
 
 function InspectButton({
