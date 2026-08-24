@@ -20,6 +20,7 @@ const STATUS_PILL: Record<
 const KIND_LABEL: Record<CliRunSummaryDto["kind"], string> = {
   review: "审查",
   discuss: "讨论",
+  squad: "工程班",
   unknown: "Run",
 };
 
@@ -88,6 +89,38 @@ export function ReportsPage() {
   );
 }
 
+function runningPhaseHint(run: CliRunSummaryDto): string {
+  const phase = run.progress?.phase;
+  if (run.kind === "squad") {
+    switch (phase) {
+      case "briefing":
+        return " · 简报";
+      case "planning":
+        return " · 规划";
+      case "implementing":
+        return " · 实现";
+      case "auditing":
+        return " · 审计";
+      case "snapshotting":
+        return " · 快照";
+      case "reviewing":
+        return " · 评审";
+      case "fixing":
+        return " · 修复轮";
+      case "integrating":
+        return " · 集成";
+      default:
+        return "";
+    }
+  }
+  if (phase === "aggregating" || phase === "plan-aggregating") return " · 正在汇总";
+  if (phase === "planning") return " · 起草方案";
+  if (phase === "plan-review") return " · 方案陪审";
+  if (phase === "applying") return " · 落地中";
+  if (phase === "re-reviewing") return " · 复审中";
+  return "";
+}
+
 function RunRow({ run }: { run: CliRunSummaryDto }) {
   const pill = STATUS_PILL[run.status];
   return (
@@ -120,17 +153,7 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
             ).length
           }
           /{run.progress.attempts.length} 席位已结束
-          {run.progress.phase === "aggregating" || run.progress.phase === "plan-aggregating"
-            ? " · 正在汇总"
-            : run.progress.phase === "planning"
-              ? " · 起草方案"
-              : run.progress.phase === "plan-review"
-                ? " · 方案陪审"
-                : run.progress.phase === "applying"
-                  ? " · 落地中"
-                  : run.progress.phase === "re-reviewing"
-                    ? " · 复审中"
-                    : ""}
+          {runningPhaseHint(run)}
         </p>
       ) : null}
     </Link>

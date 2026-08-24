@@ -6,15 +6,27 @@
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 
-export type CliRunProgressPhase =
-  | "attempts"
-  | "aggregating"
-  | "done"
-  | "planning"
-  | "plan-review"
-  | "plan-aggregating"
-  | "applying"
-  | "re-reviewing";
+export const CLI_RUN_PROGRESS_PHASES = [
+  "attempts",
+  "aggregating",
+  "done",
+  "planning",
+  "plan-review",
+  "plan-aggregating",
+  "applying",
+  "re-reviewing",
+  "briefing",
+  "implementing",
+  "reviewing",
+  "auditing",
+  "snapshotting",
+  "fixing",
+  "integrating",
+] as const;
+
+export type CliRunProgressPhase = (typeof CLI_RUN_PROGRESS_PHASES)[number];
+
+const PROGRESS_PHASE_SET = new Set<string>(CLI_RUN_PROGRESS_PHASES);
 
 export type CliRunPipelinePhase =
   | "planning"
@@ -342,16 +354,7 @@ function parseProgress(value: unknown): CliRunProgress | null {
   if (value === null || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   const phase = row.phase;
-  if (
-    phase !== "attempts" &&
-    phase !== "aggregating" &&
-    phase !== "done" &&
-    phase !== "planning" &&
-    phase !== "plan-review" &&
-    phase !== "plan-aggregating" &&
-    phase !== "applying" &&
-    phase !== "re-reviewing"
-  ) {
+  if (typeof phase !== "string" || !PROGRESS_PHASE_SET.has(phase)) {
     return null;
   }
   if (!Array.isArray(row.attempts)) return null;
@@ -362,7 +365,7 @@ function parseProgress(value: unknown): CliRunProgress | null {
     attempts.push(parsed);
   }
   const updatedAt = typeof row.updatedAt === "string" ? row.updatedAt : null;
-  return { phase, attempts, updatedAt };
+  return { phase: phase as CliRunProgressPhase, attempts, updatedAt };
 }
 
 function parseAttempt(value: unknown): CliRunAttemptProgress | null {

@@ -39,11 +39,11 @@ export const CLI_RUN_PLAN_FILE = "plan.md";
 export { CLI_RUN_FINDINGS_FILE, CLI_RUN_LANDINGS_FILE, CLI_RUN_PLAN_LOCK_FILE };
 
 export const CLI_RUN_ID_RE =
-  /^ck-(?:run|review)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^ck-(?:run|review|squad)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const MAX_CLI_REPORT_BYTES = 2 * 1024 * 1024;
 
-export type CliRunKind = "review" | "discuss" | "unknown";
+export type CliRunKind = "review" | "discuss" | "squad" | "unknown";
 export type CliRunStatus = "completed" | "failed" | "interrupted" | "running" | "unknown";
 
 export interface CliRunSummary {
@@ -247,7 +247,9 @@ export function parseTranscriptMeta(
     ? "review"
     : runId.startsWith("ck-run-")
       ? "discuss"
-      : "unknown";
+      : runId.startsWith("ck-squad-")
+        ? "squad"
+        : "unknown";
   let status: CliRunStatus = "unknown";
   let title = runId;
   let startedAt: string | null = null;
@@ -269,6 +271,10 @@ export function parseTranscriptMeta(
       kind = "review";
       startedAt = stringOrNull(row.startedAt) ?? startedAt;
       title = titleFromReviewTask(row.task) ?? title;
+    } else if (recKind === "squad.started") {
+      kind = "squad";
+      startedAt = stringOrNull(row.startedAt) ?? startedAt;
+      title = titleFromSquadTask(row.task) ?? title;
     } else if (recKind === "run.started") {
       kind = "discuss";
       startedAt = stringOrNull(row.startedAt) ?? startedAt;
@@ -277,7 +283,11 @@ export function parseTranscriptMeta(
         const topic = stringOrNull((council as Record<string, unknown>).topic);
         if (topic) title = topic;
       }
-    } else if (recKind === "review.finished" || recKind === "run.finished") {
+    } else if (
+      recKind === "review.finished" ||
+      recKind === "run.finished" ||
+      recKind === "squad.finished"
+    ) {
       const st = stringOrNull(row.status);
       if (st === "completed" || st === "failed" || st === "interrupted") status = st;
       endedAt = stringOrNull(row.endedAt) ?? endedAt;
@@ -291,6 +301,12 @@ function titleFromReviewTask(task: unknown): string | null {
   if (task === null || typeof task !== "object") return null;
   const t = task as Record<string, unknown>;
   return stringOrNull(t.pr) ?? stringOrNull(t.task) ?? stringOrNull(t.councilTopic);
+}
+
+function titleFromSquadTask(task: unknown): string | null {
+  if (task === null || typeof task !== "object") return null;
+  const t = task as Record<string, unknown>;
+  return stringOrNull(t.taskId) ?? stringOrNull(t.task) ?? stringOrNull(t.slug);
 }
 
 function stringOrNull(value: unknown): string | null {

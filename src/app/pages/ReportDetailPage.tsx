@@ -110,11 +110,13 @@ export function ReportDetailPage() {
     query.data?.progress?.attempts.filter(
       (row) => row.role === "attempt" && row.status === "failure",
     ) ?? [];
+  const isSquad = query.data?.kind === "squad";
   const resumeCommand =
-    query.data && failedSeats.length > 0 && query.data.status !== "running"
+    query.data && !isSquad && failedSeats.length > 0 && query.data.status !== "running"
       ? buildReviewResumeCommand(query.data.runId, query.data.title, query.data.markdown)
       : null;
   const showSeats =
+    isSquad ||
     query.data?.status === "running" ||
     Boolean(
       query.data?.progress?.attempts.some(
@@ -135,23 +137,29 @@ export function ReportDetailPage() {
             <Button variant="ghost" onClick={copyMarkdown}>
               {copied === "markdown" ? "已复制" : "复制 Markdown"}
             </Button>
-            <Button variant="ghost" onClick={copyComment} disabled={!parsed}>
-              {copied === "comment" ? "已复制评论" : "复制 PR 评论"}
-            </Button>
-            {resumeCommand ? (
-              <Button variant="ghost" onClick={() => void copyText("resume", resumeCommand)}>
-                {copied === "resume" ? "已复制重跑" : "复制重跑失败席"}
-              </Button>
-            ) : null}
-            <Button
-              variant="ghost"
-              onClick={() => void copyText("apply", `councilkit apply --run ${query.data.runId}`)}
-            >
-              {copied === "apply" ? "已复制 apply" : "复制 apply 命令"}
-            </Button>
-            <Button onClick={copyFixPrompt}>
-              {copied === "prompt" ? "已复制 Prompt" : "复制修复 Prompt"}
-            </Button>
+            {isSquad ? null : (
+              <>
+                <Button variant="ghost" onClick={copyComment} disabled={!parsed}>
+                  {copied === "comment" ? "已复制评论" : "复制 PR 评论"}
+                </Button>
+                {resumeCommand ? (
+                  <Button variant="ghost" onClick={() => void copyText("resume", resumeCommand)}>
+                    {copied === "resume" ? "已复制重跑" : "复制重跑失败席"}
+                  </Button>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    void copyText("apply", `councilkit apply --run ${query.data.runId}`)
+                  }
+                >
+                  {copied === "apply" ? "已复制 apply" : "复制 apply 命令"}
+                </Button>
+                <Button onClick={copyFixPrompt}>
+                  {copied === "prompt" ? "已复制 Prompt" : "复制修复 Prompt"}
+                </Button>
+              </>
+            )}
           </div>
         ) : null}
       </div>

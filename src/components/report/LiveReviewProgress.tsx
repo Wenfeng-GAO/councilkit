@@ -13,6 +13,19 @@ const PHASE_LABEL = {
   "plan-aggregating": "正在汇总方案",
   applying: "正在按方案落地",
   "re-reviewing": "正在复审",
+  briefing: "简报中",
+  implementing: "实现中",
+  reviewing: "评审中",
+  auditing: "审计中",
+  snapshotting: "快照中",
+  fixing: "修复轮",
+  integrating: "集成中",
+} as const;
+
+const SQUAD_PHASE_LABEL = {
+  ...PHASE_LABEL,
+  planning: "规划中",
+  attempts: "席位进行中",
 } as const;
 
 const ATTEMPT_LABEL = {
@@ -27,7 +40,9 @@ export function LiveReviewProgress({
   run,
   onInspect,
 }: {
-  run: Pick<CliRunSummaryDto, "runId" | "status" | "startedAt" | "progress"> | CliRunDetailResponse;
+  run:
+    | Pick<CliRunSummaryDto, "runId" | "kind" | "status" | "startedAt" | "progress">
+    | CliRunDetailResponse;
   onInspect: (attemptId: string) => void;
 }) {
   const progress = run.progress;
@@ -37,7 +52,13 @@ export function LiveReviewProgress({
     return (
       <section className="border border-edge bg-surface px-4 py-4">
         <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
-          {run.status === "running" ? "审查进行中" : "审查"}
+          {run.status === "running"
+            ? run.kind === "squad"
+              ? "工程班进行中"
+              : "审查进行中"
+            : run.kind === "squad"
+              ? "工程班"
+              : "审查"}
         </p>
         {elapsed ? <p className="mt-2 font-command text-sm text-muted">{elapsed}</p> : null}
       </section>
@@ -52,7 +73,7 @@ export function LiveReviewProgress({
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
-            {PHASE_LABEL[progress.phase]}
+            {(run.kind === "squad" ? SQUAD_PHASE_LABEL : PHASE_LABEL)[progress.phase]}
           </p>
           <p className="mt-1 text-sm text-muted">
             {done}/{progress.attempts.length} 席位已结束
@@ -80,7 +101,9 @@ export function LiveReviewProgress({
             {attempt.durationMs !== null ? (
               <p className="mt-2 text-xs text-muted">{formatAttemptMs(attempt.durationMs)}</p>
             ) : attempt.status === "running" ? (
-              <p className="mt-2 text-xs text-muted">审查中…</p>
+              <p className="mt-2 text-xs text-muted">
+                {run.kind === "squad" ? "进行中…" : "审查中…"}
+              </p>
             ) : null}
             {attempt.status === "running" && attempt.lastActivity ? (
               <p

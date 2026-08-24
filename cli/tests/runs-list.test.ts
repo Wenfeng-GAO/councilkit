@@ -10,6 +10,7 @@ import { CliError } from "../src/errors";
 
 const REVIEW_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
 const DISCUSS_ID = "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+const SQUAD_ID = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
 
 interface FakeSink {
   json: boolean;
@@ -107,24 +108,45 @@ describe("cli runs list/open", () => {
     writeFileSync(join(dir, "report.md"), "# Decision Report\n");
   }
 
+  function seedSquad(): void {
+    const dir = join(home, "runs", SQUAD_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "squad.started",
+        version: 1,
+        runId: SQUAD_ID,
+        startedAt: "2026-08-03T00:00:00.000Z",
+        task: { taskId: "20260824-observe-ab12" },
+      })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# Squad · 20260824-observe-ab12\n");
+  }
+
   it("lists fixture runs newest-first with kind, status and title", async () => {
     seedReview();
     seedDiscuss();
+    seedSquad();
     const sink = makeSink();
     await runRuns(["list"], sink);
     const runs = (sink.finished as { runs: Array<Record<string, unknown>> }).runs;
-    expect(runs.map((r) => r.runId)).toEqual([DISCUSS_ID, REVIEW_ID]);
-    expect(runs[1]).toMatchObject({
+    expect(runs.map((r) => r.runId)).toEqual([SQUAD_ID, DISCUSS_ID, REVIEW_ID]);
+    expect(runs[2]).toMatchObject({
       kind: "review",
       status: "completed",
       title: "https://github.com/acme/repo/pull/9",
       hasReport: true,
       reportUrl: `http://127.0.0.1:43127/reports/${REVIEW_ID}`,
     });
-    expect(runs[0]).toMatchObject({
+    expect(runs[1]).toMatchObject({
       kind: "discuss",
       status: "running",
       title: "Should we ship?",
+    });
+    expect(runs[0]).toMatchObject({
+      kind: "squad",
+      title: "20260824-observe-ab12",
     });
   });
 
