@@ -99,7 +99,28 @@ const JURY_HEADING =
 export function isDeliverableText(text: string): boolean {
   if (JURY_HEADING.test(text) && Array.from(text).length >= 280) return true;
   const headings = text.match(/^#{1,3} .+/gm) ?? [];
-  return headings.length >= 2 && Array.from(text).length >= 800;
+  if (headings.length >= 2 && Array.from(text).length >= 800) return true;
+  return isJsonDeliverable(text);
+}
+
+/** Planner/squad structured JSON that would otherwise flood the inspector. */
+export function isJsonDeliverable(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 280 || trimmed[0] !== "{" || !trimmed.endsWith("}")) return false;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    const keys = Object.keys(parsed);
+    return (
+      keys.length >= 3 &&
+      (keys.includes("claims") ||
+        keys.includes("schema_version") ||
+        keys.includes("invariants") ||
+        keys.length >= 5)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function findOpenTool(blocks: readonly TimelineBlock[], name: string): number {
@@ -121,6 +142,27 @@ export function hasUnmatchedFence(text: string): boolean {
 
 export function isPathTool(name: string): boolean {
   return PATH_TOOL_NAMES.has(name.toLowerCase().replace(/[-_]/g, ""));
+}
+
+const SHELL_WRAPPER = /^(?:\/bin\/|\/usr\/bin\/)?(?:zsh|bash|sh)\s+-lc\s+/i;
+
+/** Drop `zsh -lc "…"` wrapping so copied/shown commands are the inner payload. */
+export function unwrapShellSummary(summary: string): string {
+  const trimmed = summary.trim();
+  const match = SHELL_WRAPPER.exec(trimmed);
+  if (match === null) return trimmed;
+  let inner = trimmed.slice(match[0].length);
+  const quote = inner[0];
+  if (quote === '"' || quote === "'") {
+    if (inner.length >= 2 && inner.endsWith(quote)) inner = inner.slice(1, -1);
+    else inner = inner.slice(1);
+  }
+  const cleaned = inner.trim();
+  return cleaned.length > 0 ? cleaned : trimmed;
+}
+
+export function displayToolName(name: string): string {
+  return name.toLowerCase() === "command_execution" ? "shell" : name;
 }
 
 /** Elapsed from the first sidecar event, second resolution. Empty if unparseable. */

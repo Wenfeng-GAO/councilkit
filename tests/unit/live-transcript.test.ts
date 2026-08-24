@@ -1,4 +1,5 @@
 import {
+  displayToolName,
   foldLiveEvents,
   formatElapsed,
   formatSpan,
@@ -7,6 +8,7 @@ import {
   isPathTool,
   showsTick,
   silentToolTally,
+  unwrapShellSummary,
 } from "@/lib/live-transcript";
 import { describe, expect, it } from "vitest";
 
@@ -124,6 +126,18 @@ describe("isDeliverableText", () => {
     expect(isDeliverableText(body)).toBe(true);
     expect(isDeliverableText("## 发现\n- one item")).toBe(false);
   });
+
+  it("detects a long planner JSON claims blob", () => {
+    const body = JSON.stringify({
+      schema_version: 1,
+      planner_id: "planner-a",
+      intent_check: "pass",
+      claims: [{ claim_id: "C1", statement: "x".repeat(200) }],
+      invariants: ["bounded"],
+    });
+    expect(isDeliverableText(body)).toBe(true);
+    expect(isDeliverableText('{"ok":true}')).toBe(false);
+  });
 });
 
 describe("hasUnmatchedFence", () => {
@@ -131,6 +145,23 @@ describe("hasUnmatchedFence", () => {
     expect(hasUnmatchedFence("```ts\nconst x = 1")).toBe(true);
     expect(hasUnmatchedFence("```ts\nconst x = 1\n```")).toBe(false);
     expect(hasUnmatchedFence("plain")).toBe(false);
+  });
+});
+
+describe("unwrapShellSummary", () => {
+  it("strips zsh -lc wrapping and incomplete quotes", () => {
+    expect(unwrapShellSummary('/bin/zsh -lc "rg -n foo vendor | head -50"')).toBe(
+      "rg -n foo vendor | head -50",
+    );
+    expect(unwrapShellSummary('/bin/zsh -lc "rg -n foo | head')).toBe("rg -n foo | head");
+    expect(unwrapShellSummary("pytest -q")).toBe("pytest -q");
+  });
+});
+
+describe("displayToolName", () => {
+  it("renames command_execution to shell", () => {
+    expect(displayToolName("command_execution")).toBe("shell");
+    expect(displayToolName("Bash")).toBe("Bash");
   });
 });
 

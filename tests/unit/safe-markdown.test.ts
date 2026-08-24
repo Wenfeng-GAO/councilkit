@@ -102,4 +102,12 @@ describe("SafeMarkdown rendering", () => {
     expect(html).not.toContain("track.png");
     expect(html).toContain("跟踪");
   });
+
+  it("renders GFM tables as table elements without raw HTML", () => {
+    const html = render("| 角色 | run |\n| --- | --- |\n| planner_a | `a-0` |\n");
+    expect(html).toContain("<table");
+    expect(html).toContain("<th>");
+    expect(html).toContain("planner_a");
+    expect(html).not.toContain("<script");
+  });
 });

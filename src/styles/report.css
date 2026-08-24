@@ -101,6 +101,35 @@
   color: var(--color-accent);
 }
 
+.ck-doc table,
+.ck-doc .ck-md-table {
+  width: 100%;
+  margin: 0 0 1rem;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.ck-doc th,
+.ck-doc td {
+  border: 1px solid var(--color-border);
+  padding: 0.4rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.ck-doc th {
+  font-family: var(--font-command);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-brass);
+  background: rgba(196, 165, 116, 0.06);
+}
+
+.ck-doc td {
+  color: var(--color-fg);
+}
+
 .ck-report {
   position: relative;
 }

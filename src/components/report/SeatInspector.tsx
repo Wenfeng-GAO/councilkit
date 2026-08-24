@@ -192,7 +192,7 @@ export function SeatInspector({
           runId={runId}
           attemptId={selected.attemptId}
           active={selected.status === "running"}
-          collapseDeliverable={selected.role === "aggregator"}
+          collapseDeliverable
           className="ck-inspector-body"
         />
       </dialog>

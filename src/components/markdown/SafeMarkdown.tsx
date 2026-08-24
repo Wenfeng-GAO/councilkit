@@ -1,4 +1,5 @@
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 /**
  * SafeMarkdown (U6): the ONLY renderer for untrusted text (Message bodies,
@@ -87,6 +88,18 @@ const components: Components = {
     const { node: _node, alt } = props;
     return <span className="text-muted">[图片{alt ? `：${alt}` : ""}]</span>;
   },
+  table: (props) => {
+    const { node: _node, children } = props;
+    return <table className="ck-md-table">{children}</table>;
+  },
+  th: (props) => {
+    const { node: _node, children } = props;
+    return <th>{children}</th>;
+  },
+  td: (props) => {
+    const { node: _node, children } = props;
+    return <td>{children}</td>;
+  },
 };
 
 interface SafeMarkdownProps {
@@ -102,7 +115,11 @@ export function SafeMarkdown({ content, className = "", variant = "inline" }: Sa
     <div
       className={`break-words leading-relaxed ${variant === "document" ? "ck-doc" : ""} ${className}`}
     >
-      <ReactMarkdown urlTransform={urlTransform} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={urlTransform}
+        components={components}
+      >
         {stripControlChars(content)}
       </ReactMarkdown>
     </div>

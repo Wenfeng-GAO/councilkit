@@ -1,15 +1,18 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import {
   type TimelineBlock,
+  displayToolName,
   foldLiveEvents,
   formatElapsed,
   formatSpan,
   hasUnmatchedFence,
   isDeliverableText,
+  isJsonDeliverable,
   isPathTool,
   originAt,
   showsTick,
   silentToolTally,
+  unwrapShellSummary,
 } from "@/lib/live-transcript";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
@@ -168,13 +171,24 @@ function TimelineItem({
         </pre>
       );
     }
-    const markdown = <SafeMarkdown className="text-sm" variant="document" content={block.text} />;
+    const markdown = isJsonDeliverable(block.text) ? (
+      <pre className="max-h-[min(28rem,55vh)] overflow-auto whitespace-pre-wrap break-words font-command text-[0.72rem] leading-5 text-fg">
+        {block.text}
+      </pre>
+    ) : (
+      <SafeMarkdown className="text-sm" variant="document" content={block.text} />
+    );
     if (!streaming && collapseDeliverable && isDeliverableText(block.text)) {
       const n = Array.from(block.text).length;
+      const restatesReport =
+        /^(?:# Autonomous Review Report\b|## (?:概览|共识发现|独有发现|分歧|结论))/m.test(
+          block.text,
+        );
       return (
         <details className="ck-inspector-think">
           <summary className="cursor-pointer font-command text-[0.68rem] text-brass">
-            席位交付物 · {n} 字<span className="ml-2 text-muted">· 与报告正文重复</span>
+            席位交付物 · {n} 字
+            {restatesReport ? <span className="ml-2 text-muted">· 与报告正文重复</span> : null}
           </summary>
           <div className="mt-2">{markdown}</div>
         </details>
@@ -212,22 +226,23 @@ function ToolRow({
 }) {
   const path = isPathTool(block.name);
   const span = block.endAt ? formatSpan(block.at, block.endAt) : "";
+  const summary = unwrapShellSummary(block.summary);
   return (
     <div className="ck-inspector-tool">
       <div className="ck-inspector-tool-head">
         <p className="font-command text-[0.68rem] text-brass">
-          {block.name}
+          {displayToolName(block.name)}
           <span className="ml-2 text-muted">
             {block.status === "started" ? "进行中" : "完成"}
             {span ? ` · ${span}` : ""}
           </span>
         </p>
-        {block.summary.length > 0 ? <CopyCommand text={block.summary} /> : null}
+        {summary.length > 0 ? <CopyCommand text={summary} /> : null}
       </div>
-      {block.summary.length > 0 ? (
+      {summary.length > 0 ? (
         <pre className="ck-inspector-cmd">
           {path ? <span className="mr-2 text-muted">路径</span> : null}
-          {block.summary}
+          {summary}
         </pre>
       ) : null}
     </div>
