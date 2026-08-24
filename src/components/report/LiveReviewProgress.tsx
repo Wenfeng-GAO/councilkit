@@ -1,4 +1,4 @@
-import { unwrapShellSummary } from "@/lib/live-transcript";
+import { displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
@@ -35,6 +35,7 @@ const ATTEMPT_LABEL = {
   running: "进行中",
   success: "完成",
   failure: "失败",
+  cancelled: "已取消",
 } as const;
 
 export function LiveReviewProgress({
@@ -66,9 +67,8 @@ export function LiveReviewProgress({
     );
   }
 
-  const done = progress.attempts.filter(
-    (row) => row.status === "success" || row.status === "failure",
-  ).length;
+  const done = progress.attempts.filter((row) => isEndedAttempt(row.status)).length;
+  const duplicateNames = namesWithDuplicates(progress.attempts);
   return (
     <section className="ck-report mb-6">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -87,7 +87,7 @@ export function LiveReviewProgress({
           <li key={attempt.attemptId} className="border border-edge bg-surface px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-medium text-fg">
-                {attempt.agentName}
+                {seatLabel(attempt, duplicateNames)}
                 {attempt.role === "aggregator" ? (
                   <span className="ml-2 font-command text-[0.62rem] text-brass">Aggregator</span>
                 ) : null}
@@ -106,12 +106,12 @@ export function LiveReviewProgress({
                 {run.kind === "squad" ? "进行中…" : "审查中…"}
               </p>
             ) : null}
-            {attempt.status === "running" && activityLabel(attempt.lastActivity) ? (
+            {attempt.status === "running" && displayLastActivity(attempt.lastActivity) ? (
               <p
                 className="mt-1 truncate font-command text-[0.68rem] text-muted"
-                title={activityLabel(attempt.lastActivity) ?? undefined}
+                title={displayLastActivity(attempt.lastActivity) ?? undefined}
               >
-                {activityLabel(attempt.lastActivity)}
+                {displayLastActivity(attempt.lastActivity)}
               </p>
             ) : null}
             <InspectButton attempt={attempt} onInspect={onInspect} />
@@ -122,11 +122,23 @@ export function LiveReviewProgress({
   );
 }
 
-function activityLabel(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const text = unwrapShellSummary(raw).trim();
-  if (!text || text.toLowerCase() === "tool") return null;
-  return text;
+function isEndedAttempt(status: AttemptRow["status"]): boolean {
+  return status === "success" || status === "failure" || status === "cancelled";
+}
+
+function namesWithDuplicates(attempts: readonly AttemptRow[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const row of attempts) {
+    counts.set(row.agentName, (counts.get(row.agentName) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name),
+  );
+}
+
+function seatLabel(attempt: AttemptRow, duplicateNames: Set<string>): string {
+  if (!duplicateNames.has(attempt.agentName)) return attempt.agentName;
+  return `${attempt.agentName} · ${attempt.attemptId}`;
 }
 
 function InspectButton({
@@ -155,6 +167,7 @@ function statusClass(status: AttemptRow["status"]): string {
   if (status === "success") return "text-success";
   if (status === "failure") return "text-error";
   if (status === "running") return "text-info";
+  if (status === "cancelled") return "text-muted";
   return "text-muted";
 }
 

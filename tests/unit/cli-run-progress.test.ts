@@ -232,4 +232,31 @@ describe("parseLiveStateJson pipeline", () => {
     expect(live?.pipeline?.round).toBe(1);
     expect(live?.pipeline?.applyStatus).toBe("pending");
   });
+
+  it("keeps cancelled squad seats instead of dropping progress", () => {
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: {
+          phase: "reviewing",
+          updatedAt: "t1",
+          attempts: [
+            {
+              attemptId: "review-0",
+              agentName: "reviewer",
+              driverId: "codex",
+              modelId: "gpt-5.6-sol",
+              role: "attempt",
+              status: "cancelled",
+              durationMs: 12,
+              lastActivity: null,
+            },
+          ],
+        },
+        pipeline: null,
+      }),
+    );
+    expect(live?.progress.attempts[0]?.status).toBe("cancelled");
+  });
 });

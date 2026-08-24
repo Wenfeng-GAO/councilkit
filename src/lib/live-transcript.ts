@@ -147,9 +147,9 @@ export function isPathTool(name: string): boolean {
   return PATH_TOOL_NAMES.has(name.toLowerCase().replace(/[-_]/g, ""));
 }
 
-const SHELL_WRAPPER = /^(?:\/bin\/|\/usr\/bin\/)?(?:zsh|bash|sh)\s+-lc\s+/i;
+const SHELL_WRAPPER = /^(?:\/bin\/|\/usr\/bin\/)?(?:zsh|bash|sh)\s+-(?:l)?c\s+/i;
 
-/** Drop `zsh -lc "…"` wrapping so copied/shown commands are the inner payload. */
+/** Drop `zsh -lc "…"` / `zsh -c "…"` wrapping so copied/shown commands are the inner payload. */
 export function unwrapShellSummary(summary: string): string {
   const trimmed = summary.trim();
   const match = SHELL_WRAPPER.exec(trimmed);
@@ -162,6 +162,15 @@ export function unwrapShellSummary(summary: string): string {
   }
   const cleaned = inner.trim();
   return cleaned.length > 0 ? cleaned : trimmed;
+}
+
+/** Hide JSON receipt blobs and empty/`tool` placeholders from last-activity lines. */
+export function displayLastActivity(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const text = unwrapShellSummary(raw).trim();
+  if (!text || text.toLowerCase() === "tool") return null;
+  if (text.startsWith("{") && text.includes("schema_version")) return null;
+  return text;
 }
 
 export function displayToolName(name: string): string {

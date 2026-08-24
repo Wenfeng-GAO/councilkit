@@ -50,7 +50,13 @@ export interface CliRunPipeline {
   summary: string | null;
   updatedAt: string;
 }
-export type CliRunAttemptLiveStatus = "pending" | "queued" | "running" | "success" | "failure";
+export type CliRunAttemptLiveStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "success"
+  | "failure"
+  | "cancelled";
 
 export interface CliRunAttemptProgress {
   attemptId: string;
@@ -377,7 +383,8 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
     row.status === "queued" ||
     row.status === "running" ||
     row.status === "success" ||
-    row.status === "failure"
+    row.status === "failure" ||
+    row.status === "cancelled"
       ? row.status
       : null;
   if (role === null || status === null) return null;

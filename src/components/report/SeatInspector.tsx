@@ -1,4 +1,5 @@
 import { AttemptLiveTranscript } from "@/components/report/AttemptLiveTranscript";
+import { displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useRef } from "react";
@@ -15,6 +16,7 @@ const ATTEMPT_LABEL = {
   running: "进行中",
   success: "完成",
   failure: "失败",
+  cancelled: "已取消",
 } as const;
 
 export function SeatInspector({
@@ -135,7 +137,7 @@ export function SeatInspector({
               过程
             </p>
             <h2 className="mt-1 truncate font-display text-xl text-parchment">
-              {selected.agentName}
+              {inspectorSeatLabel(selected, attempts)}
               {selected.role === "aggregator" ? " " : null}
               {selected.role === "aggregator" ? (
                 <span className="ml-2 font-command text-[0.62rem] text-brass">Aggregator</span>
@@ -153,9 +155,9 @@ export function SeatInspector({
                 </>
               ) : null}
             </p>
-            {selected.status === "running" && selected.lastActivity ? (
+            {selected.status === "running" && displayLastActivity(selected.lastActivity) ? (
               <p className="mt-1 truncate font-command text-[0.68rem] text-muted">
-                {selected.lastActivity}
+                {displayLastActivity(selected.lastActivity)}
               </p>
             ) : null}
           </div>
@@ -176,12 +178,18 @@ export function SeatInspector({
                 role="tab"
                 aria-selected={row.attemptId === selected.attemptId}
                 className="ck-inspector-tab"
-                title={row.role === "aggregator" ? `${row.agentName} · Aggregator` : row.agentName}
+                title={
+                  row.role === "aggregator"
+                    ? `${row.agentName} · Aggregator`
+                    : inspectorSeatLabel(row, attempts)
+                }
                 onClick={() => onSelect(row.attemptId)}
               >
                 {row.status === "running" ? <span className="ck-live-dot" aria-hidden /> : null}
                 <span className="truncate">
-                  {row.role === "aggregator" ? `${row.agentName} · 汇总` : row.agentName}
+                  {row.role === "aggregator"
+                    ? `${row.agentName} · 汇总`
+                    : inspectorSeatLabel(row, attempts)}
                 </span>
               </button>
             ))}
@@ -205,4 +213,9 @@ function statusClass(status: AttemptRow["status"]): string {
   if (status === "failure") return "text-error";
   if (status === "running") return "text-info";
   return "text-muted";
+}
+
+function inspectorSeatLabel(row: AttemptRow, attempts: readonly AttemptRow[]): string {
+  const dup = attempts.filter((item) => item.agentName === row.agentName).length > 1;
+  return dup ? `${row.agentName} · ${row.attemptId}` : row.agentName;
 }

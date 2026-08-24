@@ -1,4 +1,5 @@
 import {
+  displayLastActivity,
   displayToolName,
   foldLiveEvents,
   formatElapsed,
@@ -167,6 +168,20 @@ describe("unwrapShellSummary", () => {
     );
     expect(unwrapShellSummary('/bin/zsh -lc "rg -n foo | head')).toBe("rg -n foo | head");
     expect(unwrapShellSummary("pytest -q")).toBe("pytest -q");
+  });
+
+  it("strips zsh -c wrapping used by Codex", () => {
+    expect(unwrapShellSummary('/bin/zsh -c "pwd && git rev-parse HEAD"')).toBe(
+      "pwd && git rev-parse HEAD",
+    );
+  });
+});
+
+describe("displayLastActivity", () => {
+  it("hides receipt JSON and empty tool placeholders", () => {
+    expect(displayLastActivity('{"schema_version":1,"run_id":"verify-0"}')).toBeNull();
+    expect(displayLastActivity("tool")).toBeNull();
+    expect(displayLastActivity('/bin/zsh -c "go test ./pkg/events"')).toBe("go test ./pkg/events");
   });
 });
 

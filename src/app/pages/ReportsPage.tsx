@@ -149,7 +149,10 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
         <p className="mt-2 text-xs text-info">
           {
             run.progress.attempts.filter(
-              (row) => row.status === "success" || row.status === "failure",
+              (row) =>
+                row.status === "success" ||
+                row.status === "failure" ||
+                row.status === "cancelled",
             ).length
           }
           /{run.progress.attempts.length} 席位已结束

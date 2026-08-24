@@ -448,7 +448,7 @@ export const cliRunAttemptProgressSchema = z
     driverId: z.string().min(1),
     modelId: z.string().min(1),
     role: z.enum(["attempt", "aggregator"]),
-    status: z.enum(["pending", "queued", "running", "success", "failure"]),
+    status: z.enum(["pending", "queued", "running", "success", "failure", "cancelled"]),
     durationMs: z.number().int().nonnegative().nullable(),
     lastActivity: z.string().max(240).nullable().optional(),
   })
