@@ -653,3 +653,61 @@ describe("control channel abuse", () => {
     expect(supervisor.reapedAfterWatchdogDeath()).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stale watchdog exit race (ROT-BYPART-001)
+// ---------------------------------------------------------------------------
+
+describe("stale watchdog exit race", () => {
+  it("a stale watchdog exit does NOT clobber a newer record's byParticipant slot", async () => {
+    const supervisor = createSupervisor();
+
+    // Turn-1 driver A is spawned and supervised.
+    const driverA = await spawnToy(supervisor, "rot-race");
+    await driverA.waitSupervised(5000);
+    expect(supervisor.liveCount()).toBe(1);
+
+    // The driver `exit` control frame arrives on fd3 BEFORE the watchdog OS
+    // process exits (normal teardown ordering). settleDriver(A) clears the
+    // byParticipant slot for "rot-race" and marks A as settled.
+    driverA.__testInjectControlLine('{"type":"exit","code":0}');
+    await waitFor(() => supervisor.liveCount() === 0, 2000);
+
+    // Turn-2 reclaims the SAME participantId before A's watchdog process has
+    // finished exiting (this is the grok-stream-json per-turn spawn path,
+    // which does NOT await old-process teardown). Record B is now live.
+    const driverB = await spawnToy(supervisor, "rot-race");
+    await driverB.waitSupervised(5000);
+    expect(supervisor.liveCount()).toBe(1);
+    const driverBPid = driverB.pid as number;
+    expect(pidAlive(driverBPid)).toBe(true);
+
+    // A's stale watchdog OS process finally exits now. handleWatchdogExit(A)
+    // runs on the "expected" path (expectingWatchdogExit is true). Without the
+    // ownership check this would unconditionally delete byParticipant["rot-race"],
+    // removing B's entry while B is still live and supervised.
+    const staleWatchdogPid = driverA.watchdogPid;
+    process.kill(staleWatchdogPid, "SIGKILL");
+    await waitFor(() => !pidAlive(staleWatchdogPid), 2000);
+    // Allow the Node child-exit handler (handleWatchdogExit) to tick.
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 150));
+
+    // B must still be alive and supervised — the stale watchdog exit must not
+    // have reaped or settled it.
+    expect(pidAlive(driverBPid)).toBe(true);
+    expect(supervisor.liveCount()).toBe(1);
+
+    // The duplicate guard in spawnDriver must still reject a second concurrent
+    // driver for "rot-race": byParticipant["rot-race"] still points at B.
+    // With the bug, the stale exit would have clobbered it and this spawn would
+    // succeed, creating a second concurrently-live driver (the P2 defect).
+    await expect(spawnToy(supervisor, "rot-race")).rejects.toMatchObject({
+      code: "DRIVER_SPAWN_FAILED",
+    });
+
+    // Cleanup: B is the only live driver now.
+    await driverB.shutdown(500);
+    await waitFor(() => !pidAlive(driverBPid), 2000);
+    expect(supervisor.liveCount()).toBe(0);
+  });
+});
