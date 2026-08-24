@@ -432,7 +432,7 @@ export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
 // CLI runs (session-authenticated read of ~/.config/councilkit/runs)
 // ---------------------------------------------------------------------------
 
-export const cliRunKindSchema = z.enum(["review", "discuss", "unknown"]);
+export const cliRunKindSchema = z.enum(["review", "discuss", "squad", "unknown"]);
 export const cliRunStatusSchema = z.enum([
   "completed",
   "failed",
@@ -465,6 +465,13 @@ export const cliRunProgressSchema = z
       "plan-aggregating",
       "applying",
       "re-reviewing",
+      "briefing",
+      "implementing",
+      "reviewing",
+      "auditing",
+      "snapshotting",
+      "fixing",
+      "integrating",
     ]),
     attempts: z.array(cliRunAttemptProgressSchema),
     updatedAt: z.string().nullable(),

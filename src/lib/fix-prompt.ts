@@ -6,7 +6,7 @@
 export interface FixPromptInput {
   markdown: string;
   title: string;
-  kind: "review" | "discuss" | "unknown";
+  kind: "review" | "discuss" | "squad" | "unknown";
   truncated: boolean;
   verdict?: "approve" | "changes-requested" | "comment" | null;
 }

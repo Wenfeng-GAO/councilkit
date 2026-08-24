@@ -252,6 +252,47 @@ describe("cli-runs route", () => {
     expect(body.data.runs.map((r) => r.runId)).toEqual([RUN_ID]);
   });
 
+  it("lists a squad observe run and refuses fix actions", async () => {
+    const squadId = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9";
+    const dir = join(home, "runs", squadId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "squad.started",
+        version: 1,
+        runId: squadId,
+        startedAt: "2026-08-24T00:00:00.000Z",
+        task: { taskId: "20260824-observe-ab12" },
+      })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# Squad · fixture\n");
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "briefing", attempts: [], updatedAt: "t" },
+        pipeline: null,
+      })}\n`,
+    );
+    host = await boot();
+    const list = await fetch(`${host.baseUrl}/api/v1/cli-runs`, { headers: authedHeaders(host) });
+    const listed = (await list.json()) as {
+      ok: true;
+      data: { runs: Array<{ runId: string; kind: string }> };
+    };
+    expect(listed.data.runs.some((run) => run.runId === squadId && run.kind === "squad")).toBe(
+      true,
+    );
+    const action = await fetch(`${host.baseUrl}/api/v1/cli-runs/${squadId}/actions`, {
+      method: "POST",
+      headers: { ...authedHeaders(host), "content-type": "application/json" },
+      body: JSON.stringify({ action: "fix" }),
+    });
+    expect(action.status).toBe(400);
+  });
+
   it("POST /actions starts a fix pipeline via the injected launcher", async () => {
     seed();
     const dir = join(home, "runs", RUN_ID);
