@@ -8,9 +8,12 @@ import {
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { SeatInspector } from "@/components/report/SeatInspector";
+import { SquadHandoffCard } from "@/components/report/SquadHandoffCard";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
+import { cliRunNeedsPoll } from "@/lib/cli-run-status";
 import { buildFixFromReviewPrompt, buildReviewResumeCommand } from "@/lib/fix-prompt";
+import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
 import { buildPrComment, siblingRuns } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
@@ -37,8 +40,7 @@ export function ReportDetailPage() {
     retry: false,
     refetchInterval: (current) => {
       const live = current.state.data;
-      if (live?.status === "running") return 2000;
-      if (live?.pipeline && live.pipeline.phase !== "done") return 2000;
+      if (live && cliRunNeedsPoll(live.status, live.pipeline)) return 2000;
       if (Date.now() < watchUntil) return 2000;
       return false;
     },
@@ -165,7 +167,14 @@ export function ReportDetailPage() {
       </div>
       {query.isPending ? <p className="text-sm text-muted">正在打开报告…</p> : null}
       {query.isError ? (
-        <EmptyState title="找不到这份报告" hint="run id 无效，或 report.md 尚未写入。" />
+        <EmptyState
+          title={isHostUnreachableError(query.error) ? HOST_DOWN_TITLE : "找不到这份报告"}
+          hint={
+            isHostUnreachableError(query.error)
+              ? HOST_DOWN_HINT
+              : "run id 无效，或 report.md 尚未写入。"
+          }
+        />
       ) : null}
       {query.data ? (
         <>
@@ -194,6 +203,7 @@ export function ReportDetailPage() {
               Attempt，成功席会复用。
             </p>
           ) : null}
+          {query.data.kind === "squad" ? <SquadHandoffCard run={query.data} /> : null}
           {query.data.kind === "review" && query.data.hasReport ? (
             <FixPipeline
               run={query.data}
@@ -222,7 +232,8 @@ export function ReportDetailPage() {
             />
           ) : null}
           {!query.data.hasReport || query.data.markdown.trim().length === 0 ? (
-            query.data.status === "running" ? null : (
+            query.data.status === "running" ||
+            query.data.status === "awaiting_orchestrator" ? null : (
               <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />
             )
           ) : parsed ? (

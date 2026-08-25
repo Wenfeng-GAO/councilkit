@@ -1,6 +1,7 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
+import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
 import { diffFindings, flattenFindings } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
@@ -27,9 +28,14 @@ export function CompareReportsPage() {
     return <p className="px-6 py-8 text-sm text-muted">正在对比两份报告…</p>;
   }
   if (leftQuery.isError || rightQuery.isError || !leftQuery.data || !rightQuery.data) {
+    const down =
+      isHostUnreachableError(leftQuery.error) || isHostUnreachableError(rightQuery.error);
     return (
       <div className="px-6 py-8">
-        <EmptyState title="无法对比这两份报告" hint="确认两条 run 都还在本机 CLI 库里。" />
+        <EmptyState
+          title={down ? HOST_DOWN_TITLE : "无法对比这两份报告"}
+          hint={down ? HOST_DOWN_HINT : "确认两条 run 都还在本机 CLI 库里。"}
+        />
       </div>
     );
   }

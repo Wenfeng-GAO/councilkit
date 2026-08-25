@@ -439,7 +439,49 @@ export const cliRunStatusSchema = z.enum([
   "interrupted",
   "running",
   "unknown",
+  "awaiting_orchestrator",
+  "closed",
 ]);
+
+/** Read-only squad observe projection. Extra keys are stripped; omit missing fields. */
+export const cliRunHandoffSchema = z.object({
+  epoch: z.number().int().nonnegative().optional(),
+  candidateSha: z.string().min(1).max(64).optional(),
+  candidateStatus: z.enum(["intended", "completed", "invalidated"]).optional(),
+  invalidatedReason: z.string().min(1).max(2000).optional(),
+  taskBaseSha: z.string().min(1).max(64).optional(),
+  parentCandidateSha: z.string().min(1).max(64).optional(),
+  currentFix: z
+    .union([
+      z.string().min(1).max(240),
+      z
+        .object({
+          round: z.number().int().nonnegative().optional(),
+          operationId: z.string().min(1).max(200).optional(),
+        })
+        .strict(),
+    ])
+    .optional(),
+  next: z.string().min(1).max(2000).optional(),
+  approved: z.boolean().optional(),
+  reviewerVerdict: z.string().min(1).max(500).optional(),
+  verifierVerdict: z.string().min(1).max(500).optional(),
+  remainingBlockers: z.array(z.string().min(1).max(500)).max(32).optional(),
+  reviewRunId: z.string().min(1).max(80).optional(),
+  seatNotes: z
+    .array(
+      z
+        .object({
+          attemptId: z.string().min(1).max(80),
+          purpose: z.string().min(1).max(200).optional(),
+          note: z.string().min(1).max(500).optional(),
+        })
+        .strict(),
+    )
+    .max(32)
+    .optional(),
+});
+export type CliRunHandoffDto = z.infer<typeof cliRunHandoffSchema>;
 
 export const cliRunAttemptProgressSchema = z
   .object({
@@ -513,6 +555,7 @@ export const cliRunSummarySchema = z
     reportUrl: z.string().min(1),
     progress: cliRunProgressSchema.nullable(),
     pipeline: cliRunPipelineSchema.nullable().default(null),
+    handoff: cliRunHandoffSchema.nullable().default(null),
   })
   .strict();
 export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;

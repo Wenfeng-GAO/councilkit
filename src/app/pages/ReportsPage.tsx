@@ -1,22 +1,13 @@
 import { StartReviewForm } from "@/components/report/StartReviewForm";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
+import { cliRunNeedsPoll, cliRunStatusPill } from "@/lib/cli-run-status";
+import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
 import { groupCliRuns } from "@/lib/report-groups";
 import { getAppRuntime } from "@/runtime/bootstrap";
-import type { CliRunStatusDto, CliRunSummaryDto } from "@shared/runtime/schemas";
+import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-
-const STATUS_PILL: Record<
-  CliRunStatusDto,
-  { tone: "muted" | "info" | "success" | "error" | "warn"; text: string }
-> = {
-  completed: { tone: "success", text: "已完成" },
-  failed: { tone: "error", text: "失败" },
-  interrupted: { tone: "warn", text: "中断" },
-  running: { tone: "info", text: "进行中" },
-  unknown: { tone: "muted", text: "未知" },
-};
 
 const KIND_LABEL: Record<CliRunSummaryDto["kind"], string> = {
   review: "审查",
@@ -32,10 +23,7 @@ export function ReportsPage() {
     queryFn: () => client.listCliRuns(),
     retry: false,
     refetchInterval: (current) =>
-      current.state.data?.runs.some(
-        (run) =>
-          run.status === "running" || (run.pipeline !== null && run.pipeline.phase !== "done"),
-      )
+      current.state.data?.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline))
         ? 2000
         : false,
   });
@@ -51,7 +39,14 @@ export function ReportsPage() {
       <StartReviewForm />
       {query.isPending ? <p className="text-sm text-muted">正在读取报告…</p> : null}
       {query.isError ? (
-        <EmptyState title="无法读取 CLI 报告" hint="确认 Runtime Host 在线，且本机有 CLI runs。" />
+        <EmptyState
+          title={isHostUnreachableError(query.error) ? HOST_DOWN_TITLE : "无法读取 CLI 报告"}
+          hint={
+            isHostUnreachableError(query.error)
+              ? HOST_DOWN_HINT
+              : "确认 Runtime Host 在线，且本机有 CLI runs。"
+          }
+        />
       ) : null}
       {query.isSuccess && query.data.runs.length === 0 ? (
         <EmptyState title="还没有 CLI 报告" hint="在上方粘贴 PR URL 开始审查。" />
@@ -121,7 +116,7 @@ function runningPhaseHint(run: CliRunSummaryDto): string {
 }
 
 function RunRow({ run }: { run: CliRunSummaryDto }) {
-  const pill = STATUS_PILL[run.status];
+  const pill = cliRunStatusPill(run.kind, run.status);
   return (
     <Link
       to={`/reports/${run.runId}`}
@@ -144,7 +139,7 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
       {run.startedAt ? (
         <p className="text-xs text-muted">{new Date(run.startedAt).toLocaleString()}</p>
       ) : null}
-      {run.status === "running" && run.progress ? (
+      {(run.status === "running" || run.status === "awaiting_orchestrator") && run.progress ? (
         <p className="mt-2 text-xs text-info">
           {
             run.progress.attempts.filter(
@@ -153,7 +148,7 @@ function RunRow({ run }: { run: CliRunSummaryDto }) {
             ).length
           }
           /{run.progress.attempts.length} 席位已结束
-          {runningPhaseHint(run)}
+          {run.status === "awaiting_orchestrator" ? " · 等待编排" : runningPhaseHint(run)}
         </p>
       ) : null}
     </Link>

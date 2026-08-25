@@ -1,8 +1,8 @@
 import { AttemptLiveTranscript } from "@/components/report/AttemptLiveTranscript";
-import { displayLastActivity } from "@/lib/live-transcript";
+import { type LiveEventSpan, displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import "@/styles/report.css";
 
 type AttemptRow = NonNullable<CliRunSummaryDto["progress"]>["attempts"][number];
@@ -36,6 +36,7 @@ export function SeatInspector({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const selected = attempts.find((row) => row.attemptId === selectedId) ?? attempts[0] ?? null;
+  const [span, setSpan] = useState<LiveEventSpan | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -148,10 +149,10 @@ export function SeatInspector({
             </p>
             <p className="mt-2 font-command text-[0.68rem] text-muted">
               <span className={statusClass(selected.status)}>{ATTEMPT_LABEL[selected.status]}</span>
-              {selected.durationMs !== null ? (
+              {inspectorDuration(selected.durationMs, span) ? (
                 <>
                   <span className="mx-1.5 text-edge">·</span>
-                  {formatAttemptMs(selected.durationMs)}
+                  {inspectorDuration(selected.durationMs, span)}
                 </>
               ) : null}
             </p>
@@ -202,6 +203,7 @@ export function SeatInspector({
           active={selected.status === "running"}
           collapseDeliverable
           className="ck-inspector-body"
+          onTimeline={setSpan}
         />
       </dialog>
     </div>
@@ -218,4 +220,13 @@ function statusClass(status: AttemptRow["status"]): string {
 function inspectorSeatLabel(row: AttemptRow, attempts: readonly AttemptRow[]): string {
   const dup = attempts.filter((item) => item.agentName === row.agentName).length > 1;
   return dup ? `${row.agentName} · ${row.attemptId}` : row.agentName;
+}
+
+function inspectorDuration(receiptMs: number | null, span: LiveEventSpan | null): string | null {
+  if (span?.hasTimeline && span.spanMs !== null) return formatAttemptMs(span.spanMs);
+  if (receiptMs === null) return null;
+  if (span && span.eventCount > 0 && !span.hasTimeline) {
+    return `${formatAttemptMs(receiptMs)} · 过程无时间轴`;
+  }
+  return formatAttemptMs(receiptMs);
 }

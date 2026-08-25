@@ -1,6 +1,7 @@
 import {
   applyLiveHeartbeat,
   liveStateFromRecords,
+  mapSquadObserveStatus,
   mergeLiveProgress,
   parseLiveStateJson,
 } from "@shared/runtime/cli-run-progress";
@@ -258,5 +259,131 @@ describe("parseLiveStateJson pipeline", () => {
       }),
     );
     expect(live?.progress.attempts[0]?.status).toBe("cancelled");
+  });
+
+  it("reads awaiting_orchestrator, closed, and a camelCase handoff", () => {
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "awaiting_orchestrator",
+        progress: { phase: "snapshotting", attempts: [], updatedAt: "t1" },
+        pipeline: null,
+        handoff: {
+          epoch: 9,
+          candidateSha: "636e4b58aaaa",
+          candidateStatus: "invalidated",
+          invalidatedReason: "reviewer P1",
+          taskBaseSha: "ec2659baaaaa",
+          next: "gate record needs a finished verify receipt",
+          approved: false,
+        },
+      }),
+    );
+    expect(live?.status).toBe("awaiting_orchestrator");
+    expect(live?.handoff?.epoch).toBe(9);
+    expect(live?.handoff?.candidateStatus).toBe("invalidated");
+    expect(live?.handoff?.approved).toBe(false);
+  });
+
+  it("accepts snake_case handoff keys and ignores extra fields", () => {
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "closed",
+        progress: { phase: "integrating", attempts: [], updatedAt: "t1" },
+        pipeline: null,
+        handoff: {
+          candidate_sha: "80b2a77bbbbb",
+          candidate_status: "completed",
+          task_base_sha: "ec2659baaaaa",
+          current_fix: { round: 2, operation_id: "fix-2" },
+          leftover: true,
+        },
+      }),
+    );
+    expect(live?.status).toBe("closed");
+    expect(live?.handoff?.candidateSha).toBe("80b2a77bbbbb");
+    expect(live?.handoff?.currentFix).toEqual({ round: 2, operationId: "fix-2" });
+  });
+
+  it("keeps progress when handoff is garbage", () => {
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "implementing", attempts: [], updatedAt: "t1" },
+        pipeline: null,
+        handoff: "nope",
+      }),
+    );
+    expect(live?.status).toBe("running");
+    expect(live?.progress.phase).toBe("implementing");
+    expect(live?.handoff).toBeNull();
+  });
+});
+
+describe("mapSquadObserveStatus", () => {
+  const terminal = [
+    {
+      attemptId: "coder-0",
+      agentName: "coder",
+      driverId: "grokb",
+      modelId: "grok-4.6",
+      role: "attempt" as const,
+      status: "success" as const,
+      durationMs: 1,
+      lastActivity: null,
+    },
+  ];
+
+  it("maps interrupted squad with terminal seats and phase≠done", () => {
+    expect(
+      mapSquadObserveStatus({
+        kind: "squad",
+        status: "interrupted",
+        progress: { phase: "snapshotting", attempts: terminal, updatedAt: "t" },
+      }),
+    ).toBe("awaiting_orchestrator");
+  });
+
+  it("does not map review interrupted", () => {
+    expect(
+      mapSquadObserveStatus({
+        kind: "review",
+        status: "interrupted",
+        progress: { phase: "snapshotting", attempts: terminal, updatedAt: "t" },
+      }),
+    ).toBe("interrupted");
+  });
+
+  it("promotes interrupted+running seats to running", () => {
+    expect(
+      mapSquadObserveStatus({
+        kind: "squad",
+        status: "interrupted",
+        progress: {
+          phase: "implementing",
+          attempts: [{ ...terminal[0], status: "running", attemptId: "coder-1" }],
+          updatedAt: "t",
+        },
+      }),
+    ).toBe("running");
+  });
+
+  it("keeps closed and does not remap phase=done", () => {
+    expect(
+      mapSquadObserveStatus({
+        kind: "squad",
+        status: "closed",
+        progress: { phase: "snapshotting", attempts: terminal, updatedAt: "t" },
+      }),
+    ).toBe("closed");
+    expect(
+      mapSquadObserveStatus({
+        kind: "squad",
+        status: "interrupted",
+        progress: { phase: "done", attempts: terminal, updatedAt: "t" },
+      }),
+    ).toBe("interrupted");
   });
 });

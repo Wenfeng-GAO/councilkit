@@ -24,13 +24,16 @@ import {
 } from "./cli-ledger";
 import {
   CLI_RUN_STATUS_FILE,
+  type CliRunLiveStatus,
   type CliRunPipeline,
   type CliRunProgress,
   liveStateFromRecords,
+  mapSquadObserveStatus,
   mergeLiveProgress,
   parseLiveStateJson,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
+import type { CliRunHandoffDto } from "./schemas";
 
 export type { CliRunAttemptProgress, CliRunPipeline, CliRunProgress } from "./cli-run-progress";
 export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
@@ -44,7 +47,7 @@ export const CLI_RUN_ID_RE =
 export const MAX_CLI_REPORT_BYTES = 2 * 1024 * 1024;
 
 export type CliRunKind = "review" | "discuss" | "squad" | "unknown";
-export type CliRunStatus = "completed" | "failed" | "interrupted" | "running" | "unknown";
+export type CliRunStatus = CliRunLiveStatus;
 
 export interface CliRunSummary {
   runId: string;
@@ -60,6 +63,7 @@ export interface CliRunSummary {
   reportUrl: string;
   progress: CliRunProgress | null;
   pipeline: CliRunPipeline | null;
+  handoff: CliRunHandoffDto | null;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -177,10 +181,15 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
   const lockStat = safeLstat(lockPath);
   const hasPlanLock = Boolean(lockStat?.isFile() && !lockStat.isSymbolicLink());
 
+  const status = mapSquadObserveStatus({
+    kind: parsed.kind,
+    status: live?.status ?? parsed.status,
+    progress: derived,
+  });
   return {
     runId,
     kind: parsed.kind,
-    status: live?.status ?? parsed.status,
+    status,
     title: parsed.title,
     startedAt: parsed.startedAt,
     endedAt: parsed.endedAt,
@@ -191,6 +200,7 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     reportUrl: cliReportUrl(runId),
     progress: derived,
     pipeline: live?.pipeline ?? null,
+    handoff: live?.handoff ?? null,
   };
 }
 
@@ -289,7 +299,15 @@ export function parseTranscriptMeta(
       recKind === "squad.finished"
     ) {
       const st = stringOrNull(row.status);
-      if (st === "completed" || st === "failed" || st === "interrupted") status = st;
+      if (
+        st === "completed" ||
+        st === "failed" ||
+        st === "interrupted" ||
+        st === "awaiting_orchestrator" ||
+        st === "closed"
+      ) {
+        status = st;
+      }
       endedAt = stringOrNull(row.endedAt) ?? endedAt;
     }
   }

@@ -114,5 +114,61 @@ describe("listCliRuns squad", () => {
     });
     expect(runs[0]?.progress?.phase).toBe("implementing");
     expect(runs[0]?.progress?.attempts[0]?.attemptId).toBe("coder-1");
+    expect(runs[0]?.handoff).toBeNull();
+  });
+
+  it("maps a k4p2-shaped interrupted sidecar to awaiting_orchestrator", () => {
+    const dir = join(home, "runs", SQUAD_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "squad.started",
+        version: 1,
+        runId: SQUAD_ID,
+        startedAt: "2026-08-24T01:00:00.000Z",
+        task: { taskId: "20260824-pr126-cmfix-k4p2" },
+      })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# Squad · k4p2\n");
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "interrupted",
+        progress: {
+          phase: "snapshotting",
+          updatedAt: "2026-08-24T15:35:00.000Z",
+          attempts: [
+            {
+              attemptId: "coder-0",
+              agentName: "coder",
+              driverId: "grokb",
+              modelId: "grok-4.6",
+              role: "attempt",
+              status: "success",
+              durationMs: 864850,
+              lastActivity: "}",
+            },
+            {
+              attemptId: "verify-0",
+              agentName: "verifier",
+              driverId: "codex",
+              modelId: "gpt-5.6-terra",
+              role: "attempt",
+              status: "success",
+              durationMs: 1,
+              lastActivity: null,
+            },
+          ],
+        },
+        pipeline: null,
+      })}\n`,
+    );
+
+    const runs = listCliRuns(process.env);
+    expect(runs[0]?.status).toBe("awaiting_orchestrator");
+    expect(runs[0]?.kind).toBe("squad");
+    expect(runs[0]?.progress?.phase).toBe("snapshotting");
   });
 });

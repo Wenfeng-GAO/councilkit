@@ -1,5 +1,6 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import {
+  type LiveEventSpan,
   type TimelineBlock,
   displayToolName,
   foldLiveEvents,
@@ -9,6 +10,7 @@ import {
   isDeliverableText,
   isJsonDeliverable,
   isPathTool,
+  liveEventSpan,
   originAt,
   shortenActivityPath,
   showsTick,
@@ -28,12 +30,14 @@ export function AttemptLiveTranscript({
   active,
   collapseDeliverable = false,
   className = "",
+  onTimeline,
 }: {
   runId: string;
   attemptId: string;
   active: boolean;
   collapseDeliverable?: boolean;
   className?: string;
+  onTimeline?: (span: LiveEventSpan) => void;
 }) {
   const [events, setEvents] = useState<AttemptLiveEvent[]>([]);
   const [done, setDone] = useState(false);
@@ -100,6 +104,11 @@ export function AttemptLiveTranscript({
     };
   }, [runId, attemptId, active]);
 
+  const span = liveEventSpan(events);
+  useEffect(() => {
+    onTimeline?.(liveEventSpan(events));
+  }, [onTimeline, events]);
+
   const onScroll = () => {
     const el = scrollerRef.current;
     if (!el) return;
@@ -129,6 +138,9 @@ export function AttemptLiveTranscript({
   return (
     <div ref={scrollerRef} className={className} onScroll={onScroll}>
       <div className="flex flex-col gap-2.5">
+        {span.eventCount > 0 && !span.hasTimeline ? (
+          <p className="font-command text-[0.68rem] text-muted">过程无时间轴</p>
+        ) : null}
         {tally.length > 0 ? (
           <p className="ck-inspector-tally">
             {tally.map((row) => `${row.name} ${row.count}`).join(" · ")}

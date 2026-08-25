@@ -189,6 +189,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.councilkit.host.plis
 
 验证托管生效：`launchctl list | grep councilkit` 出现非 `-` 的 PID，`curl http://127.0.0.1:43127/api/v1/health` 返回 200，且 Settings 页 Installations 仍为 trusted。日志在 `~/Library/Logs/CouncilKit/host.out.log` 与 `host.err.log`。
 
+观察 **squad / review** 过程需要 Host 读 `COUNCILKIT_HOME/runs` sidecar。`councilkit review` / `apply` / `fix`（Autonomous Run）不经 Host 跑 agent，但浏览器打开 `http://127.0.0.1:43127/reports/<runId>` 必须有 Host。前台 `pnpm dev` 被杀 ≠ 观察消失——launchd 托管的 Host 仍应响应 `GET /api/v1/cli-runs/ck-squad-…`。Host 未起时 observe 写盘不失败；浏览器打开失败会提示「Host 未在 127.0.0.1:43127」，不是空白页。
+
 卸载（脚本只删 plist，不代为 unload、不删日志）：
 
 ```bash

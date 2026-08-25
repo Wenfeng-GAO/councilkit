@@ -3,6 +3,7 @@
  * The Host only reads this; the CLI writes the sidecar so the browser can poll
  * without parsing Attempt output payloads.
  */
+import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 
@@ -87,11 +88,53 @@ export interface CliRunProgress {
   updatedAt: string | null;
 }
 
+export type CliRunLiveStatus =
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "running"
+  | "unknown"
+  | "awaiting_orchestrator"
+  | "closed";
+
 export interface CliRunLiveState {
   version: 1;
-  status: "completed" | "failed" | "interrupted" | "running" | "unknown";
+  status: CliRunLiveStatus;
   progress: CliRunProgress;
   pipeline?: CliRunPipeline | null;
+  handoff?: CliRunHandoffDto | null;
+}
+
+const LIVE_STATUS_SET = new Set<string>([
+  "completed",
+  "failed",
+  "interrupted",
+  "running",
+  "unknown",
+  "awaiting_orchestrator",
+  "closed",
+]);
+
+const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
+const ATTEMPT_LIVE = new Set(["running", "queued", "pending"]);
+
+/** Old squad sidecars used interrupted + final.md as a close signal. Map at read. */
+export function mapSquadObserveStatus(input: {
+  kind: string;
+  status: CliRunLiveStatus;
+  progress: CliRunProgress | null;
+}): CliRunLiveStatus {
+  if (input.kind !== "squad") return input.status;
+  if (input.status !== "interrupted") return input.status;
+  const progress = input.progress;
+  if (progress === null || progress.phase === "done") return input.status;
+  const attempts = progress.attempts;
+  if (attempts.length === 0) return input.status;
+  if (attempts.some((row) => ATTEMPT_LIVE.has(row.status))) return "running";
+  if (attempts.every((row) => ATTEMPT_TERMINAL.has(row.status))) {
+    return "awaiting_orchestrator";
+  }
+  return input.status;
 }
 
 export function liveStateFromRecords(
@@ -254,6 +297,7 @@ export function withLiveHeartbeats(
       attempts: live.progress.attempts.map((row) => ({ ...row })),
     },
     pipeline: live.pipeline ? { ...live.pipeline } : live.pipeline,
+    handoff: live.handoff ?? null,
   };
   for (const beat of beats) applyLiveHeartbeat(next, beat);
   return next;
@@ -278,19 +322,80 @@ export function parseLiveStateJson(text: string): CliRunLiveState | null {
   const row = rec as Record<string, unknown>;
   if (row.version !== 1) return null;
   const status = row.status;
-  if (
-    status !== "completed" &&
-    status !== "failed" &&
-    status !== "interrupted" &&
-    status !== "running" &&
-    status !== "unknown"
-  ) {
+  if (typeof status !== "string" || !LIVE_STATUS_SET.has(status)) {
     return null;
   }
   const progress = parseProgress(row.progress);
   if (progress === null) return null;
   const pipeline = parsePipeline(row.pipeline);
-  return { version: 1, status, progress, pipeline };
+  const handoff = parseHandoff(row.handoff);
+  return { version: 1, status: status as CliRunLiveStatus, progress, pipeline, handoff };
+}
+
+function parseHandoff(value: unknown): CliRunHandoffDto | null {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const row = value as Record<string, unknown>;
+  const currentFixRaw = row.currentFix ?? row.current_fix;
+  let currentFix: unknown;
+  if (typeof currentFixRaw === "string") {
+    currentFix = currentFixRaw;
+  } else if (
+    currentFixRaw !== null &&
+    typeof currentFixRaw === "object" &&
+    !Array.isArray(currentFixRaw)
+  ) {
+    const cf = currentFixRaw as Record<string, unknown>;
+    currentFix = {
+      round: cf.round,
+      operationId: cf.operationId ?? cf.operation_id,
+    };
+  }
+  const seatNotesRaw = row.seatNotes ?? row.seat_notes;
+  const seatNotes = Array.isArray(seatNotesRaw)
+    ? seatNotesRaw.map((item) => {
+        if (item === null || typeof item !== "object") return item;
+        const seat = item as Record<string, unknown>;
+        return {
+          attemptId: seat.attemptId ?? seat.attempt_id,
+          purpose: seat.purpose,
+          note: seat.note,
+        };
+      })
+    : undefined;
+  const parsed = cliRunHandoffSchema.safeParse({
+    epoch: row.epoch,
+    candidateSha: row.candidateSha ?? row.candidate_sha,
+    candidateStatus: row.candidateStatus ?? row.candidate_status,
+    invalidatedReason: row.invalidatedReason ?? row.invalidated_reason,
+    taskBaseSha: row.taskBaseSha ?? row.task_base_sha,
+    parentCandidateSha: row.parentCandidateSha ?? row.parent_candidate_sha,
+    currentFix,
+    next: row.next,
+    approved: row.approved,
+    reviewerVerdict: row.reviewerVerdict ?? row.reviewer_verdict,
+    verifierVerdict: row.verifierVerdict ?? row.verifier_verdict,
+    remainingBlockers: row.remainingBlockers ?? row.remaining_blockers,
+    reviewRunId: row.reviewRunId ?? row.review_run_id,
+    seatNotes,
+  });
+  if (!parsed.success) return null;
+  const data = parsed.data;
+  const current =
+    data.currentFix &&
+    typeof data.currentFix === "object" &&
+    data.currentFix.round === undefined &&
+    data.currentFix.operationId === undefined
+      ? undefined
+      : data.currentFix;
+  const cleaned: CliRunHandoffDto = { ...data, currentFix: current };
+  if (!handoffHasContent(cleaned)) return null;
+  return cleaned;
+}
+
+function handoffHasContent(value: CliRunHandoffDto): boolean {
+  return Object.values(value).some((item) => item !== undefined);
 }
 
 export function parsePipeline(value: unknown): CliRunPipeline | null {

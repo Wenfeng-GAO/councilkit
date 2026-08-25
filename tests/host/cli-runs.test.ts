@@ -381,6 +381,71 @@ describe("cli-runs route", () => {
     expect(action.status).toBe(400);
   });
 
+  it("maps interrupted squad with terminal seats to awaiting_orchestrator and returns handoff", async () => {
+    const squadId = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8";
+    const dir = join(home, "runs", squadId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "squad.started",
+        version: 1,
+        runId: squadId,
+        startedAt: "2026-08-24T00:00:00.000Z",
+        task: { taskId: "20260824-pr126-cmfix-k4p2" },
+      })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# Squad · k4p2\n");
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "interrupted",
+        progress: {
+          phase: "snapshotting",
+          updatedAt: "t",
+          attempts: [
+            {
+              attemptId: "coder-0",
+              agentName: "coder",
+              driverId: "grokb",
+              modelId: "grok-4.6",
+              role: "attempt",
+              status: "success",
+              durationMs: 12,
+              lastActivity: "}",
+            },
+          ],
+        },
+        pipeline: null,
+        handoff: {
+          epoch: 9,
+          candidateSha: "636e4b58deadbeef",
+          candidateStatus: "invalidated",
+          approved: false,
+          next: "approved_paths relative to parent",
+        },
+      })}\n`,
+    );
+    host = await boot();
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${squadId}`, {
+      headers: authedHeaders(host),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: true;
+      data: {
+        status: string;
+        kind: string;
+        handoff: { epoch: number; candidateStatus: string } | null;
+      };
+    };
+    expect(body.data.kind).toBe("squad");
+    expect(body.data.status).toBe("awaiting_orchestrator");
+    expect(body.data.handoff?.epoch).toBe(9);
+    expect(body.data.handoff?.candidateStatus).toBe("invalidated");
+  });
+
   it("POST /actions starts a fix pipeline via the injected launcher", async () => {
     seed();
     const dir = join(home, "runs", RUN_ID);

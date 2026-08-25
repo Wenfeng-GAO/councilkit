@@ -156,10 +156,7 @@ function looksLikePath(summary: string): boolean {
   return /^[\w./-]+\.\w{1,8}$/.test(trimmed);
 }
 
-function findGenericCompletionTarget(
-  blocks: readonly TimelineBlock[],
-  summary: string,
-): number {
+function findGenericCompletionTarget(blocks: readonly TimelineBlock[], summary: string): number {
   const pathish = looksLikePath(summary);
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
     const block = blocks[i];
@@ -168,10 +165,7 @@ function findGenericCompletionTarget(
     if (pathish && isPathTool(block.name)) return i;
     if (
       !pathish &&
-      (name === "execute" ||
-        name === "shell" ||
-        name === "bash" ||
-        name === "command_execution")
+      (name === "execute" || name === "shell" || name === "bash" || name === "command_execution")
     ) {
       return i;
     }
@@ -209,14 +203,48 @@ export function unwrapShellSummary(summary: string): string {
   return cleaned.length > 0 ? cleaned : trimmed;
 }
 
+const LAST_ACTIVITY_DISPLAY_MAX = 80;
+
 /** Hide JSON receipt blobs and empty/`tool` placeholders from last-activity lines. */
 export function displayLastActivity(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const text = unwrapShellSummary(raw).trim();
   if (!text || text.toLowerCase() === "tool") return null;
-  if (text.startsWith("{") && text.includes("schema_version")) return null;
-  if (text.length <= 2 && /^[{}\[\]:,."']+$/.test(text)) return null;
-  return shortenActivityPath(text);
+  if (/^[{}\[\]:,."'\s]+$/.test(text)) return null;
+  if (text.startsWith("{") && looksLikeEnvelopeJson(text)) return null;
+  if (text.startsWith("```") || /^#{1,3} /.test(text)) return null;
+  const shortened = shortenActivityPath(text);
+  const chars = Array.from(shortened);
+  if (chars.length <= LAST_ACTIVITY_DISPLAY_MAX) return shortened;
+  return `${chars.slice(0, LAST_ACTIVITY_DISPLAY_MAX).join("")}…`;
+}
+
+function looksLikeEnvelopeJson(text: string): boolean {
+  if (text.includes("schema_version") || text.includes("run_id") || text.includes("receipt_hash")) {
+    return true;
+  }
+  return text.length >= 40 && /"(?:approved_paths|invariants|claims)"/.test(text);
+}
+
+export interface LiveEventSpan {
+  spanMs: number | null;
+  hasTimeline: boolean;
+  eventCount: number;
+}
+
+/** First-to-last live timestamp span. Single backfilled `at` is not a timeline. */
+export function liveEventSpan(events: readonly { at: string }[]): LiveEventSpan {
+  const times: number[] = [];
+  for (const event of events) {
+    const parsed = Date.parse(event.at);
+    if (Number.isFinite(parsed)) times.push(parsed);
+  }
+  if (times.length === 0) return { spanMs: null, hasTimeline: false, eventCount: events.length };
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  const spanMs = Math.max(0, max - min);
+  const hasTimeline = new Set(times).size >= 2 && spanMs >= 1000;
+  return { spanMs: hasTimeline ? spanMs : null, hasTimeline, eventCount: events.length };
 }
 
 /** Collapse a bare absolute path to the last two segments for seat cards. */

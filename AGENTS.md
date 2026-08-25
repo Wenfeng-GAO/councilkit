@@ -95,7 +95,7 @@ pnpm exec councilkit run --agents '["<A-id>","<B-id>"]' --topic "..." \
 - CLI 只保证与**同 checkout** Host 互通；与浏览器数据不互通；V1.1 无 `--resume`。
 - live smoke 与 Host 共用 43127、独占串行；端口被占只 `lsof` 记录，不 kill 非自身进程。
 - **Live Transcript**：review/apply/fix 的每个 attempt 会把 driver 过程事件（text/thinking/tool call）增量写入 `runs/<runId>/live/<attemptId>.jsonl`（CLI 侧 `cli/src/auto/live-events.ts`，写失败静默、2MB 上限；grok 用 `streaming-messages-json` 与 claude 共用解析器；probe 仍用单对象 `json`）。Host 端点 `GET /api/v1/cli-runs/:runId/attempts/:attemptId/live?afterSeq=N`（分页 + 坏行容忍）；`/reports/<runId>` 的 attempt 卡片展开「过程」即可看实时输出。该 sidecar 是观察层，不进 transcript/report。
-- **Squad observe**：`ck-squad-<uuid>` / `kind=squad` 是外部 `squadctl --observe` 写入的只读 sidecar（同一 `COUNCILKIT_HOME/runs`）。Host 不读 `.squad/`、不 spawn `squadctl`、不对 squad run 提供 fix/re-review。报告页走席位过程，不走修复管线。
+- **Squad observe**：`ck-squad-<uuid>` / `kind=squad` 是外部 `squadctl --observe` 写入的只读 sidecar（同一 `COUNCILKIT_HOME/runs`）。Host 不读 `.squad/`、不 spawn `squadctl`、不对 squad run 提供 fix/re-review。报告页走席位过程 + 只读 `handoff` 块，不走修复管线。旧 sidecar `interrupted` + 全席终态 + `phase≠done` 读时映射为 `awaiting_orchestrator`（「等待编排」）；显式收工为 `closed`（「已收工」）。看过程需要 Host（`pnpm start` 或 launchd）；前台 `pnpm dev` 被杀 ≠ 观察消失。
 
 ## 目录速览
 

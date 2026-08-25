@@ -1,33 +1,10 @@
+import { cliRunPhaseHeading } from "@/lib/cli-run-status";
 import { displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
 
 type AttemptRow = NonNullable<CliRunSummaryDto["progress"]>["attempts"][number];
-
-const PHASE_LABEL = {
-  attempts: "席位审查中",
-  aggregating: "正在汇总",
-  done: "已结束",
-  planning: "正在起草修复方案",
-  "plan-review": "方案陪审中",
-  "plan-aggregating": "正在汇总方案",
-  applying: "正在按方案落地",
-  "re-reviewing": "正在复审",
-  briefing: "简报中",
-  implementing: "实现中",
-  reviewing: "评审中",
-  auditing: "审计中",
-  snapshotting: "快照中",
-  fixing: "修复轮",
-  integrating: "集成中",
-} as const;
-
-const SQUAD_PHASE_LABEL = {
-  ...PHASE_LABEL,
-  planning: "规划中",
-  attempts: "席位进行中",
-} as const;
 
 const ATTEMPT_LABEL = {
   pending: "等待",
@@ -58,9 +35,13 @@ export function LiveReviewProgress({
             ? run.kind === "squad"
               ? "工程班进行中"
               : "审查进行中"
-            : run.kind === "squad"
-              ? "工程班"
-              : "审查"}
+            : run.status === "awaiting_orchestrator"
+              ? "等待编排"
+              : run.status === "closed" && run.kind === "squad"
+                ? "已收工"
+                : run.kind === "squad"
+                  ? "工程班"
+                  : "审查"}
         </p>
         {elapsed ? <p className="mt-2 font-command text-sm text-muted">{elapsed}</p> : null}
       </section>
@@ -74,7 +55,7 @@ export function LiveReviewProgress({
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
-            {phaseHeading(run.kind, run.status, progress.phase)}
+            {cliRunPhaseHeading(run.kind, run.status, progress.phase)}
           </p>
           <p className="mt-1 text-sm text-muted">
             {done}/{progress.attempts.length} 席位已结束
@@ -122,18 +103,6 @@ export function LiveReviewProgress({
   );
 }
 
-function phaseHeading(
-  kind: CliRunSummaryDto["kind"] | undefined,
-  status: CliRunSummaryDto["status"],
-  phase: NonNullable<CliRunSummaryDto["progress"]>["phase"],
-): string {
-  if (status === "completed") return "已结束";
-  if (status === "interrupted") return kind === "squad" ? "已结束" : "已中断";
-  if (status === "failed") return "失败";
-  const table = kind === "squad" ? SQUAD_PHASE_LABEL : PHASE_LABEL;
-  return table[phase];
-}
-
 function isEndedAttempt(status: AttemptRow["status"]): boolean {
   return status === "success" || status === "failure" || status === "cancelled";
 }
@@ -143,9 +112,7 @@ function namesWithDuplicates(attempts: readonly AttemptRow[]): Set<string> {
   for (const row of attempts) {
     counts.set(row.agentName, (counts.get(row.agentName) ?? 0) + 1);
   }
-  return new Set(
-    [...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name),
-  );
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
 }
 
 function seatLabel(attempt: AttemptRow, duplicateNames: Set<string>): string {

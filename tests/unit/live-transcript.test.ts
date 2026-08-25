@@ -7,6 +7,7 @@ import {
   hasUnmatchedFence,
   isDeliverableText,
   isPathTool,
+  liveEventSpan,
   shortenActivityPath,
   showsTick,
   silentToolTally,
@@ -15,6 +16,19 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("foldLiveEvents", () => {
+  it("folds a kimi-style character spray into one text block", () => {
+    const events = Array.from({ length: 40 }, (_, i) => ({
+      seq: i + 1,
+      at: `t${i}`,
+      type: "text.delta" as const,
+      text: i % 2 === 0 ? "{" : "}",
+    }));
+    const blocks = foldLiveEvents(events);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.kind).toBe("text");
+    expect(blocks[0] && blocks[0].kind === "text" ? blocks[0].text : "").toHaveLength(40);
+  });
+
   it("merges consecutive text and thinking deltas", () => {
     const blocks = foldLiveEvents([
       { seq: 1, at: "t0", type: "thinking.delta", text: "hmm" },
@@ -229,6 +243,8 @@ describe("displayLastActivity", () => {
     expect(displayLastActivity("tool")).toBeNull();
     expect(displayLastActivity('/bin/zsh -c "go test ./pkg/events"')).toBe("go test ./pkg/events");
     expect(displayLastActivity("}")).toBeNull();
+    expect(displayLastActivity('{ "run_id": "verify-0", "ok": true }')).toBeNull();
+    expect(displayLastActivity("## 概览\n\n结论")).toBeNull();
   });
 
   it("shortens a bare absolute path", () => {
@@ -237,7 +253,26 @@ describe("displayLastActivity", () => {
         "/Users/hengzhuo/code/ant/agentrun/.squad/20260824-pr126-cmfix-k4p2/planner-a.json",
       ),
     ).toBe("20260824-pr126-cmfix-k4p2/planner-a.json");
-    expect(shortenActivityPath("sed -n '1,80p' /tmp/brief.md")).toBe("sed -n '1,80p' /tmp/brief.md");
+    expect(shortenActivityPath("sed -n '1,80p' /tmp/brief.md")).toBe(
+      "sed -n '1,80p' /tmp/brief.md",
+    );
+  });
+});
+
+describe("liveEventSpan", () => {
+  it("treats a single backfilled timestamp as no timeline", () => {
+    const at = "2026-08-24T15:23:34.924Z";
+    expect(liveEventSpan([{ at }, { at }, { at }])).toEqual({
+      spanMs: null,
+      hasTimeline: false,
+      eventCount: 3,
+    });
+  });
+
+  it("uses first-to-last live timestamps when they actually move", () => {
+    expect(
+      liveEventSpan([{ at: "2026-08-24T14:48:00.000Z" }, { at: "2026-08-24T15:03:00.000Z" }]),
+    ).toEqual({ spanMs: 15 * 60 * 1000, hasTimeline: true, eventCount: 2 });
   });
 });
 

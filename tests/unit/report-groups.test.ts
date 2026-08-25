@@ -18,6 +18,7 @@ function run(
     reportUrl: `http://127.0.0.1:43127/reports/${partial.runId}`,
     progress: null,
     pipeline: null,
+    handoff: null,
     ...partial,
   };
 }
