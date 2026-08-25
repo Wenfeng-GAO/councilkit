@@ -18,10 +18,14 @@ test("首页 CTA 能进入报告库", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "CLI 报告" })).toBeVisible();
 });
 
-test("首页就能贴 PR URL 开审查", async ({ page }) => {
+test("首页 CTA 贴 URL 开审查落到 /reports#review 并聚焦 PR URL", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("审查一个 PR")).toBeVisible();
-  await expect(page.getByLabel("PR URL")).toBeVisible();
-  await expect(page.getByRole("button", { name: "开始审查" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "贴 URL 开审查" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "开始审查" })).toHaveCount(0);
+  const companion = page.getByRole("link", { name: "贴 URL 开审查" });
+  await expect(companion).toHaveAttribute("href", "/reports#review");
+  await companion.click();
+  await expect(page).toHaveURL(/\/reports#review/);
+  const prUrl = page.locator("#review-pr-url");
+  await expect(prUrl).toBeVisible();
+  await expect(prUrl).toBeFocused();
 });
