@@ -9,6 +9,7 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
+import { resolveHostMode } from "./config";
 
 export type CliRunAction = "fix" | "re-review" | "review";
 
@@ -31,19 +32,41 @@ const LOG_TAIL_MAX = 1024;
 export function resolveCouncilkitLauncher(
   fromDir = dirname(fileURLToPath(import.meta.url)),
 ): string | null {
-  const roots = [process.cwd(), fromDir, join(fromDir, ".."), join(fromDir, "../..")];
-  for (const root of roots) {
+  for (const root of launcherRoots(fromDir)) {
     const candidate = resolve(root, "cli/bin/councilkit.mjs");
     if (existsSync(candidate)) return candidate;
   }
   return null;
 }
 
+/** How the Host should exec same-checkout `councilkit`. Dev uses source via tsx
+ * so a stale `cli/dist` cannot reject Host flags like `--run-id`. */
+export function resolveCouncilkitSpawn(
+  fromDir = dirname(fileURLToPath(import.meta.url)),
+): { execPath: string; argvPrefix: string[] } | null {
+  if (resolveHostMode() !== "production") {
+    for (const root of launcherRoots(fromDir)) {
+      const src = resolve(root, "cli/src/main.ts");
+      const tsxCli = resolve(root, "node_modules/tsx/dist/cli.mjs");
+      if (existsSync(src) && existsSync(tsxCli)) {
+        return { execPath: process.execPath, argvPrefix: [tsxCli, src] };
+      }
+    }
+  }
+  const launcher = resolveCouncilkitLauncher(fromDir);
+  if (launcher === null) return null;
+  return { execPath: process.execPath, argvPrefix: [launcher] };
+}
+
+function launcherRoots(fromDir: string): string[] {
+  return [process.cwd(), fromDir, join(fromDir, ".."), join(fromDir, "../..")];
+}
+
 export function defaultCliRunLauncher(): CliRunLauncher {
   return {
     start(input) {
-      const launcher = resolveCouncilkitLauncher();
-      if (launcher === null) {
+      const spawnSpec = resolveCouncilkitSpawn();
+      if (spawnSpec === null) {
         throw new Error(
           "councilkit CLI launcher not found; run `pnpm build:cli` from the repo root",
         );
@@ -54,7 +77,7 @@ export function defaultCliRunLauncher(): CliRunLauncher {
       // which left an empty pipeline.log and no pid after 「立即修复」.
       const logFd = openSync(input.logPath, "a");
       try {
-        const child = spawn(process.execPath, [launcher, ...args], {
+        const child = spawn(spawnSpec.execPath, [...spawnSpec.argvPrefix, ...args], {
           detached: true,
           stdio: ["ignore", logFd, logFd],
           env: process.env,
@@ -80,7 +103,7 @@ export function defaultCliRunLauncher(): CliRunLauncher {
   };
 }
 
-function launchArgs(input: CliRunLaunchRequest): string[] {
+export function launchArgs(input: CliRunLaunchRequest): string[] {
   if (input.action === "review") {
     if (input.pr === undefined || input.pr.length === 0) {
       throw new Error("review spawn requires pr");

@@ -34,6 +34,7 @@ import {
   DRIVER_PROBE_PROMPT,
   buildProbeSpec,
   buildSpawnSpec,
+  probeTimeoutMs,
 } from "../auto/driver-commands";
 import { formatDurationMs } from "../auto/duration";
 import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
@@ -109,8 +110,8 @@ export interface ReviewDeps {
  * within this window is treated as unreachable. 60s, not 10s: a cold minimal
  * call on a real backend (codex cold start, cfuse route handshake) takes
  * 20-60s; a tighter budget false-negatives healthy drivers (G4' evidence:
- * codex probed "unreachable" at 10s while fully functional). */
-const PROBE_TIMEOUT_MS = 60_000;
+ * codex probed "unreachable" at 10s while fully functional). grok uses a
+ * longer budget via `probeTimeoutMs`. */
 
 /** `--resume` accepts only a real run id — anything else (path separators,
  * `..`, empty) is a usage error, never a path-traversal attempt. */
@@ -533,7 +534,7 @@ export async function runReview(
       prompt: DRIVER_PROBE_PROMPT,
     });
     const result = await spawnOnce(spec, {
-      timeoutMs: PROBE_TIMEOUT_MS,
+      timeoutMs: probeTimeoutMs(driverId),
       signal: controller.signal,
       spawnImpl: deps.spawnImpl,
     });
