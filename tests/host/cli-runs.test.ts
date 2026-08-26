@@ -446,6 +446,45 @@ describe("cli-runs route", () => {
     expect(body.data.handoff?.candidateStatus).toBe("invalidated");
   });
 
+  it("returns squad brief and plan documents on detail", async () => {
+    const squadId = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee7";
+    const dir = join(home, "runs", squadId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "squad.started",
+        version: 1,
+        runId: squadId,
+        startedAt: "2026-08-25T00:00:00.000Z",
+        task: { taskId: "20260825-observe-docs" },
+      })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# Squad · docs\n");
+    writeFileSync(join(dir, "brief.md"), "# Brief\n\nLock occupancy.\n");
+    writeFileSync(join(dir, "plan.md"), "# Plan\n\nC1 then C2.\n");
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "awaiting_orchestrator",
+        progress: { phase: "reviewing", attempts: [], updatedAt: "t" },
+        pipeline: null,
+      })}\n`,
+    );
+    host = await boot();
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${squadId}`, {
+      headers: authedHeaders(host),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: true;
+      data: { documents: Array<{ id: string; title: string; markdown: string }> };
+    };
+    expect(body.data.documents.map((doc) => doc.id)).toEqual(["brief", "plan"]);
+    expect(body.data.documents[0]?.markdown).toContain("Lock occupancy.");
+  });
+
   it("POST /actions starts a fix pipeline via the injected launcher", async () => {
     seed();
     const dir = join(home, "runs", RUN_ID);

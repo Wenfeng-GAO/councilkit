@@ -8,6 +8,7 @@ import {
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { SeatInspector } from "@/components/report/SeatInspector";
+import { SquadDocuments } from "@/components/report/SquadDocuments";
 import { SquadHandoffCard } from "@/components/report/SquadHandoffCard";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -204,6 +205,13 @@ export function ReportDetailPage() {
             </p>
           ) : null}
           {query.data.kind === "squad" ? <SquadHandoffCard run={query.data} /> : null}
+          {isSquad ? (
+            <SquadDocuments
+              documents={query.data.documents ?? []}
+              reportMarkdown={query.data.markdown}
+              reportTruncated={query.data.truncated}
+            />
+          ) : null}
           {query.data.kind === "review" && query.data.hasReport ? (
             <FixPipeline
               run={query.data}
@@ -225,13 +233,13 @@ export function ReportDetailPage() {
             <LiveReviewProgress run={query.data} onInspect={setInspectId} />
           ) : null}
           <FindingLedger run={query.data} />
-          {query.data.planMarkdown.trim().length > 0 ? (
+          {!isSquad && query.data.planMarkdown.trim().length > 0 ? (
             <FixPlanDocument
               markdown={query.data.planMarkdown}
               truncated={query.data.planTruncated}
             />
           ) : null}
-          {!query.data.hasReport || query.data.markdown.trim().length === 0 ? (
+          {isSquad ? null : !query.data.hasReport || query.data.markdown.trim().length === 0 ? (
             query.data.status === "running" ||
             query.data.status === "awaiting_orchestrator" ? null : (
               <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />

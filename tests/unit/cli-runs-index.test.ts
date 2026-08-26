@@ -1,7 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isCliRunId, listCliRuns, parseTranscriptMeta } from "@shared/runtime/cli-runs-index";
+import {
+  isCliRunId,
+  listCliRuns,
+  parseTranscriptMeta,
+  readCliRun,
+} from "@shared/runtime/cli-runs-index";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SQUAD_ID = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
@@ -170,5 +175,38 @@ describe("listCliRuns squad", () => {
     expect(runs[0]?.status).toBe("awaiting_orchestrator");
     expect(runs[0]?.kind).toBe("squad");
     expect(runs[0]?.progress?.phase).toBe("snapshotting");
+  });
+
+  it("reads squad brief/plan/reviews documents from the sidecar", () => {
+    const dir = join(home, "runs", SQUAD_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "squad.started",
+        version: 1,
+        runId: SQUAD_ID,
+        startedAt: "2026-08-25T01:00:00.000Z",
+        task: { taskId: "20260825-observe-docs" },
+      })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# Squad · docs\n");
+    writeFileSync(join(dir, "brief.md"), "# Brief\n\nFix the majors.\n");
+    writeFileSync(join(dir, "plan.md"), "# Plan\n\nDo C1.\n");
+    writeFileSync(join(dir, "reviews.md"), "# 评审\n\n- verdict: `changes-requested`\n");
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "awaiting_orchestrator",
+        progress: { phase: "reviewing", attempts: [], updatedAt: "t" },
+        pipeline: null,
+      })}\n`,
+    );
+
+    const detail = readCliRun(SQUAD_ID, process.env);
+    expect(detail?.documents.map((doc) => doc.id)).toEqual(["brief", "plan", "reviews"]);
+    expect(detail?.documents[0]?.title).toBe("简报");
+    expect(detail?.documents[0]?.markdown).toContain("Fix the majors.");
   });
 });

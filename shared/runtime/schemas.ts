@@ -581,6 +581,17 @@ export type CliRunPipelineDto = z.infer<typeof cliRunPipelineSchema>;
 export const cliRunsListResponseSchema = z.object({ runs: z.array(cliRunSummarySchema) }).strict();
 export type CliRunsListResponse = z.infer<typeof cliRunsListResponseSchema>;
 
+/** Squad observe copies of brief/plan/reviews/final. Extra keys stripped. */
+export const cliRunDocumentSchema = z
+  .object({
+    id: z.string().min(1).max(80),
+    title: z.string().min(1).max(80),
+    markdown: z.string(),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type CliRunDocumentDto = z.infer<typeof cliRunDocumentSchema>;
+
 export const cliRunDetailResponseSchema = cliRunSummarySchema.extend({
   markdown: z.string(),
   truncated: z.boolean(),
@@ -589,6 +600,7 @@ export const cliRunDetailResponseSchema = cliRunSummarySchema.extend({
   findings: z.array(ledgerFindingSchema).default([]),
   planLock: planLockFileSchema.nullable().default(null),
   landings: z.array(landingRecordSchema).default([]),
+  documents: z.array(cliRunDocumentSchema).default([]),
 });
 export type CliRunDetailResponse = z.infer<typeof cliRunDetailResponseSchema>;
 

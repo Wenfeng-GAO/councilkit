@@ -33,13 +33,22 @@ import {
   parseLiveStateJson,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
-import type { CliRunHandoffDto } from "./schemas";
+import type { CliRunDocumentDto, CliRunHandoffDto } from "./schemas";
 
 export type { CliRunAttemptProgress, CliRunPipeline, CliRunProgress } from "./cli-run-progress";
 export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
 
 export const CLI_RUN_PLAN_FILE = "plan.md";
 export { CLI_RUN_FINDINGS_FILE, CLI_RUN_LANDINGS_FILE, CLI_RUN_PLAN_LOCK_FILE };
+
+const SQUAD_DOCUMENT_SPECS = [
+  { file: "brief.md", id: "brief", title: "简报" },
+  { file: "request.md", id: "request", title: "需求" },
+  { file: "plan.md", id: "plan", title: "方案" },
+  { file: "decisions.md", id: "decisions", title: "裁决" },
+  { file: "reviews.md", id: "reviews", title: "评审" },
+  { file: "final.md", id: "final", title: "收工摘要" },
+] as const;
 
 export const CLI_RUN_ID_RE =
   /^ck-(?:run|review|squad)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -74,6 +83,7 @@ export interface CliRunDetail extends CliRunSummary {
   findings: LedgerFinding[];
   planLock: PlanLockFile | null;
   landings: LandingRecord[];
+  documents: CliRunDocumentDto[];
 }
 
 export function isCliRunId(runId: string): boolean {
@@ -136,6 +146,7 @@ export function readCliRun(
   const findings = readFindings(join(root, runId, CLI_RUN_FINDINGS_FILE));
   const planLock = readPlanLock(join(root, runId, CLI_RUN_PLAN_LOCK_FILE));
   const landings = readLandings(join(root, runId, CLI_RUN_LANDINGS_FILE));
+  const documents = summary.kind === "squad" ? readSquadDocuments(join(root, runId)) : [];
   return {
     ...summary,
     markdown: report.text,
@@ -145,6 +156,7 @@ export function readCliRun(
     findings: findings?.findings ?? [],
     planLock,
     landings,
+    documents,
   };
 }
 
@@ -220,6 +232,24 @@ function readLandings(path: string): LandingRecord[] {
   const stat = safeLstat(path);
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return [];
   return parseLandingsText(readCapped(path, 256 * 1024).text);
+}
+
+function readSquadDocuments(dir: string): CliRunDocumentDto[] {
+  const documents: CliRunDocumentDto[] = [];
+  for (const spec of SQUAD_DOCUMENT_SPECS) {
+    const path = join(dir, spec.file);
+    const stat = safeLstat(path);
+    if (stat === null || !stat.isFile() || stat.isSymbolicLink()) continue;
+    const { text, truncated } = readCapped(path, MAX_CLI_REPORT_BYTES);
+    if (text.trim().length === 0) continue;
+    documents.push({
+      id: spec.id,
+      title: spec.title,
+      markdown: text,
+      truncated,
+    });
+  }
+  return documents;
 }
 
 function readLiveState(path: string): ReturnType<typeof parseLiveStateJson> {
