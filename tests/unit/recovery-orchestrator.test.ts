@@ -1882,4 +1882,60 @@ describe("recovery orchestration: releaseRuntime (S5)", () => {
     const after = await db.runtimeBindings.get(warmBinding?.id ?? "");
     expect(after?.state).toBe("closed");
   });
+
+  it("ROT-CONCLUDE-001: releaseRuntime(cold) → concludeRoom does NOT throw (cold-build via ensureScope), room concluded + report dispatched", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+    const round1 = await orchestrator.startRound(room.id);
+    expect(round1?.phase).toBe("completed");
+    // Room is open with a completed round and an active (warm) runtime binding.
+    const warmBefore = (await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first()) as { id: string; executionScopeId: string } | undefined;
+    expect(warmBefore).toBeDefined();
+    expect((await db.rooms.get(room.id))?.status).toBe("open");
+
+    // User releases the warm runtime: binding flips to closed (warm → cold).
+    const createScopeCallsBefore = host.createScopeCalls.length;
+    await orchestrator.releaseRuntime(room.id);
+    const releasedBinding = await db.runtimeBindings.get(warmBefore?.id ?? "");
+    expect(releasedBinding?.state).toBe("closed");
+    const activeAfterRelease = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((b) => b.state === "active")
+      .first();
+    expect(activeAfterRelease).toBeUndefined();
+
+    // Before the fix, concludeRoom threw `no active controller for room X`
+    // (currentToken assertion on the now-cold room), dead-ending the room. Now
+    // concludeRoom cold-builds a fresh scope via controlRoom → ensureScope (the
+    // startRound proven path) and dispatches the report successfully.
+    const executeCallsBefore = host.executeCalls.length;
+    await expect(orchestrator.concludeRoom(room.id)).resolves.toBeUndefined();
+    expect((await db.rooms.get(room.id))?.status).toBe("concluded");
+    expect(await db.reports.where("roomId").equals(room.id).count()).toBe(1);
+
+    // A cold-build happened: exactly one createScope call across the release+conclude.
+    expect(host.createScopeCalls.length).toBe(createScopeCallsBefore + 1);
+    // A report execution was dispatched (facilitator) and committed.
+    expect(host.executeCalls.length).toBe(executeCallsBefore + 1);
+    const reportExecs = (await db.modelExecutions.where("roomId").equals(room.id).toArray()).filter(
+      (execution) => execution.resultKind === "report",
+    );
+    expect(reportExecs).toHaveLength(1);
+    expect(reportExecs[0]?.state).toBe("committed");
+
+    // Idempotent on an already-concluded room: no second report, no throw, no
+    // further cold-build.
+    const createScopeCallsAfter = host.createScopeCalls.length;
+    await expect(orchestrator.concludeRoom(room.id)).resolves.toBeUndefined();
+    expect(await db.reports.where("roomId").equals(room.id).count()).toBe(1);
+    expect(host.createScopeCalls.length).toBe(createScopeCallsAfter);
+  });
 });
