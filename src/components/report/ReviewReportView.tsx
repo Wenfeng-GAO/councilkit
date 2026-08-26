@@ -4,6 +4,8 @@ import {
   type ReviewAttemptRow,
   type ReviewFinding,
   type ReviewSection,
+  formatFindingSeverityStats,
+  sortReviewFindings,
   splitH3Blocks,
 } from "@/lib/review-report";
 import { type SeatAttemptRef, matchSeatAttempt } from "@/lib/seat-inspector";
@@ -198,10 +200,14 @@ function SectionBlock({
   onInspect?: (attemptId: string) => void;
 }) {
   const appendix = section.id.startsWith("附录") || section.title.startsWith("附录");
+  const stats = sectionFindingStats(section);
   return (
     <section id={section.id} className="scroll-mt-6">
       <div className="mb-3 flex items-center gap-3">
         <h2 className="font-display text-xl text-parchment">{section.title}</h2>
+        {stats ? (
+          <span className="shrink-0 font-command text-[0.68rem] text-muted">{stats}</span>
+        ) : null}
         <div className="h-px flex-1 bg-gradient-to-r from-[var(--color-brass-dim)] to-transparent" />
       </div>
       {section.title === "结论" ? <VerdictBody body={section.body} /> : null}
@@ -388,9 +394,10 @@ function FindingList({
   findings: ReviewFinding[];
   sectionId: string;
 }) {
+  const ordered = sortReviewFindings(findings);
   return (
     <ul className="flex flex-col gap-2">
-      {findings.map((finding) => (
+      {ordered.map((finding) => (
         <FindingCard
           key={`${sectionId}-${finding.severity}-${finding.text.slice(0, 64)}`}
           finding={finding}
@@ -407,18 +414,34 @@ function GroupedFindings({
 }) {
   return (
     <div className="flex flex-col gap-6">
-      {groups.map((group) => (
-        <div key={group.title || "ungrouped"}>
-          {group.title ? (
-            <h3 className="mb-3 font-command text-[0.72rem] uppercase tracking-[0.14em] text-brass">
-              {group.title}
-            </h3>
-          ) : null}
-          <FindingList findings={group.findings} sectionId={group.title || "group"} />
-        </div>
-      ))}
+      {groups.map((group) => {
+        const stats = formatFindingSeverityStats(group.findings);
+        return (
+          <div key={group.title || "ungrouped"}>
+            {group.title ? (
+              <div className="mb-3 flex items-baseline gap-2">
+                <h3 className="font-command text-[0.72rem] uppercase tracking-[0.14em] text-brass">
+                  {group.title}
+                </h3>
+                {stats ? (
+                  <span className="font-command text-[0.62rem] text-muted">{stats}</span>
+                ) : null}
+              </div>
+            ) : null}
+            <FindingList findings={group.findings} sectionId={group.title || "group"} />
+          </div>
+        );
+      })}
     </div>
   );
+}
+
+function sectionFindingStats(section: ReviewSection): string | null {
+  const items =
+    section.groups && section.groups.length > 0
+      ? section.groups.flatMap((group) => group.findings)
+      : (section.findings ?? []);
+  return formatFindingSeverityStats(items);
 }
 
 function DisagreementBody({ body }: { body: string }) {

@@ -157,3 +157,77 @@ export function lastLandingRange(landings: readonly LandingRecord[]): string | n
   if (!last.parentSha || !last.candidateSha) return null;
   return `${last.parentSha}...${last.candidateSha}`;
 }
+
+const SEVERITY_RANK: Record<FindingSeverity, number> = {
+  critical: 0,
+  major: 1,
+  minor: 2,
+  nit: 3,
+};
+
+const STATUS_RANK: Record<FindingStatus, number> = {
+  regress: 0,
+  open: 1,
+  accepted: 2,
+  closed: 3,
+};
+
+const SOURCE_RANK: Record<FindingSource, number> = {
+  consensus: 0,
+  unique: 1,
+  unknown: 2,
+};
+
+export function compareFindingSeverity(
+  a: FindingSeverity | null | undefined,
+  b: FindingSeverity | null | undefined,
+): number {
+  const left = a == null ? FINDING_SEVERITIES.length : SEVERITY_RANK[a];
+  const right = b == null ? FINDING_SEVERITIES.length : SEVERITY_RANK[b];
+  return left - right;
+}
+
+export function sortLedgerFindings(findings: readonly LedgerFinding[]): LedgerFinding[] {
+  return findings
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const severity = compareFindingSeverity(a.item.severity, b.item.severity);
+      if (severity !== 0) return severity;
+      const status = STATUS_RANK[a.item.status] - STATUS_RANK[b.item.status];
+      if (status !== 0) return status;
+      const source = SOURCE_RANK[a.item.source] - SOURCE_RANK[b.item.source];
+      if (source !== 0) return source;
+      const title = a.item.title.localeCompare(b.item.title);
+      if (title !== 0) return title;
+      const id = a.item.id.localeCompare(b.item.id);
+      if (id !== 0) return id;
+      return a.index - b.index;
+    })
+    .map((row) => row.item);
+}
+
+export interface LedgerFindingCounts {
+  total: number;
+  byStatus: Record<FindingStatus, number>;
+  bySeverity: Record<FindingSeverity, number>;
+}
+
+export function countLedgerFindings(findings: readonly LedgerFinding[]): LedgerFindingCounts {
+  const byStatus: Record<FindingStatus, number> = {
+    open: 0,
+    closed: 0,
+    accepted: 0,
+    regress: 0,
+  };
+  const bySeverity: Record<FindingSeverity, number> = {
+    critical: 0,
+    major: 0,
+    minor: 0,
+    nit: 0,
+  };
+  for (const row of findings) {
+    byStatus[row.status] += 1;
+    bySeverity[row.severity] += 1;
+  }
+  return { total: findings.length, byStatus, bySeverity };
+}

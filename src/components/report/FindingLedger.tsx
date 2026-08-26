@@ -1,3 +1,8 @@
+import {
+  FINDING_SEVERITIES,
+  countLedgerFindings,
+  sortLedgerFindings,
+} from "@shared/runtime/cli-ledger";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 
 const STATUS_LABEL = {
@@ -14,17 +19,16 @@ const SEVERITY_LABEL = {
   nit: "琐碎",
 } as const;
 
+const STATUS_SUMMARY_ORDER = ["open", "regress", "closed", "accepted"] as const;
+
 export function FindingLedger({ run }: { run: CliRunDetailResponse }) {
   if (run.findings.length === 0 && !run.planLock && run.landings.length === 0) return null;
-  const counts = {
-    open: run.findings.filter((row) => row.status === "open").length,
-    closed: run.findings.filter((row) => row.status === "closed").length,
-    regress: run.findings.filter((row) => row.status === "regress").length,
-    accepted: run.findings.filter((row) => row.status === "accepted").length,
-  };
+  const findings = sortLedgerFindings(run.findings);
+  const counts = countLedgerFindings(findings);
   const nextCluster = run.planLock?.clusters.find(
     (cluster) => !run.landings.some((row) => row.clusterId === cluster.id),
   );
+  const summary = formatLedgerSummary(counts, nextCluster?.id ?? null);
 
   return (
     <section className="border border-edge bg-surface px-4 py-4" aria-labelledby="ck-ledger">
@@ -34,14 +38,10 @@ export function FindingLedger({ run }: { run: CliRunDetailResponse }) {
       >
         Finding 账本
       </p>
-      <p className="mt-2 text-sm text-muted">
-        {counts.open} 未关 · {counts.closed} 已关 · {counts.regress} 回归
-        {counts.accepted > 0 ? ` · ${counts.accepted} 接受不修` : ""}
-        {nextCluster ? ` · 下一刀 ${nextCluster.id}` : ""}
-      </p>
-      {run.findings.length > 0 ? (
+      <p className="mt-2 text-sm text-muted">{summary}</p>
+      {findings.length > 0 ? (
         <ul className="ck-ledger mt-3">
-          {run.findings.map((row) => (
+          {findings.map((row) => (
             <li key={row.id} className="ck-ledger-row">
               <span className={`ck-sev ck-sev-${row.severity}`}>
                 {SEVERITY_LABEL[row.severity]}
@@ -84,6 +84,25 @@ export function FindingLedger({ run }: { run: CliRunDetailResponse }) {
       ) : null}
     </section>
   );
+}
+
+function formatLedgerSummary(
+  counts: ReturnType<typeof countLedgerFindings>,
+  nextClusterId: string | null,
+): string {
+  const parts: string[] = [`${counts.total} 条`];
+  for (const status of STATUS_SUMMARY_ORDER) {
+    const n = counts.byStatus[status];
+    if (n === 0 && status !== "open") continue;
+    parts.push(`${n} ${STATUS_LABEL[status]}`);
+  }
+  for (const severity of FINDING_SEVERITIES) {
+    const n = counts.bySeverity[severity];
+    if (n === 0) continue;
+    parts.push(`${n} ${SEVERITY_LABEL[severity]}`);
+  }
+  if (nextClusterId) parts.push(`下一刀 ${nextClusterId}`);
+  return parts.join(" · ");
 }
 
 function shortSha(sha: string | null): string {

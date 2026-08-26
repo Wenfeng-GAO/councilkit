@@ -1,4 +1,10 @@
-import { parseFindingGroups, parseFindings, parseReviewReport } from "@/lib/review-report";
+import {
+  formatFindingSeverityStats,
+  parseFindingGroups,
+  parseFindings,
+  parseReviewReport,
+  sortReviewFindings,
+} from "@/lib/review-report";
 import { describe, expect, it } from "vitest";
 
 const SAMPLE = `# Autonomous Review Report
@@ -251,5 +257,38 @@ describe("parseFindings", () => {
     expect(section?.groups).toBeNull();
     expect(section?.findings?.every((item) => item.severity === null)).toBe(true);
     expect(section?.body).toContain("**Verdict**");
+  });
+});
+
+describe("sortReviewFindings", () => {
+  it("orders by severity and keeps document order on ties", () => {
+    const ordered = sortReviewFindings([
+      { severity: "nit", qualifier: null, text: "nit-a" },
+      { severity: "major", qualifier: null, text: "major-a" },
+      { severity: "minor", qualifier: null, text: "minor-a" },
+      { severity: "major", qualifier: null, text: "major-b" },
+      { severity: "critical", qualifier: null, text: "critical-a" },
+      { severity: null, qualifier: null, text: "untagged" },
+    ]);
+    expect(ordered.map((item) => item.text)).toEqual([
+      "critical-a",
+      "major-a",
+      "major-b",
+      "minor-a",
+      "nit-a",
+      "untagged",
+    ]);
+  });
+
+  it("summarizes non-zero severity counts in Chinese", () => {
+    expect(
+      formatFindingSeverityStats([
+        { severity: "major", qualifier: null, text: "a" },
+        { severity: "major", qualifier: null, text: "b" },
+        { severity: "nit", qualifier: null, text: "c" },
+        { severity: null, qualifier: null, text: "skip" },
+      ]),
+    ).toBe("2 重大 · 1 琐碎");
+    expect(formatFindingSeverityStats([{ severity: null, qualifier: null, text: "x" }])).toBeNull();
   });
 });

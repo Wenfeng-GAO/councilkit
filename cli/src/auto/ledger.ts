@@ -24,6 +24,7 @@ import {
   parseFindingsFile,
   parseLandingsText,
   parsePlanLockFile,
+  sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
 import { atomicWriteJson } from "../store/atomic-write";
 
@@ -35,6 +36,7 @@ export {
   parseFindingsFile,
   parseLandingsText,
   parsePlanLockFile,
+  sortLedgerFindings,
 };
 
 /** Incremental `--against` range: prior review SHA → current PR SHA. */
@@ -107,7 +109,7 @@ export function extractFindingsFromReport(input: {
     sha: input.sha ?? null,
     againstRunId: input.againstRunId ?? null,
     againstRange: input.againstRange ?? null,
-    findings,
+    findings: sortLedgerFindings(findings),
   };
 }
 
@@ -139,7 +141,7 @@ export function classifyAgainstPrior(
     if (out.some((row) => row.id === fresh.id)) continue;
     out.push({ ...fresh, status: "open" });
   }
-  return out;
+  return sortLedgerFindings(out);
 }
 
 export function markFindingsClosed(file: FindingsFile, ids: readonly string[]): FindingsFile {
@@ -234,7 +236,7 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
       lines.push("- （无）");
       continue;
     }
-    for (const row of rows.slice(0, 40)) {
+    for (const row of sortLedgerFindings(rows).slice(0, 40)) {
       lines.push(`- ${row.id} [${row.severity}] ${row.title}`);
     }
     if (rows.length > 40) lines.push(`- …另有 ${rows.length - 40} 条`);

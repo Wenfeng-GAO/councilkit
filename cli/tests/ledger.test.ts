@@ -96,11 +96,12 @@ describe("ledger extract", () => {
       extractedAt: "2026-08-20T00:00:00.000Z",
       sha: "abc1234",
     });
-    expect(file.findings.map((row) => row.severity)).toEqual(["major", "minor", "critical"]);
-    expect(file.findings[0]?.files).toContain("pkg/eventlog/log.go");
-    expect(file.findings[0]?.id).toContain("pkg.eventlog.log.go--");
-    expect(file.findings[2]?.source).toBe("unique");
-    expect(file.findings[2]?.reviewer).toBe("review-security");
+    expect(file.findings.map((row) => row.severity)).toEqual(["critical", "major", "minor"]);
+    const consensusMajor = file.findings.find((row) => row.source === "consensus");
+    expect(consensusMajor?.files).toContain("pkg/eventlog/log.go");
+    expect(consensusMajor?.id).toContain("pkg.eventlog.log.go--");
+    expect(file.findings[0]?.source).toBe("unique");
+    expect(file.findings[0]?.reviewer).toBe("review-security");
     expect(file.findings.some((row) => row.title.includes("Verdict"))).toBe(false);
   });
 });
@@ -147,16 +148,31 @@ describe("ledger classify", () => {
     expect(classified.find((row) => row.id === "d--new")?.status).toBe("open");
   });
 
+  it("sorts classified findings by severity then status", () => {
+    const prior = [
+      finding({ id: "a--minor", title: "small", severity: "minor", status: "open" }),
+      finding({ id: "b--major", title: "big", severity: "major", status: "closed" }),
+    ];
+    const next = [
+      finding({ id: "a--minor", title: "small again", severity: "minor" }),
+      finding({ id: "b--major", title: "big again", severity: "major" }),
+      finding({ id: "c--crit", title: "new leak", severity: "critical" }),
+    ];
+    expect(classifyAgainstPrior(prior, next).map((row) => `${row.severity}:${row.status}`)).toEqual(
+      ["critical:open", "major:regress", "minor:open"],
+    );
+  });
+
   it("marks claimed closes on apply", () => {
     const file = extractFindingsFromReport({
       markdown: SAMPLE,
       runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
       extractedAt: "2026-08-20T00:00:00.000Z",
     });
-    const id = file.findings[0]?.id ?? "";
+    const id = file.findings.find((row) => row.severity === "major")?.id ?? "";
     const marked = markFindingsClosed(file, [id]);
-    expect(marked.findings[0]?.status).toBe("closed");
-    expect(marked.findings[1]?.status).toBe("open");
+    expect(marked.findings.find((row) => row.id === id)?.status).toBe("closed");
+    expect(marked.findings.filter((row) => row.status === "open")).toHaveLength(2);
   });
 });
 

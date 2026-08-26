@@ -3,6 +3,11 @@
  * `councilkit review` writes. Returns null when the document is not that
  * format so the page can fall back to plain document rendering.
  */
+import {
+  FINDING_SEVERITIES,
+  type FindingSeverity,
+  compareFindingSeverity,
+} from "@shared/runtime/cli-ledger";
 
 export interface ReviewAttemptRow {
   name: string;
@@ -13,9 +18,51 @@ export interface ReviewAttemptRow {
 }
 
 export interface ReviewFinding {
-  severity: "critical" | "major" | "minor" | "nit" | null;
+  severity: FindingSeverity | null;
   qualifier: string | null;
   text: string;
+}
+
+const FINDING_SEVERITY_LABEL: Record<FindingSeverity, string> = {
+  critical: "致命",
+  major: "重大",
+  minor: "次要",
+  nit: "琐碎",
+};
+
+export function sortReviewFindings(findings: readonly ReviewFinding[]): ReviewFinding[] {
+  return findings
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const severity = compareFindingSeverity(a.item.severity, b.item.severity);
+      if (severity !== 0) return severity;
+      return a.index - b.index;
+    })
+    .map((row) => row.item);
+}
+
+export function countReviewFindingsBySeverity(
+  findings: readonly ReviewFinding[],
+): Record<FindingSeverity, number> {
+  const counts: Record<FindingSeverity, number> = {
+    critical: 0,
+    major: 0,
+    minor: 0,
+    nit: 0,
+  };
+  for (const finding of findings) {
+    if (finding.severity === null) continue;
+    counts[finding.severity] += 1;
+  }
+  return counts;
+}
+
+export function formatFindingSeverityStats(findings: readonly ReviewFinding[]): string | null {
+  const counts = countReviewFindingsBySeverity(findings);
+  const parts = FINDING_SEVERITIES.filter((severity) => counts[severity] > 0).map(
+    (severity) => `${counts[severity]} ${FINDING_SEVERITY_LABEL[severity]}`,
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 export interface ReviewFindingGroup {
