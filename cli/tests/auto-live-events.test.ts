@@ -133,6 +133,31 @@ describe("LiveEventCollector", () => {
     ]);
   });
 
+  it("cursor: assistant text + tool_call started/completed", () => {
+    const lines = [
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "reading" }] },
+      }),
+      JSON.stringify({
+        type: "tool_call",
+        subtype: "started",
+        tool_call: { readToolCall: { args: { path: "README.md" } } },
+      }),
+      JSON.stringify({
+        type: "tool_call",
+        subtype: "completed",
+        tool_call: { readToolCall: { args: { path: "README.md" } } },
+      }),
+    ].join("\n");
+    const coll = new LiveEventCollector("cursor-stream-json");
+    expect(feedLines(coll, `${lines}\n`)).toEqual([
+      { type: "text.delta", text: "reading" },
+      { type: "tool.started", name: "readToolCall", summary: "README.md" },
+      { type: "tool.completed", name: "readToolCall", summary: "README.md" },
+    ]);
+  });
+
   it("grok: shares the claude parser (thinking/text deltas + tool_use from assistant frames)", () => {
     const coll = new LiveEventCollector("grok-stream-json");
     const events = feedLines(

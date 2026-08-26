@@ -16,7 +16,19 @@
  *    prompt → stdin; read the last-message file, fall back to stdout.
  */
 import { Buffer } from "node:buffer";
-import { constants, accessSync, readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  constants,
+  accessSync,
+  closeSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  writeSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { errors } from "../errors";
@@ -55,26 +67,186 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
   "kimi-stream-json": "kimi",
   "codex-app-server": "codex",
   "grok-stream-json": "grok",
+  "cursor-stream-json": "cursor-agent",
 };
 
+/** Cursor account default. Omit `--model` so cursor-agent picks it. */
+export const CURSOR_DEFAULT_MODEL = "auto";
+
+export function isCursorDefaultModel(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  return id === "auto" || id === "default" || id === "configured";
+}
+
 export const GROK_LEADER_SOCK = ".grok-leader.sock";
+/** Per-spawn GROK_HOME under the attempt/probe cwd. Credentials only; no host skills. */
+export const GROK_ISOLATED_HOME_DIR = ".grok-home";
+export const ISOLATED_GROK_CONFIG =
+  "[compat.claude]\nskills = false\n[compat.cursor]\nskills = false\n";
+
+export const DEFAULT_PROBE_TIMEOUT_MS = 60_000;
+/** grok 1.0 headless still bootstraps a full session; 60s false-negatives a live backend. */
+export const GROK_PROBE_TIMEOUT_MS = 180_000;
+
+export function probeTimeoutMs(
+  driverId: string,
+  fallback: number = DEFAULT_PROBE_TIMEOUT_MS,
+): number {
+  if (driverId === "grok-stream-json") return Math.max(GROK_PROBE_TIMEOUT_MS, fallback);
+  return fallback;
+}
 
 export function grokLeaderSocket(workspace: string): string {
   return join(workspace, GROK_LEADER_SOCK);
 }
 
+/** Clash/mihomo mixed-port defaults on this machine. */
+const LOCAL_HTTP_PROXY_PORTS = [7897, 7890];
+const DEFAULT_NO_PROXY = "localhost,127.0.0.1,.alipay.com,.local";
+
+export function envHasProxy(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    env.HTTPS_PROXY ||
+      env.https_proxy ||
+      env.ALL_PROXY ||
+      env.all_proxy ||
+      env.HTTP_PROXY ||
+      env.http_proxy,
+  );
+}
+
+/** If the parent (often a Host started without shell proxy) has no proxy, and a
+ * local HTTP proxy is listening, point grok at it so cli-chat-proxy.grok.com
+ * is reachable. */
+export function withLocalHttpProxy(
+  env: NodeJS.ProcessEnv,
+  detectPort: () => number | null = detectListeningLocalProxy,
+): NodeJS.ProcessEnv {
+  if (envHasProxy(env)) return env;
+  const port = detectPort();
+  if (port === null) return env;
+  const url = `http://127.0.0.1:${port}`;
+  const noProxy = env.NO_PROXY ?? env.no_proxy ?? DEFAULT_NO_PROXY;
+  return {
+    ...env,
+    HTTPS_PROXY: url,
+    HTTP_PROXY: url,
+    https_proxy: url,
+    http_proxy: url,
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
+  };
+}
+
+function detectListeningLocalProxy(): number | null {
+  for (const port of LOCAL_HTTP_PROXY_PORTS) {
+    const probe = spawnSync("nc", ["-z", "127.0.0.1", String(port)], {
+      stdio: "ignore",
+      timeout: 400,
+    });
+    if (probe.status === 0) return port;
+  }
+  return null;
+}
+
 /** Env for a driver subprocess. Grok must not inherit the caller's TUI session
- * (`GROK_AGENT` / `GROK_SESSION_ID`); `PWD` must match the isolated cwd. */
+ * (`GROK_AGENT` / `GROK_SESSION_ID`); `PWD` must match the isolated cwd.
+ * GROK_HOME is a per-cwd copy of auth only, with vendor Claude/Cursor skill
+ * scans forced off (same isolation as squad grokb). */
 export function spawnEnvForDriver(
   driverId: string | undefined,
   cwd: string,
   base: NodeJS.ProcessEnv = process.env,
+  opts?: { localProxyPort?: () => number | null },
 ): NodeJS.ProcessEnv {
   if (driverId === "grok-stream-json") {
-    const { GROK_AGENT: _agent, GROK_SESSION_ID: _session, ...rest } = base;
-    return { ...rest, PWD: cwd };
+    const {
+      GROK_AGENT: _agent,
+      GROK_SESSION_ID: _session,
+      GROK_HOME: origHome,
+      GROK_CLAUDE_SKILLS_ENABLED: _claudeSkills,
+      GROK_CURSOR_SKILLS_ENABLED: _cursorSkills,
+      ...rest
+    } = base;
+    const isolated = isolateGrokHome(cwd, origHome);
+    const next: NodeJS.ProcessEnv = {
+      ...rest,
+      PWD: cwd,
+      GROK_CLAUDE_SKILLS_ENABLED: "false",
+      GROK_CURSOR_SKILLS_ENABLED: "false",
+      ...(isolated !== null
+        ? { GROK_HOME: isolated }
+        : origHome !== undefined
+          ? { GROK_HOME: origHome }
+          : {}),
+    };
+    return withLocalHttpProxy(next, opts?.localProxyPort ?? detectListeningLocalProxy);
   }
   return { ...base, PWD: cwd };
+}
+
+function isolateGrokHome(cwd: string, origHome: string | undefined): string | null {
+  const isolated = join(cwd, GROK_ISOLATED_HOME_DIR);
+  try {
+    mkdirSync(isolated, { recursive: true, mode: 0o700 });
+  } catch {
+    return null;
+  }
+  const src =
+    origHome !== undefined && origHome.trim().length > 0 ? origHome : join(homedir(), ".grok");
+  copyGrokCredentials(src, isolated);
+  writeIsolatedGrokConfig(isolated);
+  return isolated;
+}
+
+function copyGrokCredentials(srcDir: string, dstDir: string): void {
+  for (const name of ["auth.json", "credentials.json"] as const) {
+    const src = join(srcDir, name);
+    const dest = join(dstDir, name);
+    try {
+      const st = lstatSync(src);
+      if (!st.isFile() || st.isSymbolicLink()) continue;
+      const data = readFileSync(src);
+      const fd = openSync(dest, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+      try {
+        writeSync(fd, data);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      // missing source, dest already exists, or unreadable — skip
+    }
+  }
+}
+
+function writeIsolatedGrokConfig(isolated: string): void {
+  const path = join(isolated, "config.toml");
+  const data = Buffer.from(ISOLATED_GROK_CONFIG, "utf8");
+  try {
+    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    try {
+      writeSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") return;
+  }
+  try {
+    const st = lstatSync(path);
+    if (st.isSymbolicLink()) return;
+    const existing = readFileSync(path);
+    if (existing.equals(data)) return;
+    const fd = openSync(path, constants.O_WRONLY | constants.O_TRUNC, 0o600);
+    try {
+      writeSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // leave whatever is already on disk
+  }
 }
 
 /** Resolve a bare executable name against PATH (X_OK regular file), or verify an
@@ -195,12 +367,28 @@ function buildInvocation(
         argv.push("--output-format", "streaming-messages-json", "--include-partial-messages");
       }
       argv.push("-p", prompt, "--disable-web-search", "--no-subagents", "--always-approve");
-      if (opts.probe) argv.push("--max-turns", "1");
+      if (opts.probe) argv.push("--max-turns", "1", "--reasoning-effort", "low");
       if (opts.workspace) {
         argv.push("--cwd", opts.workspace, "--leader-socket", grokLeaderSocket(opts.workspace));
       }
       assertArgvSafe(argv);
       return { argv, promptStdin: false };
+    }
+    case "cursor-stream-json": {
+      // `--print` headless; prompt on stdin (measured 2026-08-26). `auto` /
+      // `default` / `configured` omit `--model` so Cursor uses the account
+      // default. Review uses --force; probe stays in --mode ask (read-only).
+      const argv = ["--print", "--output-format"];
+      if (opts.probe) {
+        argv.push("json", "--mode", "ask", "--trust");
+      } else {
+        argv.push("stream-json", "--stream-partial-output", "--force", "--trust");
+      }
+      if (!isCursorDefaultModel(agent.modelId)) {
+        argv.push("--model", agent.modelId);
+      }
+      if (opts.workspace) argv.push("--workspace", opts.workspace);
+      return { argv, promptStdin: true };
     }
     case "codex-app-server": {
       if (opts.probe) {
@@ -339,6 +527,11 @@ export function extractFinalOutput(
         return extractGrokLine(capturedFinalLine) ?? extractGrok(stdout);
       }
       return extractGrok(stdout);
+    case "cursor-stream-json":
+      if (capturedFinalLine !== undefined && capturedFinalLine !== null) {
+        return extractClaudeLine(capturedFinalLine) ?? extractClaude(stdout);
+      }
+      return extractClaude(stdout);
     default:
       return null;
   }
@@ -425,6 +618,8 @@ export class FinalEventLineCollector {
       if (extractKimiLine(line) !== null) this.lastLine = line;
     } else if (this.driverId === "grok-stream-json" && obj.type === "result") {
       if (extractGrokLine(line) !== null) this.lastLine = line;
+    } else if (this.driverId === "cursor-stream-json" && obj.type === "result") {
+      if (extractClaudeLine(line) !== null) this.lastLine = line;
     }
   }
 }
@@ -794,6 +989,9 @@ export class DriverActivityCollector {
       case "grok-stream-json":
         this.considerClaude(obj);
         return;
+      case "cursor-stream-json":
+        this.considerCursor(obj);
+        return;
       case "kimi-stream-json":
         this.considerKimi(obj);
         return;
@@ -803,6 +1001,23 @@ export class DriverActivityCollector {
       default:
         return;
     }
+  }
+
+  private considerCursor(obj: Record<string, unknown>): void {
+    if (obj.type === "assistant" || obj.type === "result" || obj.type === "system") {
+      this.sawEvent = true;
+    }
+    if (obj.type !== "tool_call") return;
+    this.sawEvent = true;
+    if (obj.subtype === "started") {
+      const hint = cursorToolHint(obj);
+      if (hint !== null) this.inProgress = hint;
+      return;
+    }
+    if (obj.subtype !== "completed") return;
+    this.inProgress = null;
+    this.toolCalls++;
+    this.pushCommand(cursorToolCommand(obj));
   }
 
   private considerClaude(obj: Record<string, unknown>): void {
@@ -902,4 +1117,30 @@ export class DriverActivityCollector {
       ? chars.slice(0, ACTIVITY_COMMAND_MAX_CHARS).join("")
       : folded;
   }
+}
+
+function cursorToolCall(obj: Record<string, unknown>): Record<string, unknown> | null {
+  const call = obj.tool_call;
+  return typeof call === "object" && call !== null ? (call as Record<string, unknown>) : null;
+}
+
+function cursorToolHint(obj: Record<string, unknown>): string | null {
+  const command = cursorToolCommand(obj);
+  if (typeof command === "string" && command.trim().length > 0) return command;
+  const call = cursorToolCall(obj);
+  if (call === null) return null;
+  const name = Object.keys(call)[0];
+  return name !== undefined && name.length > 0 ? name : null;
+}
+
+function cursorToolCommand(obj: Record<string, unknown>): unknown {
+  const call = cursorToolCall(obj);
+  if (call === null) return undefined;
+  for (const value of Object.values(call)) {
+    if (typeof value !== "object" || value === null) continue;
+    const rec = value as { args?: { command?: unknown; cmd?: unknown } };
+    if (typeof rec.args?.command === "string") return rec.args.command;
+    if (typeof rec.args?.cmd === "string") return rec.args.cmd;
+  }
+  return undefined;
 }

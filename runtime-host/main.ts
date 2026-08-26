@@ -10,6 +10,7 @@ import {
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "./drivers/codex-app-server";
+import { createCursorStreamJsonDriver } from "./drivers/cursor-stream-json";
 import { createGrokStreamJsonDriver } from "./drivers/grok-stream-json";
 import { createKimiStreamJsonDriver } from "./drivers/kimi-stream-json";
 import type { DriverDeps, ParticipantDriver, PrewarmInput, PrewarmResult } from "./drivers/types";
@@ -112,6 +113,11 @@ async function main(): Promise<void> {
       capabilityByDriver,
       "grok-stream-json",
       createGrokStreamJsonDriver(driverDeps),
+    ),
+    "cursor-stream-json": withCapabilityTracking(
+      capabilityByDriver,
+      "cursor-stream-json",
+      createCursorStreamJsonDriver(driverDeps),
     ),
   };
 

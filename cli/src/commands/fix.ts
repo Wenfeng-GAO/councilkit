@@ -22,6 +22,7 @@ import {
   DRIVER_PROBE_PROMPT,
   buildProbeSpec,
   buildSpawnSpec,
+  probeTimeoutMs,
 } from "../auto/driver-commands";
 import { formatDurationMs } from "../auto/duration";
 import {
@@ -735,8 +736,12 @@ function resolvePlanner(store: Store, ref: string | undefined): AgentRecord {
   if (groks.length > 1) {
     throw errors.usage("multiple grok-stream-json agents; pass --agent <name|id>");
   }
+  const cursorNamed = enabled.find((a) => a.name === "review-cursor");
+  if (cursorNamed?.driverSelection.driverId === "cursor-stream-json") return cursorNamed;
+  const cursors = enabled.filter((a) => a.driverSelection.driverId === "cursor-stream-json");
+  if (cursors.length === 1) return cursors[0];
   throw errors.usage(
-    "fix defaults to a grok-stream-json planner (review-adversarial). Run `councilkit init` with grok on PATH, or pass --agent.",
+    "fix defaults to a grok-stream-json planner (review-adversarial), or cursor-stream-json (review-cursor). Run `councilkit init` with grok or cursor-agent on PATH, or pass --agent.",
   );
 }
 
@@ -789,7 +794,11 @@ async function probeAgent(
       cwd: probeCwd,
       prompt: DRIVER_PROBE_PROMPT,
     }),
-    { timeoutMs: PROBE_TIMEOUT_MS, signal, spawnImpl },
+    {
+      timeoutMs: probeTimeoutMs(agent.driverSelection.driverId, PROBE_TIMEOUT_MS),
+      signal,
+      spawnImpl,
+    },
   );
   if (probe.status !== "success") {
     throw errors.runFailed(

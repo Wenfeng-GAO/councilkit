@@ -31,6 +31,7 @@ import {
   GROK_LEADER_SOCK,
   buildProbeSpec,
   buildSpawnSpec,
+  probeTimeoutMs,
 } from "../auto/driver-commands";
 import { formatDurationMs } from "../auto/duration";
 import {
@@ -69,7 +70,6 @@ import { Store } from "../store/store";
 import { parseFlags, parseTimeoutMs } from "./parse";
 
 const RUN_ID_PATTERN = /^ck-review-[0-9a-fA-F-]+$/;
-const PROBE_TIMEOUT_MS = 60_000;
 const DEFAULT_AGENT_NAME = "review-adversarial";
 
 export interface ApplyDeps {
@@ -287,7 +287,7 @@ export async function runApply(
       prompt: DRIVER_PROBE_PROMPT,
     });
     const probe = await spawnOnce(probeSpec, {
-      timeoutMs: PROBE_TIMEOUT_MS,
+      timeoutMs: probeTimeoutMs(agent.driverSelection.driverId),
       signal: controller.signal,
       spawnImpl: deps.spawnImpl,
     });
@@ -503,8 +503,12 @@ function resolveApplyAgent(store: Store, ref: string | undefined): AgentRecord {
       "multiple grok-stream-json agents; pass --agent <name|id> (default is review-adversarial)",
     );
   }
+  const cursorNamed = enabled.find((a) => a.name === "review-cursor");
+  if (cursorNamed?.driverSelection.driverId === "cursor-stream-json") return cursorNamed;
+  const cursors = enabled.filter((a) => a.driverSelection.driverId === "cursor-stream-json");
+  if (cursors.length === 1) return cursors[0];
   throw errors.usage(
-    "apply defaults to a grok-stream-json agent (review-adversarial). Run `councilkit init` with grok on PATH, or pass --agent.",
+    "apply defaults to a grok-stream-json agent (review-adversarial), or cursor-stream-json (review-cursor). Run `councilkit init` with grok or cursor-agent on PATH, or pass --agent.",
   );
 }
 

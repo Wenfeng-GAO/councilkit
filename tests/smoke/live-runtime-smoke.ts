@@ -84,6 +84,7 @@ import { followExecutionEvents } from "@/runtime/event-stream";
 import { loadConfig } from "@host/config";
 import { createClaudeStreamJsonDriver } from "@host/drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "@host/drivers/codex-app-server";
+import { createCursorStreamJsonDriver } from "@host/drivers/cursor-stream-json";
 import { createGrokStreamJsonDriver } from "@host/drivers/grok-stream-json";
 import { createKimiStreamJsonDriver } from "@host/drivers/kimi-stream-json";
 import type {
@@ -597,6 +598,11 @@ async function createRealRig(logLines: string[]): Promise<Rig> {
       "grok-stream-json",
       createGrokStreamJsonDriver(driverDeps),
     ),
+    "cursor-stream-json": trackCapability(
+      capabilityByDriver,
+      "cursor-stream-json",
+      createCursorStreamJsonDriver(driverDeps),
+    ),
   };
   const { host, scopeManager } = await assembleHost({
     installations,
@@ -770,6 +776,28 @@ const FAKE_INSTALLATIONS: Record<DriverId, { dto: InstallationDto; record: Insta
       detail: null,
     },
   },
+  "cursor-stream-json": {
+    dto: {
+      installationId: "cursor-fake000000",
+      driverId: "cursor-stream-json",
+      state: "trusted",
+      executablePath: "/fake/cursor-agent",
+      fingerprint: "sha256:00",
+      components: [],
+      detail: null,
+    },
+    record: {
+      installationId: "cursor-fake000000",
+      driverId: "cursor-stream-json",
+      name: "cursor-agent",
+      discoveredPath: "/fake/cursor-agent",
+      realpath: "/fake/cursor-agent",
+      fingerprint: "sha256:00",
+      state: "trusted",
+      components: [],
+      detail: null,
+    },
+  },
 };
 
 function fakeInstallationRegistry(): InstallationRegistry {
@@ -827,6 +855,11 @@ async function createFakeRig(logLines: string[]): Promise<Rig> {
       capabilityByDriver,
       "grok-stream-json",
       makeFactory("grok-stream-json"),
+    ),
+    "cursor-stream-json": trackCapability(
+      capabilityByDriver,
+      "cursor-stream-json",
+      makeFactory("cursor-stream-json"),
     ),
   };
   const { host, scopeManager } = await assembleHost({

@@ -120,6 +120,14 @@ export type KimiStreamJsonOptions = z.infer<typeof kimiStreamJsonOptionsSchema>;
 export const grokStreamJsonOptionsSchema = z.object({}).strict();
 export type GrokStreamJsonOptions = z.infer<typeof grokStreamJsonOptionsSchema>;
 
+/**
+ * `cursor-stream-json` options: model is the Agent's `modelId` against the
+ * live `cursor-agent models` catalog. `auto` means omit `--model` and use
+ * Cursor's account default. Profile carries no model, argv or token fields.
+ */
+export const cursorStreamJsonOptionsSchema = z.object({}).strict();
+export type CursorStreamJsonOptions = z.infer<typeof cursorStreamJsonOptionsSchema>;
+
 /** Typed Execution Profile DTO. Strict by construction: no executable, argv,
  * shell, raw env or token fields can pass validation. */
 export const executionProfileSchema = z.discriminatedUnion("driverId", [
@@ -153,6 +161,14 @@ export const executionProfileSchema = z.discriminatedUnion("driverId", [
       installationId: z.string().min(1),
       credentialMode: z.literal(CREDENTIAL_MODE),
       options: grokStreamJsonOptionsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      driverId: z.literal("cursor-stream-json"),
+      installationId: z.string().min(1),
+      credentialMode: z.literal(CREDENTIAL_MODE),
+      options: cursorStreamJsonOptionsSchema,
     })
     .strict(),
 ]);

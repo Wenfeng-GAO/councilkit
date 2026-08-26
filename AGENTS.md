@@ -13,7 +13,7 @@ CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 
 `--json`：进度/诊断走 stderr，stdout 只出一个最终 JSON。退出码见 README CLI 章节（0/2/3/4/5/7/130）。
 
 ```bash
-# 0. 一键写入默认审查班子（不经 Host；PATH 上有 cld/kimi/grok 才建对应 Agent）
+# 0. 一键写入默认审查班子（不经 Host；PATH 上有 cld/kimi/grok/cursor-agent 才建对应 Agent）
 pnpm exec councilkit init --json
 # 之后审查不再手写 --agents JSON：
 pnpm exec councilkit review <url> --json
@@ -23,7 +23,7 @@ pnpm exec councilkit apply --run <ck-review-id> --json   # 默认第一个未落
 pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪审
 ```
 
-`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`）与 Council `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个）。已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）。`--force` 先删 `pr-jury` 再重建。
+`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`；有 `cursor-agent` 时再加 `review-cursor`，model = `auto`）与 Council `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）。已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）。`--force` 先删 `pr-jury` 再重建。
 
 ```bash
 # 1. 自检 Host + 实时模型闭集（讨论 Run 才需要；review 不需要）
@@ -38,6 +38,7 @@ pnpm exec councilkit models  --json
 { "driverId":"claude-stream-json", "route":"cfuse",  "catalog":["antchat/GLM-5.2[1m]", "..."], "error":null }
 { "driverId":"kimi-stream-json",   "route":null,     "catalog":["kimi-code/k3"],              "error":null }
 { "driverId":"grok-stream-json",   "route":null,     "catalog":["grok-4.6","grok-4.5"],       "error":null }
+{ "driverId":"cursor-stream-json", "route":null,     "catalog":["auto","composer-2.5", "..."], "error":null }
 ```
 
 ```bash
@@ -94,8 +95,8 @@ pnpm exec councilkit run --agents '["<A-id>","<B-id>"]' --topic "..." \
 - 凭据（cookie/CSRF）只存进程内存，Host 重启自动重取一次；不落盘、不出现在任何输出。
 - CLI 只保证与**同 checkout** Host 互通；与浏览器数据不互通；V1.1 无 `--resume`。
 - live smoke 与 Host 共用 43127、独占串行；端口被占只 `lsof` 记录，不 kill 非自身进程。
-- **Live Transcript**：review/apply/fix 的每个 attempt 会把 driver 过程事件（text/thinking/tool call）增量写入 `runs/<runId>/live/<attemptId>.jsonl`（CLI 侧 `cli/src/auto/live-events.ts`，写失败静默、2MB 上限；grok 用 `streaming-messages-json` 与 claude 共用解析器；probe 仍用单对象 `json`）。Host 端点 `GET /api/v1/cli-runs/:runId/attempts/:attemptId/live?afterSeq=N`（分页 + 坏行容忍）；`/reports/<runId>` 的 attempt 卡片展开「过程」即可看实时输出。该 sidecar 是观察层，不进 transcript/report。
-- **Squad observe**：`ck-squad-<uuid>` / `kind=squad` 是外部 `squadctl --observe` 写入的只读 sidecar（同一 `COUNCILKIT_HOME/runs`）。Host 不读 `.squad/`、不 spawn `squadctl`、不对 squad run 提供 fix/re-review。报告页走席位过程 + 只读 `handoff` 块，不走修复管线。旧 sidecar `interrupted` + 全席终态 + `phase≠done` 读时映射为 `awaiting_orchestrator`（「等待编排」）；显式收工为 `closed`（「已收工」）。看过程需要 Host（`pnpm start` 或 launchd）；前台 `pnpm dev` 被杀 ≠ 观察消失。
+- **Live Transcript**：review/apply/fix 的每个 attempt 会把 driver 过程事件（text/thinking/tool call）增量写入 `runs/<runId>/live/<attemptId>.jsonl`（CLI 侧 `cli/src/auto/live-events.ts`，写失败静默、2MB 上限；grok 用 `streaming-messages-json` 与 claude 共用解析器；cursor-agent 用 `stream-json`，`auto` 省略 `--model`；probe 仍用单对象 `json`）。Host 端点 `GET /api/v1/cli-runs/:runId/attempts/:attemptId/live?afterSeq=N`（分页 + 坏行容忍）；`/reports/<runId>` 的 attempt 卡片展开「过程」即可看实时输出。该 sidecar 是观察层，不进 transcript/report。
+- **Squad observe**：`ck-squad-<uuid>` / `kind=squad` 是外部 `squadctl --observe` 写入的只读 sidecar（同一 `COUNCILKIT_HOME/runs`）。Host 不读 `.squad/`、不 spawn `squadctl`、不对 squad run 提供 fix/re-review。报告页走席位过程 + 只读 `handoff` 块 + sidecar 里的 brief/plan/评审/final，不走修复管线。旧 sidecar `interrupted` + 全席终态 + `phase≠done` 读时映射为 `awaiting_orchestrator`（「等待编排」）；显式收工为 `closed`（「已收工」）。看过程需要 Host（`pnpm start` 或 launchd）；前台 `pnpm dev` 被杀 ≠ 观察消失。
 
 ## 目录速览
 

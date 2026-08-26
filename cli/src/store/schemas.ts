@@ -3,6 +3,7 @@ import type { SnapshotItem } from "@shared/runtime/schemas";
 import {
   claudeStreamJsonOptionsSchema,
   codexAppServerOptionsSchema,
+  cursorStreamJsonOptionsSchema,
   type executionProfileSchema,
   grokStreamJsonOptionsSchema,
   kimiStreamJsonOptionsSchema,
@@ -40,6 +41,9 @@ export const driverSelectionSchema = z.discriminatedUnion("driverId", [
     .strict(),
   z
     .object({ driverId: z.literal("grok-stream-json"), options: grokStreamJsonOptionsSchema })
+    .strict(),
+  z
+    .object({ driverId: z.literal("cursor-stream-json"), options: cursorStreamJsonOptionsSchema })
     .strict(),
 ]);
 export type DriverSelection = z.infer<typeof driverSelectionSchema>;

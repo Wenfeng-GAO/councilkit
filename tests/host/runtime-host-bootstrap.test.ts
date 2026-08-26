@@ -83,6 +83,7 @@ describe("fixed canonical origin", () => {
     expect(drivers.map((d) => d.driverId).sort()).toEqual([
       "claude-stream-json",
       "codex-app-server",
+      "cursor-stream-json",
       "grok-stream-json",
       "kimi-stream-json",
     ]);

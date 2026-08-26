@@ -12,7 +12,7 @@ import type { DriverId } from "@shared/runtime/contracts";
  * the inherited PATH followed by the built-in macOS well-known directories.
  */
 
-export type InstallationName = "cld" | "codex" | "kimi" | "grok";
+export type InstallationName = "cld" | "codex" | "kimi" | "grok" | "cursor-agent";
 export type BinaryName = InstallationName | "claude" | "cfuse-claude-code";
 
 export interface DiscoveredCandidate {
@@ -52,6 +52,7 @@ const BINARY_NAMES: readonly BinaryName[] = [
   "cfuse-claude-code",
   "kimi",
   "grok",
+  "cursor-agent",
 ];
 
 const DRIVER_BY_NAME: Record<InstallationName, DriverId> = {
@@ -59,6 +60,7 @@ const DRIVER_BY_NAME: Record<InstallationName, DriverId> = {
   codex: "codex-app-server",
   kimi: "kimi-stream-json",
   grok: "grok-stream-json",
+  "cursor-agent": "cursor-stream-json",
 };
 
 function defaultWellKnownDirs(env: NodeJS.ProcessEnv): string[] {
@@ -158,6 +160,16 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
       name: "grok",
       driverId: DRIVER_BY_NAME.grok,
       wrapper: grok,
+      claude: null,
+      cfuse: null,
+    });
+  }
+  const cursorAgent = found.get("cursor-agent");
+  if (cursorAgent) {
+    installations.push({
+      name: "cursor-agent",
+      driverId: DRIVER_BY_NAME["cursor-agent"],
+      wrapper: cursorAgent,
       claude: null,
       cfuse: null,
     });

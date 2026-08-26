@@ -45,7 +45,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   }
   if (available.length === 0) {
     throw errors.usage(
-      "no review drivers found on PATH (need at least one of: cld, kimi, grok). Install and login to a local CLI, then retry.",
+      "no review drivers found on PATH (need at least one of: cld, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
       { missingDrivers },
     );
   }

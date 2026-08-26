@@ -173,6 +173,25 @@ describe("councilkit init", () => {
     expect(store.getCouncil("pr-jury").agentIds).toHaveLength(4);
   });
 
+  it("adds review-cursor with model auto when cursor-agent is on PATH", async () => {
+    stub(["cld", "kimi", "grok", "cursor-agent"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdAgents: Array<{ name: string; driverId: string; modelId: string }>;
+    };
+    expect(out.createdAgents.find((a) => a.name === "review-cursor")).toMatchObject({
+      driverId: "cursor-stream-json",
+      modelId: "auto",
+    });
+    const store = new Store();
+    expect(store.getCouncil("pr-jury").agentIds).toHaveLength(5);
+    expect(store.getAgent("review-cursor").driverSelection).toEqual({
+      driverId: "cursor-stream-json",
+      options: {},
+    });
+  });
+
   it("creates a one-agent pr-jury when only kimi is on PATH", async () => {
     stub(["kimi"]);
     const sink = makeSink();
@@ -184,7 +203,7 @@ describe("councilkit init", () => {
     };
     expect(out.createdAgents.map((a) => a.name)).toEqual(["review-maintainability"]);
     expect(out.createdCouncil.reporter).toBe("review-maintainability");
-    expect(out.missingDrivers.sort()).toEqual(["cld", "grok"]);
+    expect(out.missingDrivers.sort()).toEqual(["cld", "cursor-agent", "grok"]);
   });
 
   it("migrates an existing correctness seat off codex onto grok", async () => {

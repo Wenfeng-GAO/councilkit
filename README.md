@@ -15,6 +15,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
   - Codex CLI（Runtime Driver `codex-app-server`，即官方 `codex app-server`）。
   - 本地 `kimi` CLI + coding plan 登录（Runtime Driver `kimi-stream-json`，模型 `kimi-code/k3`，发现路径含 `~/.kimi-code/bin`）。
   - 本地 `grok` CLI + `grok login`（Runtime Driver `grok-stream-json`，模型 `grok-4.6` / `grok-4.5`，发现路径含 `~/.grok/bin`）。
+  - 本地 `cursor-agent` CLI + `cursor-agent login`（或 `CURSOR_API_KEY`）（Runtime Driver `cursor-stream-json`，默认模型 `auto`，发现路径含 `~/.local/bin`）。
 
 认证统一为 `installation-managed`：本机 Runtime Installation 自行解析凭据，CouncilKit 从不读取或存储 API Key，也不提供 browser-direct fallback。
 
@@ -79,17 +80,17 @@ pnpm exec councilkit --help
 
 CLI 不 spawn Runtime Host，也不直连模型供应商——除 `review` 外，所有执行仍经过本机前台运行的 Runtime Host（与浏览器共用同一个 `http://127.0.0.1:43127`）。所以先 `pnpm start`（或 `pnpm dev`）让 Host 跑起来，再开 CLI；浏览器可以关。Host 不可达时 `doctor`/`run` 以退出码 3 失败，CLI 永不自动拉起 Host。CLI 只保证与**同 checkout** 的 Host 互通（版本绑定）。
 
-**例外：`councilkit review` / `councilkit apply` 不经 Host**——它们直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok` 并 spawn（见下「自主并行审查」），因此不需要 Host 运行，也不受退出码 3 约束。
+**例外：`councilkit review` / `councilkit apply` 不经 Host**——它们直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn（见下「自主并行审查」），因此不需要 Host 运行，也不受退出码 3 约束。
 
 ### 命令
 
 ```bash
-councilkit init [--force] [--json]                      # 发现本机 cld/kimi/codex，写入默认 pr-jury
+councilkit init [--force] [--json]                      # 发现本机 cld/kimi/codex/grok/cursor-agent，写入默认 pr-jury
 councilkit doctor [--json]                              # Host 可达性 + installations + catalog 摘要
 councilkit models [--json]                             # 当前可用 driver/route/model 闭集（实时 catalog）
 councilkit agent create \
   --name <name> --persona-prompt <text> \
-  --driver-id <claude-stream-json|codex-app-server|kimi-stream-json|grok-stream-json> \
+  --driver-id <claude-stream-json|codex-app-server|kimi-stream-json|grok-stream-json|cursor-stream-json> \
   --options '<json>' --model-id <id> --color <#rrggbb> [--disabled] [--json]
 councilkit agent list|show <name|id>|delete <name|id> [--json]
 
@@ -136,7 +137,7 @@ pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪�
 
 同一任务由 N 个全能力 agent（Attempt）在**隔离 git worktree**（`runs/<run-id>/workspaces/<attemptId>/`，同一 PR commit，不各自 clone）中独立并行做一遍，再由 Aggregator 对比汇总，产出 `report.md`（确定性头部含 Attempts 五列表格 + 中文五章节聚合正文 + `## 过程对比` + `## 附录:各审查者交付物`）+ `transcript.jsonl`。PR 审查需要本机已有该仓库：`--repo <path>`、`repos.json` 记忆，或在匹配 remote 的 clone 里直接跑。`--task` 仍用空 cwd。
 
-- **不经 Runtime Host**：CLI 直接按 PATH 解析 `cld`/`kimi`/`codex` 并 spawn，绕过 scope/SSE/ACK。claude 仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）；kimi 用 `-p`（无 `--auto`，自主权限由 config 提供）；codex 用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`。
+- **不经 Runtime Host**：CLI 直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK。claude 仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）；kimi 用 `-p`（无 `--auto`，自主权限由 config 提供）；codex 用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`；cursor-agent 用 `--print --output-format stream-json`，`auto` 省略 `--model`。
 - **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
 - `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。默认 Aggregator 是 grok（`review-adversarial`）。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
 - 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 默认 45m（cld/kimi/grok），`--codex-timeout` 默认 90m。`--concurrency` 默认 10。失败席：`councilkit review <url> --resume <run-id>` 只重跑失败 Attempt，成功席复用。
@@ -240,7 +241,7 @@ TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx tests/smoke/live-runti
 - Web Lock + `leaseEpoch` fencing 保证一个 Execution Scope 同时只有一个 Scope Controller 可以执行 Host mutation 与 Dexie 提交；其他标签页只读观察。
 - 每个活跃 Participant 保持一个 Driver 实例和隔离的 Execution Session；Claude/Codex 为长期进程，Kimi 为每 turn 短进程 + `-S` 跨进程 resume（ADR-0012）；纯追加轮次只向健康 Session 下发增量 Context Snapshot。
 - 页面刷新使用同一 Scope 与 `executionId` 重连事件流，从最后收到的 `eventSeq` 继续，不重新调用模型。
-- V1 有四个内置 Runtime Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`、`grok-stream-json`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
+- V1 有五个内置 Runtime Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`、`grok-stream-json`、`cursor-stream-json`；legacy browser-direct Gateway 已在 U7 删除，Runtime Host 是唯一执行路径。
 
 ## 管理面
 

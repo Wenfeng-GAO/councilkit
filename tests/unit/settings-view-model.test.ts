@@ -118,6 +118,7 @@ describe("settings view-model", () => {
     expect(driverDisplayName("codex-app-server")).toContain("Codex");
     expect(driverDisplayName("kimi-stream-json")).toContain("Kimi");
     expect(driverDisplayName("grok-stream-json")).toContain("Grok");
+    expect(driverDisplayName("cursor-stream-json")).toContain("Cursor");
     expect(modelCatalogQueryKey("codex-app-server", "inst-1")).toEqual([
       "host",
       "model-catalog",

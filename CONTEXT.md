@@ -13,7 +13,7 @@ _Avoid_: Runtime、daemon、gateway、backend
 _Avoid_: Runtime Host、Runtime Driver、facilitator
 
 **Runtime Driver**:
-Runtime Host 内置的一种模型执行协议实现；同一种 Runtime Driver 可以形成零个或多个 **Execution Profile**，且不由用户创建。V1 四个内置 Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`、`grok-stream-json`。
+Runtime Host 内置的一种模型执行协议实现；同一种 Runtime Driver 可以形成零个或多个 **Execution Profile**，且不由用户创建。V1 五个内置 Driver：`claude-stream-json`、`codex-app-server`、`kimi-stream-json`、`grok-stream-json`、`cursor-stream-json`。
 _Avoid_: Provider、Runtime、Agent、Execution Profile
 
 **Runtime Installation**:

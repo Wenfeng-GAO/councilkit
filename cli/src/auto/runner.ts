@@ -532,7 +532,8 @@ export function defaultSpawn(
     const lineColl =
       input.driverId === "claude-stream-json" ||
       input.driverId === "kimi-stream-json" ||
-      input.driverId === "grok-stream-json"
+      input.driverId === "grok-stream-json" ||
+      input.driverId === "cursor-stream-json"
         ? new FinalEventLineCollector(input.driverId)
         : null;
     // Incremental process observer (P2-1): fed with the same stdout chunks, so

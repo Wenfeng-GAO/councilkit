@@ -77,7 +77,12 @@ export async function setDriverBehavior(
  * 新建的 rig 会继承该默认行为。 */
 export async function setDriverDefaultBehavior(
   page: Page,
-  driverId: "claude-stream-json" | "codex-app-server" | "kimi-stream-json" | "grok-stream-json",
+  driverId:
+    | "claude-stream-json"
+    | "codex-app-server"
+    | "kimi-stream-json"
+    | "grok-stream-json"
+    | "cursor-stream-json",
   behavior: DriverBehaviorInput,
 ): Promise<void> {
   await controlPost(page, "/driver-default", { driverId, behavior });
@@ -180,7 +185,12 @@ export async function freshPage(
 
 export interface CreateProfileInput {
   name: string;
-  driverId: "claude-stream-json" | "codex-app-server" | "kimi-stream-json" | "grok-stream-json";
+  driverId:
+    | "claude-stream-json"
+    | "codex-app-server"
+    | "kimi-stream-json"
+    | "grok-stream-json"
+    | "cursor-stream-json";
   /** installationId value, e.g. "claude-e2e-fake01". */
   installationId: string;
   /** claude-stream-json route; defaults to the form's ant-glm5.2. cfuse is the

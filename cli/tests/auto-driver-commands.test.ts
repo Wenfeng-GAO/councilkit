@@ -3,7 +3,16 @@
  * construction is checked structurally, output extraction against canned
  * stream-json fixtures, executable resolution against a temp PATH dir.
  */
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,12 +21,17 @@ import {
   DRIVER_PROBE_PROMPT,
   DriverActivityCollector,
   FinalEventLineCollector,
+  GROK_ISOLATED_HOME_DIR,
+  GROK_PROBE_TIMEOUT_MS,
+  ISOLATED_GROK_CONFIG,
   buildProbeSpec,
   buildSpawnSpec,
   extractFinalOutput,
+  probeTimeoutMs,
   resolveExecutable,
   spawnEnvForDriver,
   stripProxyPrefix,
+  withLocalHttpProxy,
 } from "../src/auto/driver-commands";
 import type { CliError } from "../src/errors";
 import type { AgentRecord } from "../src/store/schemas";
@@ -41,6 +55,7 @@ const CLAUDE_CFUSE = {
 const KIMI = { driverId: "kimi-stream-json" as const, options: {} };
 const CODEX = { driverId: "codex-app-server" as const, options: {} };
 const GROK = { driverId: "grok-stream-json" as const, options: {} };
+const CURSOR = { driverId: "cursor-stream-json" as const, options: {} };
 
 function captureError(fn: () => unknown): CliError {
   try {
@@ -57,7 +72,7 @@ describe("cli auto driver-commands", () => {
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "councilkit-dc-"));
     // Put a fake `cld`, `kimi`, `codex` on a temp PATH.
-    for (const name of ["cld", "kimi", "codex", "grok"]) {
+    for (const name of ["cld", "kimi", "codex", "grok", "cursor-agent"]) {
       const p = join(tmp, name);
       writeFileSync(p, "#!/bin/sh\necho hi\n");
       chmodSync(p, 0o755);
@@ -199,6 +214,39 @@ describe("cli auto driver-commands", () => {
       ]);
     });
 
+    it("cursor: stdin prompt, stream-json, force+trust, omit --model for auto", () => {
+      const spec = buildSpawnSpec(agent(CURSOR, "auto"), {
+        attemptId: "attempt-0",
+        workspace: "/ws",
+        prompt: "review this",
+        env: env(tmp),
+      });
+      expect(spec.promptStdin).toBe(true);
+      expect(spec.executable).toBe(join(tmp, "cursor-agent"));
+      expect(spec.argv).toEqual([
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--stream-partial-output",
+        "--force",
+        "--trust",
+        "--workspace",
+        "/ws",
+      ]);
+      expect(spec.argv).not.toContain("--model");
+    });
+
+    it("cursor: explicit model is passed through", () => {
+      const spec = buildSpawnSpec(agent(CURSOR, "composer-2.5"), {
+        attemptId: "attempt-0",
+        workspace: "/ws",
+        prompt: "review this",
+        env: env(tmp),
+      });
+      expect(spec.argv).toContain("--model");
+      expect(spec.argv).toContain("composer-2.5");
+    });
+
     it("codex: stdin prompt, last-message file under workspace, skip-git-repo-check, --json", () => {
       const spec = buildSpawnSpec(agent(CODEX, "gpt-5"), {
         attemptId: "attempt-0",
@@ -324,6 +372,8 @@ describe("cli auto driver-commands", () => {
         "--always-approve",
         "--max-turns",
         "1",
+        "--reasoning-effort",
+        "low",
         "--cwd",
         "/probe-cwd",
         "--leader-socket",
@@ -332,17 +382,112 @@ describe("cli auto driver-commands", () => {
       expect(spec.cwd).toBe("/probe-cwd");
     });
 
-    it("grok spawn env drops TUI session vars and pins PWD to the isolated cwd", () => {
-      const env = spawnEnvForDriver("grok-stream-json", "/probe-cwd", {
-        PATH: "/bin",
-        GROK_AGENT: "1",
-        GROK_SESSION_ID: "parent-session",
-        PWD: "/Users/me/councilkit",
-      });
-      expect(env.PWD).toBe("/probe-cwd");
+    it("cursor probe: json + ask mode, no --force, omit --model for auto", () => {
+      const spec = buildProbeSpec(agent(CURSOR, "auto"), probeOpts());
+      expect(spec.promptStdin).toBe(true);
+      expect(spec.argv).toEqual([
+        "--print",
+        "--output-format",
+        "json",
+        "--mode",
+        "ask",
+        "--trust",
+        "--workspace",
+        "/probe-cwd",
+      ]);
+      expect(spec.argv).not.toContain("--force");
+      expect(spec.argv).not.toContain("--model");
+    });
+
+    it("grok spawn env isolates GROK_HOME and disables host Claude/Cursor skills", () => {
+      const orig = mkdtempSync(join(tmpdir(), "ck-grok-src-"));
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-cwd-"));
+      writeFileSync(join(orig, "auth.json"), '{"token":"x"}\n', { mode: 0o600 });
+      mkdirSync(join(orig, "skills"), { recursive: true });
+      mkdirSync(join(orig, "bundled", "skills"), { recursive: true });
+      const env = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        {
+          PATH: "/bin",
+          GROK_AGENT: "1",
+          GROK_SESSION_ID: "parent-session",
+          GROK_HOME: orig,
+          GROK_CLAUDE_SKILLS_ENABLED: "true",
+          GROK_CURSOR_SKILLS_ENABLED: "true",
+          PWD: "/Users/me/councilkit",
+        },
+        { localProxyPort: () => null },
+      );
+      expect(env.PWD).toBe(cwd);
       expect(env.GROK_AGENT).toBeUndefined();
       expect(env.GROK_SESSION_ID).toBeUndefined();
+      expect(env.GROK_CLAUDE_SKILLS_ENABLED).toBe("false");
+      expect(env.GROK_CURSOR_SKILLS_ENABLED).toBe("false");
       expect(env.PATH).toBe("/bin");
+      expect(env.GROK_HOME).toBe(join(cwd, GROK_ISOLATED_HOME_DIR));
+      expect(readFileSync(join(env.GROK_HOME ?? "", "auth.json"), "utf8")).toContain("token");
+      expect(readFileSync(join(env.GROK_HOME ?? "", "config.toml"), "utf8")).toBe(
+        ISOLATED_GROK_CONFIG,
+      );
+      expect(existsSync(join(env.GROK_HOME ?? "", "skills"))).toBe(false);
+      expect(existsSync(join(env.GROK_HOME ?? "", "bundled"))).toBe(false);
+    });
+
+    it("grok isolated config replaces a stale skills=true file", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-stale-"));
+      const first = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin" },
+        { localProxyPort: () => null },
+      );
+      const configPath = join(first.GROK_HOME ?? "", "config.toml");
+      writeFileSync(configPath, "[compat.claude]\nskills = true\n");
+      const again = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin" },
+        { localProxyPort: () => null },
+      );
+      expect(readFileSync(join(again.GROK_HOME ?? "", "config.toml"), "utf8")).toBe(
+        ISOLATED_GROK_CONFIG,
+      );
+    });
+
+    it("grok probes use a 3-minute budget", () => {
+      expect(probeTimeoutMs("grok-stream-json")).toBe(GROK_PROBE_TIMEOUT_MS);
+      expect(probeTimeoutMs("kimi-stream-json")).toBe(60_000);
+      expect(probeTimeoutMs("kimi-stream-json", 90_000)).toBe(90_000);
+    });
+
+    it("grok spawn env keeps an existing HTTPS_PROXY", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-px-"));
+      const env = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin", HTTPS_PROXY: "http://127.0.0.1:8888" },
+        { localProxyPort: () => 7897 },
+      );
+      expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:8888");
+    });
+
+    it("grok spawn env fills a local HTTP proxy when the parent has none", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-px2-"));
+      const env = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin" },
+        { localProxyPort: () => 7897 },
+      );
+      expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7897");
+      expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7897");
+      expect(env.NO_PROXY).toMatch(/localhost/);
+    });
+
+    it("withLocalHttpProxy is a no-op when nothing is listening", () => {
+      const env = withLocalHttpProxy({ PATH: "/bin" }, () => null);
+      expect(env.HTTPS_PROXY).toBeUndefined();
     });
 
     it("claude non-cfuse route → usage error", () => {
@@ -489,6 +634,26 @@ describe("cli auto driver-commands", () => {
       const coll = new DriverActivityCollector("codex-app-server");
       feedLines(coll, `${lines}\n`);
       expect(coll.summary()).toEqual({ toolCalls: 3, commands: ["ls"] });
+    });
+
+    it("cursor: counts completed tool_call events and samples shell commands", () => {
+      const lines = [
+        JSON.stringify({ type: "system", subtype: "init", model: "Auto (default)" }),
+        JSON.stringify({
+          type: "tool_call",
+          subtype: "started",
+          tool_call: { shellToolCall: { args: { command: "git status" } } },
+        }),
+        JSON.stringify({
+          type: "tool_call",
+          subtype: "completed",
+          tool_call: { shellToolCall: { args: { command: "git status" } } },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", result: "done" }),
+      ].join("\n");
+      const coll = new DriverActivityCollector("cursor-stream-json");
+      feedLines(coll, `${lines}\n`);
+      expect(coll.summary()).toEqual({ toolCalls: 1, commands: ["git status"] });
     });
 
     it("grok: shares the claude parser for streaming-messages-json frames", () => {
@@ -671,6 +836,14 @@ describe("cli auto driver-commands", () => {
         content: [{ type: "text", text: "block answer" }],
       });
       expect(extractFinalOutput("kimi-stream-json", stdout)).toBe("block answer");
+    });
+
+    it("cursor: last success result .result, same as claude", () => {
+      const stdout = [
+        JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }] } }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }),
+      ].join("\n");
+      expect(extractFinalOutput("cursor-stream-json", stdout)).toBe("ok");
     });
 
     it("grok: pretty-printed json .text is the deliverable", () => {

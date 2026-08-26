@@ -83,6 +83,9 @@ export class LiveEventCollector {
       case "grok-stream-json":
         this.considerClaude(obj, out);
         return;
+      case "cursor-stream-json":
+        this.considerCursor(obj, out);
+        return;
       case "kimi-stream-json":
         this.considerKimi(obj, out);
         return;
@@ -91,6 +94,34 @@ export class LiveEventCollector {
         return;
       default:
         return;
+    }
+  }
+
+  private considerCursor(obj: Record<string, unknown>, out: RawLiveEvent[]): void {
+    if (obj.type === "assistant") {
+      const message = asRecord(obj.message);
+      if (message !== null && Array.isArray(message.content)) {
+        for (const block of message.content) {
+          const b = asRecord(block);
+          if (b === null || b.type !== "text") continue;
+          const text = typeof b.text === "string" ? b.text : "";
+          if (text.length > 0) out.push({ type: "text.delta", text });
+        }
+      }
+      return;
+    }
+    if (obj.type !== "tool_call") return;
+    const call = asRecord(obj.tool_call);
+    const name = call !== null ? Object.keys(call)[0] : undefined;
+    const toolName = name !== undefined && name.length > 0 ? name : "tool";
+    const args = call !== null ? asRecord(asRecord(call[toolName])?.args) : null;
+    const summary = pickToolSummary(args);
+    if (obj.subtype === "started") {
+      out.push({ type: "tool.started", name: toolName, summary });
+      return;
+    }
+    if (obj.subtype === "completed") {
+      out.push({ type: "tool.completed", name: toolName, summary });
     }
   }
 

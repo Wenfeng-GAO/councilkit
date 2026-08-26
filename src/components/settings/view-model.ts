@@ -19,6 +19,7 @@ export const DRIVER_DISPLAY_NAMES: Record<DriverId, string> = {
   "codex-app-server": "Codex (app-server)",
   "kimi-stream-json": "Kimi K3 (kimi CLI)",
   "grok-stream-json": "Grok (grok CLI)",
+  "cursor-stream-json": "Cursor (cursor-agent CLI)",
 };
 
 export const CLAUDE_ROUTE_LABELS: Record<string, string> = {

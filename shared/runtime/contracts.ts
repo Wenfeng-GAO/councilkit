@@ -58,6 +58,7 @@ export const DRIVER_IDS = [
   "codex-app-server",
   "kimi-stream-json",
   "grok-stream-json",
+  "cursor-stream-json",
 ] as const;
 export type DriverId = (typeof DRIVER_IDS)[number];
 

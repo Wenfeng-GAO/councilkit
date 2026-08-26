@@ -81,6 +81,7 @@ describe("runtime contract constants (compatibility pins)", () => {
       "codex-app-server",
       "kimi-stream-json",
       "grok-stream-json",
+      "cursor-stream-json",
     ]);
   });
 
@@ -229,6 +230,22 @@ describe("execution profile schema", () => {
       executionProfileSchema.safeParse({ ...grok, options: { modelId: "grok-4.6" } }).success,
     ).toBe(false);
     expect(executionProfileSchema.safeParse({ ...grok, options: { token: "x" } }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts a cursor-stream-json profile with empty options and rejects extras", () => {
+    const cursor = {
+      driverId: "cursor-stream-json",
+      installationId: "cursor-abc123",
+      credentialMode: "installation-managed",
+      options: {},
+    };
+    expect(executionProfileSchema.safeParse(cursor).success).toBe(true);
+    expect(
+      executionProfileSchema.safeParse({ ...cursor, options: { modelId: "auto" } }).success,
+    ).toBe(false);
+    expect(executionProfileSchema.safeParse({ ...cursor, options: { token: "x" } }).success).toBe(
       false,
     );
   });

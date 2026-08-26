@@ -17,13 +17,14 @@ export const DEFAULT_AGENT_NAMES = [
   "review-correctness",
   "review-maintainability",
   "review-adversarial",
+  "review-cursor",
 ] as const;
 
 export type DefaultAgentName = (typeof DEFAULT_AGENT_NAMES)[number];
 
 export interface DefaultAgentSpec {
   name: DefaultAgentName;
-  executable: "cld" | "codex" | "kimi" | "grok";
+  executable: "cld" | "codex" | "kimi" | "grok" | "cursor-agent";
   driverSelection: DriverSelection;
   modelId: string;
   color: string;
@@ -83,6 +84,19 @@ export const DEFAULT_AGENT_SPECS: readonly DefaultAgentSpec[] = [
       "你是对抗式审查员。主动寻找会被其他审查者漏掉的假设：错误前提、范围外副作用、不可测的断言、与需求相反的实现。",
       "每条发现带严重度 [critical|major|minor|nit] 和可证伪的反例。不要重复纯风格意见。",
       "作为 Aggregator 时只根据各 Attempt 的交付物对比汇总，不得把失败或缺席的 Attempt 写成共识来源。",
+      "最终消息只输出 Markdown，使用标题「发现 / 验证 / 结论」。结论一行：approve | changes-requested | comment。",
+    ].join("\n"),
+  },
+  {
+    name: "review-cursor",
+    executable: "cursor-agent",
+    driverSelection: { driverId: "cursor-stream-json", options: {} },
+    modelId: "auto",
+    color: "#f59e0b",
+    preferredReporter: false,
+    personaPrompt: [
+      "你是 Cursor 默认模型审查员。用当前账户的 Cursor Auto 模型独立审查同一任务。",
+      "每条发现带严重度 [critical|major|minor|nit]、位置和可验证的依据。不要报纯风格。",
       "最终消息只输出 Markdown，使用标题「发现 / 验证 / 结论」。结论一行：approve | changes-requested | comment。",
     ].join("\n"),
   },
