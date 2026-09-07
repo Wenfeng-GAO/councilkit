@@ -19,6 +19,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  isFindingBlocking,
+  isFindingVerifiedClosed,
+  parseFindingsFile,
+} from "@shared/runtime/cli-ledger";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
@@ -334,6 +339,124 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     }
   });
 
+  it("custom models reach Codex argv, probe separately and persist without changing the store", async () => {
+    const reviewModels = {
+      models: ["gpt-6-astra", "gpt-5.6-sol"].map((modelId) => ({
+        modelId,
+        driverSelection: { driverId: "codex-app-server", options: {} },
+      })),
+      aggregatorIndex: 1,
+    };
+    const calls: SpawnInput[] = [];
+    const sink = makeSink();
+    try {
+      await runReview(
+        ["--task", "Review this task", "--review-models", JSON.stringify(reviewModels)],
+        sink,
+        {
+          spawnImpl: async (input) => {
+            calls.push(input);
+            const text =
+              input.prompt === DRIVER_PROBE_PROMPT
+                ? "OK"
+                : "## Findings\nNo findings.\n## Verification\n未验证\n## Verdict\napprove";
+            return {
+              stdout: `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } })}\n`,
+              exitCode: 0,
+              timedOut: false,
+              aborted: false,
+            };
+          },
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    expect(calls.filter((input) => input.prompt === DRIVER_PROBE_PROMPT)).toHaveLength(2);
+    const modelArgs = calls.map((input) => input.argv[input.argv.indexOf("-m") + 1]);
+    expect(modelArgs).toContain("gpt-6-astra");
+    expect(modelArgs.at(-1)).toBe("gpt-5.6-sol");
+    const result = sink.finished as { runId: string };
+    const started = readReviewTranscript(resolvePaths().transcript(result.runId)).find(
+      (r) => r.kind === "review.started",
+    );
+    expect(started?.reviewModels).toEqual(reviewModels);
+    expect(started?.aggregator.modelId).toBe("gpt-5.6-sol");
+    expect(new Store().listAgents()).toEqual([]);
+    expect(new Store().listCouncils()).toEqual([]);
+    const changed = {
+      ...reviewModels,
+      models: [{ ...reviewModels.models[0], modelId: "different-model" }, reviewModels.models[1]],
+    };
+    await expect(
+      runReview(
+        [
+          "--task",
+          "Review this task",
+          "--review-models",
+          JSON.stringify(changed),
+          "--resume",
+          result.runId,
+        ],
+        makeSink(),
+        { spawnImpl: fakeSpawn() },
+      ),
+    ).rejects.toThrow("--review-models must match");
+  });
+
+  it("saved default seat overrides reach Codex, preserve personas and probe different models", async () => {
+    const { agentIds } = seed();
+    const store = new Store();
+    const ids = agentIds.slice(0, 2);
+    const council = store.createCouncil({
+      name: "pr-jury",
+      topic: "Default review",
+      agentIds: ids,
+      reporterAgentId: ids[1],
+      rounds: 1,
+    });
+    store.updateReviewJury({
+      revision: store.councilRevision(council),
+      reporterAgentId: ids[1],
+      seats: ids.map((agentId, i) => ({
+        agentId,
+        modelId: i === 0 ? "gpt-6-astra" : "gpt-5.6-sol",
+        driverSelection: { driverId: "codex-app-server", options: {} },
+      })),
+    });
+    const calls: SpawnInput[] = [];
+    const sink = makeSink();
+    try {
+      await runReview(["--task", "Default roster task"], sink, {
+        spawnImpl: async (input) => {
+          calls.push(input);
+          const text =
+            input.prompt === DRIVER_PROBE_PROMPT
+              ? "OK"
+              : "## Findings\nNo findings.\n## Verification\n未验证\n## Verdict\napprove";
+          return {
+            stdout: `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } })}\n`,
+            exitCode: 0,
+            timedOut: false,
+            aborted: false,
+          };
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    expect(calls.filter((input) => input.prompt === DRIVER_PROBE_PROMPT)).toHaveLength(2);
+    expect(calls.map((input) => input.argv[input.argv.indexOf("-m") + 1])).toContain("gpt-6-astra");
+    expect(calls.at(-1)?.argv).toContain("gpt-5.6-sol");
+    const result = sink.finished as { runId: string };
+    const started = readReviewTranscript(resolvePaths().transcript(result.runId)).find(
+      (r) => r.kind === "review.started",
+    );
+    expect(started?.attempts.map((seat) => seat.agentName)).toEqual(["Alice", "Bob"]);
+    expect(started?.aggregator.modelId).toBe("gpt-5.6-sol");
+    expect(store.getAgent(ids[0]).driverSelection.driverId).toBe("claude-stream-json");
+  });
+
   function seedGitRepo(): string {
     const dir = join(home, "src-repo");
     mkdirSync(dir, { recursive: true });
@@ -370,6 +493,136 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     });
     return { agentIds: [a.id, b.id, c.id], aggregatorName: "Bob" };
   }
+
+  it.each([
+    "complete",
+    "probe-failed",
+    "aggregation-failed",
+    "partial",
+    "wrong-head",
+    "dirty",
+    "aggregator-only",
+  ])(
+    "incremental closure uses complete reviewer evidence and the actual checkout (%s)",
+    async (mode) => {
+      const { agentIds, aggregatorName } = seed();
+      const repo = seedGitRepo();
+      writeFileSync(join(repo, "source.ts"), "export const retained = true;\n");
+      execFileSync("git", ["add", "source.ts"], { cwd: repo });
+      execFileSync("git", ["commit", "-m", "candidate"], { cwd: repo });
+      const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repo,
+        encoding: "utf8",
+      }).trim();
+      const priorId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea";
+      const paths = resolvePaths();
+      mkdirSync(paths.runDir(priorId), { recursive: true });
+      writeFileSync(
+        join(paths.runDir(priorId), "findings.json"),
+        JSON.stringify({
+          version: 1,
+          runId: priorId,
+          extractedAt: "2026-08-24",
+          sha,
+          againstRunId: null,
+          againstRange: null,
+          findings: [
+            {
+              id: "persist--lost",
+              severity: "critical",
+              status: "open",
+              title: "Write failure loses text",
+              text: "write failure loses text",
+              source: "unique",
+              reviewer: "original",
+              files: ["source.ts"],
+            },
+          ],
+        }),
+      );
+      const evidence = `\n\`\`\`councilkit-findings\n${JSON.stringify([
+        {
+          findingId: "persist--lost",
+          candidateSha: sha,
+          outcome: "verified_closed",
+          method: "code_trace",
+          reason: "Failure now retains the unique copy",
+          evidence: "The error branch returns without clearing retained text",
+          locations: ["source.ts:1"],
+        },
+      ])}\n\`\`\``;
+      const failure: SpawnOutput = {
+        stdout: "",
+        stderr: "driver unavailable",
+        exitCode: 1,
+        timedOut: false,
+        aborted: false,
+      };
+      const spawn: SpawnImpl = async (input) => {
+        if (input.prompt === DRIVER_PROBE_PROMPT)
+          return mode === "probe-failed" ? failure : claudeEnvelope("ok");
+        if (input.prompt.includes("对比汇总"))
+          return mode === "aggregation-failed"
+            ? failure
+            : claudeEnvelope(
+                `## 概览\nReview complete\n## 结论\napprove${mode === "aggregator-only" ? evidence : ""}`,
+              );
+        if (mode === "partial" && input.prompt.startsWith("你是 Alice，")) return failure;
+        if (mode === "wrong-head")
+          execFileSync("git", ["checkout", "--detach", "HEAD~1"], {
+            cwd: input.cwd,
+            stdio: "pipe",
+          });
+        if (mode === "dirty")
+          writeFileSync(join(input.cwd, "source.ts"), "changed production code\n");
+        return claudeEnvelope(
+          `## 发现\n无新问题\n## 结论\napprove${mode === "aggregator-only" ? "" : evidence}`,
+        );
+      };
+      const sink = makeSink();
+      try {
+        await runReview(
+          [
+            "--agents",
+            JSON.stringify(agentIds),
+            "--aggregator",
+            aggregatorName,
+            "--pr",
+            "https://github.com/acme/repo/pull/9",
+            "--repo",
+            repo,
+            "--against",
+            priorId,
+          ],
+          sink,
+          { spawnImpl: spawn, worktreeRef: "HEAD" },
+        );
+      } catch (error) {
+        expect(error).toBeInstanceOf(ReviewExit);
+      }
+      const outcome = sink.finished as {
+        runId: string;
+        status: string;
+        incomplete: boolean;
+        reportPath: string;
+      };
+      const file = parseFindingsFile(
+        readFileSync(join(paths.runDir(outcome.runId), "findings.json"), "utf8"),
+      );
+      if (!file) throw new Error("Expected parsed ledger");
+      expect(file.findings).toHaveLength(1);
+      const row = file.findings[0];
+      if (!row) throw new Error("Expected carried finding");
+      expect(isFindingVerifiedClosed(row, sha)).toBe(mode === "complete");
+      expect(isFindingBlocking(row, sha)).toBe(mode !== "complete");
+      if (mode === "probe-failed") {
+        expect(file.sha).toBeNull();
+        expect(outcome.status).toBe("failed");
+        expect(readFileSync(outcome.reportPath, "utf8")).toContain("INCOMPLETE");
+      }
+      if (mode === "partial") expect(outcome.incomplete).toBe(true);
+    },
+  );
 
   it("runs 3 attempts + aggregation, writes report/transcript, --out copy, exit 0", async () => {
     const { agentIds, aggregatorName } = seed();

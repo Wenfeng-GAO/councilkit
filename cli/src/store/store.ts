@@ -16,7 +16,8 @@
  *    diagnostic CliError(io) carrying the file + redacted zod summary, never the
  *    raw content.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { type ReviewJuryUpdate, reviewJuryUpdateSchema } from "@shared/runtime/review-jury";
 import { EXIT, errors } from "../errors";
 import { zodFailureMessage } from "../output";
 import { redact } from "../redact";
@@ -253,6 +254,44 @@ export class Store {
     if (idx < 0) throw errors.usage(`no council matches ref "${redactName(councilRef)}"`);
     const next: CouncilRecord = { ...council, agentIds: ids, reporterAgentId: reporterId };
     file.councils[idx] = next;
+    this.writeCouncils(file);
+    return next;
+  }
+
+  /** Council-scoped model choices keep shared Agent personas/bindings untouched. */
+  councilAgents(council: CouncilRecord): AgentRecord[] {
+    return council.agentIds.map((id) => {
+      const agent = this.getAgent(id);
+      const override = council.agentOverrides?.[id];
+      return override ? { ...agent, ...override } : agent;
+    });
+  }
+
+  councilRevision(council: CouncilRecord): string {
+    return createHash("sha256")
+      .update(JSON.stringify([council, this.listAgents()]))
+      .digest("hex");
+  }
+
+  updateReviewJury(input: ReviewJuryUpdate): CouncilRecord {
+    const validated = reviewJuryUpdateSchema.safeParse(input);
+    if (!validated.success) throw errors.usage("invalid default review roster");
+    const council = this.getCouncil("pr-jury");
+    if (input.revision !== this.councilRevision(council))
+      throw errors.usage("JURY_CONFLICT: 默认席位已被修改，请重新加载后再保存。");
+    for (const seat of input.seats) {
+      if (!this.getAgent(seat.agentId).enabled) throw errors.usage("不能添加已停用的 Agent");
+    }
+    const next: CouncilRecord = {
+      ...council,
+      agentIds: input.seats.map((seat) => seat.agentId),
+      reporterAgentId: input.reporterAgentId,
+      agentOverrides: Object.fromEntries(
+        input.seats.map(({ agentId, ...model }) => [agentId, model]),
+      ),
+    };
+    const file = this.readCouncils();
+    file.councils = file.councils.map((row) => (row.id === council.id ? next : row));
     this.writeCouncils(file);
     return next;
   }

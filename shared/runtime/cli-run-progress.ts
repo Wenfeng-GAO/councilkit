@@ -23,6 +23,8 @@ export const CLI_RUN_PROGRESS_PHASES = [
   "snapshotting",
   "fixing",
   "integrating",
+  "proposing",
+  "debating",
 ] as const;
 
 export type CliRunProgressPhase = (typeof CLI_RUN_PROGRESS_PHASES)[number];
@@ -154,17 +156,50 @@ export function liveStateFromRecords(
       driverId: string;
       modelId: string;
     };
+    flow?: "review" | "ideate";
+    debateAttemptIds?: string[];
   } | null = null;
   const finished = new Map<string, { status: "success" | "failure"; durationMs: number }>();
   let aggregation: { status: "success" | "failure"; durationMs: number } | null = null;
   let runStatus: CliRunLiveState["status"] = "running";
   let sawFinished = false;
+  let ideateStage: "proposing" | "debating" | "aggregating" | null = null;
 
   for (const rec of records) {
     if (rec === null || typeof rec !== "object") continue;
     const row = rec as Record<string, unknown>;
     const kind = typeof row.kind === "string" ? row.kind : "";
-    if (kind === "review.started") {
+    if (kind === "ideate.started") {
+      const proposals = Array.isArray(row.proposals) ? row.proposals : [];
+      const debates = Array.isArray(row.debates) ? row.debates : [];
+      const aggregator = row.aggregator;
+      started = {
+        attempts: [...proposals, ...debates].flatMap((item) => {
+          const parsed = asMeta(item);
+          return parsed ? [parsed] : [];
+        }),
+        aggregator: asMeta(aggregator) ?? {
+          attemptId: "aggregate-final",
+          agentName: "aggregator",
+          driverId: "unknown",
+          modelId: "",
+        },
+        flow: "ideate",
+        debateAttemptIds: debates.flatMap((item) => {
+          const parsed = asMeta(item);
+          return parsed ? [parsed.attemptId] : [];
+        }),
+      };
+      ideateStage = "proposing";
+    } else if (kind === "ideate.stage") {
+      if (row.stage === "proposing" || row.stage === "debating" || row.stage === "aggregating") {
+        ideateStage = row.stage;
+      }
+    } else if (kind === "ideate.finished") {
+      sawFinished = true;
+      const st = row.status;
+      if (st === "completed" || st === "failed" || st === "interrupted") runStatus = st;
+    } else if (kind === "review.started") {
       const attempts = Array.isArray(row.attempts) ? row.attempts : [];
       const aggregator = row.aggregator;
       if (aggregator === null || typeof aggregator !== "object") continue;
@@ -226,8 +261,32 @@ export function liveStateFromRecords(
   const anyAttemptSuccess = attemptRows.some((row) => row.status === "success");
   let aggregatorStatus: CliRunAttemptLiveStatus = "pending";
   let aggregatorDuration: number | null = null;
-  let phase: CliRunProgressPhase = "attempts";
-  if (aggregation) {
+  let phase: CliRunProgressPhase = started.flow === "ideate" ? "proposing" : "attempts";
+  if (started.flow === "ideate") {
+    const debateIds = new Set(started.debateAttemptIds ?? []);
+    const proposalRows = attemptRows.filter((row) => !debateIds.has(row.attemptId));
+    const debateRows = attemptRows.filter((row) => debateIds.has(row.attemptId));
+    const proposalsTerminal = proposalRows.every(
+      (row) => row.status === "success" || row.status === "failure",
+    );
+    const debatesTerminal =
+      debateRows.length === 0 ||
+      debateRows.every((row) => row.status === "success" || row.status === "failure");
+    if (aggregation) {
+      aggregatorStatus = aggregation.status;
+      aggregatorDuration = aggregation.durationMs;
+      phase = sawFinished ? "done" : "aggregating";
+    } else if (ideateStage === "aggregating" || (proposalsTerminal && debatesTerminal && anyAttemptSuccess)) {
+      aggregatorStatus = "running";
+      phase = "aggregating";
+    } else if (ideateStage === "debating" || (proposalsTerminal && debateRows.length > 0 && !debatesTerminal)) {
+      phase = "debating";
+    } else if (sawFinished) {
+      phase = "done";
+    } else {
+      phase = "proposing";
+    }
+  } else if (aggregation) {
     aggregatorStatus = aggregation.status;
     aggregatorDuration = aggregation.durationMs;
     phase = sawFinished ? "done" : "aggregating";

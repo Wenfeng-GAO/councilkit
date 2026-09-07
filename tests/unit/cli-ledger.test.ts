@@ -1,6 +1,10 @@
 import {
   type LedgerFinding,
   countLedgerFindings,
+  findingStatusLabel,
+  isFindingBlocking,
+  isFindingVerifiedClosed,
+  parseFindingsFile,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
 import { describe, expect, it } from "vitest";
@@ -55,6 +59,66 @@ describe("sortLedgerFindings", () => {
       "m-closed",
       "n1",
     ]);
+  });
+});
+
+describe("trusted resolution", () => {
+  const historical = finding({
+    id: "legacy",
+    title: "lost content",
+    severity: "critical",
+    status: "closed",
+  });
+  it("reads old files without turning historical closure into proof", () => {
+    const file = parseFindingsFile(
+      JSON.stringify({
+        version: 1,
+        runId: "legacy",
+        extractedAt: "now",
+        sha: null,
+        againstRunId: null,
+        againstRange: null,
+        findings: [historical],
+      }),
+    );
+    expect(file?.findings[0]).toEqual(historical);
+    expect(isFindingVerifiedClosed(historical)).toBe(false);
+    expect(isFindingBlocking(historical)).toBe(true);
+    expect(findingStatusLabel(historical)).toBe("历史未验证");
+  });
+  it("distinguishes repair claims, exact-SHA resolution and accepted tradeoffs", () => {
+    const claimed = {
+      ...historical,
+      status: "open" as const,
+      repairClaim: { candidateSha: "a".repeat(40), runId: "apply", at: "now" },
+    };
+    expect(findingStatusLabel(claimed)).toBe("声明已修复 · 待验证");
+    expect(isFindingBlocking(claimed)).toBe(true);
+    const verified = {
+      ...historical,
+      verification: {
+        outcome: "verified_closed" as const,
+        candidateSha: "a".repeat(40),
+        runId: "review",
+        attemptId: "attempt-0",
+        reviewer: "reviewer",
+        method: "code_trace" as const,
+        reason: "The write error retains the only copy",
+        evidence: "The error branch returns before clearing pending text",
+        locations: ["pkg/log.go:42"],
+        runComplete: true,
+      },
+    };
+    expect(findingStatusLabel(verified)).toBe("已验证解决");
+    expect(isFindingVerifiedClosed(verified, "a".repeat(40))).toBe(true);
+    expect(isFindingBlocking(verified, "b".repeat(40))).toBe(true);
+    expect(isFindingBlocking({ ...historical, status: "accepted" })).toBe(false);
+    expect(
+      isFindingVerifiedClosed({
+        ...verified,
+        verification: { ...verified.verification, runComplete: false },
+      }),
+    ).toBe(false);
   });
 });
 

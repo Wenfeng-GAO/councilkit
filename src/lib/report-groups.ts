@@ -1,5 +1,6 @@
 import { extractPrUrl } from "@/lib/fix-prompt";
 import type { ParsedReviewReport } from "@/lib/review-report";
+import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 
 export interface RunGroup {
@@ -12,7 +13,8 @@ export function groupCliRuns(runs: readonly CliRunSummaryDto[]): RunGroup[] {
   const groups = new Map<string, CliRunSummaryDto[]>();
   const order: string[] = [];
   for (const run of runs) {
-    const key = extractPrUrl(run.title) ?? run.title;
+    const key =
+      run.reviewEvidence?.prUrl ?? normalizeReviewPr(extractPrUrl(run.title)) ?? run.title;
     if (!groups.has(key)) {
       order.push(key);
       groups.set(key, []);

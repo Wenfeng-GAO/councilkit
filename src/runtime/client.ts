@@ -7,6 +7,7 @@ import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunStartIdeateRequest,
   type CliRunStartReviewRequest,
   type CliRunStartReviewResponse,
   type CliRunsListResponse,
@@ -176,6 +177,14 @@ export class RuntimeClient {
 
   startCliReview(body: CliRunStartReviewRequest): Promise<CliRunStartReviewResponse> {
     return this.call("POST", "/api/v1/cli-runs", {
+      body,
+      schema: cliRunStartReviewResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  startCliIdeate(body: CliRunStartIdeateRequest): Promise<CliRunStartReviewResponse> {
+    return this.call("POST", "/api/v1/cli-runs/ideate", {
       body,
       schema: cliRunStartReviewResponseSchema,
       auth: "mutation",

@@ -25,6 +25,12 @@ describe("cliRunPhaseHeading", () => {
     expect(cliRunPhaseHeading("squad", "closed", "snapshotting")).toBe("已收工");
     expect(cliRunPhaseHeading("review", "interrupted", "attempts")).toBe("已中断");
   });
+
+  it("labels ideate proposing and debating while running", () => {
+    expect(cliRunPhaseHeading("ideate", "running", "proposing")).toBe("独立提案中");
+    expect(cliRunPhaseHeading("ideate", "running", "debating")).toBe("交叉辩论中");
+    expect(cliRunPhaseHeading("ideate", "completed", "done")).toBe("已结束");
+  });
 });
 
 describe("cliRunNeedsPoll", () => {

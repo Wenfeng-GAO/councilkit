@@ -9,9 +9,10 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
+import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
 import { resolveHostMode } from "./config";
 
-export type CliRunAction = "fix" | "re-review" | "review";
+export type CliRunAction = "fix" | "re-review" | "review" | "ideate";
 
 export interface CliRunLaunchRequest {
   action: CliRunAction;
@@ -19,6 +20,11 @@ export interface CliRunLaunchRequest {
   logPath: string;
   pr?: string;
   repo?: string;
+  reviewModels?: ReviewModels;
+  idea?: string;
+  background?: string;
+  debateRounds?: number;
+  ideateModels?: IdeateModels;
 }
 
 export interface CliRunLauncher {
@@ -87,7 +93,7 @@ export function defaultCliRunLauncher(): CliRunLauncher {
         if (pid === undefined) {
           throw new Error("failed to spawn councilkit (no pid)");
         }
-        if (input.action !== "review") {
+        if (input.action !== "review" && input.action !== "ideate") {
           child.unref();
           return { pid };
         }
@@ -104,6 +110,20 @@ export function defaultCliRunLauncher(): CliRunLauncher {
 }
 
 export function launchArgs(input: CliRunLaunchRequest): string[] {
+  if (input.action === "ideate") {
+    const idea = input.idea?.trim() ?? "";
+    if (idea.length === 0) {
+      throw new Error("ideate spawn requires idea");
+    }
+    const args = ["ideate", "--run-id", input.runId];
+    if (input.debateRounds !== undefined) args.push("--debate-rounds", String(input.debateRounds));
+    if (input.background !== undefined && input.background.length > 0) {
+      args.push("--background", input.background);
+    }
+    if (input.ideateModels) args.push("--models", JSON.stringify(input.ideateModels));
+    args.push("--", idea);
+    return args;
+  }
   if (input.action === "review") {
     if (input.pr === undefined || input.pr.length === 0) {
       throw new Error("review spawn requires pr");
@@ -112,6 +132,7 @@ export function launchArgs(input: CliRunLaunchRequest): string[] {
     if (input.repo !== undefined && input.repo.length > 0) {
       args.push("--repo", input.repo);
     }
+    if (input.reviewModels) args.push("--review-models", JSON.stringify(input.reviewModels));
     return args;
   }
   if (input.action === "re-review") {
@@ -136,7 +157,7 @@ export async function handshakeReview(
   const deadline = Date.now() + REVIEW_HANDSHAKE_MS;
   while (Date.now() < deadline) {
     if (exited) {
-      throw new Error(logTail(input.logPath) || `councilkit review exited ${String(exitCode)}`);
+      throw new Error(logTail(input.logPath) || `councilkit ${input.action} exited ${String(exitCode)}`);
     }
     if (isRealDir(runDir) && isPidAlive(pid)) {
       child.unref();
@@ -145,7 +166,7 @@ export async function handshakeReview(
     await sleep(REVIEW_HANDSHAKE_POLL_MS);
   }
   stopDetachedChild(child, pid);
-  throw Object.assign(new Error("review handshake timed out waiting for the run directory"), {
+  throw Object.assign(new Error(`${input.action} handshake timed out waiting for the run directory`), {
     code: "HANDSHAKE_TIMEOUT",
   });
 }

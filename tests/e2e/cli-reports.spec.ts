@@ -4,13 +4,13 @@ const E2E_CLI_RUN_ID = "ck-review-00000000-0000-4000-8000-0000000000e2";
 
 test("侧栏有「报告」，列表页能打开", async ({ page }) => {
   await page.goto("/reports");
-  await expect(page.getByRole("heading", { name: "CLI 报告" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "报告" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "审查与报告" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "报告", exact: true })).toBeVisible();
 });
 
 test("有 fixture 时能点进报告并看到标题；脚本标签保持为文本", async ({ page }) => {
   await page.goto("/reports");
-  const heading = page.getByRole("heading", { name: "CLI 报告" });
+  const heading = page.getByRole("heading", { name: "审查与报告" });
   await expect(heading).toBeVisible();
   const fixture = page.getByRole("link", { name: /e2e-fixture-review/ });
   if ((await fixture.count()) === 0) {
@@ -46,7 +46,7 @@ test("深链 /reports/:runId 能直接打开 fixture", async ({ page }) => {
 
 test("/reports 开始审查表单在有 fixture 时也可见", async ({ page }) => {
   await page.goto("/reports");
-  await expect(page.getByRole("heading", { name: "CLI 报告" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "审查与报告" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始审查" })).toBeVisible();
   await expect(page.getByLabel("PR URL")).toBeVisible();
 });
@@ -70,6 +70,31 @@ test("开始审查提交无效 URL 留在 /reports 并显示错误", async ({ pa
   await page.getByRole("button", { name: "开始审查" }).click();
   await expect(page).toHaveURL(/\/reports\/?$/);
   await expect(page.getByRole("alert")).toBeVisible();
+});
+
+test("/reports 有创意讨论入口和筛选", async ({ page }) => {
+  await page.goto("/reports");
+  await expect(page.getByRole("heading", { name: "讨论产品创意" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始讨论" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /创意/ })).toBeVisible();
+});
+
+test("创意 fixture 详情没有修复或 apply 动作", async ({ page }) => {
+  await page.goto("/reports/ck-ideate-00000000-0000-4000-8000-0000000000e2");
+  await expect(page.getByRole("heading", { name: "Product Ideate Report" })).toBeVisible();
+  await expect(page.getByText("找不到这份报告")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "复制 apply 命令" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "复制修复 Prompt" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "立即修复" })).toHaveCount(0);
+});
+
+test("开始创意讨论后导航到 /reports/<ideate-runId>", async ({ page }) => {
+  await page.goto("/reports");
+  await expect(page.getByRole("button", { name: "开始讨论" })).toBeDisabled();
+  await page.getByLabel("一句话创意").fill("为独立开发者每周整理用户反馈");
+  await expect(page.getByRole("button", { name: "开始讨论" })).toBeEnabled();
+  await page.getByRole("button", { name: "开始讨论" }).click();
+  await expect(page).toHaveURL(/\/reports\/ck-ideate-[0-9a-fA-F-]+/);
 });
 
 test("开始审查提交 GitHub PR 后导航到 /reports/<runId>", async ({ page }) => {

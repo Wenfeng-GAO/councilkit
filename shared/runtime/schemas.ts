@@ -22,6 +22,7 @@ import {
   SCOPE_STATES,
 } from "./contracts";
 import { usageSchema } from "./events";
+import { reviewEvidenceSchema } from "./review-case";
 
 // ---------------------------------------------------------------------------
 // Health / capabilities
@@ -127,6 +128,25 @@ export type GrokStreamJsonOptions = z.infer<typeof grokStreamJsonOptionsSchema>;
  */
 export const cursorStreamJsonOptionsSchema = z.object({}).strict();
 export type CursorStreamJsonOptions = z.infer<typeof cursorStreamJsonOptionsSchema>;
+
+export const driverSelectionSchema = z.discriminatedUnion("driverId", [
+  z
+    .object({ driverId: z.literal("claude-stream-json"), options: claudeStreamJsonOptionsSchema })
+    .strict(),
+  z
+    .object({ driverId: z.literal("codex-app-server"), options: codexAppServerOptionsSchema })
+    .strict(),
+  z
+    .object({ driverId: z.literal("kimi-stream-json"), options: kimiStreamJsonOptionsSchema })
+    .strict(),
+  z
+    .object({ driverId: z.literal("grok-stream-json"), options: grokStreamJsonOptionsSchema })
+    .strict(),
+  z
+    .object({ driverId: z.literal("cursor-stream-json"), options: cursorStreamJsonOptionsSchema })
+    .strict(),
+]);
+export type DriverSelection = z.infer<typeof driverSelectionSchema>;
 
 /** Typed Execution Profile DTO. Strict by construction: no executable, argv,
  * shell, raw env or token fields can pass validation. */
@@ -448,7 +468,7 @@ export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
 // CLI runs (session-authenticated read of ~/.config/councilkit/runs)
 // ---------------------------------------------------------------------------
 
-export const cliRunKindSchema = z.enum(["review", "discuss", "squad", "unknown"]);
+export const cliRunKindSchema = z.enum(["review", "discuss", "squad", "ideate", "unknown"]);
 export const cliRunStatusSchema = z.enum([
   "completed",
   "failed",
@@ -530,6 +550,8 @@ export const cliRunProgressSchema = z
       "snapshotting",
       "fixing",
       "integrating",
+      "proposing",
+      "debating",
     ]),
     attempts: z.array(cliRunAttemptProgressSchema),
     updatedAt: z.string().nullable(),
@@ -556,6 +578,32 @@ export const cliRunPipelineSchema = z
   })
   .strict();
 
+export const ideateIntegritySchema = z
+  .object({
+    plannedProposals: z.number().int().nonnegative(),
+    successfulProposals: z.number().int().nonnegative(),
+    plannedDebates: z.number().int().nonnegative(),
+    successfulDebates: z.number().int().nonnegative(),
+    configuredModels: z.number().int().nonnegative(),
+    successfulModels: z.number().int().nonnegative(),
+    incomplete: z.boolean(),
+    degradedReasons: z.array(z.string()),
+    contextTruncated: z.boolean(),
+    failedSeats: z.array(
+      z
+        .object({
+          stage: z.enum(["proposal", "debate", "aggregate"]),
+          attemptId: z.string().min(1),
+          agentName: z.string().min(1),
+          code: z.string().min(1),
+          message: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type IdeateIntegrityDto = z.infer<typeof ideateIntegritySchema>;
+
 export const cliRunSummarySchema = z
   .object({
     runId: z.string().min(1),
@@ -567,6 +615,8 @@ export const cliRunSummarySchema = z
     hasReport: z.boolean(),
     hasPlan: z.boolean().default(false),
     hasFindings: z.boolean().default(false),
+    reviewEvidence: reviewEvidenceSchema.nullable().optional(),
+    ideateIntegrity: ideateIntegritySchema.nullable().optional(),
     hasPlanLock: z.boolean().default(false),
     reportUrl: z.string().min(1),
     progress: cliRunProgressSchema.nullable(),
@@ -620,10 +670,79 @@ export const cliRunActionResponseSchema = z
   .strict();
 export type CliRunActionResponse = z.infer<typeof cliRunActionResponseSchema>;
 
+/** A per-run roster. No persisted Agent, executable, credentials or raw argv. */
+export const reviewModelSchema = z
+  .object({
+    driverSelection: driverSelectionSchema,
+    modelId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(256)
+      .refine((value) => !value.startsWith("-")),
+  })
+  .strict();
+export type ReviewModel = z.infer<typeof reviewModelSchema>;
+export const reviewModelsSchema = z
+  .object({
+    models: z.array(reviewModelSchema).min(1).max(QUOTAS.maxParticipantsPerScope),
+    aggregatorIndex: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.aggregatorIndex >= value.models.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["aggregatorIndex"],
+        message: "Aggregator must be a selected model",
+      });
+    }
+    const keys = value.models.map((model) =>
+      JSON.stringify([
+        model.driverSelection.driverId,
+        model.driverSelection.options,
+        model.modelId,
+      ]),
+    );
+    if (new Set(keys).size !== keys.length) {
+      ctx.addIssue({ code: "custom", path: ["models"], message: "Duplicate review model" });
+    }
+  });
+export type ReviewModels = z.infer<typeof reviewModelsSchema>;
+
+/** Same seat shape as review models, but duplicate configs are allowed (单模型多角色). */
+export const ideateModelsSchema = z
+  .object({
+    models: z.array(reviewModelSchema).min(2).max(QUOTAS.maxParticipantsPerScope),
+    aggregatorIndex: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.aggregatorIndex >= value.models.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["aggregatorIndex"],
+        message: "Reporter must be a selected model",
+      });
+    }
+  });
+export type IdeateModels = z.infer<typeof ideateModelsSchema>;
+
+export const cliRunStartIdeateRequestSchema = z
+  .object({
+    idea: z.string().min(1),
+    background: z.string().optional(),
+    debateRounds: z.number().int().min(0).max(2).optional(),
+    models: ideateModelsSchema.optional(),
+  })
+  .strict();
+export type CliRunStartIdeateRequest = z.infer<typeof cliRunStartIdeateRequestSchema>;
+
 export const cliRunStartReviewRequestSchema = z
   .object({
     pr: z.string().min(1),
     repo: z.string().min(1).optional(),
+    reviewModels: reviewModelsSchema.optional(),
   })
   .strict();
 export type CliRunStartReviewRequest = z.infer<typeof cliRunStartReviewRequestSchema>;

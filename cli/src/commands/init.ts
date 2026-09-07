@@ -14,9 +14,21 @@ import {
   PR_JURY_TARGET_OUTPUT,
   PR_JURY_TOPIC,
 } from "../init/defaults";
+import {
+  IDEATE_AGENT_SPECS,
+  type IdeateAgentSpec,
+  IDEATE_REPORTER_FALLBACK,
+  NEXT_IDEATE_HINT,
+  PRODUCT_JURY_BACKGROUND,
+  PRODUCT_JURY_COUNCIL_NAME,
+  PRODUCT_JURY_ROUNDS,
+  PRODUCT_JURY_TARGET_OUTPUT,
+  PRODUCT_JURY_TOPIC,
+} from "../init/ideate-defaults";
 import type { OutputSink } from "../output";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
 import { Store } from "../store/store";
+import { discoverCodexModel } from "./jury";
 import { parseFlags } from "./parse";
 
 export interface InitOutcome {
@@ -41,6 +53,11 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const missingDrivers: string[] = [];
   for (const spec of DEFAULT_AGENT_SPECS) {
     if (findExecutable(spec.executable, env) !== null) available.push(spec);
+    else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
+  }
+  const ideateAvailable: IdeateAgentSpec[] = [];
+  for (const spec of IDEATE_AGENT_SPECS) {
+    if (findExecutable(spec.executable, env) !== null) ideateAvailable.push(spec);
     else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   if (available.length === 0) {
@@ -82,23 +99,78 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     );
   }
 
-  const roster = [...reusedAgents, ...createdAgents];
-  const reporter = pickReporter(roster, available);
+  const reviewRoster = [...reusedAgents, ...createdAgents];
+  const reporter = pickReporter(reviewRoster, available);
   let createdCouncil: CouncilRecord | null = null;
   let reusedCouncil: CouncilRecord | null = null;
   const existingCouncil = findCouncilByName(store, PR_JURY_COUNCIL_NAME);
   if (existingCouncil !== null) {
-    reusedCouncil = store.syncCouncilRoster(existingCouncil.id, roster, reporter.id);
+    reusedCouncil = store.syncCouncilRoster(existingCouncil.id, reviewRoster, reporter.id);
   } else {
     createdCouncil = store.createCouncil({
       name: PR_JURY_COUNCIL_NAME,
       topic: PR_JURY_TOPIC,
       background: PR_JURY_BACKGROUND,
       targetOutput: PR_JURY_TARGET_OUTPUT,
-      agentIds: roster.map((a) => a.id),
+      agentIds: reviewRoster.map((a) => a.id),
       rounds: PR_JURY_ROUNDS,
       reporterAgentId: reporter.id,
     });
+  }
+
+  const ideateRoster: AgentRecord[] = [];
+  for (const spec of ideateAvailable) {
+    const discovered = spec.modelId ?? discoverCodexModel(env);
+    const existing = findByName(store, spec.name);
+    if (existing !== null) {
+      const modelId =
+        spec.modelId ??
+        (isPlaceholderModel(existing.modelId) && discovered ? discovered : existing.modelId);
+      const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
+      const sameModel = existing.modelId === modelId;
+      if (!sameDriver || !sameModel) {
+        const updated = store.updateAgent(existing.id, {
+          modelId,
+          driverSelection: spec.driverSelection,
+        });
+        reusedAgents.push(updated);
+        ideateRoster.push(updated);
+      } else {
+        reusedAgents.push(existing);
+        ideateRoster.push(existing);
+      }
+      continue;
+    }
+    if (discovered === null) {
+      if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
+      continue;
+    }
+    const created = store.createAgent({
+      name: spec.name,
+      personaPrompt: spec.personaPrompt,
+      modelId: discovered,
+      color: spec.color,
+      driverSelection: spec.driverSelection,
+    });
+    createdAgents.push(created);
+    ideateRoster.push(created);
+  }
+  if (ideateRoster.length >= 2) {
+    const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+    const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
+    if (existingProduct !== null) {
+      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id);
+    } else {
+      store.createCouncil({
+        name: PRODUCT_JURY_COUNCIL_NAME,
+        topic: PRODUCT_JURY_TOPIC,
+        background: PRODUCT_JURY_BACKGROUND,
+        targetOutput: PRODUCT_JURY_TARGET_OUTPUT,
+        agentIds: ideateRoster.map((a) => a.id),
+        rounds: PRODUCT_JURY_ROUNDS,
+        reporterAgentId: productReporter.id,
+      });
+    }
   }
 
   const outcome: InitOutcome = {
@@ -107,15 +179,21 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     createdCouncil: createdCouncil === null ? null : briefCouncil(createdCouncil, store),
     reusedCouncil: reusedCouncil === null ? null : briefCouncil(reusedCouncil, store),
     missingDrivers,
-    next: NEXT_REVIEW_HINT,
+    next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
   };
   await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
 }
 
+function isPlaceholderModel(modelId: string): boolean {
+  return modelId === "default" || modelId === "auto" || modelId === "configured";
+}
+
 function recreateDefaults(store: Store): void {
-  const council = findCouncilByName(store, PR_JURY_COUNCIL_NAME);
-  if (council !== null) store.deleteCouncil(council.id);
-  for (const spec of DEFAULT_AGENT_SPECS) {
+  for (const name of [PR_JURY_COUNCIL_NAME, PRODUCT_JURY_COUNCIL_NAME]) {
+    const council = findCouncilByName(store, name);
+    if (council !== null) store.deleteCouncil(council.id);
+  }
+  for (const spec of [...DEFAULT_AGENT_SPECS, ...IDEATE_AGENT_SPECS]) {
     const agent = findByName(store, spec.name);
     if (agent !== null) store.deleteAgent(agent.id);
   }
@@ -133,6 +211,21 @@ function pickReporter(roster: AgentRecord[], available: DefaultAgentSpec[]): Age
   const preferred = available.find((s) => s.preferredReporter)?.name;
   if (preferred !== undefined) {
     const match = roster.find((a) => a.name === preferred);
+    if (match !== undefined) return match;
+  }
+  return roster[0];
+}
+
+function pickIdeateReporter(
+  roster: AgentRecord[],
+  existing: CouncilRecord | null,
+): AgentRecord {
+  if (existing !== null) {
+    const current = roster.find((agent) => agent.id === existing.reporterAgentId);
+    if (current !== undefined) return current;
+  }
+  for (const name of IDEATE_REPORTER_FALLBACK) {
+    const match = roster.find((agent) => agent.name === name);
     if (match !== undefined) return match;
   }
   return roster[0];

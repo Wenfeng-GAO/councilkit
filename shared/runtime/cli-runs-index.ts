@@ -7,7 +7,16 @@
  * Safety: never follow symlinks; runId is a closed token; a single corrupt
  * directory is skipped on list (detail of a bad id is not-found).
  */
-import { type Stats, lstatSync, readFileSync, readdirSync } from "node:fs";
+import {
+  constants,
+  type Stats,
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  readdirSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveCliRunsRoot } from "./cli-home";
 import {
@@ -33,7 +42,13 @@ import {
   parseLiveStateJson,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
-import type { CliRunDocumentDto, CliRunHandoffDto } from "./schemas";
+import { type ReviewEvidence, summarizeReviewEvidence } from "./review-case";
+import {
+  type CliRunDocumentDto,
+  type CliRunHandoffDto,
+  type IdeateIntegrityDto,
+  ideateIntegritySchema,
+} from "./schemas";
 
 export type { CliRunAttemptProgress, CliRunPipeline, CliRunProgress } from "./cli-run-progress";
 export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
@@ -51,11 +66,11 @@ const SQUAD_DOCUMENT_SPECS = [
 ] as const;
 
 export const CLI_RUN_ID_RE =
-  /^ck-(?:run|review|squad)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^ck-(?:run|review|squad|ideate)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const MAX_CLI_REPORT_BYTES = 2 * 1024 * 1024;
 
-export type CliRunKind = "review" | "discuss" | "squad" | "unknown";
+export type CliRunKind = "review" | "discuss" | "squad" | "ideate" | "unknown";
 export type CliRunStatus = CliRunLiveStatus;
 
 export interface CliRunSummary {
@@ -73,6 +88,8 @@ export interface CliRunSummary {
   progress: CliRunProgress | null;
   pipeline: CliRunPipeline | null;
   handoff: CliRunHandoffDto | null;
+  reviewEvidence?: ReviewEvidence | null;
+  ideateIntegrity?: IdeateIntegrityDto | null;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -176,7 +193,8 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     transcriptStat?.isFile() && !transcriptStat.isSymbolicLink()
       ? readCapped(transcriptPath, 256 * 1024).text
       : "";
-  const parsed = parseTranscriptMeta(transcriptText, runId);
+  const tailText = readCapped(transcriptPath, 64 * 1024, true).text;
+  const parsed = parseTranscriptMeta(`${transcriptText}\n${tailText}`, runId);
   const live = readLiveState(join(dir, CLI_RUN_STATUS_FILE));
   const derived = mergeLiveProgress(
     live?.progress ?? null,
@@ -213,6 +231,9 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     progress: derived,
     pipeline: live?.pipeline ?? null,
     handoff: live?.handoff ?? null,
+    reviewEvidence:
+      parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null,
+    ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
   };
 }
 
@@ -282,6 +303,8 @@ export function parseTranscriptMeta(
   title: string;
   startedAt: string | null;
   endedAt: string | null;
+  incomplete: boolean | null;
+  ideateIntegrity: IdeateIntegrityDto | null;
 } {
   let kind: CliRunKind = runId.startsWith("ck-review-")
     ? "review"
@@ -289,11 +312,15 @@ export function parseTranscriptMeta(
       ? "discuss"
       : runId.startsWith("ck-squad-")
         ? "squad"
-        : "unknown";
+        : runId.startsWith("ck-ideate-")
+          ? "ideate"
+          : "unknown";
   let status: CliRunStatus = "unknown";
   let title = runId;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
+  let incomplete: boolean | null = null;
+  let ideateIntegrity: IdeateIntegrityDto | null = null;
 
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
@@ -307,7 +334,21 @@ export function parseTranscriptMeta(
     if (rec === null || typeof rec !== "object") continue;
     const row = rec as Record<string, unknown>;
     const recKind = typeof row.kind === "string" ? row.kind : "";
-    if (recKind === "review.started") {
+    if (recKind === "ideate.started") {
+      kind = "ideate";
+      startedAt = stringOrNull(row.startedAt) ?? startedAt;
+      title = stringOrNull(row.idea) ?? title;
+    } else if (recKind === "ideate.finished") {
+      const st = stringOrNull(row.status);
+      if (st === "completed" || st === "failed" || st === "interrupted") status = st;
+      endedAt = stringOrNull(row.endedAt) ?? endedAt;
+      if (typeof row.incomplete === "boolean") incomplete = row.incomplete;
+      const parsedIntegrity = ideateIntegritySchema.safeParse(row.integrity);
+      if (parsedIntegrity.success) {
+        ideateIntegrity = parsedIntegrity.data;
+        incomplete = parsedIntegrity.data.incomplete;
+      }
+    } else if (recKind === "review.started") {
       kind = "review";
       startedAt = stringOrNull(row.startedAt) ?? startedAt;
       title = titleFromReviewTask(row.task) ?? title;
@@ -342,7 +383,7 @@ export function parseTranscriptMeta(
     }
   }
   if (status === "unknown" && startedAt !== null && endedAt === null) status = "running";
-  return { kind, status, title, startedAt, endedAt };
+  return { kind, status, title, startedAt, endedAt, incomplete, ideateIntegrity };
 }
 
 function titleFromReviewTask(task: unknown): string | null {
@@ -371,12 +412,54 @@ function safeLstat(path: string): Stats | null {
   }
 }
 
-function readCapped(path: string, maxBytes: number): { text: string; truncated: boolean } {
+/** Bound actual IO, including the transcript tail used to establish completion. */
+function readCapped(
+  path: string,
+  maxBytes: number,
+  tail = false,
+): { text: string; truncated: boolean } {
+  let fd: number | undefined;
   try {
-    const buf = readFileSync(path);
-    if (buf.byteLength <= maxBytes) return { text: buf.toString("utf8"), truncated: false };
-    return { text: buf.subarray(0, maxBytes).toString("utf8"), truncated: true };
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return { text: "", truncated: false };
+    const length = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    const count = readSync(fd, buffer, 0, length, tail ? Math.max(0, stat.size - length) : 0);
+    return { text: buffer.subarray(0, count).toString("utf8"), truncated: stat.size > maxBytes };
   } catch {
     return { text: "", truncated: false };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
+}
+
+function readReviewEvidence(dir: string, runId: string, head: string): ReviewEvidence {
+  const started = parseTranscriptRecords(head).find(
+    (record) =>
+      record !== null &&
+      typeof record === "object" &&
+      "kind" in record &&
+      record.kind === "review.started",
+  ) as { runId?: string; task?: { pr?: string; against?: string } } | undefined;
+  const tail = readCapped(join(dir, "transcript.jsonl"), 64 * 1024, true).text.trim();
+  let complete = false;
+  try {
+    const last = JSON.parse(tail.split("\n").at(-1) ?? "") as Record<string, unknown>;
+    complete =
+      started?.runId === runId &&
+      last.kind === "review.finished" &&
+      last.status === "completed" &&
+      last.incomplete === false &&
+      !last.failure;
+  } catch {
+    /* Missing/corrupt terminal evidence stays incomplete. */
+  }
+  return summarizeReviewEvidence({
+    runId,
+    complete,
+    prUrl: started?.task?.pr ?? null,
+    againstRunId: started?.task?.against ?? null,
+    ledger: readFindings(join(dir, CLI_RUN_FINDINGS_FILE)),
+  });
 }

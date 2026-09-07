@@ -8,8 +8,11 @@ import { runCouncilCmd } from "./commands/council";
  */
 import { runDoctor } from "./commands/doctor";
 import { runFix } from "./commands/fix";
+import { runIdeate } from "./commands/ideate";
 import { runInit } from "./commands/init";
+import { runJury } from "./commands/jury";
 import { runModels } from "./commands/models";
+import { runRepair } from "./commands/repair";
 import { runReview } from "./commands/review";
 import { runRun } from "./commands/run";
 import { runRuns } from "./commands/runs";
@@ -18,8 +21,12 @@ import type { OutputSink } from "./output";
 
 export async function dispatch(command: string, args: string[], out: OutputSink): Promise<void> {
   switch (command) {
+    case "jury":
+      return runJury(args, out);
     case "init":
       return runInit(args, out);
+    case "ideate":
+      return runIdeate(args, out);
     case "doctor":
       return runDoctor(args, out);
     case "models":
@@ -32,6 +39,8 @@ export async function dispatch(command: string, args: string[], out: OutputSink)
       return runRun(args, out);
     case "runs":
       return runRuns(args, out);
+    case "repair":
+      return runRepair(args, out);
     case "review":
       return runReview(args, out);
     case "apply":

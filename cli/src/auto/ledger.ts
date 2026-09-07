@@ -13,20 +13,28 @@ import {
   CLI_RUN_FINDINGS_FILE,
   CLI_RUN_LANDINGS_FILE,
   CLI_RUN_PLAN_LOCK_FILE,
+  FINDING_SEVERITIES,
+  FULL_COMMIT_SHA,
+  type FindingRepairClaim,
   type FindingSource,
   type FindingStatus,
+  type FindingVerification,
   type FindingsFile,
   type LandingRecord,
   type LedgerFinding,
   type PlanCluster,
   type PlanLockFile,
+  findingStatusLabel,
+  isFindingVerifiedClosed,
   lastLandingRange,
   parseFindingsFile,
   parseLandingsText,
   parsePlanLockFile,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
+import { z } from "zod";
 import { atomicWriteJson } from "../store/atomic-write";
+import type { AttemptResult } from "./runner";
 
 export {
   CLI_RUN_FINDINGS_FILE,
@@ -126,15 +134,18 @@ export function classifyAgainstPrior(
     }
     const match = matchFinding(old, next, used);
     if (match === null) {
-      out.push({ ...old, status: "closed" });
+      // Absence is missing coverage, never a closure receipt (including failed runs).
+      out.push({ ...old });
       continue;
     }
     used.add(match.id);
-    if (old.status === "closed") {
-      out.push({ ...match, id: old.id, status: "regress" });
-    } else {
-      out.push({ ...match, id: old.id, status: "open" });
-    }
+    const { verification: _previousVerification, ...history } = old;
+    out.push({
+      ...history,
+      ...match,
+      id: old.id,
+      status: isFindingVerifiedClosed(old) ? "regress" : "open",
+    });
   }
   for (const fresh of next) {
     if (used.has(fresh.id)) continue;
@@ -144,13 +155,21 @@ export function classifyAgainstPrior(
   return sortLedgerFindings(out);
 }
 
-export function markFindingsClosed(file: FindingsFile, ids: readonly string[]): FindingsFile {
-  const closed = new Set(ids);
+export function markFindingsRepairClaimed(
+  file: FindingsFile,
+  ids: readonly string[],
+  repairClaim: FindingRepairClaim,
+): FindingsFile {
+  const claimed = new Set(ids);
   return {
     ...file,
-    findings: file.findings.map((row) =>
-      closed.has(row.id) && row.status === "open" ? { ...row, status: "closed" } : row,
-    ),
+    findings: file.findings.map((row) => {
+      if (!claimed.has(row.id) || row.status === "accepted") return row;
+      // A new producer claim invalidates the old resolution; it is not a
+      // verification of the newly applied candidate, even when file.sha is old.
+      const { verification: _previousVerification, ...finding } = row;
+      return { ...finding, status: "open" as const, repairClaim };
+    }),
   };
 }
 
@@ -221,7 +240,7 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
   const lines: string[] = [
     `对照账本 run ${file.runId}${file.sha ? ` @ ${file.sha.slice(0, 12)}` : ""}。`,
     "这是增量复审：不要把整份 PR 相对 master 再发现一遍。",
-    "只报告：(1) 账本里仍成立的 open；(2) 已关闭项的回归；(3) 本区间新引入的缺陷。",
+    "检查未解决、声明已修复和历史未验证项；仅有绑定本次完整 SHA 的独立验证可关闭。未提及不等于关闭。",
     "账本标 accepted 的项不要再当成阻塞，除非实现偏离了已接受的合同。",
   ];
   if (range) {
@@ -237,7 +256,9 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
       continue;
     }
     for (const row of sortLedgerFindings(rows).slice(0, 40)) {
-      lines.push(`- ${row.id} [${row.severity}] ${row.title}`);
+      lines.push(
+        `- ${row.id} [${row.severity}] [${findingStatusLabel(row, file.sha)}] ${row.title}`,
+      );
     }
     if (rows.length > 40) lines.push(`- …另有 ${rows.length - 40} 条`);
   }
@@ -315,6 +336,9 @@ export function persistFindingsFromReport(input: {
   againstRunId?: string | null;
   againstRange?: string | null;
   prior?: FindingsFile | null;
+  attempts?: readonly AttemptResult[];
+  reviewComplete?: boolean;
+  verifiedAttemptShas?: Readonly<Record<string, string>>;
 }): FindingsFile {
   const extracted = extractFindingsFromReport({
     markdown: input.markdown,
@@ -324,6 +348,41 @@ export function persistFindingsFromReport(input: {
     againstRunId: input.againstRunId,
     againstRange: input.againstRange,
   });
+  // Keep independent findings even when the Aggregator omits a severe minority finding.
+  for (const attempt of input.attempts ?? []) {
+    if (attempt.status !== "success") continue;
+    const independent = extractFindingsFromReport({
+      markdown: `# Autonomous Review Report\n\n---\n\n${attempt.output.replace(
+        /^##\s+(?:发现|findings)\s*$/gim,
+        "## 独有发现",
+      )}`,
+      runId: input.runId,
+      extractedAt: extracted.extractedAt,
+    });
+    for (const row of independent.findings) {
+      const matched = matchFinding(row, extracted.findings, new Set());
+      if (!matched) {
+        extracted.findings.push({ ...row, source: "unique", reviewer: attempt.agentName });
+      } else {
+        const stronger =
+          FINDING_SEVERITIES.indexOf(row.severity) < FINDING_SEVERITIES.indexOf(matched.severity);
+        if (stronger) {
+          matched.severity = row.severity;
+          matched.title = row.title;
+          matched.source = "unique";
+          matched.reviewer = attempt.agentName;
+        }
+        if (row.text !== matched.text) {
+          // Put the stronger evidence first so the bounded field cannot truncate it away.
+          const evidence = `${attempt.agentName}: ${row.text}`;
+          matched.text = (
+            stronger ? `${evidence}\n\n聚合摘要: ${matched.text}` : `${matched.text}\n\n${evidence}`
+          ).slice(0, 8000);
+        }
+        matched.files = [...new Set([...matched.files, ...row.files])].slice(0, 32);
+      }
+    }
+  }
   const file: FindingsFile =
     input.prior && input.againstRunId
       ? {
@@ -331,6 +390,14 @@ export function persistFindingsFromReport(input: {
           findings: classifyAgainstPrior(input.prior.findings, extracted.findings),
         }
       : extracted;
+  file.findings = applyReviewerVerifications(file.findings, {
+    sha: input.sha,
+    runId: input.runId,
+    complete: input.reviewComplete === true,
+    attempts: input.attempts ?? [],
+    verifiedAttemptShas: input.verifiedAttemptShas ?? {},
+    reportedFindings: extracted.findings,
+  });
   writeFindings(input.runDir, file);
   return file;
 }
@@ -470,6 +537,14 @@ function matchFinding(
 ): LedgerFinding | null {
   const byId = next.find((row) => row.id === prior.id && !used.has(row.id));
   if (byId) return byId;
+  // Reports often quote an existing ID; never slugify that quote into misc--misc--… .
+  const byReference = next.find(
+    (row) =>
+      !used.has(row.id) &&
+      (explicitFindingIds(row.text).includes(prior.id) ||
+        explicitFindingIds(prior.text).includes(row.id)),
+  );
+  if (byReference) return byReference;
   let best: { row: LedgerFinding; score: number } | null = null;
   const priorTokens = tokens(prior.title);
   for (const row of next) {
@@ -482,6 +557,103 @@ function matchFinding(
     if (best === null || score > best.score) best = { row, score };
   }
   return best?.row ?? null;
+}
+
+function explicitFindingIds(text: string): string[] {
+  return [...text.matchAll(/`([^`\n]+)`/g)]
+    .map((match) => match[1] ?? "")
+    .filter((id) => id.length > 0 && id.length <= 160 && !/\s/.test(id));
+}
+
+const reviewerAssessmentSchema = z
+  .object({
+    findingId: z.string().min(1).max(160),
+    candidateSha: z.string().regex(FULL_COMMIT_SHA),
+    outcome: z.enum(["verified_closed", "still_open", "not_evaluated"]),
+    method: z.enum(["regression_test", "code_trace", "not_evaluated"]),
+    reason: z.string().trim().min(1).max(2000),
+    evidence: z.string().trim().min(1).max(4000),
+    command: z.string().trim().min(1).max(2000).optional(),
+    locations: z
+      .array(z.string().regex(/.+:\d+$/))
+      .min(1)
+      .max(32)
+      .optional(),
+  })
+  .strict();
+
+/** Only original reviewer final output is a source. The Aggregator cannot create receipts. */
+export function applyReviewerVerifications(
+  findings: readonly LedgerFinding[],
+  input: {
+    sha?: string | null;
+    runId: string;
+    complete: boolean;
+    attempts: readonly AttemptResult[];
+    reportedFindings: readonly LedgerFinding[];
+    verifiedAttemptShas: Readonly<Record<string, string>>;
+  },
+): LedgerFinding[] {
+  if (!input.sha || !FULL_COMMIT_SHA.test(input.sha)) return [...findings];
+  const assessments = new Map<string, FindingVerification[]>();
+  for (const attempt of input.attempts) {
+    if (
+      attempt.status !== "success" ||
+      attempt.exitCode !== 0 ||
+      !attempt.workspace ||
+      attempt.attemptId === "aggregator"
+    )
+      continue;
+    for (const block of attempt.output.matchAll(/```councilkit-findings\s*\n([\s\S]*?)\n```/g)) {
+      let rows: unknown;
+      try {
+        rows = JSON.parse(block[1] ?? "");
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(rows) || rows.length > 200) continue;
+      for (const raw of rows) {
+        const parsed = reviewerAssessmentSchema.safeParse(raw);
+        if (!parsed.success || parsed.data.candidateSha !== input.sha) continue;
+        const { findingId, ...assessment } = parsed.data;
+        if (assessment.outcome === "verified_closed" && assessment.method === "not_evaluated")
+          continue;
+        if (
+          assessment.outcome === "verified_closed" &&
+          (input.verifiedAttemptShas[attempt.attemptId] !== input.sha ||
+            (assessment.method === "regression_test"
+              ? !assessment.command
+              : !assessment.locations?.length))
+        )
+          continue;
+        const list = assessments.get(findingId) ?? [];
+        list.push({
+          ...assessment,
+          runId: input.runId,
+          attemptId: attempt.attemptId,
+          reviewer: attempt.agentName,
+          runComplete: input.complete,
+        });
+        assessments.set(findingId, list);
+      }
+    }
+  }
+  return sortLedgerFindings(
+    findings.map((row) => {
+      if (row.status === "accepted") return row;
+      const receipts = assessments.get(row.id) ?? [];
+      const stillOpen = receipts.find((receipt) => receipt.outcome === "still_open");
+      if (stillOpen) return { ...row, status: "open" as const, verification: stillOpen };
+      // Contradicting findings, including unique ones, outrank any closure claim.
+      const reported = matchFinding(row, input.reportedFindings, new Set()) !== null;
+      const closure = receipts.find((receipt) => receipt.outcome === "verified_closed");
+      if (closure && input.complete && !reported) {
+        return { ...row, status: "closed" as const, verification: closure };
+      }
+      const unevaluated = receipts.find((receipt) => receipt.outcome === "not_evaluated");
+      return unevaluated ? { ...row, verification: unevaluated } : row;
+    }),
+  );
 }
 
 function tokens(text: string): Set<string> {

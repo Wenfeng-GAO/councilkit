@@ -152,6 +152,7 @@ export function SeatInspector({
               {inspectorDuration(selected.durationMs, span) ? (
                 <>
                   <span className="mx-1.5 text-edge">·</span>
+                  {runId.startsWith("ck-squad-") ? "记录 " : ""}
                   {inspectorDuration(selected.durationMs, span)}
                 </>
               ) : null}

@@ -22,3 +22,16 @@ export function mapStartReviewError(error: unknown, pr: string): StartReviewHint
   }
   return { text, copyCommand: null };
 }
+
+export function mapStartIdeateError(error: unknown): StartReviewHint {
+  const text =
+    error instanceof RuntimeClientError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : "启动创意讨论失败";
+  if (/product-jury/i.test(text) || text.includes("councilkit init")) {
+    return { text, copyCommand: "councilkit init" };
+  }
+  return { text, copyCommand: null };
+}

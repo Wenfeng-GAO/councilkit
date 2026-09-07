@@ -6,6 +6,7 @@
  * appends are append-only in practice but always durable via tmp+fsync+rename).
  */
 import { readFileSync } from "node:fs";
+import { reviewModelsSchema } from "@shared/runtime/schemas";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteFile } from "../store/atomic-write";
@@ -68,6 +69,7 @@ export interface ReviewTaskRecord {
 export const reviewStartedRecordSchema = z
   .object({
     kind: z.literal("review.started"),
+    reviewModels: reviewModelsSchema.optional(),
     version: z.literal(REVIEW_TRANSCRIPT_VERSION),
     runId: z.string().min(1),
     startedAt: z.string().min(1),
@@ -207,6 +209,160 @@ export const reviewTranscriptRecordSchema = z.discriminatedUnion("kind", [
   reviewFinishedRecordSchema,
 ]);
 export type ReviewTranscriptRecord = z.infer<typeof reviewTranscriptRecordSchema>;
+
+export const ideateIntegritySchema = z
+  .object({
+    plannedProposals: z.number().int().nonnegative(),
+    successfulProposals: z.number().int().nonnegative(),
+    plannedDebates: z.number().int().nonnegative(),
+    successfulDebates: z.number().int().nonnegative(),
+    configuredModels: z.number().int().nonnegative(),
+    successfulModels: z.number().int().nonnegative(),
+    incomplete: z.boolean(),
+    degradedReasons: z.array(z.string()),
+    contextTruncated: z.boolean(),
+    failedSeats: z.array(
+      z
+        .object({
+          stage: z.enum(["proposal", "debate", "aggregate"]),
+          attemptId: z.string().min(1),
+          agentName: z.string().min(1),
+          code: z.string().min(1),
+          message: z.string(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type IdeateIntegrity = z.infer<typeof ideateIntegritySchema>;
+
+export const ideateAttemptMetaSchema = z
+  .object({
+    attemptId: z.string().min(1),
+    agentId: z.string().min(1),
+    agentName: z.string().min(1),
+    driverId: z.string().min(1),
+    modelId: z.string().min(1),
+    stage: z.enum(["proposal", "debate", "aggregate"]),
+    round: z.number().int().nonnegative(),
+    proposalRef: z.string().min(1),
+  })
+  .strict();
+export type IdeateAttemptMeta = z.infer<typeof ideateAttemptMetaSchema>;
+
+export const ideateStartedRecordSchema = z
+  .object({
+    kind: z.literal("ideate.started"),
+    version: z.literal(REVIEW_TRANSCRIPT_VERSION),
+    runId: z.string().min(1),
+    startedAt: z.string().min(1),
+    idea: z.string(),
+    background: z.string(),
+    debateRounds: z.number().int().min(0).max(2),
+    proposals: z.array(ideateAttemptMetaSchema),
+    debates: z.array(ideateAttemptMetaSchema),
+    aggregator: ideateAttemptMetaSchema,
+    probe: z.array(driverProbeRecordSchema).optional(),
+    configuredModels: z.array(
+      z
+        .object({
+          driverId: z.string().min(1),
+          modelId: z.string().min(1),
+          options: z.unknown(),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type IdeateStartedRecord = z.infer<typeof ideateStartedRecordSchema>;
+
+export const ideateStageRecordSchema = z
+  .object({
+    kind: z.literal("ideate.stage"),
+    version: z.literal(REVIEW_TRANSCRIPT_VERSION),
+    stage: z.enum(["proposing", "debating", "aggregating"]),
+    at: z.string().min(1),
+  })
+  .strict();
+export type IdeateStageRecord = z.infer<typeof ideateStageRecordSchema>;
+
+export const ideateFinishedRecordSchema = z
+  .object({
+    kind: z.literal("ideate.finished"),
+    version: z.literal(REVIEW_TRANSCRIPT_VERSION),
+    status: z.enum(["completed", "failed", "interrupted"]),
+    endedAt: z.string().min(1),
+    incomplete: z.boolean(),
+    reportPath: z.string().optional(),
+    integrity: ideateIntegritySchema,
+    failure: z
+      .object({ phase: z.string().min(1), code: z.string().min(1), message: z.string() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type IdeateFinishedRecord = z.infer<typeof ideateFinishedRecordSchema>;
+
+export const ideateTranscriptRecordSchema = z.discriminatedUnion("kind", [
+  ideateStartedRecordSchema,
+  ideateStageRecordSchema,
+  attemptFinishedRecordSchema,
+  aggregationFinishedRecordSchema,
+  ideateFinishedRecordSchema,
+]);
+export type IdeateTranscriptRecord = z.infer<typeof ideateTranscriptRecordSchema>;
+
+export function readIdeateTranscript(path: string): IdeateTranscriptRecord[] {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return [];
+    throw errors.io(`failed to read ideate transcript: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
+  }
+  const records: IdeateTranscriptRecord[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().length === 0) continue;
+    const lineNo = i + 1;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw errors.io(`ideate transcript is corrupt: line ${lineNo} is not valid JSON`, {
+        line: lineNo,
+      });
+    }
+    const result = ideateTranscriptRecordSchema.safeParse(parsed);
+    if (result.success) {
+      records.push(result.data);
+      continue;
+    }
+    const firstIssue = result.error.issues[0];
+    const summary =
+      firstIssue === undefined
+        ? "schema mismatch"
+        : `${firstIssue.code}${firstIssue.path.length > 0 ? ` @${firstIssue.path.join(".")}` : ""}`;
+    throw errors.io(`ideate transcript is corrupt: line ${lineNo}: ${summary}`, {
+      line: lineNo,
+    });
+  }
+  return records;
+}
+
+export function writeIdeateTranscript(path: string, records: IdeateTranscriptRecord[]): void {
+  const lines = records.map((r) => JSON.stringify(r)).join("\n");
+  try {
+    atomicWriteFile(path, `${lines}\n`);
+  } catch (cause) {
+    throw errors.io(`failed to write ideate transcript: ${ioName(cause)}`, {
+      cause: ioName(cause),
+    });
+  }
+}
 
 /** Read a review transcript JSONL into validated records (P2-2). Each line is
  * JSON.parsed then `safeParse`d against the union. ANY malformed line aborts

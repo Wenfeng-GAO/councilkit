@@ -2,15 +2,21 @@ import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/TextInput";
 import { mapStartReviewError } from "@/lib/start-review-hints";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import type { CliRunStartReviewRequest } from "@shared/runtime/schemas";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { DefaultReviewJury, type JuryStatus } from "./DefaultReviewJury";
 
 export function StartReviewForm() {
   const { client } = getAppRuntime();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
+  const [juryStatus, setJuryStatus] = useState<JuryStatus>({
+    ready: false,
+    summary: "正在读取默认席位",
+  });
   const [pr, setPr] = useState("");
   const [repo, setRepo] = useState("");
   const [hint, setHint] = useState<{ text: string; copyCommand: string | null } | null>(null);
@@ -25,7 +31,7 @@ export function StartReviewForm() {
 
   const start = useMutation({
     mutationFn: () => {
-      const body: { pr: string; repo?: string } = { pr: pr.trim() };
+      const body: CliRunStartReviewRequest = { pr: pr.trim() };
       const repoPath = repo.trim();
       if (repoPath.length > 0) body.repo = repoPath;
       return client.startCliReview(body);
@@ -55,37 +61,56 @@ export function StartReviewForm() {
   return (
     <form
       id="review"
-      className="flex flex-col gap-3 rounded border border-edge bg-surface px-4 py-4"
+      className="ck-review-composer"
+      aria-labelledby="start-review-heading"
+      aria-busy={start.isPending}
       onSubmit={(event) => {
         event.preventDefault();
-        start.mutate();
+        if (!start.isPending && juryStatus.ready) start.mutate();
       }}
     >
-      <TextInput
-        id="review-pr-url"
-        label="PR URL"
-        value={pr}
-        onChange={(event) => setPr(event.target.value)}
-        required
-        placeholder="https://github.com/org/repo/pull/1"
-        autoComplete="off"
-      />
-      <details>
-        <summary className="cursor-pointer select-none text-sm text-muted">高级</summary>
-        <div className="mt-2">
-          <TextInput
-            id="review-repo-path"
-            label="本地仓库路径"
-            value={repo}
-            onChange={(event) => setRepo(event.target.value)}
-            placeholder="/abs/path/to/checkout"
-            autoComplete="off"
-            help="可选。对应 CLI --repo；省略时由 CLI 用 repos.json 或 cwd 解析。"
-          />
+      <div className="ck-composer-heading">
+        <div>
+          <p className="ck-eyebrow">NEW REVIEW</p>
+          <h2 id="start-review-heading">发起 PR 审查</h2>
         </div>
-      </details>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={start.isPending}>
+        <span className="ck-composer-note">独立审查 · 对比汇总</span>
+      </div>
+      <fieldset disabled={start.isPending} className="ck-composer-fields">
+        <TextInput
+          id="review-pr-url"
+          label="PR URL"
+          value={pr}
+          onChange={(event) => setPr(event.target.value)}
+          required
+          placeholder="粘贴 GitHub 或 AntCode PR 链接"
+          autoComplete="off"
+        />
+        <DefaultReviewJury disabled={start.isPending} onStatusChange={setJuryStatus} />
+        <details className="ck-review-advanced">
+          <summary className="cursor-pointer select-none text-sm text-muted">
+            高级 · 本地仓库
+          </summary>
+          <div className="mt-2">
+            <TextInput
+              id="review-repo-path"
+              label="本地仓库路径"
+              value={repo}
+              onChange={(event) => setRepo(event.target.value)}
+              placeholder="/abs/path/to/checkout"
+              autoComplete="off"
+              help="可选。自动定位失败时，指定此 PR 对应的本地仓库。"
+            />
+          </div>
+        </details>
+      </fieldset>
+      <div className="ck-composer-footer">
+        <p>{juryStatus.summary}</p>
+        <Button
+          className="ck-start-button"
+          type="submit"
+          disabled={start.isPending || !juryStatus.ready}
+        >
           {start.isPending ? "正在启动…" : "开始审查"}
         </Button>
       </div>

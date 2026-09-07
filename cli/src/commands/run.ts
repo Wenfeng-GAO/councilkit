@@ -95,7 +95,7 @@ export async function runRun(argv: string[], out: OutputSink): Promise<void> {
     );
   }
 
-  const allAgents = store.listAgents();
+  const allAgents = store.councilAgents(council);
   const agents = await resolveRunAgents({
     council: { agentIds: council.agentIds, reporterAgentId: council.reporterAgentId },
     agents: allAgents.map((snapshot) => ({ snapshot })),

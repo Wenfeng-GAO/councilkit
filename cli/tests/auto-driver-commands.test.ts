@@ -1052,3 +1052,150 @@ describe("stripProxyPrefix — newline-separated statement is not a prefix", () 
     expect(r.stripped).toBe(false);
   });
 });
+
+describe("ideate restricted invocation", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "councilkit-ideate-dc-"));
+    for (const name of ["cld", "kimi", "codex", "grok", "cursor-agent"]) {
+      const p = join(tmp, name);
+      writeFileSync(p, "#!/bin/sh\necho hi\n");
+      chmodSync(p, 0o755);
+    }
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+  const env = (): NodeJS.ProcessEnv => ({ ...process.env, PATH: tmp });
+
+  it("grok uses plan + sandbox + deny-tools, not always-approve", async () => {
+    const { buildIdeateSpawnSpec } = await import("../src/auto/driver-commands");
+    const { IDEATE_FORBIDDEN_FLAGS, IDEATE_GROK_SANDBOX_PROFILE } = await import(
+      "../src/auto/ideate-policy"
+    );
+    const workspace = join(tmp, "ws-grok");
+    mkdirSync(workspace, { recursive: true });
+    const spec = buildIdeateSpawnSpec(agent(GROK, "grok-4.6"), {
+      attemptId: "proposal-seat1",
+      workspace,
+      prompt: "idea",
+      env: env(),
+    });
+    expect(spec.argv).toContain("--permission-mode");
+    expect(spec.argv).toContain("plan");
+    expect(spec.argv).toContain("--sandbox");
+    expect(spec.argv).toContain(IDEATE_GROK_SANDBOX_PROFILE);
+    expect(spec.argv).toContain("--disallowed-tools");
+    expect(spec.argv).toContain("--deny");
+    expect(spec.envOverlay?.GROK_SANDBOX).toBe(IDEATE_GROK_SANDBOX_PROFILE);
+    expect(spec.argv).toContain("--tools");
+    expect(spec.argv[spec.argv.indexOf("--tools") + 1]).toBe("");
+    expect(spec.argv).not.toContain("--always-approve");
+    for (const flag of IDEATE_FORBIDDEN_FLAGS) {
+      expect(spec.argv).not.toContain(flag);
+    }
+    expect(existsSync(join(workspace, ".councilkit-ideate-policy"))).toBe(true);
+    const { disposeIdeateAuthHome } = await import("../src/auto/ideate-policy");
+    disposeIdeateAuthHome(spec.ephemeralHome);
+  });
+
+  it("kimi uses headless -p plus isolated agent-file, not --plan/--auto/-y", async () => {
+    const { buildIdeateSpawnSpec } = await import("../src/auto/driver-commands");
+    const { IDEATE_KIMI_CONFIG } = await import("../src/auto/ideate-policy");
+    const workspace = join(tmp, "ws-kimi");
+    const home = join(tmp, "home-kimi");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(join(home, ".kimi-code"), { recursive: true });
+    const spec = buildIdeateSpawnSpec(agent(KIMI, "kimi-code/k3"), {
+      attemptId: "proposal-seat1",
+      workspace,
+      prompt: "idea",
+      env: { ...env(), HOME: home, KIMI_CODE_HOME: join(home, ".kimi-code") },
+    });
+    expect(spec.argv).toContain("-p");
+    expect(spec.argv).toContain("--agent-file");
+    expect(spec.argv).toContain("--skills-dir");
+    expect(spec.argv).not.toContain("--plan");
+    expect(spec.argv).not.toContain("--auto");
+    expect(spec.argv).not.toContain("-y");
+    expect(spec.envOverlay?.KIMI_CODE_HOME).toMatch(/ck-ideate-kimi-/);
+    expect(spec.envOverlay?.KIMI_CODE_HOME?.startsWith(workspace)).toBe(false);
+    const agentFile = spec.argv[spec.argv.indexOf("--agent-file") + 1] as string;
+    expect(readFileSync(agentFile, "utf8")).toContain("tools: []");
+    expect(readFileSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"), "utf8")).toBe(
+      IDEATE_KIMI_CONFIG,
+    );
+    const { disposeIdeateAuthHome } = await import("../src/auto/ideate-policy");
+    disposeIdeateAuthHome(spec.ephemeralHome);
+  });
+
+  it("claude uses plan + empty tools + isolated empty MCP, not skip-permissions", async () => {
+    const { buildIdeateSpawnSpec } = await import("../src/auto/driver-commands");
+    const workspace = join(tmp, "ws-claude");
+    mkdirSync(workspace, { recursive: true });
+    const spec = buildIdeateSpawnSpec(agent(CLAUDE_CFUSE), {
+      attemptId: "proposal-seat1",
+      workspace,
+      prompt: "idea",
+      env: env(),
+    });
+    expect(spec.argv).toEqual(expect.arrayContaining(["--permission-mode", "plan", "--safe-mode"]));
+    expect(spec.argv).toContain("--tools");
+    expect(spec.argv[spec.argv.indexOf("--tools") + 1]).toBe("");
+    expect(spec.argv).toContain("--strict-mcp-config");
+    expect(spec.argv).not.toContain("--dangerously-skip-permissions");
+    expect(spec.argv).not.toContain("--bare");
+  });
+
+  it("codex uses read-only + ignore-user-config, not workspace-write bypass", async () => {
+    const { buildIdeateSpawnSpec } = await import("../src/auto/driver-commands");
+    const workspace = join(tmp, "ws-codex");
+    mkdirSync(workspace, { recursive: true });
+    const spec = buildIdeateSpawnSpec(agent(CODEX, "gpt-5.6-sol"), {
+      attemptId: "aggregate-final",
+      workspace,
+      prompt: "idea",
+      env: env(),
+    });
+    expect(spec.argv).toEqual(
+      expect.arrayContaining(["-s", "read-only", "--ignore-user-config"]),
+    );
+    expect(spec.argv).not.toContain("workspace-write");
+    expect(spec.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("cursor uses ask + sandbox enabled, not --force", async () => {
+    const { buildIdeateSpawnSpec } = await import("../src/auto/driver-commands");
+    const workspace = join(tmp, "ws-cursor");
+    mkdirSync(workspace, { recursive: true });
+    const spec = buildIdeateSpawnSpec(agent(CURSOR, "auto"), {
+      attemptId: "proposal-seat1",
+      workspace,
+      prompt: "idea",
+      env: env(),
+    });
+    expect(spec.argv).toEqual(expect.arrayContaining(["--mode", "ask", "--sandbox", "enabled"]));
+    expect(spec.argv).not.toContain("--force");
+    expect(spec.argv).not.toContain("--yolo");
+  });
+
+  it("assertIdeateRestrictedArgv rejects kimi --prompt plus --plan", async () => {
+    const { assertIdeateRestrictedArgv } = await import("../src/auto/ideate-policy");
+    expect(() =>
+      assertIdeateRestrictedArgv(
+        ["-m", "kimi-code/k3", "-p", "x", "--plan", "--agent-file", "a.md", "--skills-dir", "s"],
+        "kimi-stream-json",
+      ),
+    ).toThrow(/cannot combine --prompt with --plan/);
+  });
+
+  it("assertIdeateRestrictedArgv rejects no-bypass-only grok argv", async () => {
+    const { assertIdeateRestrictedArgv } = await import("../src/auto/ideate-policy");
+    expect(() =>
+      assertIdeateRestrictedArgv(
+        ["-m", "grok-4.6", "-p", "x", "--disable-web-search", "--no-subagents"],
+        "grok-stream-json",
+      ),
+    ).toThrow(/missing required restriction/);
+  });
+});

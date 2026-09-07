@@ -1,0 +1,102 @@
+/* Reports extends the existing parchment / brass workspace palette. */
+.ck-reports-workspace { max-width: 1180px; margin: 0 auto; padding: 44px 40px 24px; --review-accent: var(--color-brass); }
+.ck-reports-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
+.ck-eyebrow { color: var(--color-brass); font: 10px var(--font-command); letter-spacing: .14em; }
+.ck-reports-header h1 { margin: 10px 0; color: var(--color-parchment); font-size: 32px; font-weight: 550; letter-spacing: -.035em; }
+.ck-reports-description { color: #a2a8b1; font-size: 13px; }
+.ck-header-link { color: var(--color-parchment); font-size: 12px; border-bottom: 1px solid var(--color-brass-dim); padding: 10px 0; white-space: nowrap; }
+.ck-header-link span { margin-left: 20px; color: var(--color-brass); }
+.ck-review-composer { border: 1px solid #37342e; border-top: 2px solid var(--color-brass); border-radius: 6px; background: var(--color-surface); overflow: hidden; scroll-margin-top: 24px; }
+.ck-composer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 28px 20px; }
+.ck-composer-heading h2 { font-size: 20px; color: var(--color-parchment); font-weight: 550; margin-top: 7px; }
+.ck-composer-note { color: var(--color-muted); font-size: 11px; }
+.ck-composer-fields { display: flex; flex-direction: column; gap: 22px; min-width: 0; padding: 0 28px 20px; }
+.ck-composer-fields > label > input { background: #0f1216; font-family: var(--font-command); font-size: 13px; padding: 13px 14px; }
+.ck-composer-fields input:focus, .ck-composer-fields select:focus { border-color: var(--color-brass); }
+.ck-roster-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: #abb0b8; margin-bottom: 12px; }
+.ck-review-advanced > summary { font-size: 11px; }
+.ck-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--color-border); padding: 16px 28px; background: #181b20; }
+.ck-composer-footer p { font-size: 11px; color: #a2a8b1; overflow-wrap: anywhere; }
+.ck-composer-footer .ck-start-button { background: var(--color-brass); color: #171410; padding: 11px 24px; flex-shrink: 0; font-weight: 650; }
+.ck-review-composer > [role="alert"] { padding: 16px 28px; border-top: 1px solid var(--color-border); }
+.ck-text-button { font-size: 11px; color: var(--color-brass); padding: 10px 0; white-space: nowrap; }
+.ck-text-button:hover:not(:disabled) { color: var(--color-parchment); }
+.ck-text-button:disabled { opacity: .5; cursor: wait; }
+.ck-report-library { margin-top: 38px; scroll-margin-top: 24px; }
+.ck-library-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ck-library-heading h2 { color: var(--color-parchment); font-size: 20px; margin-top: 8px; }
+.ck-library-heading h2 > span { font: 12px var(--font-command); color: var(--color-muted); margin-left: 10px; }
+.ck-library-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 22px 0 24px; border-bottom: 1px solid var(--color-border); }
+.ck-library-toolbar > label { min-width: 190px; padding-bottom: 10px; }
+.ck-library-toolbar input { font-size: 11px; background: transparent; }
+.ck-library-filters { display: flex; gap: 20px; overflow-x: auto; align-self: stretch; }
+.ck-library-filters button { display: flex; gap: 7px; align-items: center; color: #a2a8b1; font-size: 12px; padding: 12px 0 17px; border-bottom: 2px solid transparent; white-space: nowrap; transition: color 140ms, border-color 140ms; }
+.ck-library-filters button > span { font: 10px var(--font-command); color: var(--color-muted); }
+.ck-library-filters button[aria-pressed="true"] { color: var(--color-parchment); border-bottom-color: var(--color-brass); }
+.ck-report-groups { display: flex; flex-direction: column; gap: 24px; }
+.ck-group-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.ck-group-heading h3 { color: #c7ccd3; font: 12px var(--font-command); overflow-wrap: anywhere; }
+.ck-group-heading > span { color: var(--color-muted); font-size: 10px; white-space: nowrap; }
+.ck-run-list { list-style: none; padding: 0; border: 1px solid var(--color-border); border-radius: 5px; overflow: hidden; }
+.ck-run-list > li + li { border-top: 1px solid var(--color-border); }
+.ck-run-row { display: block; padding: 16px 18px; background: var(--color-surface); border-left: 2px solid transparent; transition: background 150ms, border-color 150ms; }
+.ck-run-row:hover { background: #1c2026; border-left-color: var(--color-brass); }
+.ck-run-row:focus-visible { outline-offset: -3px; }
+.ck-run-row-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.ck-run-row-top > p { font-size: 13px; }
+.ck-run-status { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+.ck-run-status > span { font-size: 10px; }
+.ck-run-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 8px; color: var(--color-muted); font-size: 10px; }
+.ck-run-meta code { font: 10px var(--font-command); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-run-meta time { white-space: nowrap; }
+.ck-show-history { display: flex; justify-content: center; gap: 18px; width: 100%; padding: 10px; color: var(--color-muted); font-size: 11px; }
+.ck-show-history:hover { color: var(--color-brass); }
+.ck-reports-footnote { border-top: 1px solid var(--color-border); padding-top: 20px; margin-top: 36px; color: var(--color-muted); font-size: 10px; }
+@media (max-width: 1100px) { .ck-library-toolbar { flex-direction: column-reverse; align-items: stretch; gap: 6px; } .ck-library-toolbar > label { padding: 0; } .ck-library-filters { gap: 24px; } }
+@media (max-width: 700px) {
+  .ck-reports-workspace { padding: 28px 18px 20px; }
+  .ck-reports-header { margin-bottom: 24px; }
+  .ck-reports-header h1 { font-size: 27px; }
+  .ck-header-link, .ck-composer-note { display: none; }
+  .ck-composer-heading { padding: 20px 18px; }
+  .ck-composer-fields { padding: 0 18px 18px; }
+  .ck-composer-footer { padding: 16px 18px; align-items: stretch; flex-direction: column; gap: 12px; }
+  .ck-run-row-top { flex-direction: column; align-items: stretch; gap: 8px; }
+  .ck-run-meta { align-items: start; flex-direction: column-reverse; gap: 6px; }
+  .ck-run-meta code { max-width: 100%; }
+  .ck-library-filters { gap: 18px; }
+}
+.ck-roster-heading strong { color: var(--color-fg); font-size: 13px; font-weight: 550; }
+.ck-jury-count { color: var(--color-muted); font: 10px var(--font-command); margin-left: 12px; }
+.ck-jury-seats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0; margin: 0; list-style: none; }
+.ck-jury-seat { padding: 15px 16px; background: #101318; border: 1px solid var(--color-border); border-radius: 4px; min-width: 0; }
+.ck-jury-seat-heading { display: flex; align-items: center; gap: 11px; }
+.ck-jury-number { font: 10px var(--font-command); color: var(--color-brass); align-self: flex-start; padding-top: 3px; }
+.ck-jury-seat h3 { font-size: 13px; color: var(--color-parchment); font-weight: 550; }
+.ck-jury-seat-heading p { margin-top: 4px; font: 9px var(--font-command); color: var(--color-muted); overflow-wrap: anywhere; }
+.ck-jury-seat-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.ck-jury-badge { font-size: 9px; padding: 4px 7px; color: var(--color-brass); background: #29261f; border-radius: 3px; white-space: nowrap; }
+.ck-jury-binding { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-top: 16px; padding-top: 11px; border-top: 1px solid var(--color-border); }
+.ck-jury-binding > span { font-size: 10px; color: var(--color-muted); }
+.ck-jury-binding code { font: 11px var(--font-command); color: #cbd0d7; overflow-wrap: anywhere; }
+.ck-jury-caption { color: var(--color-muted); font-size: 11px; margin-top: 12px; }
+.ck-jury-reporter { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--color-brass); white-space: nowrap; }
+.ck-jury-reporter input { accent-color: var(--color-brass); }
+.ck-jury-remove { padding: 3px 5px; color: var(--color-muted); font-size: 17px; }
+.ck-jury-remove:disabled { opacity: .25; }
+.ck-jury-model-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; margin-top: 18px; }
+.ck-jury-model-fields label { min-width: 0; }
+.ck-jury-model-fields select { width: 100%; min-width: 0; font-size: 11px; }
+.ck-jury-model-fields label > span { font-size: 10px; }
+.ck-jury-model-fields:has(> label:nth-of-type(3)) > label:nth-last-of-type(1) { grid-column: 1 / -1; }
+.ck-jury-catalog-note { grid-column: 1 / -1; color: var(--color-muted); font-size: 10px; line-height: 1.7; }
+.ck-jury-catalog-note button { color: var(--color-brass); margin-left: 10px; }
+.ck-jury-editor-footer { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.ck-jury-editor-footer > label { max-width: 280px; }
+.ck-jury-editor-footer > p { font-size: 11px; color: var(--color-muted); }
+.ck-jury-save-actions { display: flex; justify-content: flex-end; gap: 20px; align-items: center; }
+.ck-jury-save { padding: 9px 16px; border: 1px solid var(--color-brass-dim); color: var(--color-brass); border-radius: 4px; font-size: 12px; }
+.ck-jury-save:disabled { opacity: .4; }
+.ck-jury-error { color: var(--color-error); font-size: 12px; line-height: 1.7; }
+.ck-model-message { display: block; padding: 14px 0; color: var(--color-muted); font-size: 12px; }
+@media (max-width: 850px) { .ck-jury-seats { grid-template-columns: 1fr; } }

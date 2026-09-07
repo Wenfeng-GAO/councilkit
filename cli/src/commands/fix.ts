@@ -33,6 +33,7 @@ import {
   readPlanLock,
   writePlanLock,
 } from "../auto/ledger";
+import { reviewModelAgents } from "../auto/review-models";
 import { type SpawnImpl, runAttempts, spawnOnce } from "../auto/runner";
 import {
   PLAN_REVIEW_FILE,
@@ -160,8 +161,12 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   const report = readRequired(reportPath, `report.md for ${runId}`);
   const findings = ensureFindings({ runDir, runId, markdown: report });
 
-  const planner = resolvePlanner(store, values.agent as string | undefined);
-  const jury = resolveJury(store);
+  const selectedJury = started.reviewModels ? reviewModelAgents(started.reviewModels) : undefined;
+  const planner =
+    selectedJury && started.reviewModels && values.agent === undefined
+      ? (selectedJury[started.reviewModels.aggregatorIndex] as AgentRecord)
+      : resolvePlanner(store, values.agent as string | undefined);
+  const jury = selectedJury ?? resolveJury(store);
   const planAggregator = resolvePlanAggregator(planner, jury);
 
   const controller = deps.abortController ?? new AbortController();
@@ -696,6 +701,10 @@ async function startFollowUpReview(input: {
     .filter((line) => line.length > 0)
     .join("\n");
   const argv = [input.pr, "--against", input.sourceRunId, "--focus", focus];
+  const source = readReviewTranscript(resolvePaths().transcript(input.sourceRunId)).find(
+    (r) => r.kind === "review.started",
+  );
+  if (source?.reviewModels) argv.push("--review-models", JSON.stringify(source.reviewModels));
   if (input.timeoutFlag) argv.push("--timeout", input.timeoutFlag);
   if (input.codexTimeoutFlag) argv.push("--codex-timeout", input.codexTimeoutFlag);
   try {
@@ -748,7 +757,7 @@ function resolvePlanner(store: Store, ref: string | undefined): AgentRecord {
 function resolveJury(store: Store): AgentRecord[] {
   try {
     const council = store.getCouncil(PR_JURY_COUNCIL_NAME);
-    const agents = council.agentIds.map((id) => store.getAgent(id)).filter((a) => a.enabled);
+    const agents = store.councilAgents(council).filter((a) => a.enabled);
     if (agents.length === 0) {
       throw errors.usage("pr-jury has no enabled agents; run `councilkit init`");
     }

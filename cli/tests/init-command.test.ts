@@ -61,15 +61,20 @@ function fakeSpawn(): SpawnImpl {
 describe("councilkit init", () => {
   let home: string;
   let bin: string;
+  let codexHome: string;
   let oldHome: string | undefined;
   let oldPath: string | undefined;
+  let oldCodex: string | undefined;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ck-init-home-"));
     bin = mkdtempSync(join(tmpdir(), "ck-init-bin-"));
+    codexHome = mkdtempSync(join(tmpdir(), "ck-init-codex-"));
     oldHome = process.env.COUNCILKIT_HOME;
     oldPath = process.env.PATH;
+    oldCodex = process.env.CODEX_HOME;
     process.env.COUNCILKIT_HOME = home;
+    process.env.CODEX_HOME = codexHome;
   });
 
   afterEach(() => {
@@ -77,8 +82,11 @@ describe("councilkit init", () => {
     else process.env.COUNCILKIT_HOME = oldHome;
     if (oldPath === undefined) process.env.PATH = undefined;
     else process.env.PATH = oldPath;
+    if (oldCodex === undefined) process.env.CODEX_HOME = undefined;
+    else process.env.CODEX_HOME = oldCodex;
     rmSync(home, { recursive: true, force: true });
     rmSync(bin, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
   });
 
   function stub(names: string[]): void {
@@ -108,6 +116,8 @@ describe("councilkit init", () => {
       next: string;
     };
     expect(out.createdAgents.map((a) => a.name).sort()).toEqual([
+      "ideate-engineering",
+      "ideate-product",
       "review-adversarial",
       "review-correctness",
       "review-maintainability",
@@ -139,6 +149,52 @@ describe("councilkit init", () => {
     const council = store.getCouncil("pr-jury");
     expect(council.agentIds).toHaveLength(4);
     expect(council.reporterAgentId).toBe(store.getAgent("review-adversarial").id);
+    const product = store.getCouncil("product-jury");
+    expect(product.agentIds).toHaveLength(2);
+    expect(product.reporterAgentId).toBe(store.getAgent("ideate-product").id);
+    expect(store.getAgent("ideate-product").modelId).toBe("grok-4.6");
+    expect(store.getAgent("ideate-engineering").modelId).toBe("kimi-code/k3");
+  });
+
+  it("uses the challenger as product-jury reporter when Codex is on PATH", async () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-6-astra"\n');
+    stub(["cld", "kimi", "grok", "codex"]);
+    await runInit([], makeSink());
+    const store = new Store();
+    expect(store.getCouncil("product-jury").reporterAgentId).toBe(
+      store.getAgent("ideate-challenger").id,
+    );
+    expect(store.getAgent("ideate-challenger").modelId).toBe("gpt-6-astra");
+  });
+
+  it("does not invent a Codex model when none is configured", async () => {
+    stub(["cld", "kimi", "grok", "codex"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as { missingDrivers: string[] };
+    expect(out.missingDrivers).toContain("codex-model");
+    expect(new Store().listAgents().map((agent) => agent.name)).not.toContain("ideate-challenger");
+  });
+
+  it("does not silently replace a configured product-jury reporter", async () => {
+    stub(["cld", "kimi", "grok"]);
+    await runInit([], makeSink());
+    expect(new Store().getCouncil("product-jury").reporterAgentId).toBe(
+      new Store().getAgent("ideate-product").id,
+    );
+    // PATH-only `codex` is not enough under the current contract: challenger
+    // is created only when a Codex model is discoverable.
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-6-astra"\n');
+    stub(["cld", "kimi", "grok", "codex"]);
+    await runInit([], makeSink());
+    const store = new Store();
+    expect(store.listAgents().map((a) => a.name)).toContain("ideate-challenger");
+    expect(store.getCouncil("product-jury").reporterAgentId).toBe(
+      store.getAgent("ideate-product").id,
+    );
+    expect(store.getCouncil("product-jury").agentIds).toContain(
+      store.getAgent("ideate-challenger").id,
+    );
   });
 
   it("adds review-adversarial to pr-jury when grok is on PATH", async () => {
@@ -201,9 +257,12 @@ describe("councilkit init", () => {
       createdCouncil: { reporter: string };
       missingDrivers: string[];
     };
-    expect(out.createdAgents.map((a) => a.name)).toEqual(["review-maintainability"]);
+    expect(out.createdAgents.map((a) => a.name).sort()).toEqual([
+      "ideate-engineering",
+      "review-maintainability",
+    ]);
     expect(out.createdCouncil.reporter).toBe("review-maintainability");
-    expect(out.missingDrivers.sort()).toEqual(["cld", "cursor-agent", "grok"]);
+    expect(out.missingDrivers.sort()).toEqual(["cld", "codex", "cursor-agent", "grok"]);
   });
 
   it("migrates an existing correctness seat off codex onto grok", async () => {
@@ -234,12 +293,16 @@ describe("councilkit init", () => {
       createdCouncil: unknown;
     };
     expect(out.createdAgents).toEqual([]);
-    expect(out.reusedAgents).toHaveLength(4);
+    expect(out.reusedAgents).toHaveLength(6);
     expect(out.reusedCouncil?.name).toBe("pr-jury");
     expect(out.createdCouncil).toBeNull();
     expect(new Store().getAgent("review-security").id).toBe(first);
-    expect(new Store().listAgents()).toHaveLength(4);
-    expect(new Store().listCouncils()).toHaveLength(1);
+    expect(new Store().listAgents()).toHaveLength(6);
+    expect(new Store().listCouncils()).toHaveLength(2);
+    expect(new Store().listCouncils().map((c) => c.name).sort()).toEqual([
+      "pr-jury",
+      "product-jury",
+    ]);
   });
 
   it("--force recreates default agents after deleting pr-jury", async () => {
@@ -249,8 +312,9 @@ describe("councilkit init", () => {
     await runInit(["--force"], makeSink());
     const secondId = new Store().getAgent("review-security").id;
     expect(secondId).not.toBe(firstId);
-    expect(new Store().listAgents()).toHaveLength(4);
+    expect(new Store().listAgents()).toHaveLength(6);
     expect(new Store().getCouncil("pr-jury").name).toBe("pr-jury");
+    expect(new Store().getCouncil("product-jury").name).toBe("product-jury");
   });
 
   it("does not overwrite a user-edited default agent without --force", async () => {

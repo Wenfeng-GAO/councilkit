@@ -39,7 +39,7 @@ import {
   attachClosesFromFindings,
   buildClusterPlanMarkdown,
   ensureFindings,
-  markFindingsClosed,
+  markFindingsRepairClaimed,
   parsePlanDocument,
   readFindings,
   readLandings,
@@ -97,6 +97,7 @@ export interface ApplyOutcome {
   parentSha: string | null;
   candidateSha: string | null;
   closed: string[];
+  claimed: string[];
   summary: string;
   failure: { phase: string; code: string; message: string } | null;
 }
@@ -241,6 +242,7 @@ export async function runApply(
     parentSha: null as string | null,
     candidateSha: null as string | null,
     closed: [] as string[],
+    claimed: [] as string[],
     summary: "",
   };
 
@@ -411,7 +413,7 @@ export async function runApply(
     outcomeBase.branch = branch;
     outcomeBase.commit = sha;
     outcomeBase.candidateSha = sha;
-    outcomeBase.closed = closed;
+    outcomeBase.claimed = closed;
     outcomeBase.changed = leftover || (sha !== null && sha !== shaBefore);
     outcomeBase.summary = result.output;
 
@@ -428,13 +430,21 @@ export async function runApply(
       clusterId: target.clusterId ?? "unscoped",
       parentSha: shaBefore,
       candidateSha: sha,
-      closed,
+      closed: [],
+      claimed: closed,
       runId,
       pushed: outcomeBase.pushed,
     });
     if (closed.length > 0) {
       const latest = readFindings(runDir) ?? findings;
-      writeFindings(runDir, markFindingsClosed(latest, closed));
+      writeFindings(
+        runDir,
+        markFindingsRepairClaimed(latest, closed, {
+          candidateSha: sha,
+          runId,
+          at: new Date().toISOString(),
+        }),
+      );
     }
 
     out.progress(

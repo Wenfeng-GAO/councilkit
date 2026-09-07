@@ -45,6 +45,8 @@ describe("parseTranscriptMeta", () => {
       title: "20260824-observe-ab12",
       startedAt: "2026-08-24T00:00:00.000Z",
       endedAt: "2026-08-24T00:10:00.000Z",
+      incomplete: null,
+      ideateIntegrity: null,
     });
   });
 
@@ -208,5 +210,77 @@ describe("listCliRuns squad", () => {
     expect(detail?.documents.map((doc) => doc.id)).toEqual(["brief", "plan", "reviews"]);
     expect(detail?.documents[0]?.title).toBe("简报");
     expect(detail?.documents[0]?.markdown).toContain("Fix the majors.");
+  });
+});
+
+const IDEATE_ID = "ck-ideate-884bbb0c-c435-4f82-a28b-aa8cc2d6472b";
+const SMOKE_INTEGRITY = {
+  plannedProposals: 3,
+  successfulProposals: 2,
+  plannedDebates: 3,
+  successfulDebates: 2,
+  configuredModels: 3,
+  successfulModels: 2,
+  incomplete: true,
+  degradedReasons: ["部分席位失败"],
+  contextTruncated: false,
+  failedSeats: [
+    {
+      stage: "proposal",
+      attemptId: "proposal-seat2",
+      agentName: "kimi-code/k3 · 2",
+      code: "DRIVER_UNREACHABLE",
+      message: "non-zero exit 1\nerror: Cannot combine --prompt with --plan.",
+    },
+    {
+      stage: "debate",
+      attemptId: "debate-r1-seat2",
+      agentName: "kimi-code/k3 · 2",
+      code: "DRIVER_UNREACHABLE",
+      message: "non-zero exit 1\nerror: Cannot combine --prompt with --plan.",
+    },
+  ],
+} as const;
+
+describe("parseTranscriptMeta ideate integrity", () => {
+  it("keeps completed + incomplete:true smoke integrity on list and detail", () => {
+    const text = `${JSON.stringify({
+      kind: "ideate.started",
+      version: 1,
+      runId: IDEATE_ID,
+      startedAt: "2026-09-07T17:14:53.000Z",
+      idea: "为独立开发者做一个每周整理用户反馈并给出下周验证任务的本地工具",
+    })}\n${JSON.stringify({
+      kind: "ideate.finished",
+      version: 1,
+      status: "completed",
+      endedAt: "2026-09-07T17:28:00.000Z",
+      incomplete: true,
+      integrity: SMOKE_INTEGRITY,
+    })}\n`;
+    expect(parseTranscriptMeta(text, IDEATE_ID)).toMatchObject({
+      kind: "ideate",
+      status: "completed",
+      incomplete: true,
+      ideateIntegrity: SMOKE_INTEGRITY,
+    });
+
+    const home = mkdtempSync(join(tmpdir(), "ck-ideate-index-"));
+    const previous = process.env.COUNCILKIT_HOME;
+    process.env.COUNCILKIT_HOME = home;
+    try {
+      const dir = join(home, "runs", IDEATE_ID);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "transcript.jsonl"), text);
+      writeFileSync(join(dir, "report.md"), "# Product Ideate Report\n");
+      const listed = listCliRuns(process.env);
+      expect(listed[0]?.status).toBe("completed");
+      expect(listed[0]?.ideateIntegrity).toEqual(SMOKE_INTEGRITY);
+      expect(readCliRun(IDEATE_ID, process.env)?.ideateIntegrity?.failedSeats).toHaveLength(2);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "COUNCILKIT_HOME");
+      else process.env.COUNCILKIT_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

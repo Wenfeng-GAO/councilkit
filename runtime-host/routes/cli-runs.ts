@@ -22,6 +22,7 @@ import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunStartIdeateRequest,
   type CliRunStartReviewRequest,
   type CliRunStartReviewResponse,
   type CliRunsListResponse,
@@ -29,6 +30,7 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunStartIdeateRequestSchema,
   cliRunStartReviewRequestSchema,
   cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
@@ -77,7 +79,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             ),
           );
         }
-        if (!hasPrJuryCouncil()) {
+        if (!body.reviewModels && !hasPrJuryCouncil()) {
           throw httpError(
             400,
             makeError(
@@ -98,6 +100,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
               runId,
               pr: body.pr,
               repo: body.repo,
+              reviewModels: body.reviewModels,
               logPath,
             }),
           );
@@ -110,7 +113,60 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             body.pr,
           );
         }
-        writeRunningStub(runId);
+        writeRunningStub(runId, "attempts");
+        return { runId, started: true };
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/api/v1/cli-runs/ideate",
+      auth: "mutation",
+      bodySchema: cliRunStartIdeateRequestSchema,
+      responseSchema: cliRunStartReviewResponseSchema,
+      handler: async (ctx): Promise<CliRunStartReviewResponse> => {
+        const body = ctx.body as CliRunStartIdeateRequest;
+        const idea = body.idea.trim();
+        if (idea.length === 0) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "idea is required.", { retryable: false }),
+          );
+        }
+        if (!body.models && !hasNamedCouncil("product-jury")) {
+          throw httpError(
+            400,
+            makeError(
+              "BAD_REQUEST",
+              "discovery",
+              "default product-jury is missing; run `councilkit init`",
+              { retryable: false },
+            ),
+          );
+        }
+        const runId = `ck-ideate-${randomUUID()}`;
+        const logPath = join(tmpdir(), `councilkit-host-ideate-${runId}.log`);
+        let started: { pid: number };
+        try {
+          started = await Promise.resolve(
+            launcher.start({
+              action: "ideate",
+              runId,
+              idea,
+              background: body.background,
+              debateRounds: body.debateRounds,
+              ideateModels: body.models,
+              logPath,
+            }),
+          );
+        } catch (error) {
+          throw mapIdeateSpawnError(error);
+        }
+        if (!isPidAlive(started.pid)) {
+          throw mapIdeateSpawnError(
+            new Error("councilkit ideate exited before handshake completed"),
+          );
+        }
+        writeRunningStub(runId, "proposing");
         return { runId, started: true };
       },
     },
@@ -247,17 +303,45 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
 }
 
 function hasPrJuryCouncil(): boolean {
+  return hasNamedCouncil("pr-jury");
+}
+
+function hasNamedCouncil(name: string): boolean {
   try {
     const home = resolveCouncilkitHome(process.env);
     const raw = readFileSync(join(home, "councils.json"), "utf8");
     const parsed = JSON.parse(raw) as { councils?: Array<{ id?: unknown; name?: unknown }> };
     if (!Array.isArray(parsed.councils)) return false;
-    return parsed.councils.some(
-      (council) => council.name === "pr-jury" || council.id === "pr-jury",
-    );
+    return parsed.councils.some((council) => council.name === name || council.id === name);
   } catch {
     return false;
   }
+}
+
+function mapIdeateSpawnError(error: unknown): never {
+  const message = error instanceof Error ? error.message : "failed to spawn councilkit";
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code: unknown }).code)
+      : "";
+  if (code === "HANDSHAKE_TIMEOUT" || message.includes("HANDSHAKE_TIMEOUT")) {
+    throw httpError(
+      500,
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", message.slice(0, 1024), { retryable: true }),
+    );
+  }
+  if (message.includes("product-jury")) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "default product-jury is missing; run `councilkit init`", {
+        retryable: false,
+      }),
+    );
+  }
+  throw httpError(
+    500,
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", message.slice(0, 1024), { retryable: false }),
+  );
 }
 
 function mapReviewSpawnError(error: unknown, pr: string): never {
@@ -298,14 +382,14 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
   );
 }
 
-function writeRunningStub(runId: string): void {
+function writeRunningStub(runId: string, phase: "attempts" | "proposing" = "attempts"): void {
   const statusPath = join(resolveCliRunsRoot(), runId, CLI_RUN_STATUS_FILE);
   if (existsSync(statusPath)) return;
   const now = new Date().toISOString();
   const live = {
     version: 1 as const,
     status: "running" as const,
-    progress: { phase: "attempts" as const, attempts: [] as const, updatedAt: now },
+    progress: { phase, attempts: [] as const, updatedAt: now },
     pipeline: null,
   };
   try {

@@ -42,6 +42,8 @@ export function AttemptLiveTranscript({
   const [events, setEvents] = useState<AttemptLiveEvent[]>([]);
   const [done, setDone] = useState(false);
   const [ready, setReady] = useState(false);
+  const [readError, setReadError] = useState(false);
+  const retryRef = useRef<() => void>(() => {});
   const afterSeqRef = useRef(0);
   const eventsRef = useRef<AttemptLiveEvent[]>([]);
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -56,6 +58,7 @@ export function AttemptLiveTranscript({
     setEvents([]);
     setDone(false);
     setReady(false);
+    setReadError(false);
     pinToBottomRef.current = active;
 
     const stickToBottom = () => {
@@ -75,6 +78,7 @@ export function AttemptLiveTranscript({
           setEvents(eventsRef.current);
         }
         afterSeqRef.current = res.nextSeq;
+        setReadError(false);
         setReady(true);
         stickToBottom();
         if (res.done) {
@@ -88,6 +92,7 @@ export function AttemptLiveTranscript({
         }
       } catch {
         if (cancelled) return;
+        setReadError(true);
         setReady(true);
         if (active) {
           timer = window.setTimeout(() => {
@@ -97,6 +102,9 @@ export function AttemptLiveTranscript({
       }
     };
 
+    retryRef.current = () => {
+      void pull();
+    };
     void pull();
     return () => {
       cancelled = true;
@@ -115,6 +123,17 @@ export function AttemptLiveTranscript({
     pinToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
   };
 
+  const errorNotice = readError ? (
+    <output className="mb-3 block text-sm text-warn">
+      过程读取失败。{active ? "正在自动重试，已读取的记录仍保留。" : "请重试读取过程记录。"}
+      {!active ? (
+        <button type="button" className="ml-2 underline" onClick={() => retryRef.current()}>
+          重新读取过程
+        </button>
+      ) : null}
+    </output>
+  ) : null;
+
   if (!ready) {
     return (
       <div ref={scrollerRef} className={className}>
@@ -125,9 +144,9 @@ export function AttemptLiveTranscript({
   if (events.length === 0) {
     return (
       <div ref={scrollerRef} className={className}>
-        <p className="font-command text-[0.68rem] text-muted">
-          {active && !done ? "等待过程输出…" : "该 driver 无过程输出"}
-        </p>
+        {errorNotice ?? (
+          <p className="text-sm text-muted">{active && !done ? "等待过程输出…" : "尚无过程记录"}</p>
+        )}
       </div>
     );
   }
@@ -137,6 +156,7 @@ export function AttemptLiveTranscript({
   const last = timeline.length - 1;
   return (
     <div ref={scrollerRef} className={className} onScroll={onScroll}>
+      {errorNotice}
       <div className="flex flex-col gap-2.5">
         {span.eventCount > 0 && !span.hasTimeline ? (
           <p className="font-command text-[0.68rem] text-muted">过程无时间轴</p>

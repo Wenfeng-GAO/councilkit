@@ -1,13 +1,11 @@
 import { QUOTAS } from "@shared/runtime/contracts";
 import type { SnapshotItem } from "@shared/runtime/schemas";
 import {
-  claudeStreamJsonOptionsSchema,
-  codexAppServerOptionsSchema,
-  cursorStreamJsonOptionsSchema,
+  driverSelectionSchema,
   type executionProfileSchema,
-  grokStreamJsonOptionsSchema,
-  kimiStreamJsonOptionsSchema,
+  reviewModelSchema,
 } from "@shared/runtime/schemas";
+export { driverSelectionSchema, type DriverSelection } from "@shared/runtime/schemas";
 /**
  * CLI store schemas (brief §2b, plan-a §3). Reuses the shared per-driver option
  * schemas so a CLI Driver Selection can never drift from the Host's wire
@@ -29,25 +27,6 @@ const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 /** Reuses the shared per-driver options schemas — same closed vocabulary the
  * Host validates on the wire. `installationId`/`credentialMode` are NOT here:
  * the CLI resolves a trusted installation per run and never persists it. */
-export const driverSelectionSchema = z.discriminatedUnion("driverId", [
-  z
-    .object({ driverId: z.literal("claude-stream-json"), options: claudeStreamJsonOptionsSchema })
-    .strict(),
-  z
-    .object({ driverId: z.literal("codex-app-server"), options: codexAppServerOptionsSchema })
-    .strict(),
-  z
-    .object({ driverId: z.literal("kimi-stream-json"), options: kimiStreamJsonOptionsSchema })
-    .strict(),
-  z
-    .object({ driverId: z.literal("grok-stream-json"), options: grokStreamJsonOptionsSchema })
-    .strict(),
-  z
-    .object({ driverId: z.literal("cursor-stream-json"), options: cursorStreamJsonOptionsSchema })
-    .strict(),
-]);
-export type DriverSelection = z.infer<typeof driverSelectionSchema>;
-
 // ---------------------------------------------------------------------------
 // agents.json
 // ---------------------------------------------------------------------------
@@ -106,6 +85,7 @@ export const councilRecordSchema = z
     agentIds: z.array(z.string().min(1).max(128)).min(1).max(QUOTAS.maxParticipantsPerScope),
     rounds: z.number().int().positive().max(16),
     reporterAgentId: z.string().min(1).max(128),
+    agentOverrides: z.record(z.string(), reviewModelSchema).optional(),
   })
   .strict();
 export type CouncilRecord = z.infer<typeof councilRecordSchema>;

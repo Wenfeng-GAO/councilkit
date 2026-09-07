@@ -80,12 +80,13 @@ pnpm exec councilkit --help
 
 CLI 不 spawn Runtime Host，也不直连模型供应商——除 `review` 外，所有执行仍经过本机前台运行的 Runtime Host（与浏览器共用同一个 `http://127.0.0.1:43127`）。所以先 `pnpm start`（或 `pnpm dev`）让 Host 跑起来，再开 CLI；浏览器可以关。Host 不可达时 `doctor`/`run` 以退出码 3 失败，CLI 永不自动拉起 Host。CLI 只保证与**同 checkout** 的 Host 互通（版本绑定）。
 
-**例外：`councilkit review` / `councilkit apply` 不经 Host**——它们直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn（见下「自主并行审查」），因此不需要 Host 运行，也不受退出码 3 约束。
+**例外：`councilkit review` / `councilkit ideate` / `councilkit apply` 不经 Host**——它们直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn（见下「自主并行审查」），因此不需要 Host 运行，也不受退出码 3 约束。
 
 ### 命令
 
 ```bash
-councilkit init [--force] [--json]                      # 发现本机 cld/kimi/codex/grok/cursor-agent，写入默认 pr-jury
+councilkit init [--force] [--json]                      # 发现本机 CLI，写入默认 pr-jury + product-jury
+councilkit ideate "<idea>" [--background "<text>"] [--debate-rounds 0|1|2] [--council product-jury] [--models '<json>'] [--json]
 councilkit doctor [--json]                              # Host 可达性 + installations + catalog 摘要
 councilkit models [--json]                             # 当前可用 driver/route/model 闭集（实时 catalog）
 councilkit agent create \
@@ -111,6 +112,7 @@ councilkit review --council <name|id> \
   (--pr <url|number> | --task "<text>") [--focus "<text>"] [--against <run-id>] [--timeout 45m] [--codex-timeout 90m] [--concurrency 10] [--out path] [--json]
 councilkit apply --run <ck-review-id> [--cluster <id>] [--all-clusters] [--agent <ref>] [--no-push] [--timeout 45m] [--json]
 councilkit fix --run <ck-review-id> [--plan-only] [--no-re-review] [--no-push] [--json]
+councilkit repair export --run <ck-review-id> --out <new-file.json> [--cluster <id>] [--json]
 
 councilkit runs list [--json]                           # 列出 CLI 报告
 councilkit runs open <run-id> [--json]                  # 打印 http://127.0.0.1:43127/reports/<id>
@@ -126,7 +128,23 @@ pnpm exec councilkit review <url> --json
 pnpm exec councilkit fix --run <ck-review-id> --json     # 方案陪审 → 一集群落地 → 对照账本复审
 pnpm exec councilkit apply --run <ck-review-id> --json   # 默认落地第一个未落地集群（grok + push）
 pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪审：closed / 回归 / 新洞
+pnpm exec councilkit ideate "一句话创意" --json                     # 产品创意：并行盲提 → 串行辩论 → 中立决策
 ```
+
+#### `councilkit ideate` — 产品创意决策（不经 Host）
+
+`init` 在 PATH 上发现 grok/kimi/codex 后写入 `ideate-product` / `ideate-engineering` / `ideate-challenger` 与 Council `product-jury`。`ideate-challenger` 还需要可发现的 Codex 模型（`~/.codex/config.toml` 顶层 `model=`，否则 `models_cache.json`）；仅 PATH 有 `codex` 不够。已配置 Reporter 不静默换人；默认优先 Codex，其次 product，再 engineering。`--force` 会同时重建 `pr-jury` 与 `product-jury`。
+
+```bash
+pnpm exec councilkit init --json
+pnpm exec councilkit ideate "一句话创意" --background "用户、约束、非目标" --debate-rounds 1 --json
+# Host 运行时打开 http://127.0.0.1:43127/reports
+```
+
+- 编排：并行盲提 → 0–2 轮串行辩论 → 中立 Aggregator。`--debate-rounds 0` 是主动跳过，不算故障。
+- 权限：受限讨论，不修改用户项目、不 commit/push；不继承 review 的 bypass 开关。Kimi headless 用 `-p` + `--agent-file`（不能与 `--plan` 同用）。
+- `--models` 只覆盖本次席位/Reporter，不写回 `product-jury`。`--models` 不能与 `--council` / `--agents` 同用。
+- 部分席位失败仍可汇总：`status=completed` + `incomplete:true`，报告与列表标降级。无 fix / apply / re-review。
 
 - `--agents` 用 JSON 数组（不是逗号分隔），避免名字含逗号/空格歧义。
 - **Reporter 必填**：Council 必须显式指定一个 reporter agent（且在 agents 中），不静默 fallback。
@@ -141,7 +159,28 @@ pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪�
 - **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
 - `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。默认 Aggregator 是 grok（`review-adversarial`）。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
 - 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 默认 45m（cld/kimi/grok），`--codex-timeout` 默认 90m。`--concurrency` 默认 10。失败席：`councilkit review <url> --resume <run-id>` 只重跑失败 Attempt，成功席复用。
-- **Finding 账本**：每次 review 从 `report.md` 抽出 `findings.json`（id = path--slug，状态 `open|closed|accepted|regress`）。`--against <prior-run>` 对照上一份账本做增量陪审，而不是整 PR 相对 master 再发现一遍。`fix` 的复审默认带 `--against`。
+- **Finding 账本**：每次 review 产生 `findings.json`，`--against <prior-run>` 优先保留原问题 ID，并保留独立审查者报告的发现。失败、未覆盖、聚合报告未再提及都不会关闭旧问题。`fix` 的复审默认带 `--against`。
+- **关闭证据**：`apply` 只记录 `repairClaim`。关闭需要成功的独立审查者提交结构化验证，绑定本次完整候选 SHA，并提供测试命令或代码位置；控制器核对审查 worktree 的 HEAD 与受跟踪文件没有变化。聚合器不能代写关闭凭据，仍成立的发现优先于关闭声明。旧 `closed` 没有验证凭据时显示“历史未验证”，重大项仍待处理。证据来自独立模型审查，不能理解为控制器已经重跑并认证了其所有测试。
+
+#### 把修复交给 Squad
+
+```bash
+pnpm exec councilkit repair export --run <ck-review-id> --out /tmp/repair.json
+# 也可用 --cluster <id> 选取已批准方案中的一个集群
+```
+
+导出要求审查完整成功且账本具有对应的完整 SHA；存在 `plan.lock.json` 时必须属于本轮且已批准。输出文件必须不存在。包保留问题 ID、来源 SHA、证据、修改范围、不变量和验收要求，范围外问题明确留待处理。
+
+在目标仓库用 `hengzhuo-engineering-squad` 创建任务，`init --base-sha` 使用包中的 `source.sha`，随后执行：
+
+```bash
+"$SQUADCTL" intake --task-dir "$TASK_DIR" --package /tmp/repair.json
+"$SQUADCTL" convergence --task-dir "$TASK_DIR"
+```
+
+`intake` 在尚未冻结的 briefing 阶段生成来源包、request 和 brief 草稿，不覆盖已有文件。Planner 核实草稿后再冻结计划和门禁；包中的命令是待核实输入。`convergence` 根据记录的修复轮次和问题 ID 提醒继续、诊断或预算耗尽，不产生 PASS。任务完成后仍需独立验收候选提交；本接口尚不自动把 CouncilKit 证据写成 Squad 门禁回执，也不自动发布本地候选。
+
+报告列表按 PR 展示最近完整审查的证据 SHA、未决重大项、未验证修复和下一步。较新的失败审查单独提示恢复，不覆盖旧的有效证据；旧证据不代表远端当前 HEAD 已通过。对比与重复问题统计只沿同一 PR 的 `against` 链。详情页可复制导出命令。Host 继续只读 Squad sidecar，不接管其执行控制。
 
 #### `councilkit fix` — 方案陪审 → 一集群落地 → 对照账本复审
 
@@ -176,6 +215,14 @@ pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪�
 ### 端口独占
 
 `run` 的 live smoke 与浏览器/Host 共用 43127，且要求独占串行（不可与 vitest/playwright 并发）。端口被占用时用 `lsof -nP -iTCP:43127 -sTCP:LISTEN` 定位；CLI 不 kill 任何非自身进程。
+
+## 在报告页调整默认审查席位
+
+打开 `/reports` 即可查看 `pr-jury` 当前的默认角色、模型与汇总席位。点击「调整席位」，在每个角色的下拉框中选择模型来源、路由与模型；也可以添加已有 Agent、移除非汇总席位，或指定新的汇总席位。点击「保存默认席位」后，后续 PR 审查使用这份配置。页面不再提供自由输入模型 ID 或一次性模型组合。
+
+模型选项来自实时目录、本机已保存的 Agent 与 Codex 模型缓存，因此目录尚未同步的新模型（如 `gpt-6-astra`）也可直接下拉选择。启动审查时仍会探测实际可用性。
+
+配置原子写入 `councils.json` 中 `pr-jury` 的 `agentOverrides`，不修改共用 Agent 的角色职责与全局模型，也不影响其他 Council 或已开始的 Run。至少保留 1 个席位、最多 8 个；汇总席位必须在班子内。CLI 可用 `councilkit jury show --json` 查看实际默认配置，用 `jury save --config '<json>'` 更新；过期 revision 会拒绝保存，避免覆盖另一个页面的调整。`init --force` 重建 Council 时会清除这组覆盖配置。
 
 ## 后台托管（launchd，macOS）
 

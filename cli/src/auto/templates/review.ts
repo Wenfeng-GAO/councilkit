@@ -64,7 +64,22 @@ List every issue you found, one per line:
 The commands you actually ran and their results. If you did not verify, write "未验证".
 
 ## 结论
-A single line: approve | changes-requested | comment`;
+A single line: approve | changes-requested | comment
+
+## 逐项验证
+有 Finding 账本时，针对你检查的原 finding ID 追加一个 councilkit-findings fenced JSON 数组。
+候选 SHA 必须是本工作区 git rev-parse HEAD 的完整 40 位值，不能猜测或使用短 SHA。
+每项字段：findingId、candidateSha、outcome（verified_closed / still_open / not_evaluated）、
+method（regression_test / code_trace / not_evaluated）、reason、evidence。
+regression_test 另填 command（实际执行的命令）；code_trace 另填 locations（文件:行号数组）。
+verified_closed 必须独立检查原反例；regression_test 的 evidence 写实际命令、结果和反例为何不再触发；
+code_trace 的 evidence 写调用链及原反例已被消除的具体证据。没有检查就用 not_evaluated。
+验证时保持候选的已跟踪文件不变；定向反例可放在未跟踪文件。不要 checkout 其他提交。
+只写代码作者声称已修复、泛称测试绿、未在 diff 看见，均不能 verified_closed。
+示例（必须替换占位值，不能照抄）：
+\`\`\`councilkit-findings
+[{"findingId":"<原ID>","candidateSha":"<git rev-parse HEAD>","outcome":"not_evaluated","method":"not_evaluated","reason":"本席未检查这个反例","evidence":"无验证证据"}]
+\`\`\``;
 
 const AGGREGATE_STRUCTURE = `## 概览
 ## 共识发现
@@ -228,10 +243,11 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "",
     "点名引用每位被保留的成功的审查者。对比他们的发现与验证过程，区分共识、独有发现、分歧。",
     "reviewer 可能使用 Findings/Verification/Verdict 等英文标题，请按语义理解，不要当作格式错误。",
+    "必须保留有具体证据的严重独有发现；少数意见不能因无人重复而删除。逐项验证 JSON 来自独立 Attempt，你不能补造关闭证据。",
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
     "结论章节给出单行英文 verdict token：approve | changes-requested | comment。",
     input.task.against
-      ? "若有 Finding 账本：在「共识发现」里用原 id 标注仍成立或回归的项；新洞另起条目；不要把账本已关闭且本区间未再出现的项再写一遍。"
+      ? "若有 Finding 账本：在「共识发现」里用原 id 标注仍成立或回归的项；新洞另起条目。历史 closed 无验证不等于解决；未报告/未覆盖不等于关闭。已验证关闭另述证据，不混入仍成立的发现列表。"
       : "",
     "最终消息即交付物，只输出下面的 Markdown 五章节结构：",
     "",

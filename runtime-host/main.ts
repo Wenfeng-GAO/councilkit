@@ -24,6 +24,8 @@ import { diagnosticsRoutes } from "./routes/diagnostics";
 import { healthRoutes } from "./routes/health";
 import { installationRoutes } from "./routes/installations";
 import { modelRoutes } from "./routes/models";
+import { productJuryRoutes } from "./routes/product-jury";
+import { reviewJuryRoutes } from "./routes/review-jury";
 import { scopeRoutes } from "./routes/scopes";
 import { createScopeManager } from "./scopes/scope-manager";
 import { createSessionReconciler } from "./scopes/session-reconciler";
@@ -158,6 +160,8 @@ async function main(): Promise<void> {
     ...scopeRoutes(services),
     ...diagnosticsRoutes(services),
     ...cliRunsRoutes(services),
+    ...reviewJuryRoutes(),
+    ...productJuryRoutes(),
   ];
 
   let viteMiddlewares:

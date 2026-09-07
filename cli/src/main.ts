@@ -1,6 +1,7 @@
 import { dispatch } from "./cli";
 import { ApplyExit } from "./commands/apply";
 import { FixExit } from "./commands/fix";
+import { IdeateExit } from "./commands/ideate";
 import { ReviewExit } from "./commands/review";
 import { RunExit } from "./commands/run";
 /**
@@ -27,7 +28,9 @@ Usage:
   councilkit <command> [options] [--json]
 
 Commands:
-  init [--force]                      Discover local CLIs and write the default pr-jury roster.
+  init [--force]                      Discover local CLIs and write pr-jury + product-jury.
+  ideate "<idea>"                     Restricted product council: propose, debate, decide.
+      [--background] [--debate-rounds 0|1|2] [--json]
   doctor                              Host reachability, installations, catalog summary.
   models                              Closed set of available driver/route/model.
   agent create|list|show|delete       Manage agents (name + persona + Driver Selection + modelId).
@@ -37,6 +40,7 @@ Commands:
   runs gc [--keep <days>] [--dry-run] [--all]
                                       Delete old runs/<id>/workspaces only
                                       (report.md/transcript.jsonl are always kept).
+  jury show [--council product-jury]  Read pr-jury or product-jury seats (save is pr-jury only).
   review <pr-url>                     Review a PR with default council pr-jury.
   review --agents '<json-array>'      N autonomous agents independently review one task,
       --aggregator <id>               then one synthesizes a report. Bypasses the Host.
@@ -44,7 +48,10 @@ Commands:
       [--repo <path>]                 Local clone of the PR repo (remembered).
       [--timeout 45m] [--codex-timeout 90m] [--concurrency 10]
       [--against <run-id>]            Incremental jury vs that run's findings.json.
+  review --review-models '<json>'      Per-run {models, aggregatorIndex}; does not change saved agents.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
+  repair export --run <id> --out <file> [--cluster <id>]
+                                      Export a bounded repair package for an external Squad.
   apply --run <ck-review-id>          Apply one locked cluster (default first unlanded), grok + push.
       [--cluster <id>|--all-clusters]
   fix --run <ck-review-id>            Plan-jury a repair, apply one cluster, then re-review vs the ledger.
@@ -115,6 +122,9 @@ function main(argv: string[]): void {
         process.exit(error.exitCode);
       }
       if (error instanceof ReviewExit) {
+        process.exit(error.exitCode);
+      }
+      if (error instanceof IdeateExit) {
         process.exit(error.exitCode);
       }
       if (error instanceof ApplyExit) {

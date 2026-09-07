@@ -615,7 +615,7 @@ async function bootStartReview(start?: (input: CliRunLaunchRequest) => { pid: nu
       services.cliRunLauncher = {
         start: (input: CliRunLaunchRequest) => {
           launches.push(input);
-          return start ? start(input) : { pid: 4242 };
+          return start ? start(input) : { pid: process.pid };
         },
       };
       return cliRunsRoutes(services);
@@ -704,6 +704,51 @@ describe("POST /api/v1/cli-runs start review", () => {
     expect(launches[0]?.pr).toBe(GH_PR);
     expect(launches[0]?.runId).toBe(body.data.runId);
     expect(launches[0]?.action).not.toBe("fix");
+  });
+
+  it("launches a custom Codex roster without requiring pr-jury", async () => {
+    const { launches } = await bootStartReview();
+    const reviewModels = {
+      models: [
+        { modelId: "gpt-6-astra", driverSelection: { driverId: "codex-app-server", options: {} } },
+      ],
+      aggregatorIndex: 0,
+    };
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, reviewModels }),
+    });
+    expect(res.status).toBe(200);
+    expect(launches[0]?.reviewModels).toEqual(reviewModels);
+  });
+
+  it.each([
+    { models: [], aggregatorIndex: 0 },
+    {
+      models: [
+        { modelId: "gpt-6-astra", driverSelection: { driverId: "codex-app-server", options: {} } },
+      ],
+      aggregatorIndex: 1,
+    },
+    {
+      models: [
+        {
+          modelId: "gpt-6-astra",
+          driverSelection: { driverId: "codex-app-server", options: { executable: "/tmp/bad" } },
+        },
+      ],
+      aggregatorIndex: 0,
+    },
+  ])("rejects invalid custom roster before launch: %j", async (reviewModels) => {
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, reviewModels }),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toHaveLength(0);
   });
 
   it("POST /api/v1/cli-runs passes repo through to launcher.start", async () => {
@@ -801,5 +846,105 @@ describe("POST /api/v1/cli-runs start review", () => {
     expect(body.error.message).toContain("acme/repo");
     expect(body.error.message).toContain("councilkit review");
     expect(launches).toHaveLength(1);
+  });
+});
+
+function seedProductJury(): void {
+  writeFileSync(
+    join(home, "councils.json"),
+    `${JSON.stringify({
+      format: "councilkit-councils",
+      version: 1,
+      councils: [
+        {
+          id: "product-jury",
+          name: "product-jury",
+          topic: "ideate",
+          background: "",
+          targetOutput: "",
+          agentIds: ["p", "e"],
+          rounds: 1,
+          reporterAgentId: "p",
+        },
+      ],
+    })}\n`,
+  );
+}
+
+describe("POST /api/v1/cli-runs/ideate", () => {
+  it("rejects an empty idea after trim", async () => {
+    seedProductJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/ideate`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ idea: "   " }),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toEqual([]);
+  });
+
+  it("rejects extra fields", async () => {
+    seedProductJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/ideate`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ idea: "weekly feedback", extra: 1 }),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toEqual([]);
+  });
+
+  it("requires product-jury when models are omitted", async () => {
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/ideate`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ idea: "weekly feedback" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { message: string } };
+    expect(body.error.message).toContain("product-jury");
+    expect(launches).toEqual([]);
+  });
+
+  it("spawns ideate with idea, background and debate rounds", async () => {
+    seedProductJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/ideate`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({
+        idea: "weekly feedback sorter",
+        background: "solo builder, two weeks",
+        debateRounds: 1,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: true; data: { runId: string; started: true } };
+    expect(body.data.started).toBe(true);
+    expect(body.data.runId).toMatch(/^ck-ideate-[0-9a-fA-F-]+$/);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toMatchObject({
+      action: "ideate",
+      idea: "weekly feedback sorter",
+      background: "solo builder, two weeks",
+      debateRounds: 1,
+      runId: body.data.runId,
+    });
+  });
+
+  it("keeps special characters in the idea and does not shell-join", async () => {
+    seedProductJury();
+    const { launches } = await bootStartReview();
+    const idea = `quotes "and" $HOME; rm -rf /`;
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/ideate`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ idea }),
+    });
+    expect(res.status).toBe(200);
+    expect(launches[0]?.idea).toBe(idea);
   });
 });

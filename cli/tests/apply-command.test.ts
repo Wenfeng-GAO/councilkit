@@ -156,7 +156,7 @@ describe("cli apply command", () => {
         };
       }
       if (input.executable === "git" && input.argv[0] === "rev-parse" && input.argv[1] === "HEAD") {
-        return { stdout: "abc1234deadbeef\n", stderr: "", exitCode: 0 };
+        return { stdout: `${"a".repeat(40)}\n`, stderr: "", exitCode: 0 };
       }
       if (
         input.executable === "git" &&
@@ -244,6 +244,55 @@ describe("cli apply command", () => {
     );
     const landings = readFileSync(join(home, "runs", RUN_ID, "landings.jsonl"), "utf8");
     expect(landings).toContain('"clusterId":"log"');
+  });
+
+  it("persists landing and producer claims without verified closure", async () => {
+    seedGrok();
+    seedReviewRun();
+    const dir = join(home, "runs", RUN_ID);
+    writeFileSync(
+      join(dir, "findings.json"),
+      JSON.stringify({
+        version: 1,
+        runId: RUN_ID,
+        extractedAt: "2026-08-01",
+        sha: "b".repeat(40),
+        againstRunId: null,
+        againstRange: null,
+        findings: [
+          {
+            id: "log--lost",
+            severity: "critical",
+            status: "open",
+            title: "lost text",
+            text: "lost text",
+            source: "unique",
+            reviewer: "security",
+            files: ["log.go"],
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(dir, "plan.md"),
+      "# 修复方案\n\n## 落地顺序\n\n### 集群 1: log\n- closes: log--lost\n- files: log.go\n",
+    );
+    const sink = makeSink();
+    expect(
+      await runCapturing(["--run", RUN_ID, "--no-push"], sink, {
+        runCommand: fakeGit().runCommand,
+      }),
+    ).toBe(0);
+    const outcome = sink.finished as { closed: string[]; claimed: string[] };
+    expect(outcome.closed).toEqual([]);
+    expect(outcome.claimed).toEqual(["log--lost"]);
+    const ledger = JSON.parse(readFileSync(join(dir, "findings.json"), "utf8"));
+    expect(ledger.findings[0].status).toBe("open");
+    expect(ledger.findings[0].verification).toBeUndefined();
+    expect(ledger.findings[0].repairClaim.candidateSha).toBe("a".repeat(40));
+    const landing = JSON.parse(readFileSync(join(dir, "landings.jsonl"), "utf8").trim());
+    expect(landing.closed).toEqual([]);
+    expect(landing.claimed).toEqual(["log--lost"]);
   });
 
   it("defaults to review-adversarial, checks out the PR, and pushes", async () => {

@@ -21,6 +21,7 @@ import {
   constants,
   accessSync,
   closeSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -33,6 +34,24 @@ import { delimiter, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
+import {
+  IDEATE_GROK_CONFIG,
+  IDEATE_GROK_DENY_RULES,
+  IDEATE_GROK_DISALLOWED_TOOLS,
+  IDEATE_GROK_REQUIREMENTS,
+  IDEATE_GROK_SANDBOX,
+  IDEATE_GROK_SANDBOX_PROFILE,
+  IDEATE_GROK_TOOLS,
+  IDEATE_POLICY_MARKER,
+  assertIdeateIsolatedEnv,
+  assertIdeateRestrictedArgv,
+  disposeIdeateAuthHome,
+  ideateEnvOverlay,
+  prepareIdeateAuthHome,
+  prepareIdeateWorkspace,
+} from "./ideate-policy";
+
+export { IDEATE_FORBIDDEN_FLAGS } from "./ideate-policy";
 
 /** Fully-resolved, ready-to-spawn description of one Attempt (or the Aggregator
  * spawn, which reuses the same shape). `argv` is the complete arg list — for
@@ -53,6 +72,10 @@ export interface AttemptSpec {
   promptStdin: boolean;
   /** Isolated working directory for this subprocess. */
   cwd: string;
+  /** Extra env merged after driver isolation (ideate KIMI_CODE_HOME / sandbox). */
+  envOverlay?: NodeJS.ProcessEnv;
+  /** Ephemeral auth home outside the retained Run tree; caller must dispose. */
+  ephemeralHome?: string;
   /** codex: path to the `-o` last-message file (also read for extraction). */
   lastMessageFile?: string;
   /** Per-Attempt timeout; the runner falls back to its pool default when absent. */
@@ -69,6 +92,10 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
   "grok-stream-json": "grok",
   "cursor-stream-json": "cursor-agent",
 };
+
+export function executableForDriver(driverId: string): string | undefined {
+  return EXECUTABLE_BY_DRIVER[driverId];
+}
 
 /** Cursor account default. Omit `--model` so cursor-agent picks it. */
 export const CURSOR_DEFAULT_MODEL = "auto";
@@ -192,10 +219,17 @@ function isolateGrokHome(cwd: string, origHome: string | undefined): string | nu
   } catch {
     return null;
   }
-  const src =
-    origHome !== undefined && origHome.trim().length > 0 ? origHome : join(homedir(), ".grok");
-  copyGrokCredentials(src, isolated);
-  writeIsolatedGrokConfig(isolated);
+  const ideate = existsSync(join(cwd, IDEATE_POLICY_MARKER));
+  if (!ideate) {
+    const src =
+      origHome !== undefined && origHome.trim().length > 0 ? origHome : join(homedir(), ".grok");
+    copyGrokCredentials(src, isolated);
+  }
+  writeIsolatedGrokConfig(isolated, ideate ? IDEATE_GROK_CONFIG : ISOLATED_GROK_CONFIG);
+  if (ideate) {
+    writeIsolatedGrokSandbox(isolated);
+    writeIsolatedTextFile(join(isolated, "requirements.toml"), IDEATE_GROK_REQUIREMENTS);
+  }
   return isolated;
 }
 
@@ -219,9 +253,19 @@ function copyGrokCredentials(srcDir: string, dstDir: string): void {
   }
 }
 
-function writeIsolatedGrokConfig(isolated: string): void {
-  const path = join(isolated, "config.toml");
-  const data = Buffer.from(ISOLATED_GROK_CONFIG, "utf8");
+function writeIsolatedGrokSandbox(isolated: string): void {
+  writeIsolatedTextFile(join(isolated, "sandbox.toml"), IDEATE_GROK_SANDBOX);
+}
+
+function writeIsolatedGrokConfig(
+  isolated: string,
+  contents: string = ISOLATED_GROK_CONFIG,
+): void {
+  writeIsolatedTextFile(join(isolated, "config.toml"), contents);
+}
+
+function writeIsolatedTextFile(path: string, contents: string): void {
+  const data = Buffer.from(contents, "utf8");
   try {
     const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     try {
@@ -423,6 +467,190 @@ function buildInvocation(
     default: {
       throw errors.usage(`unsupported driver "${driverId}" for review`);
     }
+  }
+}
+
+function buildIdeateInvocation(
+  agent: AgentRecord,
+  opts: {
+    prompt: string;
+    workspace: string;
+    files: ReturnType<typeof prepareIdeateWorkspace>;
+    probe: boolean;
+  },
+): DriverInvocation {
+  const sel = agent.driverSelection;
+  const driverId = sel.driverId;
+  const { prompt, workspace, files, probe } = opts;
+  switch (driverId) {
+    case "claude-stream-json": {
+      if (sel.options.route !== "cfuse") {
+        throw errors.usage(
+          `ideate only supports the cfuse route for claude-stream-json (got "${sel.options.route}")`,
+        );
+      }
+      return {
+        argv: [
+          "cfuse",
+          "--print",
+          "--verbose",
+          "--output-format",
+          "stream-json",
+          "--include-partial-messages",
+          "--safe-mode",
+          "--disable-slash-commands",
+          "--no-chrome",
+          "--permission-mode",
+          "plan",
+          "--tools",
+          "",
+          "--disallowedTools",
+          "Bash",
+          "Edit",
+          "Write",
+          "--strict-mcp-config",
+          "--mcp-config",
+          files.claudeMcp,
+        ],
+        promptStdin: true,
+      };
+    }
+    case "kimi-stream-json": {
+      // Headless print mode is -p. Local kimi 0.41.0 rejects --prompt with
+      // --plan / --auto / -y. Plan-mode restriction is isolated config
+      // `default_plan_mode = true` plus --agent-file tools: [].
+      const argv = [
+        "-m",
+        agent.modelId,
+        "-p",
+        prompt,
+        "--output-format",
+        "stream-json",
+        "--agent-file",
+        files.kimiAgent,
+        "--skills-dir",
+        files.kimiSkills,
+      ];
+      assertArgvSafe(argv);
+      return { argv, promptStdin: false };
+    }
+    case "grok-stream-json": {
+      const argv = ["-m", agent.modelId];
+      if (probe) {
+        argv.push("--output-format", "json");
+      } else {
+        argv.push(
+          "--output-format",
+          "streaming-messages-json",
+          "--include-partial-messages",
+        );
+      }
+      argv.push(
+        "-p",
+        prompt,
+        "--permission-mode",
+        "plan",
+        "--sandbox",
+        IDEATE_GROK_SANDBOX_PROFILE,
+        "--tools",
+        IDEATE_GROK_TOOLS,
+        "--disallowed-tools",
+        IDEATE_GROK_DISALLOWED_TOOLS,
+      );
+      for (const rule of IDEATE_GROK_DENY_RULES) {
+        argv.push("--deny", rule);
+      }
+      argv.push("--disable-web-search", "--no-subagents");
+      if (probe) argv.push("--max-turns", "1", "--reasoning-effort", "low");
+      argv.push("--cwd", workspace, "--leader-socket", grokLeaderSocket(workspace));
+      assertArgvSafe(argv);
+      return { argv, promptStdin: false };
+    }
+    case "cursor-stream-json": {
+      const argv = [
+        "--print",
+        "--output-format",
+        probe ? "json" : "stream-json",
+        "--mode",
+        "ask",
+        "--sandbox",
+        "enabled",
+        "--trust",
+      ];
+      if (!probe) argv.splice(3, 0, "--stream-partial-output");
+      if (!isCursorDefaultModel(agent.modelId)) argv.push("--model", agent.modelId);
+      argv.push("--workspace", workspace);
+      return { argv, promptStdin: true };
+    }
+    case "codex-app-server": {
+      const lastMessageFile = join(workspace, ".last-message.md");
+      const argv = ["exec", "-s", "read-only", "--ignore-user-config", "--skip-git-repo-check", "--json"];
+      if (!isCodexDefaultModel(agent.modelId)) argv.push("-m", agent.modelId);
+      argv.push("-o", lastMessageFile, "-");
+      return { argv, promptStdin: true, lastMessageFile };
+    }
+    default: {
+      throw errors.usage(
+        `driver "${driverId}" has no verified restricted ideate invocation; refusing to spawn`,
+      );
+    }
+  }
+}
+
+export function isCodexDefaultModel(modelId: string): boolean {
+  const id = modelId.trim().toLowerCase();
+  return id === "default" || id === "auto" || id === "configured";
+}
+
+/** Restricted discussion spawn: real plan/sandbox/deny-tools + isolated config. */
+export function buildIdeateSpawnSpec(
+  agent: AgentRecord,
+  opts: {
+    attemptId: string;
+    workspace: string;
+    prompt: string;
+    env?: NodeJS.ProcessEnv;
+    probe?: boolean;
+  },
+): AttemptSpec {
+  const { attemptId, workspace, prompt } = opts;
+  const env = opts.env ?? process.env;
+  const driverId = agent.driverSelection.driverId;
+  const exeName = EXECUTABLE_BY_DRIVER[driverId];
+  if (exeName === undefined) {
+    throw errors.usage(
+      `driver "${driverId}" has no verified restricted ideate invocation; refusing to spawn`,
+    );
+  }
+  const files = prepareIdeateWorkspace(workspace);
+  const auth = prepareIdeateAuthHome(driverId, env);
+  try {
+    const executable = resolveExecutable(exeName, env);
+    const invocation = buildIdeateInvocation(agent, {
+      prompt,
+      workspace,
+      files,
+      probe: opts.probe === true,
+    });
+    assertIdeateRestrictedArgv(invocation.argv, driverId);
+    const envOverlay = ideateEnvOverlay(driverId, workspace, auth?.dir ?? null);
+    assertIdeateIsolatedEnv(envOverlay, driverId, workspace);
+    return {
+      attemptId,
+      agentId: agent.id,
+      agentName: agent.name,
+      driverId,
+      modelId: agent.modelId,
+      executable,
+      cwd: workspace,
+      prompt,
+      envOverlay,
+      ephemeralHome: auth?.dir,
+      ...invocation,
+    };
+  } catch (error) {
+    disposeIdeateAuthHome(auth?.dir);
+    throw error;
   }
 }
 

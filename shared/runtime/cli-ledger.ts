@@ -24,6 +24,37 @@ export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
 export const FINDING_SOURCES = ["consensus", "unique", "unknown"] as const;
 export type FindingSource = (typeof FINDING_SOURCES)[number];
 
+export const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/;
+export const findingVerificationSchema = z
+  .object({
+    outcome: z.enum(["verified_closed", "still_open", "not_evaluated"]),
+    candidateSha: z.string().regex(FULL_COMMIT_SHA),
+    runId: z.string().min(1),
+    attemptId: z.string().min(1),
+    reviewer: z.string().min(1).max(120),
+    method: z.enum(["regression_test", "code_trace", "not_evaluated"]),
+    reason: z.string().trim().min(1).max(2000),
+    evidence: z.string().trim().min(1).max(4000),
+    command: z.string().trim().min(1).max(2000).optional(),
+    locations: z
+      .array(z.string().regex(/.+:\d+$/))
+      .min(1)
+      .max(32)
+      .optional(),
+    runComplete: z.boolean(),
+  })
+  .strict();
+export type FindingVerification = z.infer<typeof findingVerificationSchema>;
+
+export const findingRepairClaimSchema = z
+  .object({
+    candidateSha: z.string().regex(FULL_COMMIT_SHA).nullable(),
+    runId: z.string().min(1),
+    at: z.string().min(1),
+  })
+  .strict();
+export type FindingRepairClaim = z.infer<typeof findingRepairClaimSchema>;
+
 export const ledgerFindingSchema = z
   .object({
     id: z.string().min(1).max(160),
@@ -34,9 +65,46 @@ export const ledgerFindingSchema = z
     source: z.enum(FINDING_SOURCES),
     reviewer: z.string().max(120).nullable(),
     files: z.array(z.string().min(1).max(400)).max(32),
+    repairClaim: findingRepairClaimSchema.optional(),
+    verification: findingVerificationSchema.optional(),
   })
   .strict();
 export type LedgerFinding = z.infer<typeof ledgerFindingSchema>;
+
+/** Legacy closed is a historical claim, never proof of a verified resolution. */
+export function isFindingVerifiedClosed(row: LedgerFinding, sha?: string | null): boolean {
+  const parsed = findingVerificationSchema.safeParse(row.verification);
+  if (!parsed.success || row.status !== "closed") return false;
+  const verification = parsed.data;
+  return (
+    verification.outcome === "verified_closed" &&
+    verification.runComplete &&
+    verification.method !== "not_evaluated" &&
+    (verification.method === "regression_test"
+      ? !!verification.command
+      : !!verification.locations?.length) &&
+    (!row.repairClaim || row.repairClaim.candidateSha === verification.candidateSha) &&
+    (sha === undefined || sha === verification.candidateSha)
+  );
+}
+
+export function isFindingBlocking(row: LedgerFinding, sha?: string | null): boolean {
+  return (
+    (row.severity === "critical" || row.severity === "major") &&
+    row.status !== "accepted" &&
+    !isFindingVerifiedClosed(row, sha)
+  );
+}
+
+export function findingStatusLabel(row: LedgerFinding, sha?: string | null): string {
+  if (row.status === "accepted") return "接受不修";
+  if (isFindingVerifiedClosed(row, sha)) return "已验证解决";
+  if (row.status === "closed") return row.verification ? "待验证当前提交" : "历史未验证";
+  if (row.verification?.outcome === "still_open") return "验证仍成立";
+  if (row.repairClaim) return "声明已修复 · 待验证";
+  if (row.status === "regress") return "回归";
+  return "未解决";
+}
 
 export const findingsFileSchema = z
   .object({
@@ -96,6 +164,8 @@ export const landingRecordSchema = z
     parentSha: z.string().nullable(),
     candidateSha: z.string().nullable(),
     closed: z.array(z.string().min(1).max(160)).max(32),
+    /** New landings carry repair claims; legacy `closed` is also claim-only. */
+    claimed: z.array(z.string().min(1).max(160)).max(32).optional(),
     runId: z.string().min(1),
     pushed: z.boolean(),
   })

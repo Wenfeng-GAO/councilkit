@@ -68,6 +68,8 @@ import { diagnosticsRoutes } from "../../runtime-host/routes/diagnostics";
 import { healthRoutes } from "../../runtime-host/routes/health";
 import { installationRoutes } from "../../runtime-host/routes/installations";
 import { modelRoutes } from "../../runtime-host/routes/models";
+import { productJuryRoutes } from "../../runtime-host/routes/product-jury";
+import { reviewJuryRoutes } from "../../runtime-host/routes/review-jury";
 import { scopeRoutes } from "../../runtime-host/routes/scopes";
 import { createScopeManager } from "../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../runtime-host/scopes/session-reconciler";
@@ -82,6 +84,7 @@ process.env.COUNCILKIT_MODE = "production";
  * developer's real ~/.config/councilkit. Honored only when COUNCILKIT_E2E=1
  * (playwright webServer). */
 export const E2E_CLI_RUN_ID = "ck-review-00000000-0000-4000-8000-0000000000e2";
+export const E2E_IDEATE_RUN_ID = "ck-ideate-00000000-0000-4000-8000-0000000000e2";
 if (process.env.COUNCILKIT_E2E === "1") {
   const home = mkdtempSync(join(tmpdir(), "ck-e2e-cli-"));
   process.env.COUNCILKIT_HOME = home;
@@ -110,6 +113,51 @@ if (process.env.COUNCILKIT_E2E === "1") {
     })}\n`,
   );
   writeFileSync(
+    join(home, "agents.json"),
+    JSON.stringify({
+      format: "councilkit-agents",
+      version: 1,
+      agents: [
+        {
+          id: "a",
+          name: "review-security",
+          personaPrompt: "Review",
+          modelId: "kimi-code/k3",
+          color: "#123456",
+          enabled: true,
+          driverSelection: { driverId: "kimi-stream-json", options: {} },
+        },
+        {
+          id: "ideate-product",
+          name: "ideate-product",
+          personaPrompt: "Product",
+          modelId: "grok-4.6",
+          color: "#38bdf8",
+          enabled: true,
+          driverSelection: { driverId: "grok-stream-json", options: {} },
+        },
+        {
+          id: "ideate-engineering",
+          name: "ideate-engineering",
+          personaPrompt: "Engineering",
+          modelId: "kimi-code/k3",
+          color: "#4ade80",
+          enabled: true,
+          driverSelection: { driverId: "kimi-stream-json", options: {} },
+        },
+        {
+          id: "ideate-challenger",
+          name: "ideate-challenger",
+          personaPrompt: "Challenge",
+          modelId: "gpt-6-astra",
+          color: "#f472b6",
+          enabled: true,
+          driverSelection: { driverId: "codex-app-server", options: {} },
+        },
+      ],
+    }),
+  );
+  writeFileSync(
     join(home, "councils.json"),
     `${JSON.stringify({
       format: "councilkit-councils",
@@ -125,7 +173,65 @@ if (process.env.COUNCILKIT_E2E === "1") {
           rounds: 1,
           reporterAgentId: "a",
         },
+        {
+          id: "product-jury",
+          name: "product-jury",
+          topic: "e2e-ideate",
+          background: "",
+          targetOutput: "",
+          agentIds: ["ideate-product", "ideate-engineering", "ideate-challenger"],
+          rounds: 1,
+          reporterAgentId: "ideate-challenger",
+        },
       ],
+    })}\n`,
+  );
+  const ideateDir = join(home, "runs", E2E_IDEATE_RUN_ID);
+  mkdirSync(ideateDir, { recursive: true });
+  writeFileSync(
+    join(ideateDir, "report.md"),
+    "# Product Ideate Report\n\n## 决策与范围\nE2E ideate fixture.\n",
+  );
+  writeFileSync(
+    join(ideateDir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "ideate.started",
+      version: 1,
+      runId: E2E_IDEATE_RUN_ID,
+      startedAt: "2026-09-07T00:00:00.000Z",
+      idea: "e2e-fixture-ideate",
+      background: "",
+      debateRounds: 1,
+      proposals: [],
+      debates: [],
+      aggregator: {
+        attemptId: "aggregate-final",
+        agentId: "a",
+        agentName: "ideate-product",
+        driverId: "grok-stream-json",
+        modelId: "grok-4.6",
+        stage: "aggregate",
+        round: 0,
+        proposalRef: "aggregate-final",
+      },
+    })}\n${JSON.stringify({
+      kind: "ideate.finished",
+      version: 1,
+      status: "completed",
+      endedAt: "2026-09-07T00:05:00.000Z",
+      incomplete: false,
+      integrity: {
+        plannedProposals: 0,
+        successfulProposals: 0,
+        plannedDebates: 0,
+        successfulDebates: 0,
+        configuredModels: 1,
+        successfulModels: 1,
+        incomplete: false,
+        degradedReasons: [],
+        contextTruncated: false,
+        failedSeats: [],
+      },
     })}\n`,
   );
 }
@@ -726,34 +832,69 @@ async function main(): Promise<void> {
         }
         const runDir = join(home, "runs", input.runId);
         mkdirSync(runDir, { recursive: true });
+        const ideate = input.action === "ideate";
         writeFileSync(
           join(runDir, "transcript.jsonl"),
-          `${JSON.stringify({
-            kind: "review.started",
-            version: 1,
-            runId: input.runId,
-            startedAt: new Date().toISOString(),
-            task: { task: "e2e-started-review" },
-            attempts: [],
-            aggregator: {
-              attemptId: "a",
-              agentId: "a",
-              agentName: "A",
-              driverId: "kimi-stream-json",
-              modelId: "kimi-code/k3",
-            },
-          })}\n`,
+          `${JSON.stringify(
+            ideate
+              ? {
+                  kind: "ideate.started",
+                  version: 1,
+                  runId: input.runId,
+                  startedAt: new Date().toISOString(),
+                  idea: "e2e-started-ideate",
+                  background: "",
+                  debateRounds: 1,
+                  proposals: [],
+                  debates: [],
+                  aggregator: {
+                    attemptId: "aggregate-final",
+                    agentId: "a",
+                    agentName: "ideate-product",
+                    driverId: "grok-stream-json",
+                    modelId: "grok-4.6",
+                    stage: "aggregate",
+                    round: 0,
+                    proposalRef: "aggregate-final",
+                  },
+                }
+              : {
+                  kind: "review.started",
+                  version: 1,
+                  runId: input.runId,
+                  startedAt: new Date().toISOString(),
+                  task: { task: "e2e-started-review" },
+                  attempts: [],
+                  aggregator: {
+                    attemptId: "a",
+                    agentId: "a",
+                    agentName: "A",
+                    driverId: "kimi-stream-json",
+                    modelId: "kimi-code/k3",
+                  },
+                },
+          )}\n`,
+        );
+        writeFileSync(
+          join(runDir, "report.md"),
+          ideate
+            ? "# Product Ideate Report\n\n## 决策与范围\nE2E started ideate.\n"
+            : "# Autonomous Review Report\n\nE2E started review.\n",
         );
         writeFileSync(
           join(runDir, "status.json"),
           `${JSON.stringify({
             version: 1,
             status: "running",
-            progress: { phase: "attempts", attempts: [], updatedAt: new Date().toISOString() },
+            progress: {
+              phase: ideate ? "proposing" : "attempts",
+              attempts: [],
+              updatedAt: new Date().toISOString(),
+            },
             pipeline: null,
           })}\n`,
         );
-        return { pid: 4242 };
+        return { pid: process.pid };
       },
     };
   }
@@ -765,6 +906,8 @@ async function main(): Promise<void> {
     ...withAckRecording(withEventStreamTracking(scopeRoutes(services))),
     ...diagnosticsRoutes(services),
     ...cliRunsRoutes(services),
+    ...reviewJuryRoutes(),
+    ...productJuryRoutes(),
     ...testRoutes(scopeManager, executions, profileProbe),
   ];
 

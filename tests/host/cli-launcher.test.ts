@@ -28,6 +28,47 @@ afterEach(() => {
 });
 
 describe("launchArgs", () => {
+  it("passes model choices as one JSON argument to the CLI", () => {
+    const reviewModels = {
+      models: [
+        {
+          modelId: "gpt-6-astra",
+          driverSelection: { driverId: "codex-app-server" as const, options: {} },
+        },
+      ],
+      aggregatorIndex: 0,
+    };
+    const args = launchArgs({
+      action: "review",
+      runId: RUN_ID,
+      logPath: "/tmp/test.log",
+      pr: "https://github.com/acme/repo/pull/1",
+      reviewModels,
+    });
+    expect(args.slice(-2)).toEqual(["--review-models", JSON.stringify(reviewModels)]);
+  });
+  it("passes ideate idea after -- so leading dashes stay positional", () => {
+    expect(
+      launchArgs({
+        action: "ideate",
+        runId: "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        logPath: "/tmp/x.log",
+        idea: "--not-a-flag idea",
+        background: "solo builder, two weeks",
+        debateRounds: 1,
+      }),
+    ).toEqual([
+      "ideate",
+      "--run-id",
+      "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "--debate-rounds",
+      "1",
+      "--background",
+      "solo builder, two weeks",
+      "--",
+      "--not-a-flag idea",
+    ]);
+  });
   it("passes --run-id so the Host handshake can pin the run directory", () => {
     expect(
       launchArgs({

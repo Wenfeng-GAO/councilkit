@@ -1,17 +1,21 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isFindingBlocking, isFindingVerifiedClosed } from "@shared/runtime/cli-ledger";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   againstDiffRange,
+  applyReviewerVerifications,
   classifyAgainstPrior,
   extractFindingsFromReport,
-  markFindingsClosed,
+  formatLedgerForPrompt,
+  markFindingsRepairClaimed,
   parsePlanDocument,
   persistFindingsFromReport,
   resolveClusterCloses,
 } from "../src/auto/ledger";
 import type { LedgerFinding } from "../src/auto/ledger";
+import type { AttemptResult } from "../src/auto/runner";
 
 const SAMPLE = `# Autonomous Review Report
 
@@ -114,9 +118,7 @@ describe("againstDiffRange", () => {
         currentSha: "40bae4580ee5f2de7c2157b79780ab30ac2d5dbd",
         fallback: "63d2f1a...c4722e7",
       }),
-    ).toBe(
-      "63d2f1a2d8ac73ca3e26176910a12d169a527a52...40bae4580ee5f2de7c2157b79780ab30ac2d5dbd",
-    );
+    ).toBe("63d2f1a2d8ac73ca3e26176910a12d169a527a52...40bae4580ee5f2de7c2157b79780ab30ac2d5dbd");
     expect(
       againstDiffRange({
         findingsSha: "abc",
@@ -124,14 +126,14 @@ describe("againstDiffRange", () => {
         fallback: "abc...def",
       }),
     ).toBe("abc...def");
-    expect(
-      againstDiffRange({ findingsSha: null, currentSha: "abc", fallback: "x...y" }),
-    ).toBe("x...y");
+    expect(againstDiffRange({ findingsSha: null, currentSha: "abc", fallback: "x...y" })).toBe(
+      "x...y",
+    );
   });
 });
 
 describe("ledger classify", () => {
-  it("marks missing prior open findings closed and rediscovered closed as regress", () => {
+  it("preserves missing coverage and treats rediscovered historical closes as open", () => {
     const prior = [
       finding({ id: "a--one", title: "one", status: "open" }),
       finding({ id: "b--two", title: "two", status: "closed" }),
@@ -142,8 +144,8 @@ describe("ledger classify", () => {
       finding({ id: "d--new", title: "brand new", status: "open" }),
     ];
     const classified = classifyAgainstPrior(prior, next);
-    expect(classified.find((row) => row.id === "a--one")?.status).toBe("closed");
-    expect(classified.find((row) => row.id === "b--two")?.status).toBe("regress");
+    expect(classified.find((row) => row.id === "a--one")?.status).toBe("open");
+    expect(classified.find((row) => row.id === "b--two")?.status).toBe("open");
     expect(classified.find((row) => row.id === "c--ok")?.status).toBe("accepted");
     expect(classified.find((row) => row.id === "d--new")?.status).toBe("open");
   });
@@ -159,20 +161,185 @@ describe("ledger classify", () => {
       finding({ id: "c--crit", title: "new leak", severity: "critical" }),
     ];
     expect(classifyAgainstPrior(prior, next).map((row) => `${row.severity}:${row.status}`)).toEqual(
-      ["critical:open", "major:regress", "minor:open"],
+      ["critical:open", "major:open", "minor:open"],
     );
   });
 
-  it("marks claimed closes on apply", () => {
+  it("records apply claims without resolving the finding", () => {
     const file = extractFindingsFromReport({
       markdown: SAMPLE,
       runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
       extractedAt: "2026-08-20T00:00:00.000Z",
     });
     const id = file.findings.find((row) => row.severity === "major")?.id ?? "";
-    const marked = markFindingsClosed(file, [id]);
-    expect(marked.findings.find((row) => row.id === id)?.status).toBe("closed");
-    expect(marked.findings.filter((row) => row.status === "open")).toHaveLength(2);
+    const marked = markFindingsRepairClaimed(file, [id], {
+      candidateSha: "a".repeat(40),
+      runId: file.runId,
+      at: file.extractedAt,
+    });
+    const row = marked.findings.find((row) => row.id === id);
+    if (!row) throw new Error("Expected claimed finding");
+    expect(row.status).toBe("open");
+    expect(row.repairClaim?.candidateSha).toBe("a".repeat(40));
+    expect(isFindingBlocking(row)).toBe(true);
+    expect(marked.findings.filter((row) => row.status === "open")).toHaveLength(3);
+  });
+
+  it.each(["misc--completed-eventlog", "F-1"])(
+    "reuses explicit ID %s without prefix growth or closure inference",
+    (id) => {
+      const prior = finding({
+        id,
+        title: "completed snapshot lost",
+        severity: "critical",
+      });
+      const next = finding({
+        id: "misc--misc-completed-eventlog",
+        title: "Changed phrasing entirely",
+        text: `\`${id}\` 仍成立，磁盘故障仍丢失正文`,
+        severity: "critical",
+      });
+      const rows = classifyAgainstPrior([prior], [next]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.id).toBe(prior.id);
+      expect(rows[0]?.status).toBe("open");
+    },
+  );
+});
+
+const CANDIDATE_SHA = "a".repeat(40);
+const assessment = (overrides: Record<string, unknown> = {}) => ({
+  findingId: "persist--lost",
+  candidateSha: CANDIDATE_SHA,
+  outcome: "verified_closed",
+  method: "regression_test",
+  command: "go test ./eventlog -run TestShortWrite",
+  reason: "短写反例现在返回错误且保留正文",
+  evidence: "TestShortWrite PASS; injected ENOSPC retains pending text",
+  ...overrides,
+});
+function reviewer(rows: unknown[], overrides: Partial<AttemptResult> = {}): AttemptResult {
+  return {
+    attemptId: "attempt-0",
+    agentId: "reviewer",
+    agentName: "independent reviewer",
+    driverId: "grok-stream-json",
+    modelId: "configured",
+    status: "success",
+    exitCode: 0,
+    output: `\`\`\`councilkit-findings\n${JSON.stringify(rows)}\n\`\`\``,
+    durationMs: 10,
+    workspace: "/isolated/reviewer",
+    ...overrides,
+  };
+}
+function verify(rows: unknown[], overrides: Record<string, unknown> = {}) {
+  const row = applyReviewerVerifications(
+    [finding({ id: "persist--lost", title: "Short write loses text" })],
+    {
+      sha: CANDIDATE_SHA,
+      runId: "ck-review-current",
+      complete: true,
+      attempts: [reviewer(rows)],
+      reportedFindings: [],
+      verifiedAttemptShas: { "attempt-0": CANDIDATE_SHA },
+      ...overrides,
+    },
+  )[0];
+  if (!row) throw new Error("Expected verified finding");
+  return row;
+}
+
+describe("independent finding verification", () => {
+  it("closes only an exact-ID, exact-SHA finding with independent complete evidence", () => {
+    const row = verify([assessment()]);
+    expect(isFindingVerifiedClosed(row, CANDIDATE_SHA)).toBe(true);
+    expect(row.verification?.attemptId).toBe("attempt-0");
+    expect(isFindingBlocking(row, "b".repeat(40))).toBe(true);
+  });
+  it("applying a previously verified finding invalidates the old proof even on its source review", () => {
+    const resolved = verify([assessment()]);
+    const file = {
+      version: 1 as const,
+      runId: "review",
+      extractedAt: "now",
+      sha: CANDIDATE_SHA,
+      againstRunId: null,
+      againstRange: null,
+      findings: [resolved],
+    };
+    const next = markFindingsRepairClaimed(file, [resolved.id], {
+      candidateSha: "b".repeat(40),
+      runId: "apply",
+      at: "later",
+    }).findings[0];
+    if (!next) throw new Error("Expected reapplied finding");
+    expect(formatLedgerForPrompt({ ...file, sha: "b".repeat(40) }, null)).toContain(
+      "待验证当前提交",
+    );
+    expect(formatLedgerForPrompt({ ...file, sha: null }, null)).toContain("待验证当前提交");
+    expect(next.verification).toBeUndefined();
+    expect(isFindingBlocking(next, file.sha)).toBe(true);
+    expect(isFindingVerifiedClosed(next, CANDIDATE_SHA)).toBe(false);
+  });
+  it.each([
+    { complete: false },
+    { sha: null },
+    { sha: "abc123" },
+    { verifiedAttemptShas: {} },
+    { attempts: [reviewer([assessment()], { status: "failure" })] },
+    { attempts: [reviewer([assessment()], { attemptId: "aggregator" })] },
+  ])("does not close on incomplete, unbound, failed or aggregator evidence: %j", (overrides) => {
+    expect(isFindingBlocking(verify([assessment()], overrides), CANDIDATE_SHA)).toBe(true);
+  });
+  it.each([
+    { candidateSha: "b".repeat(40) },
+    { findingId: "misc--persist--lost" },
+    { method: "not_evaluated" },
+    { command: "" },
+    { reason: "" },
+    { method: "code_trace", command: undefined },
+  ])("rejects mismatched or unqualified close: %j", (overrides) => {
+    expect(isFindingBlocking(verify([assessment(overrides)]), CANDIDATE_SHA)).toBe(true);
+  });
+  it("accepts an explicit source trace and records not_evaluated without closing", () => {
+    expect(
+      isFindingVerifiedClosed(
+        verify([
+          assessment({
+            method: "code_trace",
+            command: undefined,
+            locations: ["pkg/eventlog/log.go:42"],
+          }),
+        ]),
+      ),
+    ).toBe(true);
+    const row = verify([assessment({ outcome: "not_evaluated", method: "not_evaluated" })]);
+    expect(row.verification?.outcome).toBe("not_evaluated");
+    expect(isFindingBlocking(row)).toBe(true);
+  });
+  it("a still-open minority or current finding defeats closure", () => {
+    const contradicted = verify([assessment()], {
+      attempts: [
+        reviewer([assessment()]),
+        reviewer([assessment({ outcome: "still_open" })], { attemptId: "attempt-1" }),
+      ],
+    });
+    expect(contradicted.verification?.outcome).toBe("still_open");
+    expect(isFindingBlocking(contradicted)).toBe(true);
+    expect(
+      isFindingBlocking(
+        verify([assessment()], {
+          reportedFindings: [
+            finding({
+              id: "persist--lost",
+              title: "still loses text",
+              source: "unique",
+            }),
+          ],
+        }),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -223,5 +390,78 @@ describe("ledger persist", () => {
     const disk = JSON.parse(readFileSync(join(dir, "findings.json"), "utf8")) as typeof file;
     expect(disk.findings).toHaveLength(file.findings.length);
     expect(disk.sha).toBe("deadbeef");
+  });
+
+  it("a failed incremental review with no SHA or findings preserves every old blocker", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-failed-"));
+    dirs.push(dir);
+    const prior = extractFindingsFromReport({
+      markdown: SAMPLE,
+      runId: "prior",
+      extractedAt: "now",
+    });
+    const file = persistFindingsFromReport({
+      runDir: dir,
+      runId: "failed",
+      sha: null,
+      markdown: "# Autonomous Review Report\n\n- Status: failed\n\n---\n\nINCOMPLETE",
+      againstRunId: prior.runId,
+      prior,
+      attempts: [],
+      reviewComplete: false,
+    });
+    expect(file.findings).toEqual(prior.findings);
+    expect(file.findings.filter((row) => isFindingBlocking(row))).toHaveLength(2);
+  });
+
+  it("keeps serious independent findings omitted by an approving aggregator", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-minority-"));
+    dirs.push(dir);
+    const file = persistFindingsFromReport({
+      runDir: dir,
+      runId: "minority",
+      sha: CANDIDATE_SHA,
+      markdown: "# Autonomous Review Report\n\n---\n\n## 结论\napprove",
+      attempts: [
+        reviewer([], {
+          output:
+            "## Findings\n- [critical] pkg/log.go:42 — short write loses text\n\n## Verdict\nchanges-requested",
+        }),
+      ],
+      reviewComplete: true,
+    });
+    expect(file.findings).toHaveLength(1);
+    expect(file.findings[0]?.source).toBe("unique");
+    expect(file.findings[0]?.reviewer).toBe("independent reviewer");
+    const row = file.findings[0];
+    if (!row) throw new Error("Expected independent finding");
+    expect(isFindingBlocking(row)).toBe(true);
+  });
+
+  it("keeps the strongest independent severity and evidence when aggregation downgrades the same ID", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-downgrade-"));
+    dirs.push(dir);
+    const file = persistFindingsFromReport({
+      runDir: dir,
+      runId: "downgrade",
+      sha: CANDIDATE_SHA,
+      markdown:
+        "# Autonomous Review Report\n\n---\n\n## 共识发现\n- [minor] pkg/log.go:42 — short write loses text\n\n## 结论\napprove",
+      attempts: [
+        reviewer([], {
+          output:
+            "## Findings\n- [critical] pkg/log.go:42 — short write loses text\n  Injected ENOSPC destroys the only copy.\n\n## Verdict\nchanges-requested",
+        }),
+      ],
+      reviewComplete: true,
+    });
+    expect(file.findings).toHaveLength(1);
+    const row = file.findings[0];
+    if (!row) throw new Error("Expected independent finding");
+    expect(row.severity).toBe("critical");
+    expect(row.source).toBe("unique");
+    expect(row.reviewer).toBe("independent reviewer");
+    expect(row.text).toContain("ENOSPC destroys the only copy");
+    expect(isFindingBlocking(row, CANDIDATE_SHA)).toBe(true);
   });
 });

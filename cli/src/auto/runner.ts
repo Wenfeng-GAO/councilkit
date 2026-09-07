@@ -97,6 +97,8 @@ export interface SpawnInput {
   onActivity?: (lastActivity: string) => void;
   /** Observational live-transcript events; must not throw. */
   onLiveEvent?: (events: RawLiveEvent[]) => void;
+  /** Merged after driver isolation env (ideate home / sandbox). */
+  envOverlay?: NodeJS.ProcessEnv;
 }
 
 export interface SpawnOutput {
@@ -387,6 +389,7 @@ async function runOne(
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
       driverId: spec.driverId,
+      envOverlay: spec.envOverlay,
       onActivity: (hint) => {
         lastActivity = hint;
         opts.onActivity?.(spec.attemptId, hint);
@@ -558,7 +561,7 @@ export function defaultSpawn(
     try {
       child = spawnFn(input.executable, input.argv, {
         cwd: input.cwd,
-        env: spawnEnvForDriver(input.driverId, input.cwd),
+        env: { ...spawnEnvForDriver(input.driverId, input.cwd), ...input.envOverlay },
         shell: false,
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],

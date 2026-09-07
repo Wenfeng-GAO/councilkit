@@ -113,3 +113,16 @@ export function parseIntFlag(raw: string | undefined, fieldName: string): number
   }
   return n;
 }
+
+/** Non-negative integer, including 0 (used by `--debate-rounds`). */
+export function parseNonNegativeIntFlag(raw: string | undefined, fieldName: string): number {
+  if (raw === undefined) throw errors.usage(`--${fieldName} is required (a non-negative integer)`);
+  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+    throw errors.usage(`--${fieldName} must be a non-negative integer, got "${raw}"`);
+  }
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw errors.usage(`--${fieldName} must be a non-negative integer, got "${raw}"`);
+  }
+  return n;
+}

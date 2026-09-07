@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "kind": "councilkit-repair",
+  "source": {"runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prUrl": "https://github.com/Wenfeng-GAO/councilkit/pull/126"},
+  "findings": [{"id": "F-STABLE-CANCEL", "title": "取消后不得再次派发", "severity": "major", "rootCause": "F-STABLE-CANCEL", "invariant": "accepted cancel prevents a second dispatch", "evidence": "Cancel accepted while respawn is pending, then attempt 2 dispatches.", "files": ["runtime-host/drivers/claude-stream-json.ts"]}],
+  "constraints": {"invariants": ["accepted cancel prevents a second dispatch"], "forbidden": ["未经单独授权不得 push、合并 PR、访问生产或扩大修改范围。"], "acceptance": ["在同一候选 SHA 独立复审，验证取消时序反例。"], "deferred": []},
+  "convergence": {"maxFixRounds": 3, "repeatedRootCauseLimit": 2}
+}

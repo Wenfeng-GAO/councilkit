@@ -1,27 +1,31 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { FindingLedger } from "@/components/report/FindingLedger";
+import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import {
   FixPipeline,
   FixPlanDocument,
   formatCliActionError,
 } from "@/components/report/FixPipeline";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
+import { PrCaseSummary } from "@/components/report/PrCaseSummary";
+import { RepairExportCard } from "@/components/report/RepairExportCard";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
+import { ReviewRunHeader } from "@/components/report/ReviewRunHeader";
 import { SeatInspector } from "@/components/report/SeatInspector";
-import { SquadDocuments } from "@/components/report/SquadDocuments";
-import { SquadHandoffCard } from "@/components/report/SquadHandoffCard";
+import { SquadWorkspace } from "@/components/report/SquadWorkspace";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { cliRunNeedsPoll } from "@/lib/cli-run-status";
 import { buildFixFromReviewPrompt, buildReviewResumeCommand } from "@/lib/fix-prompt";
 import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
-import { buildPrComment, siblingRuns } from "@/lib/report-groups";
+import { buildPrComment } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import "@/styles/report.css";
+import "@/styles/review-live.css";
 
 type CopiedKind = "markdown" | "prompt" | "comment" | "apply" | "resume" | null;
 
@@ -67,6 +71,7 @@ export function ReportDetailPage() {
   const listQuery = useQuery({
     queryKey: ["cli-runs"],
     queryFn: () => client.listCliRuns(),
+    enabled: query.data?.kind === "review",
     retry: false,
   });
   const parsed = useMemo(
@@ -108,14 +113,20 @@ export function ReportDetailPage() {
     void copyText("comment", buildPrComment(query.data.title, parsed));
   };
 
-  const siblings = query.data && listQuery.data ? siblingRuns(listQuery.data.runs, query.data) : [];
+  const caseRuns = query.data?.reviewEvidence?.prUrl
+    ? (listQuery.data?.runs ?? []).filter(
+        (row) => row.reviewEvidence?.prUrl === query.data?.reviewEvidence?.prUrl,
+      )
+    : [];
   const failedSeats =
     query.data?.progress?.attempts.filter(
       (row) => row.role === "attempt" && row.status === "failure",
     ) ?? [];
   const isSquad = query.data?.kind === "squad";
+  const isIdeate = query.data?.kind === "ideate";
+  const reviewActions = !isSquad && !isIdeate;
   const resumeCommand =
-    query.data && !isSquad && failedSeats.length > 0 && query.data.status !== "running"
+    query.data && reviewActions && failedSeats.length > 0 && query.data.status !== "running"
       ? buildReviewResumeCommand(query.data.runId, query.data.title, query.data.markdown)
       : null;
   const showSeats =
@@ -140,7 +151,7 @@ export function ReportDetailPage() {
             <Button variant="ghost" onClick={copyMarkdown}>
               {copied === "markdown" ? "已复制" : "复制 Markdown"}
             </Button>
-            {isSquad ? null : (
+            {reviewActions ? (
               <>
                 <Button variant="ghost" onClick={copyComment} disabled={!parsed}>
                   {copied === "comment" ? "已复制评论" : "复制 PR 评论"}
@@ -162,12 +173,12 @@ export function ReportDetailPage() {
                   {copied === "prompt" ? "已复制 Prompt" : "复制修复 Prompt"}
                 </Button>
               </>
-            )}
+            ) : null}
           </div>
         ) : null}
       </div>
       {query.isPending ? <p className="text-sm text-muted">正在打开报告…</p> : null}
-      {query.isError ? (
+      {query.isError && !query.data ? (
         <EmptyState
           title={isHostUnreachableError(query.error) ? HOST_DOWN_TITLE : "找不到这份报告"}
           hint={
@@ -179,38 +190,32 @@ export function ReportDetailPage() {
       ) : null}
       {query.data ? (
         <>
+          {query.isError ? (
+            <output className="text-sm text-warn">
+              更新失败，当前显示上次成功读取的记录。
+              <button type="button" className="ml-2 underline" onClick={() => void query.refetch()}>
+                重新读取
+              </button>
+            </output>
+          ) : null}
           {query.data.truncated ? (
             <p className="text-sm text-warn">报告超过 2MB，已截断显示。</p>
           ) : null}
-          {siblings.length > 0 ? (
-            <p className="text-sm text-muted">
-              同 PR 还有 {siblings.length} 次审查
-              {siblings[0] ? (
-                <>
-                  {" · "}
-                  <Link
-                    to={`/reports/compare/${query.data.runId}/${siblings[0].runId}`}
-                    className="text-accent hover:underline"
-                  >
-                    与最近一次对比
-                  </Link>
-                </>
-              ) : null}
-            </p>
+          {query.data.kind === "review" ? (
+            <ReviewRunHeader run={query.data} verdict={parsed?.verdict ?? null} />
           ) : null}
+          {query.data.kind === "ideate" && query.data.ideateIntegrity ? (
+            <IdeateIntegrityCard integrity={query.data.ideateIntegrity} />
+          ) : null}
+          <PrCaseSummary runs={caseRuns} />
           {resumeCommand ? (
             <p className="text-sm text-warn">
               {failedSeats.length} 个席位失败。复制「重跑失败席」只重跑失败的
               Attempt，成功席会复用。
             </p>
           ) : null}
-          {query.data.kind === "squad" ? <SquadHandoffCard run={query.data} /> : null}
           {isSquad ? (
-            <SquadDocuments
-              documents={query.data.documents ?? []}
-              reportMarkdown={query.data.markdown}
-              reportTruncated={query.data.truncated}
-            />
+            <SquadWorkspace key={query.data.runId} run={query.data} onInspect={setInspectId} />
           ) : null}
           {query.data.kind === "review" && query.data.hasReport ? (
             <FixPipeline
@@ -229,7 +234,7 @@ export function ReportDetailPage() {
               onReReview={() => action.mutate("re-review")}
             />
           ) : null}
-          {showSeats && query.data.progress ? (
+          {!isSquad && showSeats && query.data.progress ? (
             <LiveReviewProgress run={query.data} onInspect={setInspectId} />
           ) : null}
           <FindingLedger run={query.data} />
@@ -245,16 +250,24 @@ export function ReportDetailPage() {
               <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />
             )
           ) : parsed ? (
-            <ReviewReportView
-              report={parsed}
-              liveAttempts={query.data.progress?.attempts ?? []}
-              onInspect={setInspectId}
-            />
+            <div id="review-report-body" className="scroll-mt-6">
+              <ReviewReportView
+                report={parsed}
+                liveAttempts={query.data.progress?.attempts ?? []}
+                onInspect={setInspectId}
+              />
+            </div>
           ) : (
-            <article className="border border-edge bg-surface px-5 py-5 sm:px-7 sm:py-6">
+            <article
+              id="review-report-body"
+              className="border border-edge bg-surface px-5 py-5 sm:px-7 sm:py-6"
+            >
               <SafeMarkdown variant="document" content={query.data.markdown} />
             </article>
           )}
+          {query.data.status !== "running" ? (
+            <RepairExportCard key={query.data.runId} run={query.data} />
+          ) : null}
           {query.data.progress ? (
             <SeatInspector
               open={inspectId !== null}

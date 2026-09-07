@@ -1,6 +1,6 @@
 # AGENTS.md — CouncilKit for coding agents
 
-CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `apply` / `fix` 命令）不经 Runtime Host 跑 agent，直接 spawn 全能力 agent 子进程，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md`。浏览器「立即修复」只是 Host spawn 同 checkout 的 `councilkit fix`。
+CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `ideate` / `apply` / `fix` 命令）不经 Runtime Host 跑 agent，直接 spawn agent 子进程。`review`/`apply`/`fix` 是全能力路径，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md`；`ideate` 是受限只读讨论，不修改用户项目。浏览器「立即修复」只是 Host spawn 同 checkout 的 `councilkit fix`。
 
 ## 前置
 
@@ -21,9 +21,10 @@ pnpm exec councilkit review <url> --json
 pnpm exec councilkit fix --run <ck-review-id> --json     # 方案陪审 → 一集群 apply → 对照账本复审
 pnpm exec councilkit apply --run <ck-review-id> --json   # 默认第一个未落地集群；grok + push
 pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪审
+pnpm exec councilkit ideate "一句话创意" --json            # 产品创意；默认 Council product-jury
 ```
 
-`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`；有 `cursor-agent` 时再加 `review-cursor`，model = `auto`）与 Council `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）。已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）。`--force` 先删 `pr-jury` 再重建。
+`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`；有 `cursor-agent` 时再加 `review-cursor`，model = `auto`）与 Council `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）。已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）。`--force` 先删 `pr-jury` 与 `product-jury` 再重建。PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 还要 PATH 有 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型（顶层 `config.toml` `model=`，否则 `models_cache.json`）。Council `product-jury` 的 Reporter 优先 Codex，已配置 Reporter 不静默换人。
 
 ```bash
 # 1. 自检 Host + 实时模型闭集（讨论 Run 才需要；review 不需要）

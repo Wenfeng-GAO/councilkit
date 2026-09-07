@@ -7,6 +7,7 @@ import {
   liveStateFromRecords,
   withLiveHeartbeats,
 } from "@shared/runtime/cli-run-progress";
+import { reviewModelsSchema } from "@shared/runtime/schemas";
 /**
  * `councilkit review` — N fully-autonomous agents independently review the same
  * task in isolated workspaces, then one of them (the Aggregator) synthesizes a
@@ -47,6 +48,7 @@ import {
 } from "../auto/ledger";
 import { LiveEventWriter, type RawLiveEvent } from "../auto/live-events";
 import { type LocalRepo, resolveLocalRepo } from "../auto/local-repo";
+import { reviewModelAgents } from "../auto/review-models";
 import {
   type AttemptResult,
   type RunAttemptsOutcome,
@@ -127,6 +129,7 @@ export async function runReview(
       flags: {
         json: { type: "boolean" },
         agents: { type: "string" },
+        "review-models": { type: "string" },
         aggregator: { type: "string" },
         council: { type: "string" },
         pr: { type: "string" },
@@ -197,13 +200,32 @@ export async function runReview(
   let aggregatorAgent: AgentRecord;
   let councilTopic: string | undefined;
 
+  const reviewModels =
+    values["review-models"] === undefined
+      ? undefined
+      : parseJsonFlag(values["review-models"] as string, reviewModelsSchema, "review-models");
   const defaultedCouncil =
-    values.council === undefined && values.agents === undefined && values.aggregator === undefined;
+    reviewModels === undefined &&
+    values.council === undefined &&
+    values.agents === undefined &&
+    values.aggregator === undefined;
   const councilRef = defaultedCouncil
     ? PR_JURY_COUNCIL_NAME
     : (values.council as string | undefined);
 
-  if (councilRef !== undefined) {
+  if (reviewModels) {
+    if (
+      values.council !== undefined ||
+      values.agents !== undefined ||
+      values.aggregator !== undefined
+    ) {
+      throw errors.usage(
+        "--review-models is mutually exclusive with --council/--agents/--aggregator",
+      );
+    }
+    attemptAgents = reviewModelAgents(reviewModels);
+    aggregatorAgent = attemptAgents[reviewModels.aggregatorIndex] as AgentRecord;
+  } else if (councilRef !== undefined) {
     if (values.agents !== undefined || values.aggregator !== undefined) {
       throw errors.usage("--council is mutually exclusive with --agents/--aggregator");
     }
@@ -220,9 +242,11 @@ export async function runReview(
     }
     councilTopic = council.topic.trim().length > 0 ? council.topic : undefined;
     task.councilTopic = councilTopic;
-    attemptAgents = council.agentIds.map((id) => store.getAgent(id));
-    aggregatorAgent = store.getAgent(council.reporterAgentId);
-    if (!attemptAgents.some((a) => a.id === aggregatorAgent.id)) {
+    attemptAgents = store.councilAgents(council);
+    aggregatorAgent = attemptAgents.find(
+      (agent) => agent.id === council.reporterAgentId,
+    ) as AgentRecord;
+    if (!aggregatorAgent) {
       throw errors.usage("council reporter (aggregator) is not among council agents");
     }
   } else {
@@ -354,6 +378,9 @@ export async function runReview(
     // Consistency is checked on stable IDs (not user-typed names) and on every
     // input that shapes the prompts — a mismatch would silently reuse outputs
     // produced for a different task.
+    if (JSON.stringify(started.reviewModels) !== JSON.stringify(reviewModels)) {
+      throw errors.usage("--review-models must match the resumed run's models and Aggregator");
+    }
     const priorAgentIds = started.attempts.map((a) => a.agentId);
     const nowAgentIds = attemptAgents.map((a) => a.id);
     if (
@@ -513,21 +540,24 @@ export async function runReview(
   process.on("SIGTERM", onSignal);
 
   // --- driver health probes (P1-1) -----------------------------------------
-  // Probe each DISTINCT driver involved in this run exactly once: every driver
+  // Probe each distinct Driver Selection + model exactly once: every model
   // a rerun attempt needs, plus the Aggregator's driver (aggregation ALWAYS
   // re-runs, even when every attempt was reused). Reused attempts are never
   // probed on their own account.
+  const probeKey = (a: AgentRecord) => JSON.stringify([a.driverSelection, a.modelId]);
+  const probeKeysByAgent = new Map(attemptAgents.map((agent) => [agent.id, probeKey(agent)]));
   const probeAgents = new Map<string, AgentRecord>();
   for (const a of rerunAgents) {
-    if (!probeAgents.has(a.driverSelection.driverId))
-      probeAgents.set(a.driverSelection.driverId, a);
+    if (!probeAgents.has(probeKey(a))) probeAgents.set(probeKey(a), a);
   }
-  probeAgents.set(aggregatorAgent.driverSelection.driverId, aggregatorAgent);
+  probeAgents.set(probeKey(aggregatorAgent), aggregatorAgent);
 
   const probeResults: DriverProbeRecord[] = [];
   const probeCwd = join(runDir, "probe");
   mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
-  for (const [driverId, probeAgent] of probeAgents) {
+  const probeByModel = new Map<string, DriverProbeRecord>();
+  for (const [key, probeAgent] of probeAgents) {
+    const driverId = probeAgent.driverSelection.driverId;
     const spec = buildProbeSpec(probeAgent, {
       probeId: `probe-${driverId}`,
       cwd: probeCwd,
@@ -545,16 +575,17 @@ export async function runReview(
       durationMs: result.durationMs,
       failure: result.failure ?? null,
     });
+    probeByModel.set(key, probeResults[probeResults.length - 1] as DriverProbeRecord);
     out.progress(
       `  probe ${driverId} (${probeAgent.modelId}) -> ${result.status === "success" ? "ok" : "unreachable"}`,
     );
   }
-  const probeByDriver = new Map(probeResults.map((r) => [r.driverId, r]));
 
   const transcript: ReviewTranscriptRecord[] = [...priorRecords];
   if (resumeRaw === undefined) {
     const startedRecord: ReviewStartedRecord = {
       kind: "review.started",
+      ...(reviewModels ? { reviewModels } : {}),
       version: 1,
       runId,
       startedAt,
@@ -634,7 +665,7 @@ export async function runReview(
   // has one).
   const presolved: AttemptResult[] = [...reusedByAttemptId.values()];
   for (const spec of rerunSpecs) {
-    const probe = probeByDriver.get(spec.driverId);
+    const probe = probeByModel.get(probeKeysByAgent.get(spec.agentId) ?? "");
     if (probe === undefined || probe.status === "success") continue;
     const synthetic: AttemptResult = {
       attemptId: spec.attemptId,
@@ -656,14 +687,14 @@ export async function runReview(
     recordAttemptFinished(synthetic);
   }
   const runnableSpecs = rerunSpecs.filter(
-    (s) => probeByDriver.get(s.driverId)?.status === "success",
+    (s) => probeByModel.get(probeKeysByAgent.get(s.agentId) ?? "")?.status === "success",
   );
 
   let outcome: ReviewOutcome;
   try {
     // Aggregator driver unreachable → the whole run aborts BEFORE any attempt
     // spawn or workspace creation: exit 3, deterministic INCOMPLETE report.
-    const aggProbe = probeByDriver.get(aggregatorAgent.driverSelection.driverId);
+    const aggProbe = probeByModel.get(probeKey(aggregatorAgent));
     if (aggProbe === undefined || aggProbe.status !== "success") {
       // Attempts whose own driver probed OK never run either (the run aborts
       // before the runner): record them as CANCELLED so every attempt has a
@@ -1225,23 +1256,6 @@ async function finalize(
       message: error instanceof Error ? error.message : "canonical report write failed",
     };
   }
-  if (ioFailure === undefined) {
-    try {
-      persistFindingsFromReport({
-        runDir: p.runDir,
-        runId: p.runId,
-        markdown,
-        sha: p.reviewedSha,
-        againstRunId: p.task.against ?? null,
-        againstRange: p.task.againstRange ?? null,
-        prior: p.task.against
-          ? loadAgainstContext(join(dirname(p.runDir), p.task.against), p.task.against).findings
-          : null,
-      });
-    } catch {
-      // Ledger is derived from report.md; a sidecar write must not fail the review.
-    }
-  }
   if (p.outPath !== undefined && ioFailure === undefined) {
     try {
       writeReviewReportCopy(p.outPath, markdown);
@@ -1310,6 +1324,62 @@ async function finalize(
       };
       outcomeFields = computeOutcome(ioFailure);
     }
+  }
+
+  // Closing a finding needs a complete durable review, not just a rendered
+  // Aggregator paragraph. Check the original reviewer checkout after execution;
+  // a claimed SHA or a modified tracked tree cannot certify this candidate.
+  const verifiedAttemptShas: Record<string, string> = {};
+  if (p.reviewedSha && outcomeFields.status === "completed" && !outcomeFields.incomplete) {
+    for (const attempt of results) {
+      if (attempt.status !== "success" || !attempt.output.includes("```councilkit-findings"))
+        continue;
+      try {
+        const head = await p.runCommand({
+          executable: "git",
+          argv: ["rev-parse", "HEAD"],
+          cwd: attempt.workspace,
+          env: process.env,
+          timeoutMs: 10_000,
+        });
+        const clean = await p.runCommand({
+          executable: "git",
+          argv: ["diff", "--quiet", "HEAD", "--"],
+          cwd: attempt.workspace,
+          env: process.env,
+          timeoutMs: 10_000,
+        });
+        if (head.exitCode === 0 && head.stdout.trim() === p.reviewedSha && clean.exitCode === 0) {
+          verifiedAttemptShas[attempt.attemptId] = p.reviewedSha;
+        }
+      } catch {
+        /* Missing checkout or unavailable Git leaves the finding unverified. */
+      }
+    }
+  }
+  try {
+    persistFindingsFromReport({
+      runDir: p.runDir,
+      runId: p.runId,
+      markdown,
+      sha: p.reviewedSha,
+      againstRunId: p.task.against ?? null,
+      againstRange: p.task.againstRange ?? null,
+      prior: p.task.against
+        ? loadAgainstContext(join(dirname(p.runDir), p.task.against), p.task.against).findings
+        : null,
+      attempts: results,
+      verifiedAttemptShas,
+      reviewComplete:
+        outcomeFields.status === "completed" &&
+        !outcomeFields.incomplete &&
+        results.length > 0 &&
+        results.every((attempt) => attempt.status === "success") &&
+        aggregation?.status === "success",
+    });
+  } catch {
+    // No closure is materialized if the derived ledger cannot be written.
+    p.out.diag("Finding 账本写入失败；本轮不能提供结构化关闭证明。");
   }
 
   return {

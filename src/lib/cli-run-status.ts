@@ -16,6 +16,8 @@ const PHASE_LABEL = {
   snapshotting: "快照中",
   fixing: "修复轮",
   integrating: "集成中",
+  proposing: "独立提案中",
+  debating: "交叉辩论中",
 } as const;
 
 const SQUAD_PHASE_LABEL = {
