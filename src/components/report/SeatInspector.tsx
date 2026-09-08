@@ -3,6 +3,7 @@ import { type LiveEventSpan, displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import "@/styles/report.css";
 
 type AttemptRow = NonNullable<CliRunSummaryDto["progress"]>["attempts"][number];
@@ -34,7 +35,7 @@ export function SeatInspector({
   selectedId: string | null;
   onSelect: (attemptId: string) => void;
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const selected = attempts.find((row) => row.attemptId === selectedId) ?? attempts[0] ?? null;
   const [span, setSpan] = useState<LiveEventSpan | null>(null);
 
@@ -44,14 +45,14 @@ export function SeatInspector({
     const dialog = dialogRef.current;
     if (dialog) {
       const first = dialog.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
-      (first ?? dialog).focus();
+      (first ?? dialog).focus({ preventScroll: true });
     }
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prevOverflow;
       if (previouslyFocused && document.contains(previouslyFocused)) {
-        previouslyFocused.focus();
+        previouslyFocused.focus({ preventScroll: true });
       }
     };
   }, [open]);
@@ -89,7 +90,7 @@ export function SeatInspector({
       const focusable = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
       if (focusable.length === 0) {
         event.preventDefault();
-        dialog.focus();
+        dialog.focus({ preventScroll: true });
         return;
       }
       const first = focusable[0];
@@ -97,7 +98,7 @@ export function SeatInspector({
       const active = document.activeElement;
       if (!dialog.contains(active) || (event.shiftKey ? active === first : active === last)) {
         event.preventDefault();
-        (event.shiftKey ? last : first)?.focus();
+        (event.shiftKey ? last : first)?.focus({ preventScroll: true });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -106,14 +107,20 @@ export function SeatInspector({
 
   useEffect(() => {
     if (!open || selectedId === null) return;
-    const dialog = dialogRef.current;
-    const tab = dialog?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-    tab?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    const tabs = dialogRef.current?.querySelector(".ck-inspector-tabs");
+    const tab = dialogRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!(tabs instanceof HTMLElement) || !tab) return;
+    const left = tab.offsetLeft;
+    const right = left + tab.offsetWidth;
+    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+    else if (right > tabs.scrollLeft + tabs.clientWidth) {
+      tabs.scrollLeft = right - tabs.clientWidth;
+    }
   }, [open, selectedId]);
 
   if (!open || selected === null) return null;
 
-  return (
+  return createPortal(
     <div className="ck-inspector">
       <button
         type="button"
@@ -121,9 +128,9 @@ export function SeatInspector({
         aria-label="关闭过程"
         onClick={onClose}
       />
-      <dialog
+      <div
         ref={dialogRef}
-        open
+        role="dialog"
         aria-modal="true"
         aria-labelledby="ck-inspector-title"
         tabIndex={-1}
@@ -206,8 +213,9 @@ export function SeatInspector({
           className="ck-inspector-body"
           onTimeline={setSpan}
         />
-      </dialog>
-    </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

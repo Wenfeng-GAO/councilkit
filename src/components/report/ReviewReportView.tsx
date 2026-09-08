@@ -38,8 +38,15 @@ export function ReviewReportView({
 
   useEffect(() => {
     if (report.sections.length === 0) return;
+    const root = document.getElementById("review-report-body");
     const nodes = report.sections
-      .map((section) => document.getElementById(section.id))
+      .map((section) => {
+        if (root) {
+          const scoped = root.querySelector(`#${CSS.escape(section.id)}`);
+          if (scoped instanceof HTMLElement) return scoped;
+        }
+        return document.getElementById(section.id);
+      })
       .filter((node): node is HTMLElement => node !== null);
     if (nodes.length === 0) return;
     const observer = new IntersectionObserver(

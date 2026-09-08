@@ -465,8 +465,7 @@
   cursor: pointer;
 }
 
-dialog.ck-inspector-panel,
-.ck-inspector-panel[open] {
+.ck-inspector-panel {
   position: absolute;
   top: 0;
   right: 0;
@@ -651,9 +650,12 @@ dialog.ck-inspector-panel,
   }
 }
 
+.ck-report details:not([open]) > *:not(summary) {
+  display: none;
+}
+
 @media (max-width: 640px) {
-  dialog.ck-inspector-panel,
-  .ck-inspector-panel[open] {
+  .ck-inspector-panel {
     top: auto;
     left: 0;
     height: min(92vh, 100%);

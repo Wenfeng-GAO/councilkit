@@ -97,6 +97,8 @@ test("审查工作台分开统计 Aggregator，过程读取失败可恢复，手
   failLive = false;
   await expect(page.getByText("正在验证短帧事件。", { exact: true })).toBeVisible();
   await expect(page.getByText(/过程读取失败/)).toHaveCount(0);
+  await expect(page.locator("main .ck-inspector")).toHaveCount(0);
+  await expect(page.locator("body > .ck-inspector")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
