@@ -12,6 +12,7 @@ test("有 fixture 时能点进报告并看到标题；脚本标签保持为文�
   await page.goto("/reports");
   const heading = page.getByRole("heading", { name: "审查与报告" });
   await expect(heading).toBeVisible();
+  await page.getByRole("button", { name: /全部案件/ }).click();
   const fixture = page.getByRole("link", { name: /e2e-fixture-review/ });
   if ((await fixture.count()) === 0) {
     // reuseExistingServer 时本机 Host 可能没有 e2e fixture。
@@ -31,6 +32,7 @@ test("有 fixture 时能点进报告并看到标题；脚本标签保持为文�
 
 test("已有 CLI 报告时详情页能复制 apply 命令", async ({ page }) => {
   await page.goto("/reports");
+  await page.getByRole("button", { name: /全部案件/ }).click();
   const reportLink = page.locator('a[href^="/reports/ck-review-"]').first();
   if ((await reportLink.count()) === 0) return;
   await reportLink.click();
@@ -72,11 +74,14 @@ test("开始审查提交无效 URL 留在 /reports 并显示错误", async ({ pa
   await expect(page.getByRole("alert")).toBeVisible();
 });
 
-test("/reports 有创意讨论入口和筛选", async ({ page }) => {
+test("/reports 默认是案件筛选，创意在独立页", async ({ page }) => {
   await page.goto("/reports");
-  await expect(page.getByRole("heading", { name: "讨论产品创意" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "开始讨论" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /创意/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "审查与报告" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "讨论产品创意" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /需要处理/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始讨论" })).toHaveCount(0);
+  await page.getByRole("link", { name: "产品创意", exact: true }).click();
+  await expect(page).toHaveURL(/\/ideate$/);
 });
 
 test("创意 fixture 详情没有修复或 apply 动作", async ({ page }) => {
@@ -89,7 +94,7 @@ test("创意 fixture 详情没有修复或 apply 动作", async ({ page }) => {
 });
 
 test("开始创意讨论后导航到 /reports/<ideate-runId>", async ({ page }) => {
-  await page.goto("/reports");
+  await page.goto("/ideate");
   await expect(page.getByRole("button", { name: "开始讨论" })).toBeDisabled();
   await page.getByLabel("一句话创意").fill("为独立开发者每周整理用户反馈");
   await expect(page.getByRole("button", { name: "开始讨论" })).toBeEnabled();

@@ -2,12 +2,21 @@ import { summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { Link } from "react-router-dom";
 
-export function PrCaseSummary({ runs }: { runs: readonly CliRunSummaryDto[] }) {
+export function PrCaseSummary({
+  runs,
+  variant = "full",
+}: {
+  runs: readonly CliRunSummaryDto[];
+  variant?: "full" | "inline";
+}) {
   const state = summarizePrCase(runs);
   if (!state.prUrl) return null;
+  const inline = variant === "inline";
   return (
     <div
-      className="mb-3 rounded border border-edge bg-surface px-4 py-3 text-sm"
+      className={
+        inline ? "ck-case-evidence" : "mb-3 rounded border border-edge bg-surface px-4 py-3 text-sm"
+      }
       aria-label="PR 持续工作台"
     >
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -22,7 +31,7 @@ export function PrCaseSummary({ runs }: { runs: readonly CliRunSummaryDto[] }) {
         </span>
         <span className="text-muted">未验证修复：{state.unverifiedFixCount ?? "未知"}</span>
       </div>
-      <p className="mt-2 text-fg">下一步：{state.nextAction}</p>
+      {inline ? null : <p className="mt-2 text-fg">下一步：{state.nextAction}</p>}
       {state.needsRecovery && state.baseline ? (
         <p className="mt-1 text-xs text-warn">
           最新运行未形成完整审查证据。保留上次基线；它不证明当前 PR 已通过。
@@ -54,9 +63,11 @@ export function PrCaseSummary({ runs }: { runs: readonly CliRunSummaryDto[] }) {
           </Link>
         ) : null}
       </div>
-      <p className="mt-2 text-xs text-muted">
-        运行完成表示证据已收集；PR 是否可交付仍需核对当前 SHA、重大项和验收。
-      </p>
+      {inline ? null : (
+        <p className="mt-2 text-xs text-muted">
+          运行完成表示证据已收集；PR 是否可交付仍需核对当前 SHA、重大项和验收。
+        </p>
+      )}
     </div>
   );
 }

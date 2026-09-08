@@ -1,4 +1,9 @@
-import { cliRunNeedsPoll, cliRunPhaseHeading, cliRunStatusPill } from "@/lib/cli-run-status";
+import {
+  cliRunNeedsPoll,
+  cliRunPhaseHeading,
+  cliRunStatusPill,
+  primaryRunStatus,
+} from "@/lib/cli-run-status";
 import { describe, expect, it } from "vitest";
 
 describe("cliRunStatusPill", () => {
@@ -30,6 +35,32 @@ describe("cliRunPhaseHeading", () => {
     expect(cliRunPhaseHeading("ideate", "running", "proposing")).toBe("独立提案中");
     expect(cliRunPhaseHeading("ideate", "running", "debating")).toBe("交叉辩论中");
     expect(cliRunPhaseHeading("ideate", "completed", "done")).toBe("已结束");
+  });
+});
+
+describe("primaryRunStatus", () => {
+  it("prefers pipeline and apply failure over stacked pills", () => {
+    expect(
+      primaryRunStatus({
+        kind: "review",
+        status: "running",
+        pipeline: { phase: "re-reviewing", applyStatus: null },
+      }),
+    ).toEqual({ tone: "info", text: "正在复审" });
+    expect(
+      primaryRunStatus({
+        kind: "review",
+        status: "completed",
+        pipeline: { phase: "done", applyStatus: "failure" },
+      }),
+    ).toEqual({ tone: "error", text: "修复失败" });
+    expect(
+      primaryRunStatus({
+        kind: "review",
+        status: "running",
+        progress: { phase: "aggregating" },
+      }),
+    ).toEqual({ tone: "info", text: "正在汇总" });
   });
 });
 

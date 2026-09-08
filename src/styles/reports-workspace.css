@@ -1,32 +1,53 @@
 /* Reports extends the existing parchment / brass workspace palette. */
-.ck-reports-workspace { max-width: 1180px; margin: 0 auto; padding: 44px 40px 24px; --review-accent: var(--color-brass); }
-.ck-reports-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
+.ck-reports-workspace { max-width: 1180px; margin: 0 auto; padding: 36px 40px 24px; --review-accent: var(--color-brass); }
+.ck-reports-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .ck-eyebrow { color: var(--color-brass); font: 10px var(--font-command); letter-spacing: .14em; }
-.ck-reports-header h1 { margin: 10px 0; color: var(--color-parchment); font-size: 32px; font-weight: 550; letter-spacing: -.035em; }
+.ck-reports-header h1 { margin: 0 0 8px; color: var(--color-parchment); font-size: 28px; font-weight: 550; letter-spacing: -.035em; }
 .ck-reports-description { color: #a2a8b1; font-size: 13px; }
 .ck-header-link { color: var(--color-parchment); font-size: 12px; border-bottom: 1px solid var(--color-brass-dim); padding: 10px 0; white-space: nowrap; }
 .ck-header-link span { margin-left: 20px; color: var(--color-brass); }
 .ck-review-composer { border: 1px solid #37342e; border-top: 2px solid var(--color-brass); border-radius: 6px; background: var(--color-surface); overflow: hidden; scroll-margin-top: 24px; }
-.ck-composer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 28px 20px; }
-.ck-composer-heading h2 { font-size: 20px; color: var(--color-parchment); font-weight: 550; margin-top: 7px; }
+.ck-review-composer .ck-eyebrow { display: none; }
+.ck-composer-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 22px 12px; }
+.ck-composer-heading h2 { font-size: 16px; color: var(--color-parchment); font-weight: 550; margin-top: 5px; }
 .ck-composer-note { color: var(--color-muted); font-size: 11px; }
-.ck-composer-fields { display: flex; flex-direction: column; gap: 22px; min-width: 0; padding: 0 28px 20px; }
+.ck-composer-fields { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 0 22px 14px; }
 .ck-composer-fields > label > input { background: #0f1216; font-family: var(--font-command); font-size: 13px; padding: 13px 14px; }
 .ck-composer-fields input:focus, .ck-composer-fields select:focus { border-color: var(--color-brass); }
 .ck-roster-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; color: #abb0b8; margin-bottom: 12px; }
 .ck-review-advanced > summary { font-size: 11px; }
-.ck-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--color-border); padding: 16px 28px; background: #181b20; }
+.ck-composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--color-border); padding: 12px 22px; background: #181b20; }
+.ck-jury-heading-actions { display: flex; align-items: center; gap: 16px; }
+.ck-default-jury[data-collapsed="true"] { padding-bottom: 2px; }
 .ck-composer-footer p { font-size: 11px; color: #a2a8b1; overflow-wrap: anywhere; }
 .ck-composer-footer .ck-start-button { background: var(--color-brass); color: #171410; padding: 11px 24px; flex-shrink: 0; font-weight: 650; }
 .ck-review-composer > [role="alert"] { padding: 16px 28px; border-top: 1px solid var(--color-border); }
 .ck-text-button { font-size: 11px; color: var(--color-brass); padding: 10px 0; white-space: nowrap; }
 .ck-text-button:hover:not(:disabled) { color: var(--color-parchment); }
 .ck-text-button:disabled { opacity: .5; cursor: wait; }
-.ck-report-library { margin-top: 38px; scroll-margin-top: 24px; }
+.ck-report-library { margin-top: 28px; scroll-margin-top: 24px; }
 .ck-library-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.ck-library-heading h2 { color: var(--color-parchment); font-size: 20px; margin-top: 8px; }
+.ck-library-heading h2 { color: var(--color-parchment); font-size: 20px; margin-top: 0; }
 .ck-library-heading h2 > span { font: 12px var(--font-command); color: var(--color-muted); margin-left: 10px; }
-.ck-library-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 22px 0 24px; border-bottom: 1px solid var(--color-border); }
+.ck-library-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 18px 0 0; border-bottom: 1px solid var(--color-border); }
+.ck-library-kinds { display: flex; gap: 14px; margin: 10px 0 20px; }
+.ck-library-kinds button { color: #a2a8b1; font-size: 11px; padding: 4px 0; }
+.ck-library-kinds button > span { font: 10px var(--font-command); color: var(--color-muted); margin-left: 6px; }
+.ck-library-kinds button[aria-pressed="true"] { color: var(--color-parchment); }
+.ck-library-aside { margin-top: 18px; font-size: 12px; }
+.ck-library-aside a { color: var(--color-brass); }
+.ck-case-card { border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface); padding: 16px 18px; }
+.ck-case-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.ck-case-card-title h3 { font-size: 14px; font-weight: 550; overflow-wrap: anywhere; }
+.ck-case-card-title h3 a { color: var(--color-parchment); }
+.ck-case-kinds { margin-top: 4px; color: var(--color-muted); font-size: 11px; }
+.ck-case-next { margin-top: 10px; color: #c7ccd3; font-size: 13px; }
+.ck-case-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; color: var(--color-muted); font-size: 11px; }
+.ck-case-actions { display: flex; align-items: center; gap: 16px; }
+.ck-case-actions a, .ck-case-actions button { color: var(--color-brass); font-size: 12px; }
+.ck-case-actions a:hover, .ck-case-actions button:hover { color: var(--color-parchment); }
+.ck-case-evidence { margin: 14px 0 10px; padding-top: 12px; border-top: 1px solid var(--color-border); font-size: 12px; }
+.ck-case-card .ck-run-list { margin-top: 10px; }
 .ck-library-toolbar > label { min-width: 190px; padding-bottom: 10px; }
 .ck-library-toolbar input { font-size: 11px; background: transparent; }
 .ck-library-filters { display: flex; gap: 20px; overflow-x: auto; align-self: stretch; }
@@ -58,9 +79,11 @@
   .ck-reports-header { margin-bottom: 24px; }
   .ck-reports-header h1 { font-size: 27px; }
   .ck-header-link, .ck-composer-note { display: none; }
-  .ck-composer-heading { padding: 20px 18px; }
-  .ck-composer-fields { padding: 0 18px 18px; }
-  .ck-composer-footer { padding: 16px 18px; align-items: stretch; flex-direction: column; gap: 12px; }
+  .ck-composer-heading { padding: 16px 18px 10px; }
+  .ck-composer-fields { padding: 0 18px 14px; }
+  .ck-composer-footer { padding: 12px 18px; align-items: stretch; flex-direction: column; gap: 12px; }
+  .ck-case-card-top, .ck-case-meta { flex-direction: column; align-items: stretch; gap: 8px; }
+  .ck-jury-heading-actions { gap: 12px; }
   .ck-run-row-top { flex-direction: column; align-items: stretch; gap: 8px; }
   .ck-run-meta { align-items: start; flex-direction: column-reverse; gap: 6px; }
   .ck-run-meta code { max-width: 100%; }

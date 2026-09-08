@@ -43,10 +43,11 @@ test("默认席位：下拉选择 Astra、保存并重新加载，审查仅使�
     });
   });
   await page.goto("/reports");
+  await expect(page.getByRole("heading", { name: "安全审查", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "调整席位", exact: true }).click();
   await expect(page.getByRole("heading", { name: "安全审查", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "自选模型", exact: true })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "模型 ID", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "调整席位", exact: true }).click();
   await expect(page.getByRole("button", { name: "开始审查", exact: true })).toBeDisabled();
   await page.locator("#jury-a-driver").selectOption("codex-app-server");
   await expect(page.getByRole("button", { name: "保存默认席位", exact: true })).toBeDisabled();
@@ -67,6 +68,7 @@ test("默认席位：下拉选择 Astra、保存并重新加载，审查仅使�
     ],
   });
   await page.reload();
+  await page.getByRole("button", { name: "调整席位", exact: true }).click();
   await expect(page.getByText("gpt-6-astra", { exact: true })).toBeVisible();
   await page.getByLabel("PR URL").fill("https://github.com/acme/repo/pull/1");
   await page.getByRole("button", { name: "开始审查", exact: true }).click();

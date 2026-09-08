@@ -1,5 +1,6 @@
 import { CompareReportsPage } from "@/app/pages/CompareReportsPage";
 import { HomePage } from "@/app/pages/HomePage";
+import { IdeatePage } from "@/app/pages/IdeatePage";
 import { NewRoomPage } from "@/app/pages/NewRoomPage";
 import { ReportDetailPage } from "@/app/pages/ReportDetailPage";
 import { ReportsPage } from "@/app/pages/ReportsPage";
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
   { path: "/rooms/:roomId", element: withShell(<RoomPage />) },
   { path: "/templates", element: withShell(templatesPage) },
   { path: "/settings", element: withShell(<SettingsPage />) },
+  { path: "/ideate", element: withShell(<IdeatePage />) },
   { path: "/reports", element: withShell(<ReportsPage />) },
   { path: "/reports/compare/:leftId/:rightId", element: withShell(<CompareReportsPage />) },
   { path: "/reports/:runId", element: withShell(<ReportDetailPage />) },

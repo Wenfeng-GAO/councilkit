@@ -1,11 +1,11 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { FindingLedger } from "@/components/report/FindingLedger";
-import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import {
   FixPipeline,
   FixPlanDocument,
   formatCliActionError,
 } from "@/components/report/FixPipeline";
+import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
 import { RepairExportCard } from "@/components/report/RepairExportCard";
@@ -142,8 +142,8 @@ export function ReportDetailPage() {
     <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-8 sm:px-8">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted">
-          <Link to="/reports" className="text-accent hover:underline">
-            ← CLI 报告
+          <Link to={isIdeate ? "/ideate" : "/reports"} className="text-accent hover:underline">
+            {isIdeate ? "← 产品创意" : "← CLI 报告"}
           </Link>
         </p>
         {query.data?.markdown ? (

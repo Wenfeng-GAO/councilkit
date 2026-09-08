@@ -133,6 +133,8 @@ pnpm exec councilkit ideate "一句话创意" --json                     # 产�
 
 #### `councilkit ideate` — 产品创意决策（不经 Host）
 
+浏览器从侧栏「产品创意」进入 `http://127.0.0.1:43127/ideate`，填写创意与背景、选择辩论轮次和席位后开始讨论。此入口独立于报告页；启动后打开实时过程和决策报告，最近讨论也可从产品创意页继续查看。新增 Host 接口后需重启同仓库 Host，浏览器刷新只更新前端。
+
 `init` 在 PATH 上发现 grok/kimi/codex 后写入 `ideate-product` / `ideate-engineering` / `ideate-challenger` 与 Council `product-jury`。`ideate-challenger` 还需要可发现的 Codex 模型（`~/.codex/config.toml` 顶层 `model=`，否则 `models_cache.json`）；仅 PATH 有 `codex` 不够。已配置 Reporter 不静默换人；默认优先 Codex，其次 product，再 engineering。`--force` 会同时重建 `pr-jury` 与 `product-jury`。
 
 ```bash

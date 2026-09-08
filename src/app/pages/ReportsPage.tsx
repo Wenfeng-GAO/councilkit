@@ -1,31 +1,35 @@
 import "@/styles/reports-workspace.css";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
-import { StartIdeateForm } from "@/components/report/StartIdeateForm";
 import { StartReviewForm } from "@/components/report/StartReviewForm";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { TextInput } from "@/components/ui/TextInput";
-import { cliRunNeedsPoll, cliRunStatusPill } from "@/lib/cli-run-status";
+import { cliRunNeedsPoll, primaryRunStatus } from "@/lib/cli-run-status";
 import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
-import { groupCliRuns } from "@/lib/report-groups";
+import {
+  caseNeedsAttention,
+  groupCliRuns,
+  isWorkspaceRun,
+  latestRun,
+  readableCaseTitle,
+  runHistoryLabel,
+  seatProgress,
+} from "@/lib/report-groups";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import { summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-const KIND_LABEL: Record<CliRunSummaryDto["kind"], string> = {
-  review: "审查",
-  discuss: "讨论",
-  squad: "工程班",
-  ideate: "创意",
-  unknown: "Run",
-};
+type StatusFilter = "attention" | "active" | "done" | "all";
+type KindFilter = "all" | "review" | "squad";
 
 export function ReportsPage() {
   const { client } = getAppRuntime();
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("attention");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const query = useQuery({
     queryKey: ["cli-runs"],
@@ -38,74 +42,124 @@ export function ReportsPage() {
   });
 
   const runs = query.data?.runs ?? [];
-  const filters = [
-    { id: "all", label: "全部报告", count: runs.length },
-    { id: "review", label: "PR 审查", count: runs.filter((run) => run.kind === "review").length },
-    { id: "ideate", label: "创意", count: runs.filter((run) => run.kind === "ideate").length },
-    { id: "squad", label: "工程班", count: runs.filter((run) => run.kind === "squad").length },
-    { id: "discuss", label: "讨论", count: runs.filter((run) => run.kind === "discuss").length },
+  const catalog = useMemo(() => groupCliRuns(runs), [runs]);
+  const queryText = search.trim().toLowerCase();
+  const workspaceCases = catalog.filter((group) => group.runs.some(isWorkspaceRun));
+  const ideateCount = runs.filter((run) => run.kind === "ideate").length;
+  const filtered = workspaceCases
+    .filter((group) => {
+      if (kindFilter === "review" && !group.runs.some((run) => run.kind === "review")) return false;
+      if (kindFilter === "squad" && !group.runs.some((run) => run.kind === "squad")) return false;
+      if (queryText) {
+        const blob = `${group.label} ${group.runs.map((run) => `${run.title} ${run.runId} ${run.reviewEvidence?.prUrl ?? ""}`).join(" ")}`;
+        return blob.toLowerCase().includes(queryText);
+      }
+      if (statusFilter === "active") {
+        return group.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline));
+      }
+      if (statusFilter === "done") {
+        return group.runs.every(
+          (run) => !cliRunNeedsPoll(run.status, run.pipeline) && run.status !== "failed",
+        );
+      }
+      if (statusFilter === "attention") return caseNeedsAttention(group.runs);
+      return true;
+    })
+    .sort((a, b) => {
+      const aActive = a.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline));
+      const bActive = b.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline));
+      if (aActive !== bActive) return aActive ? -1 : 1;
+      const aTime = latestRun(a.runs)?.startedAt ?? "";
+      const bTime = latestRun(b.runs)?.startedAt ?? "";
+      return bTime.localeCompare(aTime);
+    });
+  const searchedExtra =
+    queryText.length > 0
+      ? catalog.filter(
+          (group) =>
+            !group.runs.some(isWorkspaceRun) &&
+            `${group.label} ${group.runs.map((run) => `${run.title} ${run.runId}`).join(" ")}`
+              .toLowerCase()
+              .includes(queryText),
+        )
+      : [];
+  const visible = [...filtered, ...searchedExtra];
+
+  const statusFilters: { id: StatusFilter; label: string; count: number }[] = [
+    {
+      id: "attention",
+      label: "需要处理",
+      count: workspaceCases.filter((group) => caseNeedsAttention(group.runs)).length,
+    },
     {
       id: "active",
       label: "进行中",
-      count: runs.filter((run) => cliRunNeedsPoll(run.status, run.pipeline)).length,
+      count: workspaceCases.filter((group) =>
+        group.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline)),
+      ).length,
+    },
+    {
+      id: "done",
+      label: "已完成",
+      count: workspaceCases.filter((group) =>
+        group.runs.every(
+          (run) => !cliRunNeedsPoll(run.status, run.pipeline) && run.status !== "failed",
+        ),
+      ).length,
+    },
+    { id: "all", label: "全部案件", count: workspaceCases.length },
+  ];
+  const kindFilters: { id: KindFilter; label: string; count: number }[] = [
+    { id: "all", label: "审查与工程班", count: workspaceCases.length },
+    {
+      id: "review",
+      label: "审查",
+      count: workspaceCases.filter((group) => group.runs.some((run) => run.kind === "review"))
+        .length,
+    },
+    {
+      id: "squad",
+      label: "工程班",
+      count: workspaceCases.filter((group) => group.runs.some((run) => run.kind === "squad"))
+        .length,
     },
   ];
-  const filtered = runs.filter(
-    (run) =>
-      (filter === "all" ||
-        (filter === "active" ? cliRunNeedsPoll(run.status, run.pipeline) : run.kind === filter)) &&
-      `${run.title} ${run.runId} ${run.reviewEvidence?.prUrl ?? ""}`
-        .toLowerCase()
-        .includes(search.trim().toLowerCase()),
-  );
-  const groups = groupCliRuns(filtered);
-  const allGroups = new Map(groupCliRuns(runs).map((group) => [group.key, group.runs]));
 
   return (
     <div className="ck-reports-workspace">
       <header className="ck-reports-header">
         <div>
-          <p className="ck-eyebrow">COUNCILKIT / WORKSPACE</p>
           <h1>审查与报告</h1>
-          <p className="ck-reports-description">发起一次审查或产品创意讨论，或接着上次的结论继续。</p>
+          <p className="ck-reports-description">发起一次审查，或接着上次的结论继续。</p>
         </div>
-        <a className="ck-header-link" href="#report-library">
-          浏览报告 <span aria-hidden="true">↓</span>
-        </a>
       </header>
-      <div className="flex flex-col gap-6">
-        <StartReviewForm />
-        <StartIdeateForm />
-      </div>
+      <StartReviewForm />
       <section
         id="report-library"
         aria-labelledby="report-library-heading"
         className="ck-report-library"
       >
         <div className="ck-library-heading">
-          <div>
-            <p className="ck-eyebrow">REPORT LIBRARY</p>
-            <h2 id="report-library-heading">
-              报告记录 <span>{runs.length}</span>
-            </h2>
-          </div>
+          <h2 id="report-library-heading">
+            案件 <span>{workspaceCases.length}</span>
+          </h2>
           <button
             type="button"
             className="ck-text-button"
             disabled={query.isFetching}
             onClick={() => void query.refetch()}
           >
-            {query.isFetching ? "更新中…" : "刷新报告"}
+            {query.isFetching ? "更新中…" : "刷新"}
           </button>
         </div>
         <div className="ck-library-toolbar">
-          <div className="ck-library-filters" aria-label="报告类型">
-            {filters.map((item) => (
+          <div className="ck-library-filters" aria-label="案件状态">
+            {statusFilters.map((item) => (
               <button
                 key={item.id}
                 type="button"
-                aria-pressed={filter === item.id}
-                onClick={() => setFilter(item.id)}
+                aria-pressed={statusFilter === item.id}
+                onClick={() => setStatusFilter(item.id)}
               >
                 {item.label}
                 <span>{item.count}</span>
@@ -121,6 +175,19 @@ export function ReportsPage() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
+        <div className="ck-library-kinds" aria-label="案件类型">
+          {kindFilters.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={kindFilter === item.id}
+              onClick={() => setKindFilter(item.id)}
+            >
+              {item.label}
+              <span>{item.count}</span>
+            </button>
+          ))}
+        </div>
         {query.isPending ? <p className="text-sm text-muted">正在读取报告…</p> : null}
         {query.isError ? (
           <EmptyState
@@ -132,151 +199,155 @@ export function ReportsPage() {
             }
           />
         ) : null}
-        {query.isSuccess && query.data.runs.length === 0 ? (
+        {query.isSuccess && runs.length === 0 ? (
           <EmptyState
             title="第一份报告，从一个 PR 开始"
             hint="在上方粘贴 PR 链接，选择模型即可开始。"
           />
         ) : null}
-        {query.isSuccess && runs.length > 0 && groups.length === 0 ? (
-          <EmptyState title="没有找到匹配报告" hint="试试其他关键词，或切换报告类型。" />
+        {query.isSuccess && runs.length > 0 && visible.length === 0 ? (
+          <EmptyState
+            title={
+              statusFilter === "attention" && !queryText ? "没有需要处理的案件" : "没有找到匹配案件"
+            }
+            hint={
+              statusFilter === "attention" && !queryText
+                ? "进行中、失败或未决重大项会列在这里。"
+                : "试试其他关键词，或切换案件状态。"
+            }
+          />
         ) : null}
-        {query.isSuccess && groups.length > 0 ? (
+        {query.isSuccess && visible.length > 0 ? (
           <div className="ck-report-groups">
-            {groups.map((group) => (
-              <section key={group.key} className="ck-report-group">
-                <div className="ck-group-heading">
-                  <h3 title={group.label}>{readableGroupTitle(group.label)}</h3>
-                  <span>{group.runs.length} 份报告</span>
-                </div>
-                <PrCaseSummary runs={allGroups.get(group.key) ?? group.runs} />
-                <ul className="ck-run-list">
-                  {(expanded.has(group.key) ? group.runs : group.runs.slice(0, 3)).map((run) => (
-                    <li key={run.runId}>
-                      <RunRow run={run} />
-                    </li>
-                  ))}
-                </ul>
-                {group.runs.length > 3 ? (
-                  <button
-                    type="button"
-                    className="ck-show-history"
-                    aria-expanded={expanded.has(group.key)}
-                    onClick={() =>
-                      setExpanded((previous) => {
-                        const next = new Set(previous);
-                        if (next.has(group.key)) next.delete(group.key);
-                        else next.add(group.key);
-                        return next;
-                      })
-                    }
-                  >
-                    {expanded.has(group.key)
-                      ? "收起历史"
-                      : `展开其余 ${group.runs.length - 3} 份报告`}{" "}
-                    <span aria-hidden="true">{expanded.has(group.key) ? "−" : "+"}</span>
-                  </button>
-                ) : null}
-              </section>
+            {visible.map((group) => (
+              <CaseCard
+                key={group.key}
+                groupKey={group.key}
+                label={group.label}
+                runs={group.runs}
+                expanded={expanded.has(group.key)}
+                onToggle={() =>
+                  setExpanded((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(group.key)) next.delete(group.key);
+                    else next.add(group.key);
+                    return next;
+                  })
+                }
+              />
             ))}
           </div>
         ) : null}
+        {ideateCount > 0 ? (
+          <p className="ck-library-aside">
+            <Link to="/ideate">另有 {ideateCount} 条创意讨论</Link>
+          </p>
+        ) : null}
       </section>
-      <footer className="ck-reports-footnote">本机报告 · 数据保存在本地，运行中自动更新</footer>
+      <footer className="ck-reports-footnote">
+        本机报告 · 运行完成表示证据已收集；PR 是否可交付仍需核对当前 SHA、重大项和验收
+      </footer>
     </div>
   );
 }
 
-function runningPhaseHint(run: CliRunSummaryDto): string {
-  const phase = run.progress?.phase;
-  if (run.kind === "squad") {
-    switch (phase) {
-      case "briefing":
-        return " · 简报";
-      case "planning":
-        return " · 规划";
-      case "implementing":
-        return " · 实现";
-      case "auditing":
-        return " · 审计";
-      case "snapshotting":
-        return " · 快照";
-      case "reviewing":
-        return " · 评审";
-      case "fixing":
-        return " · 修复轮";
-      case "integrating":
-        return " · 集成";
-      default:
-        return "";
-    }
-  }
-  if (phase === "proposing") return " · 独立提案";
-  if (phase === "debating") return " · 交叉辩论";
-  if (phase === "aggregating" || phase === "plan-aggregating") return " · 正在汇总";
-  if (phase === "planning") return " · 起草方案";
-  if (phase === "plan-review") return " · 方案陪审";
-  if (phase === "applying") return " · 落地中";
-  if (phase === "re-reviewing") return " · 复审中";
-  return "";
-}
+function CaseCard({
+  groupKey,
+  label,
+  runs,
+  expanded,
+  onToggle,
+}: {
+  groupKey: string;
+  label: string;
+  runs: readonly CliRunSummaryDto[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const latest = latestRun(runs);
+  if (!latest) return null;
+  const pill = primaryRunStatus(latest);
+  const summary = summarizePrCase(runs);
+  const title = readableCaseTitle(label);
+  const kinds = [
+    runs.some((run) => run.kind === "review") ? "审查" : null,
+    runs.some((run) => run.kind === "squad") ? "工程班" : null,
+    runs.some((run) => run.kind === "ideate") ? "创意" : null,
+    runs.some((run) => run.kind === "discuss") ? "讨论" : null,
+  ].filter((item): item is string => item !== null);
+  const progress = seatProgress(latest);
 
-function RunRow({ run }: { run: CliRunSummaryDto }) {
-  const pill = cliRunStatusPill(run.kind, run.status);
   return (
-    <Link to={`/reports/${run.runId}`} className="ck-run-row">
-      <div className="ck-run-row-top">
-        <p className="truncate text-sm font-medium text-fg">{readableGroupTitle(run.title)}</p>
-        <div className="ck-run-status">
-          <StatusPill tone="muted" text={KIND_LABEL[run.kind]} />
-          <StatusPill tone={pill.tone} text={pill.text} />
-          {run.pipeline && run.pipeline.phase !== "done" ? (
-            <StatusPill tone="info" text="修复中" />
+    <article className="ck-case-card">
+      <div className="ck-case-card-top">
+        <div className="ck-case-card-title">
+          <h3 title={label}>
+            <Link to={`/reports/${latest.runId}`}>{title}</Link>
+          </h3>
+          <p className="ck-case-kinds">{kinds.join(" · ")}</p>
+        </div>
+        <StatusPill tone={pill.tone} text={pill.text} />
+      </div>
+      {summary.prUrl ? <p className="ck-case-next">下一步：{summary.nextAction}</p> : null}
+      <div className="ck-case-meta">
+        <span>
+          {progress ? `${progress} 席` : `${runs.length} 份记录`}
+          {latest.startedAt ? (
+            <>
+              {" · "}
+              <time dateTime={latest.startedAt}>{formatRunTime(latest.startedAt)}</time>
+            </>
           ) : null}
-          {run.pipeline?.applyStatus === "failure" ? (
-            <StatusPill tone="error" text="修复失败" />
-          ) : null}
-          {run.kind === "ideate" && run.ideateIntegrity?.incomplete ? (
-            <StatusPill tone="warn" text="降级" />
+        </span>
+        <div className="ck-case-actions">
+          <Link to={`/reports/${latest.runId}`}>打开</Link>
+          {runs.length > 1 ? (
+            <button type="button" aria-expanded={expanded} onClick={onToggle}>
+              {expanded ? "收起历史" : `历史 ${runs.length - 1}`}
+            </button>
           ) : null}
         </div>
       </div>
+      {expanded ? (
+        <>
+          <PrCaseSummary runs={runs} variant="inline" />
+          <ul className="ck-run-list">
+            {runs.map((run) => (
+              <li key={run.runId}>
+                <HistoryRow run={run} groupKey={groupKey} />
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </article>
+  );
+}
+
+function HistoryRow({ run, groupKey }: { run: CliRunSummaryDto; groupKey: string }) {
+  const pill = primaryRunStatus(run);
+  const progress = seatProgress(run);
+  return (
+    <Link to={`/reports/${run.runId}`} className="ck-run-row" title={run.runId}>
+      <div className="ck-run-row-top">
+        <p className="truncate text-sm font-medium text-fg">{runHistoryLabel(run, groupKey)}</p>
+        <StatusPill tone={pill.tone} text={pill.text} />
+      </div>
       <div className="ck-run-meta">
-        <code title={run.runId}>{run.runId}</code>
+        <span>{progress ? `${progress} 席` : "\u00a0"}</span>
         {run.startedAt ? (
-          <time dateTime={run.startedAt}>
-            {new Date(run.startedAt).toLocaleString("zh-CN", {
-              month: "short",
-              day: "numeric",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </time>
+          <time dateTime={run.startedAt}>{formatRunTime(run.startedAt)}</time>
         ) : null}
       </div>
-      {(run.status === "running" || run.status === "awaiting_orchestrator") && run.progress ? (
-        <p className="mt-2 text-xs text-info">
-          {
-            run.progress.attempts.filter(
-              (row) =>
-                row.status === "success" || row.status === "failure" || row.status === "cancelled",
-            ).length
-          }
-          /{run.progress.attempts.length} 席位已结束
-          {run.status === "awaiting_orchestrator" ? " · 等待编排" : runningPhaseHint(run)}
-        </p>
-      ) : null}
     </Link>
   );
 }
 
-function readableGroupTitle(label: string): string {
-  try {
-    const url = new URL(label);
-    const match = /^(.*)\/(?:pull|pull_requests)\/(\d+)\/?$/.exec(url.pathname);
-    if (match) return `${match[1]?.replace(/^\//, "")}  #${match[2]}`;
-  } catch {
-    /* Non-URL task titles stay as supplied. */
-  }
-  return label;
+function formatRunTime(iso: string): string {
+  return new Date(iso).toLocaleString("zh-CN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

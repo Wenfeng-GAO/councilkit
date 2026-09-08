@@ -64,6 +64,38 @@ export function cliRunStatusPill(
   }
 }
 
+export function primaryRunStatus(run: {
+  kind: CliRunSummaryDto["kind"];
+  status: CliRunStatusDto;
+  progress?: { phase: keyof typeof PHASE_LABEL } | null;
+  pipeline?: { phase: string; applyStatus?: string | null } | null;
+  ideateIntegrity?: { incomplete: boolean } | null;
+}): { tone: "muted" | "info" | "success" | "error" | "warn"; text: string } {
+  if (run.pipeline?.applyStatus === "failure") return { tone: "error", text: "修复失败" };
+  if (run.pipeline && run.pipeline.phase !== "done") {
+    return {
+      tone: "info",
+      text: cliRunPhaseHeading(
+        run.kind,
+        run.status,
+        run.pipeline.phase as keyof typeof PHASE_LABEL,
+      ),
+    };
+  }
+  if (run.status === "running" || run.status === "awaiting_orchestrator") {
+    if (run.status === "awaiting_orchestrator") return { tone: "warn", text: "等待编排" };
+    const phase = run.progress?.phase;
+    if (phase && phase !== "done") {
+      return { tone: "info", text: cliRunPhaseHeading(run.kind, run.status, phase) };
+    }
+    return { tone: "info", text: "进行中" };
+  }
+  if (run.kind === "ideate" && run.ideateIntegrity?.incomplete && run.status === "completed") {
+    return { tone: "warn", text: "降级" };
+  }
+  return cliRunStatusPill(run.kind, run.status);
+}
+
 export function cliRunPhaseHeading(
   kind: CliRunSummaryDto["kind"] | undefined,
   status: CliRunStatusDto,

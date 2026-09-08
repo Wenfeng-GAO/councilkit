@@ -46,6 +46,7 @@ export function DefaultReviewJury({
     refetchOnWindowFocus: false,
   });
   const [draft, setDraft] = useState<ReviewJuryUpdate | null>(null);
+  const [seatsOpen, setSeatsOpen] = useState(false);
   const { client } = getAppRuntime();
   const installations = useQuery({
     queryKey: ["host", "installations"],
@@ -58,6 +59,7 @@ export function DefaultReviewJury({
     onSuccess: (data) => {
       queryClient.setQueryData(KEY, data);
       setDraft(null);
+      setSeatsOpen(false);
     },
   });
   const data = query.data;
@@ -85,30 +87,47 @@ export function DefaultReviewJury({
         : current,
     );
   const locked = disabled || save.isPending;
+  const showSeats = seatsOpen || draft !== null;
 
   return (
-    <section className="ck-default-jury" aria-label="默认审查席位">
+    <section
+      className="ck-default-jury"
+      aria-label="默认审查席位"
+      data-collapsed={showSeats ? "false" : "true"}
+    >
       <div className="ck-roster-heading">
         <div>
           <strong>默认审查席位</strong>
           <span className="ck-jury-count">{data ? `${seats.length} / 8` : "尚未读取"}</span>
         </div>
         {data && !draft ? (
-          <button
-            type="button"
-            className="ck-text-button"
-            disabled={locked}
-            onClick={() => {
-              save.reset();
-              setDraft({
-                revision: data.revision,
-                seats: data.seats,
-                reporterAgentId: data.reporterAgentId,
-              });
-            }}
-          >
-            调整席位
-          </button>
+          <div className="ck-jury-heading-actions">
+            <button
+              type="button"
+              className="ck-text-button"
+              aria-expanded={showSeats}
+              disabled={locked}
+              onClick={() => setSeatsOpen((open) => !open)}
+            >
+              {showSeats ? "收起席位" : "查看席位"}
+            </button>
+            <button
+              type="button"
+              className="ck-text-button"
+              disabled={locked}
+              onClick={() => {
+                save.reset();
+                setSeatsOpen(true);
+                setDraft({
+                  revision: data.revision,
+                  seats: data.seats,
+                  reporterAgentId: data.reporterAgentId,
+                });
+              }}
+            >
+              调整席位
+            </button>
+          </div>
         ) : null}
       </div>
       {query.isPending ? (
@@ -122,7 +141,7 @@ export function DefaultReviewJury({
           </button>
         </div>
       ) : null}
-      {data ? (
+      {data && showSeats ? (
         <>
           <ol className="ck-jury-seats">
             {seats.map((seat, index) => {
@@ -266,6 +285,9 @@ export function DefaultReviewJury({
             </p>
           )}
         </>
+      ) : null}
+      {data && !draft && !showSeats && save.isSuccess ? (
+        <p className="ck-jury-caption">默认席位已保存。</p>
       ) : null}
     </section>
   );

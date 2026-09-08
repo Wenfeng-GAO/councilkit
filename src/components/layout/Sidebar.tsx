@@ -65,6 +65,13 @@ export function Sidebar({ overlay = false }: { overlay?: boolean }) {
           新建讨论
         </NavLink>
         <NavLink
+          to="/ideate"
+          className={({ isActive }) => roundedLink(isActive)}
+          onClick={closeIfNarrow}
+        >
+          产品创意
+        </NavLink>
+        <NavLink
           to="/reports"
           className={({ isActive }) => roundedLink(isActive)}
           onClick={closeIfNarrow}

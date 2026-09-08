@@ -57,7 +57,7 @@ test("创意表单显示真实 product-jury，缺席时不虚构 Codex", async (
   await page.route("**/api/v1/installations", (route) =>
     route.fulfill({ json: { ok: true, data: { installations: [] } } }),
   );
-  await page.goto("/reports");
+  await page.goto("/ideate");
   await expect(page.getByRole("heading", { name: "产品席", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "工程席", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "质疑席", exact: true })).toBeVisible();
@@ -80,10 +80,13 @@ test("本次改用其他模型后发起请求带 models，不保存 jury", async
     if (route.request().method() !== "POST") return route.continue();
     started = route.request().postDataJSON();
     await route.fulfill({
-      json: { ok: true, data: { runId: "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1", started: true } },
+      json: {
+        ok: true,
+        data: { runId: "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1", started: true },
+      },
     });
   });
-  await page.goto("/reports");
+  await page.goto("/ideate");
   await page.getByRole("button", { name: "本次改用其他模型", exact: true }).click();
   await page.locator("#ideate-ideate-product-model").selectOption("grok-4.6");
   await page.getByRole("radio", { name: "由产品席汇总" }).check();
@@ -103,12 +106,35 @@ test("product-jury 缺失时禁用发起并提示 init", async ({ page }) => {
       status: 400,
       json: {
         ok: false,
-        error: { code: "BAD_REQUEST", message: "default product-jury is missing; run `councilkit init`" },
+        error: {
+          code: "BAD_REQUEST",
+          message: "default product-jury is missing; run `councilkit init`",
+        },
       },
     }),
   );
-  await page.goto("/reports");
+  await page.goto("/ideate");
   await expect(page.getByRole("alert")).toContainText("product-jury");
   await expect(page.getByRole("button", { name: "开始讨论", exact: true })).toBeDisabled();
   await expect(page.getByRole("heading", { name: "质疑席", exact: true })).toHaveCount(0);
+});
+
+test("产品创意有独立导航，报告页不再加载创意表单", async ({ page }) => {
+  let reads = 0;
+  await page.route("**/api/v1/product-jury", (route) => {
+    reads++;
+    return route.fulfill({ json: { ok: true, data: fixture() } });
+  });
+  await page.goto("/reports");
+  await expect(page.getByRole("heading", { name: "审查与报告", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "讨论产品创意", exact: true })).toHaveCount(0);
+  expect(reads).toBe(0);
+  await page.getByRole("link", { name: "产品创意", exact: true }).click();
+  await expect(page).toHaveURL(/\/ideate$/);
+  await expect(page.getByRole("heading", { name: "产品创意", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "产品席", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("一句话创意")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.locator("main").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 });
