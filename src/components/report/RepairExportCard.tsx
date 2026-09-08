@@ -17,7 +17,12 @@ export function RepairExportCard({ run }: { run: CliRunDetailResponse }) {
       runId: run.runId,
       complete: canExportRepairPackage(run),
       prUrl: run.reviewEvidence?.prUrl ?? null,
-      ledger: { runId: run.runId, sha: run.reviewEvidence?.sha ?? null, findings: run.findings },
+      ledger: {
+        runId: run.runId,
+        sha: run.reviewEvidence?.sha ?? null,
+        findings: run.findings,
+        againstRunId: run.reviewEvidence?.againstRunId ?? null,
+      },
       planLock: run.planLock,
       clusterId: clusterId || undefined,
       findingGroups: run.findingGroups ?? null,

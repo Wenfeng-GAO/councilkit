@@ -292,6 +292,13 @@ function readOptionalFindingGroups(
     if (findings?.sha && groups.source.sha !== findings.sha.toLowerCase()) {
       return { groups: null, invalid: true };
     }
+    if (
+      findings?.againstRunId &&
+      groups.source.againstRunId &&
+      groups.source.againstRunId !== findings.againstRunId
+    ) {
+      return { groups: null, invalid: true };
+    }
     if (findingsText) {
       const actual = createHash("sha256").update(findingsText, "utf8").digest("hex");
       if (actual !== groups.source.findingsSha256) return { groups: null, invalid: true };

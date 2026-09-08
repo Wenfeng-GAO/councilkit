@@ -177,3 +177,25 @@ it("redacts Cookie, csrf, Bearer, and session values from structured auth errors
   expect(terminal?.message).not.toContain("abc.def");
   expect(terminal?.message).toContain("[redacted]");
 });
+
+it("redacts X-CSRF-Token and Authorization Basic material before keeping the provider message", async () => {
+  const { classifyDriverTerminal, redactDriverDiagnostic } = await import(
+    "../src/auto/driver-terminal"
+  );
+  const raw = "unauthorized; X-CSRF-Token: SYNTHETIC_CSRF; Authorization: Basic SYNTHETIC_BASE64";
+  const terminal = classifyDriverTerminal({
+    stdout: JSON.stringify({
+      type: "error",
+      error: { type: "authentication_error", message: raw },
+    }),
+    stderr: "",
+    exitCode: 1,
+  });
+  expect(terminal?.errorClass).toBe("auth");
+  expect(terminal?.message).not.toContain("SYNTHETIC_CSRF");
+  expect(terminal?.message).not.toContain("SYNTHETIC_BASE64");
+  expect(terminal?.message).toContain("[redacted]");
+  expect(redactDriverDiagnostic(raw)).not.toContain("SYNTHETIC_CSRF");
+  expect(redactDriverDiagnostic(raw)).not.toContain("SYNTHETIC_BASE64");
+  expect(redactDriverDiagnostic(terminal?.message ?? "")).not.toContain("SYNTHETIC_CSRF");
+});

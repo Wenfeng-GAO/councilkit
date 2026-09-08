@@ -27,6 +27,15 @@ export const invocationManifestSchema = z
         task: z.string().max(8000).optional(),
         focus: z.string().max(8000).optional(),
         against: z.string().max(160).optional(),
+        councilTopic: z.string().max(8000).optional(),
+        councilBackground: z
+          .string()
+          .max(64 * 1024)
+          .optional(),
+        councilTargetOutput: z
+          .string()
+          .max(64 * 1024)
+          .optional(),
       })
       .strict(),
     repoRealpath: z.string().max(4096).nullable(),
@@ -45,6 +54,11 @@ export const invocationManifestSchema = z
             driverId: text.max(80),
             modelId: text.max(200),
             options: z.record(z.string(), z.unknown()),
+            personaPrompt: z
+              .string()
+              .min(1)
+              .max(64 * 1024)
+              .optional(),
           })
           .strict(),
       )
@@ -208,7 +222,60 @@ export function writeInvocationManifest(runDir: string, manifest: InvocationMani
   atomicWriteJson(join(runDir, INVOCATION_MANIFEST_FILE), invocationManifestSchema.parse(manifest));
 }
 
-export function readInvocationManifest(runDir: string): InvocationManifest | null {
+export function buildInvocationManifest(input: {
+  runId: string;
+  task: ReviewTask;
+  councilBackground?: string;
+  councilTargetOutput?: string;
+  repoRealpath: string | null;
+  reviewedSha: string | null;
+  timeoutMs: number;
+  concurrency: number | null;
+  agents: readonly AgentRecord[];
+  aggregator: AgentRecord;
+  tools: ToolFingerprint[];
+}): InvocationManifest {
+  return invocationManifestSchema.parse({
+    version: 1,
+    kind: "councilkit-invocation-manifest",
+    runId: input.runId,
+    task: {
+      ...(input.task.pr ? { pr: input.task.pr } : {}),
+      ...(input.task.task ? { task: input.task.task } : {}),
+      ...(input.task.focus ? { focus: input.task.focus } : {}),
+      ...(input.task.against ? { against: input.task.against } : {}),
+      ...(input.task.councilTopic ? { councilTopic: input.task.councilTopic } : {}),
+      ...(input.councilBackground ? { councilBackground: input.councilBackground } : {}),
+      ...(input.councilTargetOutput ? { councilTargetOutput: input.councilTargetOutput } : {}),
+    },
+    repoRealpath: input.repoRealpath,
+    reviewedSha:
+      input.reviewedSha && /^[0-9a-f]{40}$/i.test(input.reviewedSha)
+        ? input.reviewedSha.toLowerCase()
+        : null,
+    timeoutMs: input.timeoutMs,
+    concurrency: input.concurrency,
+    agents: input.agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      driverId: agent.driverSelection.driverId,
+      modelId: agent.modelId,
+      options: { ...agent.driverSelection.options },
+      personaPrompt: agent.personaPrompt,
+    })),
+    aggregator: {
+      id: input.aggregator.id,
+      driverId: input.aggregator.driverSelection.driverId,
+      modelId: input.aggregator.modelId,
+    },
+    tools: input.tools,
+  });
+}
+
+export function readInvocationManifest(
+  runDir: string,
+  expectedRunId?: string,
+): InvocationManifest | null {
   const path = join(runDir, INVOCATION_MANIFEST_FILE);
   let stat: ReturnType<typeof lstatSync>;
   try {
@@ -242,11 +309,17 @@ export function readInvocationManifest(runDir: string): InvocationManifest | nul
     }
     throw errors.io("invocation manifest is invalid");
   }
+  if (expectedRunId !== undefined && result.data.runId !== expectedRunId) {
+    throw errors.runFailed("invocation manifest does not belong to this run");
+  }
   return result.data;
 }
 
-export function requireInvocationManifest(runDir: string): InvocationManifest {
-  const manifest = readInvocationManifest(runDir);
+export function requireInvocationManifest(
+  runDir: string,
+  expectedRunId?: string,
+): InvocationManifest {
+  const manifest = readInvocationManifest(runDir, expectedRunId);
   if (manifest === null) {
     throw errors.io("invocation manifest is missing");
   }
@@ -277,6 +350,7 @@ export function overlayFrozenAgent(
     name: frozen.name,
     modelId: frozen.modelId,
     driverSelection: selection,
+    personaPrompt: frozen.personaPrompt ?? agent.personaPrompt,
   };
 }
 
@@ -285,7 +359,7 @@ export function stubAgentFromFrozen(frozen: InvocationManifest["agents"][number]
     {
       id: frozen.id,
       name: frozen.name,
-      personaPrompt: "Frozen reviewer from invocation manifest.",
+      personaPrompt: frozen.personaPrompt ?? "Frozen reviewer from invocation manifest.",
       modelId: frozen.modelId,
       color: "#808080",
       enabled: true,
@@ -296,6 +370,58 @@ export function stubAgentFromFrozen(frozen: InvocationManifest["agents"][number]
     },
     frozen,
   );
+}
+
+export function agentsFromFrozenManifest(
+  manifest: InvocationManifest,
+  lookup: (id: string) => AgentRecord,
+): { attemptAgents: AgentRecord[]; aggregatorAgent: AgentRecord } {
+  const attemptAgents = manifest.agents.map((frozen) => {
+    try {
+      return overlayFrozenAgent(lookup(frozen.id), frozen);
+    } catch {
+      return stubAgentFromFrozen(frozen);
+    }
+  });
+  const aggFrozen = manifest.agents.find((row) => row.id === manifest.aggregator.id) ?? null;
+  const aggregatorAgent =
+    attemptAgents.find((agent) => agent.id === manifest.aggregator.id) ??
+    (aggFrozen ? stubAgentFromFrozen(aggFrozen) : (attemptAgents[0] as AgentRecord));
+  return { attemptAgents, aggregatorAgent };
+}
+
+export function assertManifestMatchesStarted(
+  manifest: InvocationManifest,
+  started: {
+    runId: string;
+    attempts: readonly { agentId: string; driverId: string; modelId: string }[];
+    aggregator: { agentId: string; driverId: string; modelId: string };
+  },
+): void {
+  if (manifest.runId !== started.runId) {
+    throw errors.runFailed("invocation manifest does not belong to this run");
+  }
+  if (manifest.agents.length !== started.attempts.length) {
+    throw errors.runFailed("invocation manifest agents do not match the frozen run");
+  }
+  for (const [index, attempt] of started.attempts.entries()) {
+    const frozen = manifest.agents[index];
+    if (
+      !frozen ||
+      frozen.id !== attempt.agentId ||
+      frozen.driverId !== attempt.driverId ||
+      frozen.modelId !== attempt.modelId
+    ) {
+      throw errors.runFailed("invocation manifest does not match the frozen reviewer identity");
+    }
+  }
+  if (
+    manifest.aggregator.id !== started.aggregator.agentId ||
+    manifest.aggregator.driverId !== started.aggregator.driverId ||
+    manifest.aggregator.modelId !== started.aggregator.modelId
+  ) {
+    throw errors.runFailed("invocation manifest does not match the frozen aggregator");
+  }
 }
 
 export function resumeArgvFromManifest(manifest: InvocationManifest): string[] {
@@ -346,5 +472,6 @@ export function taskFromManifest(manifest: InvocationManifest): ReviewTask {
     task: manifest.task.task,
     focus: manifest.task.focus,
     against: manifest.task.against,
+    councilTopic: manifest.task.councilTopic,
   };
 }

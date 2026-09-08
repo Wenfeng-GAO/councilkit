@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -390,6 +391,40 @@ describe("review evidence completeness", () => {
     );
     const blocked = readCliRun(REVIEW_ID, process.env);
     expect(blocked?.findingGroups).toBeNull();
+    expect(canExportRepairPackage(blocked)).toBe(false);
+  });
+
+  it("treats an againstRunId mismatch as incomplete evidence", async () => {
+    const { canExportRepairPackage } = await import("@shared/runtime/review-case");
+    const dir = seedReview();
+    const findingsText = readFileSync(join(dir, "findings.json"), "utf8");
+    const parsed = JSON.parse(findingsText) as Record<string, unknown>;
+    writeFileSync(
+      join(dir, "findings.json"),
+      JSON.stringify({
+        ...parsed,
+        againstRunId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      }),
+    );
+    const updated = readFileSync(join(dir, "findings.json"), "utf8");
+    const updatedHash = createHash("sha256").update(updated, "utf8").digest("hex");
+    writeFileSync(
+      join(dir, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: REVIEW_ID,
+          sha: "a".repeat(40),
+          findingsSha256: updatedHash,
+          againstRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        },
+        groups: [],
+      }),
+    );
+    const blocked = readCliRun(REVIEW_ID, process.env);
+    expect(blocked?.findingGroups).toBeNull();
+    expect(blocked?.reviewEvidence?.evidenceComplete).toBe(false);
     expect(canExportRepairPackage(blocked)).toBe(false);
   });
 });

@@ -112,7 +112,7 @@ export function buildRepairPackage(input: {
   runId: string;
   complete: boolean;
   prUrl: string | null;
-  ledger: Pick<FindingsFile, "runId" | "sha" | "findings"> | null;
+  ledger: Pick<FindingsFile, "runId" | "sha" | "findings" | "againstRunId"> | null;
   planLock: PlanLockFile | null;
   clusterId?: string;
   findingGroups?: FindingGroupsFile | null;
@@ -124,15 +124,19 @@ export function buildRepairPackage(input: {
     throw new Error("修复任务需要与本次 run 对应的 findings.json 和完整候选 SHA。");
   }
   if (input.findingGroups) {
-    validateFindingGroups(
-      input.findingGroups,
-      new Set(ledger.findings.map((row) => row.id)),
-    );
+    validateFindingGroups(input.findingGroups, new Set(ledger.findings.map((row) => row.id)));
     if (
       input.findingGroups.source.runId !== input.runId ||
       input.findingGroups.source.sha !== ledger.sha?.toLowerCase()
     ) {
       throw new Error("finding-groups sidecar does not match this run");
+    }
+    if (
+      ledger.againstRunId &&
+      input.findingGroups.source.againstRunId &&
+      input.findingGroups.source.againstRunId !== ledger.againstRunId
+    ) {
+      throw new Error("finding-groups sidecar against source does not match this run");
     }
   }
   if (planLock && (planLock.sourceRunId !== input.runId || planLock.verdict !== "approve")) {

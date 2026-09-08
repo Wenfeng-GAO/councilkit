@@ -66,14 +66,15 @@ import {
   type ExecutionRevision,
   type InvocationManifest,
   type ToolFingerprint,
+  agentsFromFrozenManifest,
+  assertManifestMatchesStarted,
+  buildInvocationManifest,
   fingerprintsFromSpecs,
   formatResumeCommand,
   matchExecutionRevision,
-  overlayFrozenAgent,
   readExecutionRevision,
   readInvocationManifest,
   resumeArgvFromManifest,
-  stubAgentFromFrozen,
   writeInvocationManifest,
 } from "../auto/invocation-manifest";
 import {
@@ -223,6 +224,12 @@ export async function runReview(
     focus: values.focus !== undefined ? (values.focus as string) : undefined,
     councilTopic: undefined,
   };
+  // Snapshot CLI identity before any freeze overlay. Resume must reject a
+  // mismatched --pr/--task/--focus even when execution later binds the frozen
+  // spec (P1-6).
+  const requestedPr = task.pr;
+  const requestedTask = task.task;
+  const requestedFocus = task.focus;
 
   const assignedRunIdRaw = values["run-id"] as string | undefined;
   const resumeRaw = values.resume as string | undefined;
@@ -239,16 +246,35 @@ export async function runReview(
   // --- agents / aggregator resolution -------------------------------------
   const store = new Store();
   const paths = resolvePaths();
+  let requestedAgentIds: string[] | undefined;
+  let requestedAggregatorId: string | undefined;
+  if (
+    values.council === undefined &&
+    values["review-models"] === undefined &&
+    values.agents !== undefined
+  ) {
+    const refs = parseJsonFlag(values.agents as string, agentRefsSchema, "agents");
+    requestedAgentIds = refs.map((ref) => store.getAgent(ref).id);
+  }
+  if (
+    values.council === undefined &&
+    values["review-models"] === undefined &&
+    values.aggregator !== undefined
+  ) {
+    requestedAggregatorId = store.getAgent(values.aggregator as string).id;
+  }
   let frozenManifest: InvocationManifest | null = null;
   if (resumeRaw !== undefined) {
     const resumeId = resumeRaw.trim();
     if (RUN_ID_PATTERN.test(resumeId)) {
-      frozenManifest = readInvocationManifest(paths.runDir(resumeId));
+      frozenManifest = readInvocationManifest(paths.runDir(resumeId), resumeId);
     }
   }
   let attemptAgents!: AgentRecord[];
   let aggregatorAgent!: AgentRecord;
   let councilTopic: string | undefined;
+  let councilBackground: string | undefined;
+  let councilTargetOutput: string | undefined;
 
   const reviewModels =
     values["review-models"] === undefined
@@ -263,7 +289,18 @@ export async function runReview(
     ? PR_JURY_COUNCIL_NAME
     : (values.council as string | undefined);
 
-  if (reviewModels) {
+  if (frozenManifest) {
+    const rebuilt = agentsFromFrozenManifest(frozenManifest, (id) => store.getAgent(id));
+    attemptAgents = rebuilt.attemptAgents;
+    aggregatorAgent = rebuilt.aggregatorAgent;
+    if (frozenManifest.task.pr !== undefined) task.pr = frozenManifest.task.pr;
+    if (frozenManifest.task.task !== undefined) task.task = frozenManifest.task.task;
+    if (frozenManifest.task.focus !== undefined) task.focus = frozenManifest.task.focus;
+    councilTopic = frozenManifest.task.councilTopic;
+    task.councilTopic = councilTopic;
+    councilBackground = frozenManifest.task.councilBackground;
+    councilTargetOutput = frozenManifest.task.councilTargetOutput;
+  } else if (reviewModels) {
     if (
       values.council !== undefined ||
       values.agents !== undefined ||
@@ -283,40 +320,23 @@ export async function runReview(
     try {
       council = store.getCouncil(councilRef);
     } catch (error) {
-      if (frozenManifest) {
-        attemptAgents = frozenManifest.agents.map((frozen) => {
-          try {
-            return overlayFrozenAgent(store.getAgent(frozen.id), frozen);
-          } catch {
-            return stubAgentFromFrozen(frozen);
-          }
-        });
-        const aggFrozen =
-          frozenManifest.agents.find((row) => row.id === frozenManifest.aggregator.id) ?? null;
-        aggregatorAgent =
-          attemptAgents.find((agent) => agent.id === frozenManifest.aggregator.id) ??
-          (aggFrozen ? stubAgentFromFrozen(aggFrozen) : (attemptAgents[0] as AgentRecord));
-        councilTopic = undefined;
-        task.councilTopic = undefined;
-        council = null as unknown as CouncilRecord;
-      } else if (defaultedCouncil) {
+      if (defaultedCouncil) {
         throw errors.usage(
           "no --council/--agents given and default pr-jury is missing; run `councilkit init` or pass --council/--agents",
         );
-      } else {
-        throw error;
       }
+      throw error;
     }
-    if (council) {
-      councilTopic = council.topic.trim().length > 0 ? council.topic : undefined;
-      task.councilTopic = councilTopic;
-      attemptAgents = store.councilAgents(council);
-      aggregatorAgent = attemptAgents.find(
-        (agent) => agent.id === council.reporterAgentId,
-      ) as AgentRecord;
-      if (!aggregatorAgent) {
-        throw errors.usage("council reporter (aggregator) is not among council agents");
-      }
+    councilTopic = council.topic.trim().length > 0 ? council.topic : undefined;
+    task.councilTopic = councilTopic;
+    councilBackground = council.background.trim().length > 0 ? council.background : undefined;
+    councilTargetOutput = council.targetOutput.trim().length > 0 ? council.targetOutput : undefined;
+    attemptAgents = store.councilAgents(council);
+    aggregatorAgent = attemptAgents.find(
+      (agent) => agent.id === council.reporterAgentId,
+    ) as AgentRecord;
+    if (!aggregatorAgent) {
+      throw errors.usage("council reporter (aggregator) is not among council agents");
     }
   } else {
     if (values.aggregator === undefined) {
@@ -344,21 +364,6 @@ export async function runReview(
     if (!a.enabled) {
       throw errors.usage(`agent "${a.name}" is disabled; cannot participate in a review`);
     }
-  }
-
-  // Overlay frozen model/options so resume cannot mix a mutated Store identity.
-  if (frozenManifest) {
-    attemptAgents = attemptAgents.map((agent) => {
-      const frozen = frozenManifest.agents.find((row) => row.id === agent.id);
-      return frozen ? overlayFrozenAgent(agent, frozen) : agent;
-    });
-    const frozenAgg = frozenManifest.agents.find((row) => row.id === frozenManifest.aggregator.id);
-    aggregatorAgent = frozenAgg
-      ? overlayFrozenAgent(aggregatorAgent, frozenAgg)
-      : {
-          ...aggregatorAgent,
-          modelId: frozenManifest.aggregator.modelId,
-        };
   }
 
   const againstRaw = values.against as string | undefined;
@@ -467,6 +472,9 @@ export async function runReview(
         `--resume ${resumeId} does not match the transcript's review.started runId`,
       );
     }
+    if (frozenManifest) {
+      assertManifestMatchesStarted(frozenManifest, started);
+    }
     // Consistency is checked on stable IDs (not user-typed names) and on every
     // input that shapes the prompts — a mismatch would silently reuse outputs
     // produced for a different task.
@@ -474,23 +482,24 @@ export async function runReview(
       throw errors.usage("--review-models must match the resumed run's models and Aggregator");
     }
     const priorAgentIds = started.attempts.map((a) => a.agentId);
-    const nowAgentIds = attemptAgents.map((a) => a.id);
+    const nowAgentIds = requestedAgentIds ?? attemptAgents.map((a) => a.id);
     if (
       priorAgentIds.length !== nowAgentIds.length ||
       !priorAgentIds.every((id, i) => id === nowAgentIds[i])
     ) {
       throw errors.usage("--agents must match the resumed run (same agent ids, same order)");
     }
-    if (started.aggregator.agentId !== aggregatorAgent.id) {
+    const nowAggregatorId = requestedAggregatorId ?? aggregatorAgent.id;
+    if (started.aggregator.agentId !== nowAggregatorId) {
       throw errors.usage("--aggregator must match the resumed run's aggregator");
     }
     if (
-      (started.task.pr ?? undefined) !== task.pr ||
-      (started.task.task ?? undefined) !== task.task
+      (started.task.pr ?? undefined) !== requestedPr ||
+      (started.task.task ?? undefined) !== requestedTask
     ) {
       throw errors.usage("--pr/--task must match the resumed run");
     }
-    if ((started.task.focus ?? undefined) !== task.focus) {
+    if ((started.task.focus ?? undefined) !== requestedFocus) {
       throw errors.usage("--focus must match the resumed run");
     }
     if ((started.task.councilTopic ?? undefined) !== councilTopic) {
@@ -666,36 +675,27 @@ export async function runReview(
       ? (frozenManifest?.tools ??
         fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]))
       : fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]);
-  if (resumeRaw === undefined) {
-    try {
-      writeInvocationManifest(runDir, {
-        version: 1,
-        kind: "councilkit-invocation-manifest",
+  const persistManifest = (sha: string | null): void => {
+    writeInvocationManifest(
+      runDir,
+      buildInvocationManifest({
         runId,
-        task: {
-          ...(task.pr ? { pr: task.pr } : {}),
-          ...(task.task ? { task: task.task } : {}),
-          ...(task.focus ? { focus: task.focus } : {}),
-          ...(task.against ? { against: task.against } : {}),
-        },
+        task,
+        councilBackground,
+        councilTargetOutput,
         repoRealpath: localRepo ? localRepo.path : null,
-        reviewedSha: reviewedSha && /^[0-9a-f]{40}$/i.test(reviewedSha) ? reviewedSha : null,
+        reviewedSha: sha,
         timeoutMs,
         concurrency: concurrency ?? null,
-        agents: attemptAgents.map((agent) => ({
-          id: agent.id,
-          name: agent.name,
-          driverId: agent.driverSelection.driverId,
-          modelId: agent.modelId,
-          options: { ...agent.driverSelection.options },
-        })),
-        aggregator: {
-          id: aggregatorAgent.id,
-          driverId: aggregatorAgent.driverSelection.driverId,
-          modelId: aggregatorAgent.modelId,
-        },
+        agents: attemptAgents,
+        aggregator: aggregatorAgent,
         tools: frozenTools,
-      });
+      }),
+    );
+  };
+  if (resumeRaw === undefined) {
+    try {
+      persistManifest(reviewedSha);
     } catch {
       /* spawn-time check still uses in-memory frozenTools */
     }
@@ -797,34 +797,7 @@ export async function runReview(
     };
     transcript.push(startedRecord);
     try {
-      writeInvocationManifest(runDir, {
-        version: 1,
-        kind: "councilkit-invocation-manifest",
-        runId,
-        task: {
-          ...(task.pr ? { pr: task.pr } : {}),
-          ...(task.task ? { task: task.task } : {}),
-          ...(task.focus ? { focus: task.focus } : {}),
-          ...(task.against ? { against: task.against } : {}),
-        },
-        repoRealpath: localRepo ? localRepo.path : null,
-        reviewedSha: reviewedSha && /^[0-9a-f]{40}$/i.test(reviewedSha) ? reviewedSha : null,
-        timeoutMs,
-        concurrency: concurrency ?? null,
-        agents: attemptAgents.map((agent) => ({
-          id: agent.id,
-          name: agent.name,
-          driverId: agent.driverSelection.driverId,
-          modelId: agent.modelId,
-          options: { ...agent.driverSelection.options },
-        })),
-        aggregator: {
-          id: aggregatorAgent.id,
-          driverId: aggregatorAgent.driverSelection.driverId,
-          modelId: aggregatorAgent.modelId,
-        },
-        tools: frozenTools,
-      });
+      persistManifest(reviewedSha);
     } catch {
       /* manifest is observational for resume; missing file falls back to task fields */
     }
@@ -1009,120 +982,106 @@ export async function runReview(
         let branch = "HEAD";
         let targetRef: string | null = null;
         let host: "github" | "antcode" = "github";
+        let expectedHeadSha: string | undefined;
+        let expectedTargetSha: string | undefined;
         if (deps.worktreeRef === undefined) {
           const meta = await inspectPullRequest(task.pr, runCommand, env);
           branch = meta.branch;
-          targetRef = meta.baseBranch ?? null;
+          targetRef = meta.baseBranch;
+          expectedHeadSha = meta.headSha;
+          expectedTargetSha = meta.baseSha;
           host = meta.host;
           out.progress(`  worktree branch: ${branch}`);
+        } else {
+          // Test hook: the checkout is already pinned. Freeze against the local
+          // parent without touching origin — production never sets worktreeRef.
+          targetRef = "HEAD~1";
         }
         const sha = await resolveLocalPrSha({
           repo: localRepo.path,
           branch,
           pinnedRef: deps.worktreeRef ?? frozenManifest?.reviewedSha ?? undefined,
+          expectedSha: expectedHeadSha,
           runCommand,
           env,
         });
         reviewedSha = sha;
         try {
-          writeInvocationManifest(runDir, {
-            version: 1,
-            kind: "councilkit-invocation-manifest",
-            runId,
-            task: {
-              ...(task.pr ? { pr: task.pr } : {}),
-              ...(task.task ? { task: task.task } : {}),
-              ...(task.focus ? { focus: task.focus } : {}),
-              ...(task.against ? { against: task.against } : {}),
-            },
-            repoRealpath: localRepo ? localRepo.path : null,
-            reviewedSha: /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null,
-            timeoutMs,
-            concurrency: concurrency ?? null,
-            agents: attemptAgents.map((agent) => ({
-              id: agent.id,
-              name: agent.name,
-              driverId: agent.driverSelection.driverId,
-              modelId: agent.modelId,
-              options: { ...agent.driverSelection.options },
-            })),
-            aggregator: {
-              id: aggregatorAgent.id,
-              driverId: aggregatorAgent.driverSelection.driverId,
-              modelId: aggregatorAgent.modelId,
-            },
-            tools: frozenTools,
-          });
+          persistManifest(sha);
         } catch {
           /* spawn-time check still uses in-memory frozenTools */
         }
         out.progress(`  worktree ${sha.slice(0, 12)}`);
-        const frozen = await freezeReviewContext({
-          repo: localRepo.path,
-          headSha: sha,
-          sourceRef: branch,
-          targetRef,
-          host,
-          runCommand,
-          env,
-        });
-        persistFrozenContext(runDir, frozen);
-        const frozenPrompt = {
-          headSha: frozen.headSha,
-          mergeBaseSha: frozen.mergeBaseSha,
-          diffHash: frozen.diffHash,
-          verifiedCli: frozen.verifiedCli,
-        };
-        for (let i = 0; i < rerunSpecs.length; i++) {
-          const agent = rerunAgents[i];
-          const spec = rerunSpecs[i];
-          if (!agent || !spec) continue;
-          const prompt = buildAttemptPrompt({
-            agentName: agent.name,
-            personaPrompt: agent.personaPrompt,
-            task,
-            workspaceMode: "worktree",
-            frozenContext: frozenPrompt,
+        if (targetRef) {
+          const frozen = await freezeReviewContext({
+            repo: localRepo.path,
+            headSha: sha,
+            sourceRef: branch,
+            targetRef,
+            host,
+            expectedTargetSha,
+            skipRemoteFetch: deps.worktreeRef !== undefined,
+            runCommand,
+            env,
           });
-          const rebuilt = buildSpawnSpec(agent, {
-            attemptId: spec.attemptId,
-            workspace: spec.cwd,
-            prompt,
-          });
-          spec.prompt = rebuilt.prompt;
-          spec.argv = rebuilt.argv;
-          spec.promptStdin = rebuilt.promptStdin;
-        }
-        if (againstFindings?.sha) {
-          const widened = againstDiffRange({
-            findingsSha: againstFindings.sha,
-            currentSha: sha,
-            fallback: task.againstRange ?? null,
-          });
-          if (widened && widened !== task.againstRange) {
-            task.againstRange = widened;
-            task.againstLedger = formatLedgerForPrompt(againstFindings, widened);
-            for (let i = 0; i < rerunSpecs.length; i++) {
-              const agent = rerunAgents[i];
-              const spec = rerunSpecs[i];
-              if (!agent || !spec) continue;
-              const prompt = buildAttemptPrompt({
-                agentName: agent.name,
-                personaPrompt: agent.personaPrompt,
-                task,
-                workspaceMode: "worktree",
-                frozenContext: frozenPrompt,
-              });
-              const rebuilt = buildSpawnSpec(agent, {
-                attemptId: spec.attemptId,
-                workspace: spec.cwd,
-                prompt,
-              });
-              spec.prompt = rebuilt.prompt;
-              spec.argv = rebuilt.argv;
-              spec.promptStdin = rebuilt.promptStdin;
+          persistFrozenContext(runDir, frozen);
+          const frozenPrompt = {
+            headSha: frozen.headSha,
+            mergeBaseSha: frozen.mergeBaseSha,
+            diffHash: frozen.diffHash,
+            verifiedCli: frozen.verifiedCli,
+          };
+          for (let i = 0; i < rerunSpecs.length; i++) {
+            const agent = rerunAgents[i];
+            const spec = rerunSpecs[i];
+            if (!agent || !spec) continue;
+            const prompt = buildAttemptPrompt({
+              agentName: agent.name,
+              personaPrompt: agent.personaPrompt,
+              task,
+              workspaceMode: "worktree",
+              frozenContext: frozenPrompt,
+            });
+            const rebuilt = buildSpawnSpec(agent, {
+              attemptId: spec.attemptId,
+              workspace: spec.cwd,
+              prompt,
+            });
+            spec.prompt = rebuilt.prompt;
+            spec.argv = rebuilt.argv;
+            spec.promptStdin = rebuilt.promptStdin;
+          }
+          if (againstFindings?.sha) {
+            const widened = againstDiffRange({
+              findingsSha: againstFindings.sha,
+              currentSha: sha,
+              fallback: task.againstRange ?? null,
+            });
+            if (widened && widened !== task.againstRange) {
+              task.againstRange = widened;
+              task.againstLedger = formatLedgerForPrompt(againstFindings, widened);
+              for (let i = 0; i < rerunSpecs.length; i++) {
+                const agent = rerunAgents[i];
+                const spec = rerunSpecs[i];
+                if (!agent || !spec) continue;
+                const prompt = buildAttemptPrompt({
+                  agentName: agent.name,
+                  personaPrompt: agent.personaPrompt,
+                  task,
+                  workspaceMode: "worktree",
+                  frozenContext: frozenPrompt,
+                });
+                const rebuilt = buildSpawnSpec(agent, {
+                  attemptId: spec.attemptId,
+                  workspace: spec.cwd,
+                  prompt,
+                });
+                spec.prompt = rebuilt.prompt;
+                spec.argv = rebuilt.argv;
+                spec.promptStdin = rebuilt.promptStdin;
+              }
+              out.progress(`  against range: ${widened}`);
             }
-            out.progress(`  against range: ${widened}`);
           }
         }
         createWorkspace(join(runDir, "workspaces"));
@@ -1138,7 +1097,9 @@ export async function runReview(
             runCommand,
             env,
           });
-          copyFrozenContextIntoWorkspace(runDir, spec.cwd);
+          if (existsSync(join(runDir, "review-context.md"))) {
+            copyFrozenContextIntoWorkspace(runDir, spec.cwd);
+          }
         }
       } else {
         for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
@@ -1201,6 +1162,7 @@ export async function runReview(
       executionRevision,
       extraAssessments: replayAcceptedCorrections({
         runDir,
+        runId,
         candidateSha: reviewedSha ?? "",
         attempts: reusedByAttemptId.values(),
       }),
@@ -2016,7 +1978,8 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
       executionRevision: p.executionRevision,
     });
     mkdirSync(join(p.runDir, "corrections"), { recursive: true, mode: 0o700 });
-    atomicWriteFile(join(p.runDir, "corrections", `${result.attemptId}.md`), `${spawned.output}\n`);
+    const correctionBytes = `${spawned.output}\n`;
+    atomicWriteFile(join(p.runDir, "corrections", `${result.attemptId}.md`), correctionBytes);
     const afterDiff = await p.runCommand({
       executable: "git",
       argv: ["diff", "--quiet", "HEAD"],
@@ -2035,7 +1998,7 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
     records = completeCorrectionRecord(records, {
       correctionId,
       endedAt: new Date().toISOString(),
-      correctionOutputSha256: sha256Text(spawned.output),
+      correctionOutputSha256: sha256Text(correctionBytes),
       accepted,
       trackedCleanAfter: afterDiff.exitCode === 0,
       reason: projected.substantialChange
@@ -2090,7 +2053,7 @@ function timeoutForDriver(driverId: string, timeoutMs: number, codexTimeoutMs: n
 
 function buildResumeCommand(runId: string, task: ReviewTask, runDir?: string): string {
   if (runDir) {
-    const manifest = readInvocationManifest(runDir);
+    const manifest = readInvocationManifest(runDir, runId);
     if (manifest && manifest.runId === runId) {
       return formatResumeCommand(resumeArgvFromManifest(manifest));
     }

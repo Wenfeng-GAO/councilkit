@@ -467,6 +467,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
     execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
     execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: dir });
+    execFileSync("git", ["commit", "--allow-empty", "-m", "head"], { cwd: dir });
     return dir;
   }
 
@@ -1011,7 +1012,17 @@ describe("cli review command — end-to-end (fake spawn)", () => {
   });
 
   it("corrects an invalid assessment once without overwriting original output", async () => {
-    const { agentIds, aggregatorName } = seed();
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const alice = store.createAgent({
+      name: "Alice",
+      personaPrompt: "senior",
+      modelId: "antchat/GLM-5.2",
+      color: "#111111",
+      driverSelection: ds,
+    });
+    const agentIds = [alice.id];
+    const aggregatorName = "Alice";
     const repo = seedGitRepo();
     writeFileSync(join(repo, "source.ts"), "export const retained = true;\n");
     execFileSync("git", ["add", "source.ts"], { cwd: repo });
@@ -1112,6 +1123,9 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(correctionPrompt).toContain("verifiedAt");
     const outcome = sink.finished as { runId: string; reportPath: string };
     const runDir = paths.runDir(outcome.runId);
+    const firstFindings = parseFindingsFile(readFileSync(join(runDir, "findings.json"), "utf8"));
+    if (!firstFindings) throw new Error("expected findings.json after first review");
+    expect(firstFindings.findings.some((row) => isFindingVerifiedClosed(row, sha))).toBe(true);
     const transcript = readFileSync(paths.transcript(outcome.runId), "utf8");
     expect(transcript).toContain("verifiedAt");
     expect(existsSync(join(runDir, ASSESSMENT_CORRECTIONS_FILE))).toBe(true);
@@ -1216,6 +1230,46 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     ) as { agents: Array<{ id: string; modelId: string }> };
     expect(manifest.agents.find((row) => row.id === agentIds[0])?.modelId).toBe("antchat/GLM-5.2");
     expect(store.getAgent(agentIds[0]).modelId).toBe("mutated-model");
+  });
+
+  it("resumes from the frozen council topic after the Council is deleted", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const store = new Store();
+    const reporter = store.getAgent(aggregatorName);
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "frozen-topic",
+      background: "frozen-bg",
+      targetOutput: "frozen-out",
+      agentIds,
+      rounds: 1,
+      reporterAgentId: reporter.id,
+    });
+    const sink = makeSink();
+    try {
+      await runReview(["--task", "council freeze", "--council", "pr-jury"], sink, {
+        spawnImpl: fakeSpawn(),
+      });
+    } catch (error) {
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    const runId = (sink.finished as { runId: string }).runId;
+    const manifest = JSON.parse(
+      readFileSync(join(resolvePaths().runDir(runId), "invocation-manifest.v1.json"), "utf8"),
+    ) as { task: { councilTopic?: string }; agents: Array<{ personaPrompt?: string }> };
+    expect(manifest.task.councilTopic).toBe("frozen-topic");
+    expect(manifest.agents[0]?.personaPrompt).toBe("senior");
+    store.deleteCouncil("pr-jury");
+    store.updateAgent(agentIds[0], { personaPrompt: "mutated persona" });
+    const resumeSink = makeSink();
+    try {
+      await runReview(["--task", "council freeze", "--resume", runId], resumeSink, {
+        spawnImpl: fakeSpawn(),
+      });
+    } catch (error) {
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    expect((resumeSink.finished as { runId: string }).runId).toBe(runId);
   });
 
   it("refuses resume when the invocation manifest is truncated", async () => {
@@ -1894,11 +1948,10 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       try {
         await runReview(args, makeSink(), { spawnImpl: fakeSpawn() });
         throw new Error("expected runReview to throw");
-      } catch (e) {
-        const err = e as CliError;
+      } catch (err) {
         expect(err).toBeInstanceOf(CliError);
-        expect(err.exitCode).toBe(2);
-        expect(err.message).toContain(fragment);
+        expect((err as CliError).exitCode).toBe(2);
+        expect((err as CliError).message).toContain(fragment);
       }
     };
     await expectUsage(

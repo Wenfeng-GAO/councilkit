@@ -213,6 +213,10 @@ export function buildAssessmentDiagnostics(input: {
   }
   const extraKeys = new Set(extras.map((row) => `${row.attemptId}:${row.assessment.findingId}`));
   const covered = new Set(valid.map((row) => row.assessment.findingId));
+  const successfulSeats = input.attempts.filter(
+    (attempt) =>
+      attempt.attemptId !== "aggregator" && attempt.status === "success" && attempt.exitCode === 0,
+  );
   for (const id of input.requiredFindingIds) {
     if (!covered.has(id)) {
       items.push({
@@ -247,6 +251,13 @@ export function buildAssessmentDiagnostics(input: {
         !extraKeys.has(`${item.attemptId}:${id}`),
     );
     if (remainingInvalid) return false;
+    for (const seat of successfulSeats) {
+      const seatItems = items.filter((item) => item.attemptId === seat.attemptId);
+      const seatCovers =
+        extraKeys.has(`${seat.attemptId}:${id}`) ||
+        seatItems.some((item) => item.findingId === id && item.status === "valid");
+      if (!seatCovers) return false;
+    }
     const outcomes = new Set(valids.map((row) => row.assessment.outcome));
     return outcomes.size === 1;
   });

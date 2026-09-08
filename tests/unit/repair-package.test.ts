@@ -233,6 +233,19 @@ describe("repair package", () => {
         findingGroups: sampleGroups({ ...source, runId: "other" }, "RC", ["F-1", "F-2"]),
       }),
     ).toThrow("finding-groups");
+    expect(() =>
+      buildRepairPackage({
+        ...input(),
+        ledger: { ...source, againstRunId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1" },
+        findingGroups: {
+          ...sampleGroups(source, "RC", ["F-1", "F-2"]),
+          source: {
+            ...sampleGroups(source, "RC", ["F-1", "F-2"]).source,
+            againstRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+          },
+        },
+      }),
+    ).toThrow(/against source/);
   });
 });
 

@@ -205,6 +205,18 @@ export function projectCorrectionOutput(input: {
       });
       continue;
     }
+    const priorSha = typeof prior?.candidateSha === "string" ? prior.candidateSha : "";
+    if (priorSha !== input.candidateSha || row.assessment.candidateSha !== input.candidateSha) {
+      substantialChange = true;
+      rejected.push({
+        findingId: row.assessment.findingId,
+        attemptId: "correction",
+        status: "semantic_mismatch",
+        errorClass: "candidate_sha_replaced",
+        errorPath: `/correction/${row.assessment.findingId}/candidateSha`,
+      });
+      continue;
+    }
     let fieldReplaced: (typeof EVIDENCE_FIELDS)[number] | null = null;
     for (const field of EVIDENCE_FIELDS) {
       if (!sameEvidenceField(prior?.[field], row.assessment[field])) {
@@ -319,8 +331,15 @@ export function formatCorrectableIds(
 
 export function replayAcceptedCorrections(input: {
   runDir: string;
+  runId: string;
   candidateSha: string;
-  attempts: Iterable<{ attemptId: string; output: string }>;
+  attempts: Iterable<{
+    attemptId: string;
+    output: string;
+    agentId: string;
+    driverId: string;
+    modelId: string;
+  }>;
 }): DiagnosedAssessment[] {
   const records = loadAssessmentCorrections(input.runDir);
   if (!records || !FULL_COMMIT_SHA.test(input.candidateSha)) return [];
@@ -328,8 +347,19 @@ export function replayAcceptedCorrections(input: {
   const extras: DiagnosedAssessment[] = [];
   for (const rec of records.records) {
     if (!rec.accepted) continue;
+    if (rec.sourceRunId !== input.runId) continue;
+    if (rec.candidateSha !== input.candidateSha) continue;
+    if (rec.trackedCleanBefore !== true || rec.trackedCleanAfter !== true) continue;
     const attempt = byId.get(rec.sourceAttemptId);
     if (!attempt) continue;
+    if (
+      rec.identity.agentId !== attempt.agentId ||
+      rec.identity.driverId !== attempt.driverId ||
+      rec.identity.modelId !== attempt.modelId
+    ) {
+      continue;
+    }
+    if (rec.sourceOutputSha256 !== sha256Text(attempt.output)) continue;
     let correctionOutput = "";
     try {
       correctionOutput = readFileSync(
@@ -337,6 +367,12 @@ export function replayAcceptedCorrections(input: {
         "utf8",
       );
     } catch {
+      continue;
+    }
+    if (
+      rec.correctionOutputSha256 === null ||
+      rec.correctionOutputSha256 !== sha256Text(correctionOutput)
+    ) {
       continue;
     }
     const projected = projectCorrectionOutput({

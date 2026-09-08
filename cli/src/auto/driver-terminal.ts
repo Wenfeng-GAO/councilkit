@@ -19,18 +19,25 @@ const TRANSPORT = /econnreset|etimedout|socket hang up|network error|502\b|503\b
 const SK_TOKEN = /sk-[A-Za-z0-9_-]{8,}/g;
 const COOKIE_HEADER = /Cookie:\s*[^\r\n]+/gi;
 const CSRF_ASSIGN = /csrf=[^\s;,&]+/gi;
+const CSRF_HEADER = /(?:X-)?CSRF-Token:\s*[^\s;,&]+/gi;
 const BEARER = /Bearer\s+[^\s]+/gi;
-const AUTHORIZATION = /Authorization:\s*[^\s]+/gi;
+const AUTHORIZATION = /Authorization:\s*[^\r\n;]+/gi;
+const BASIC_CRED = /Basic\s+[A-Za-z0-9+/=._-]+/gi;
 const SESSION_ASSIGN = /session=[^\s;,&]+/gi;
+const SECRET_ASSIGN =
+  /(?:api[_-]?key|secret[_-]?key|access[_-]?token|session[_-]?token)\s*[:=]\s*[^\s;,&]+/gi;
 
-/** Redact provider diagnostics. Cookie / csrf= / Bearer / Authorization / session= / sk-. */
+/** Redact provider diagnostics before any failure/transcript/report persistence. */
 export function redactDriverDiagnostic(text: string): string {
   return text
     .replace(COOKIE_HEADER, "Cookie: [redacted]")
+    .replace(CSRF_HEADER, "CSRF-Token: [redacted]")
     .replace(CSRF_ASSIGN, "csrf=[redacted]")
-    .replace(BEARER, "Bearer [redacted]")
     .replace(AUTHORIZATION, "Authorization: [redacted]")
+    .replace(BEARER, "Bearer [redacted]")
+    .replace(BASIC_CRED, "Basic [redacted]")
     .replace(SESSION_ASSIGN, "session=[redacted]")
+    .replace(SECRET_ASSIGN, "[redacted]")
     .replace(SK_TOKEN, "[redacted]")
     .slice(0, 400);
 }
@@ -69,30 +76,46 @@ function isStructuredErrorRow(row: Record<string, unknown>): boolean {
   return false;
 }
 
-function parseJsonErrors(text: string): string[] {
-  const hits: string[] = [];
+function isStructuredSuccessRow(row: Record<string, unknown>): boolean {
+  const type = typeof row.type === "string" ? row.type : "";
+  const subtype = typeof row.subtype === "string" ? row.subtype : "";
+  if (type !== "result") return false;
+  if (row.is_error === true || subtype.includes("error")) return false;
+  return subtype === "success" || subtype.length === 0 || row.is_error === false;
+}
+
+function structuredLabel(row: Record<string, unknown>): string {
+  const type = typeof row.type === "string" ? row.type : "";
+  const subtype = typeof row.subtype === "string" ? row.subtype : "";
+  const error =
+    row.error && typeof row.error === "object" ? (row.error as Record<string, unknown>) : null;
+  const nestedType = error && typeof error.type === "string" ? error.type : "";
+  const message =
+    (error && typeof error.message === "string" ? error.message : null) ??
+    (typeof row.message === "string" ? row.message : null) ??
+    (typeof row.result === "string" ? row.result : null);
+  const label = nestedType || subtype || type;
+  return `${label}${message ? `: ${message}` : ""}`;
+}
+
+function parseStructuredTerminal(text: string): { errors: string[]; success: boolean } {
+  const errors: string[] = [];
+  let success = false;
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("{")) continue;
     try {
       const row = JSON.parse(trimmed) as Record<string, unknown>;
-      if (!isStructuredErrorRow(row)) continue;
-      const type = typeof row.type === "string" ? row.type : "";
-      const subtype = typeof row.subtype === "string" ? row.subtype : "";
-      const error =
-        row.error && typeof row.error === "object" ? (row.error as Record<string, unknown>) : null;
-      const nestedType = error && typeof error.type === "string" ? error.type : "";
-      const message =
-        (error && typeof error.message === "string" ? error.message : null) ??
-        (typeof row.message === "string" ? row.message : null) ??
-        (typeof row.result === "string" ? row.result : null);
-      const label = nestedType || subtype || type;
-      hits.push(`${label}${message ? `: ${message}` : ""}`);
+      if (isStructuredErrorRow(row)) {
+        errors.push(structuredLabel(row));
+        continue;
+      }
+      if (isStructuredSuccessRow(row)) success = true;
     } catch {
       /* ignore non-json */
     }
   }
-  return hits;
+  return { errors, success };
 }
 
 export function classifyDriverTerminal(input: {
@@ -102,17 +125,18 @@ export function classifyDriverTerminal(input: {
 }): DriverTerminal | null {
   const stdout = input.stdout ?? "";
   const stderr = input.stderr ?? "";
-  const structured = parseJsonErrors(`${stdout}\n${stderr}`);
-  if (structured.length > 0) {
-    const blob = structured.join("\n");
+  // Structured terminal (success or error) beats unrelated stderr warnings.
+  const structured = parseStructuredTerminal(`${stdout}\n${stderr}`);
+  if (structured.errors.length > 0) {
+    const blob = structured.errors.join("\n");
     const errorClass = pickClass(blob) ?? "unknown";
     return {
       errorClass,
       retryable: isRetryableClass(errorClass),
-      message: redactDriverDiagnostic(structured[0] || blob),
+      message: redactDriverDiagnostic(structured.errors[0] || blob),
     };
   }
-  // Success-result bodies are never classified. Only stderr leftovers remain.
+  if (structured.success) return null;
   const fromStderr = pickClass(stderr);
   if (fromStderr === null) return null;
   return {

@@ -7,7 +7,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { errors } from "../errors";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
-import { gitRevParse } from "./git-worktree";
+import { fetchRefExclusive, gitRevParse } from "./git-worktree";
 
 export const REVIEW_CONTEXT_MD = "review-context.md";
 export const REVIEW_CONTEXT_DIFF = "review-context.diff";
@@ -63,6 +63,37 @@ export function formatFrozenContextMarkdown(ctx: FrozenReviewContext): string {
   return `${lines.join("\n")}\n`;
 }
 
+async function resolveFrozenTargetSha(opts: {
+  repo: string;
+  targetRef: string;
+  runCommand: RunCommand;
+  env: NodeJS.ProcessEnv;
+  expectedSha?: string;
+  skipRemoteFetch: boolean;
+}): Promise<string> {
+  if (opts.skipRemoteFetch) {
+    const local = await gitRevParse(opts.repo, opts.targetRef, opts.runCommand, opts.env);
+    if (local === null) {
+      throw errors.runFailed(
+        `cannot resolve local target ref ${opts.targetRef}; refusing a head...head empty diff`,
+      );
+    }
+    if (opts.expectedSha && opts.expectedSha.toLowerCase() !== local.toLowerCase()) {
+      throw errors.runFailed(
+        `local ${opts.targetRef} SHA ${local} does not match the expected PR target ${opts.expectedSha}`,
+      );
+    }
+    return local;
+  }
+  return fetchRefExclusive({
+    repo: opts.repo,
+    branch: opts.targetRef,
+    runCommand: opts.runCommand,
+    env: opts.env,
+    expectedSha: opts.expectedSha,
+  });
+}
+
 export async function freezeReviewContext(opts: {
   repo: string;
   headSha: string;
@@ -71,6 +102,9 @@ export async function freezeReviewContext(opts: {
   host: "github" | "antcode";
   runCommand?: RunCommand;
   env?: NodeJS.ProcessEnv;
+  expectedTargetSha?: string;
+  /** Tests: resolve targetRef locally. Production always fetches. */
+  skipRemoteFetch?: boolean;
 }): Promise<FrozenReviewContext> {
   const runCommand = opts.runCommand ?? defaultRunCommand;
   const env = opts.env ?? process.env;
@@ -79,40 +113,36 @@ export async function freezeReviewContext(opts: {
     throw errors.runFailed(`cannot resolve frozen head SHA ${opts.headSha}`);
   }
   const targetRef = opts.targetRef?.trim() ? opts.targetRef.trim() : null;
-  let baseSha: string | null = null;
-  let mergeBaseSha: string | null = null;
-  if (targetRef !== null) {
-    const originTarget = targetRef.startsWith("refs/")
-      ? targetRef
-      : `refs/remotes/origin/${targetRef}`;
-    baseSha =
-      (await gitRevParse(opts.repo, originTarget, runCommand, env)) ??
-      (await gitRevParse(opts.repo, targetRef, runCommand, env));
-    if (baseSha === null) {
-      throw errors.runFailed(
-        `cannot resolve target ref "${targetRef}"; refusing a head...head empty diff`,
-      );
-    }
-    const merged = await runCommand({
-      executable: "git",
-      argv: ["merge-base", head, baseSha],
-      cwd: opts.repo,
-      env,
-    });
-    if (merged.exitCode === 0) {
-      const sha = merged.stdout.trim();
-      mergeBaseSha = /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
-    }
-    if (mergeBaseSha === null) {
-      throw errors.runFailed(
-        `cannot resolve merge-base of ${head} and ${baseSha}; refusing a head...head empty diff`,
-      );
-    }
+  if (targetRef === null) {
+    throw errors.runFailed("target ref metadata is missing; refusing a head...head empty diff");
   }
-  const from = mergeBaseSha ?? head;
+  const baseSha = await resolveFrozenTargetSha({
+    repo: opts.repo,
+    targetRef,
+    runCommand,
+    env,
+    expectedSha: opts.expectedTargetSha,
+    skipRemoteFetch: opts.skipRemoteFetch === true,
+  });
+  const merged = await runCommand({
+    executable: "git",
+    argv: ["merge-base", head, baseSha],
+    cwd: opts.repo,
+    env,
+  });
+  let mergeBaseSha: string | null = null;
+  if (merged.exitCode === 0) {
+    const sha = merged.stdout.trim();
+    mergeBaseSha = /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
+  }
+  if (mergeBaseSha === null) {
+    throw errors.runFailed(
+      `cannot resolve merge-base of ${head} and ${baseSha}; refusing a head...head empty diff`,
+    );
+  }
   const diffed = await runCommand({
     executable: "git",
-    argv: ["diff", "--no-color", "--no-ext-diff", `${from}...${head}`],
+    argv: ["diff", "--no-color", "--no-ext-diff", `${mergeBaseSha}...${head}`],
     cwd: opts.repo,
     env,
   });

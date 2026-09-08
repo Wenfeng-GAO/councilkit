@@ -324,6 +324,25 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(r.failure?.code).toBe("EXIT");
   });
 
+  it("does not treat an unrelated stderr warning as failure after a structured success result", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "valid report",
+      }),
+      stderr: "Warning: optional telemetry network error; review completed",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce(spec("0"), { spawnImpl: spawn });
+    expect(r.status).toBe("success");
+    expect(r.failure).toBeUndefined();
+    expect(r.output).toContain("valid report");
+  });
+
   it("onAttemptFinish throwing aborts in-flight attempts and propagates the error", async () => {
     let abortedSeen = false;
     const spawn: SpawnImpl = async (input) => {

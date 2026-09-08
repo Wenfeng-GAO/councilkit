@@ -16,7 +16,11 @@ import {
 } from "@shared/runtime/finding-groups";
 import { atomicWriteJson } from "../store/atomic-write";
 
-export { FINDING_GROUPS_FILE, FindingGroupsError } from "@shared/runtime/finding-groups";
+export {
+  FINDING_GROUPS_FILE,
+  FINDING_GROUPS_KIND,
+  FindingGroupsError,
+} from "@shared/runtime/finding-groups";
 
 export function hashFindingsBytes(bytes: string): string {
   return createHash("sha256").update(bytes, "utf8").digest("hex");
@@ -167,11 +171,12 @@ export function loadFindingGroups(input: {
   ) {
     throw new FindingGroupsError("finding-groups sidecar against source does not match this run");
   }
-  if (input.findingsBytes !== undefined) {
-    const actual = hashFindingsBytes(input.findingsBytes);
-    if (actual !== groups.source.findingsSha256) {
-      throw new FindingGroupsError("finding-groups sidecar findings hash does not match");
-    }
+  if (input.findingsBytes === undefined) {
+    throw new FindingGroupsError("finding-groups sidecar findings hash cannot be verified");
+  }
+  const actual = hashFindingsBytes(input.findingsBytes);
+  if (actual !== groups.source.findingsSha256) {
+    throw new FindingGroupsError("finding-groups sidecar findings hash does not match");
   }
   validateFindingGroups(groups, new Set(input.ledger.findings.map((row) => row.id)));
   return groups;

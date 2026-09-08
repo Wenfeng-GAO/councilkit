@@ -1,9 +1,9 @@
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { loadFindingGroups } from "../auto/finding-groups";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
+import { loadFindingGroups } from "../auto/finding-groups";
 import { errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
@@ -62,7 +62,12 @@ export async function runRepair(argv: string[], out: OutputSink): Promise<void> 
       runId,
       complete: canExportRepairPackage(run),
       prUrl: run.reviewEvidence?.prUrl ?? null,
-      ledger: { runId, sha: run.reviewEvidence?.sha ?? null, findings: run.findings },
+      ledger: {
+        runId,
+        sha: run.reviewEvidence?.sha ?? null,
+        findings: run.findings,
+        againstRunId: run.reviewEvidence?.againstRunId ?? null,
+      },
       planLock: run.planLock,
       clusterId: typeof values.cluster === "string" ? values.cluster : undefined,
       findingGroups,

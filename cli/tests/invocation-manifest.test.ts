@@ -9,11 +9,14 @@ import { describe, expect, it } from "vitest";
 import {
   fingerprintExecutable,
   matchExecutionRevision,
+  overlayFrozenAgent,
   readExecutionRevision,
   readInvocationManifest,
   verifySpawnFingerprint,
   writeExecutionRevision,
+  writeInvocationManifest,
 } from "../src/auto/invocation-manifest";
+import type { AgentRecord } from "../src/store/schemas";
 
 describe("invocation fingerprint drift", () => {
   it("rejects a changed executable hash and allows a recorded revision", () => {
@@ -97,5 +100,60 @@ describe("invocation fingerprint drift", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("refuses a valid manifest whose runId is not this run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-manifest-run-"));
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+    try {
+      writeInvocationManifest(dir, {
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        task: { task: "same task" },
+        repoRealpath: null,
+        reviewedSha: "a".repeat(40),
+        timeoutMs: 1000,
+        concurrency: 1,
+        agents: [
+          {
+            id: "agent-a",
+            name: "A",
+            driverId: "grok-stream-json",
+            modelId: "grok-4.6",
+            options: {},
+            personaPrompt: "frozen persona",
+          },
+        ],
+        aggregator: { id: "agent-a", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      });
+      expect(() => readInvocationManifest(dir, runId)).toThrow(/does not belong to this run/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("overlays the frozen personaPrompt instead of the live Store identity", () => {
+    const frozen = {
+      id: "agent-a",
+      name: "A",
+      driverId: "grok-stream-json" as const,
+      modelId: "grok-4.6",
+      options: {},
+      personaPrompt: "frozen persona",
+    };
+    const live: AgentRecord = {
+      id: "agent-a",
+      name: "A",
+      personaPrompt: "mutated persona",
+      modelId: "mutated-model",
+      color: "#123456",
+      enabled: true,
+      driverSelection: { driverId: "grok-stream-json", options: {} },
+    };
+    const overlaid = overlayFrozenAgent(live, frozen);
+    expect(overlaid.personaPrompt).toBe("frozen persona");
+    expect(overlaid.modelId).toBe("grok-4.6");
   });
 });

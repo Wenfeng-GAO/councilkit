@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAssessmentDiagnostics } from "@shared/runtime/reviewer-assessment";
@@ -11,6 +11,7 @@ import {
   invalidFindingIds,
   loadAssessmentCorrections,
   projectCorrectionOutput,
+  replayAcceptedCorrections,
   sha256Text,
   writeAssessmentCorrections,
 } from "../src/auto/assessment-correction";
@@ -253,6 +254,44 @@ describe("assessment correction", () => {
     expect(swapped.valid).toHaveLength(0);
   });
 
+  it("refuses to rebind a close that was proven against a different candidate SHA", () => {
+    const other = "b".repeat(40);
+    const original = fence([
+      {
+        findingId: "F-1",
+        candidateSha: other,
+        outcome: "verified_closed",
+        method: "code_trace",
+        reason: "closed on B",
+        evidence: "trace on B",
+        locations: ["src/a.ts:1"],
+        verifiedAt: "x",
+      },
+    ]);
+    const rebound = projectCorrectionOutput({
+      originalOutput: original,
+      correctionOutput: fence([
+        {
+          findingId: "F-1",
+          candidateSha: SHA,
+          outcome: "verified_closed",
+          method: "code_trace",
+          reason: "closed on B",
+          evidence: "trace on B",
+          locations: ["src/a.ts:1"],
+        },
+      ]),
+      candidateSha: SHA,
+      requestedFindingIds: ["F-1"],
+      sourceAttemptId: "attempt-0",
+    });
+    expect(rebound.substantialChange).toBe(true);
+    expect(rebound.valid).toHaveLength(0);
+    expect(rebound.rejected.some((item) => item.errorClass === "candidate_sha_replaced")).toBe(
+      true,
+    );
+  });
+
   it("marks coverage incomplete for invalid peers or contradictory outcomes on the same id", () => {
     const closed = {
       ...validRow("F-1"),
@@ -304,6 +343,59 @@ describe("assessment correction", () => {
       ],
     });
     expect(conflict.diagnostics.coverageComplete).toBe(false);
+  });
+
+  it("does not let one seat's valid row cover a missing or unidentifiable peer assessment", () => {
+    const closed = {
+      ...validRow("F-1"),
+      outcome: "verified_closed",
+      method: "code_trace",
+    };
+    const missingPeer = buildAssessmentDiagnostics({
+      runId: "run",
+      sha: SHA,
+      requiredFindingIds: ["F-1"],
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          status: "success",
+          exitCode: 0,
+          agentName: "A",
+          output: fence([closed]),
+        },
+        {
+          attemptId: "attempt-1",
+          status: "success",
+          exitCode: 0,
+          agentName: "B",
+          output: fence([]),
+        },
+      ],
+    });
+    expect(missingPeer.diagnostics.coverageComplete).toBe(false);
+
+    const badJsonPeer = buildAssessmentDiagnostics({
+      runId: "run",
+      sha: SHA,
+      requiredFindingIds: ["F-1"],
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          status: "success",
+          exitCode: 0,
+          agentName: "A",
+          output: fence([closed]),
+        },
+        {
+          attemptId: "attempt-1",
+          status: "success",
+          exitCode: 0,
+          agentName: "B",
+          output: "```councilkit-findings\n{not-json\n```",
+        },
+      ],
+    });
+    expect(badJsonPeer.diagnostics.coverageComplete).toBe(false);
   });
 
   it("treats accepted extraAssessments as the coverage projection", () => {
@@ -378,6 +470,115 @@ describe("assessment correction", () => {
       expect(loaded?.records[0]?.toolFingerprint.sha256).toBe("d".repeat(64));
       const replay = appendCorrectionRecord(loaded, loaded?.records[0] as never);
       expect(replay.records).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not replay a correction whose source run, identity, hashes, or clean proofs do not bind", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-corr-replay-"));
+    const identity = { agentId: "a", driverId: "grok-stream-json", modelId: "g" };
+    const original = fence([{ ...validRow("F-1"), verifiedAt: "x" }]);
+    const fixed = fence([validRow("F-1")]);
+    try {
+      mkdirSync(join(dir, "corrections"), { recursive: true });
+      writeFileSync(join(dir, "corrections", "attempt-0.md"), fixed);
+      writeAssessmentCorrections(
+        dir,
+        appendCorrectionRecord(null, {
+          correctionId: "c-bad",
+          sourceRunId: "ck-review-other",
+          sourceAttemptId: "attempt-0",
+          identity: { agentId: "other", driverId: "kimi-stream-json", modelId: "k" },
+          sourceOutputSha256: "e".repeat(64),
+          candidateSha: "b".repeat(40),
+          requestedFindingIds: ["F-1"],
+          errorPaths: ["/blocks/0/0"],
+          executionId: "exec-1",
+          startedAt: "t0",
+          endedAt: "t1",
+          correctionOutputSha256: "f".repeat(64),
+          accepted: true,
+          reason: "format",
+          toolFingerprint: {
+            name: "kimi-stream-json",
+            realpath: "/bin/kimi",
+            sha256: "d".repeat(64),
+          },
+          trackedCleanBefore: false,
+          trackedCleanAfter: false,
+        }),
+      );
+      const extras = replayAcceptedCorrections({
+        runDir: dir,
+        runId: "ck-review-current",
+        candidateSha: SHA,
+        attempts: [
+          {
+            attemptId: "attempt-0",
+            output: original,
+            agentId: identity.agentId,
+            driverId: identity.driverId,
+            modelId: identity.modelId,
+          },
+        ],
+      });
+      expect(extras).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("replays a bound accepted correction whose hashes and identity match", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-corr-replay-ok-"));
+    const identity = { agentId: "a", driverId: "grok-stream-json", modelId: "g" };
+    const original = fence([{ ...validRow("F-1"), verifiedAt: "x" }]);
+    const fixed = fence([validRow("F-1")]);
+    try {
+      mkdirSync(join(dir, "corrections"), { recursive: true });
+      writeFileSync(join(dir, "corrections", "attempt-0.md"), fixed);
+      writeAssessmentCorrections(
+        dir,
+        appendCorrectionRecord(null, {
+          correctionId: "c-ok",
+          sourceRunId: "ck-review-current",
+          sourceAttemptId: "attempt-0",
+          identity,
+          sourceOutputSha256: sha256Text(original),
+          candidateSha: SHA,
+          requestedFindingIds: ["F-1"],
+          errorPaths: ["/blocks/0/0"],
+          executionId: "exec-1",
+          startedAt: "t0",
+          endedAt: "t1",
+          correctionOutputSha256: sha256Text(fixed),
+          accepted: true,
+          reason: "format",
+          toolFingerprint: {
+            name: "grok-stream-json",
+            realpath: "/bin/grok",
+            sha256: "d".repeat(64),
+          },
+          trackedCleanBefore: true,
+          trackedCleanAfter: true,
+        }),
+      );
+      const extras = replayAcceptedCorrections({
+        runDir: dir,
+        runId: "ck-review-current",
+        candidateSha: SHA,
+        attempts: [
+          {
+            attemptId: "attempt-0",
+            output: original,
+            agentId: identity.agentId,
+            driverId: identity.driverId,
+            modelId: identity.modelId,
+          },
+        ],
+      });
+      expect(extras).toHaveLength(1);
+      expect(extras[0]?.assessment.findingId).toBe("F-1");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

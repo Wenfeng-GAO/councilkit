@@ -6,7 +6,7 @@
  * Incremental `--against` review classifies closed / regress / new against
  * that ledger instead of rediscovering the whole PR vs master.
  */
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ReviewFinding, parseReviewReport } from "@/lib/review-report";
 import {
@@ -39,6 +39,8 @@ import {
 } from "@shared/runtime/reviewer-assessment";
 import { atomicWriteJson } from "../store/atomic-write";
 import {
+  FINDING_GROUPS_FILE,
+  FINDING_GROUPS_KIND,
   buildFindingGroups,
   hashFindingsBytes,
   loadFindingGroups,
@@ -432,6 +434,9 @@ export function persistFindingsFromReport(input: {
     verifiedAttemptShas: input.verifiedAttemptShas ?? {},
     reportedFindings: extracted.findings,
     extraAssessments: input.extraAssessments,
+    requiredFindingIds: (input.prior?.findings ?? [])
+      .filter((row) => row.status !== "accepted")
+      .map((row) => row.id),
   });
   writeFindings(input.runDir, file);
   const requiredFindingIds = (input.prior?.findings ?? [])
@@ -454,17 +459,40 @@ export function persistFindingsFromReport(input: {
   });
   atomicWriteJson(join(input.runDir, ASSESSMENT_DIAGNOSTICS_FILE), diagnostics);
   let priorGroups = null;
+  let priorGroupsInvalid = false;
   if (input.againstRunId && input.prior) {
+    const againstDir = join(dirname(input.runDir), input.againstRunId);
+    const sidecarPresent = existsSync(join(againstDir, FINDING_GROUPS_FILE));
+    let priorBytes: string | undefined;
+    try {
+      priorBytes = readFileSync(join(againstDir, "findings.json"), "utf8");
+    } catch {
+      priorBytes = undefined;
+    }
     try {
       priorGroups = loadFindingGroups({
-        runDir: join(dirname(input.runDir), input.againstRunId),
+        runDir: againstDir,
         ledger: input.prior,
+        findingsBytes: priorBytes,
       });
     } catch {
       priorGroups = null;
+      if (sidecarPresent) priorGroupsInvalid = true;
     }
   }
-  if ((aliases.length > 0 || priorGroups) && input.sha && FULL_COMMIT_SHA.test(input.sha)) {
+  if (priorGroupsInvalid && input.sha && FULL_COMMIT_SHA.test(input.sha)) {
+    writeFindingGroups(input.runDir, {
+      version: 1,
+      kind: FINDING_GROUPS_KIND,
+      source: {
+        runId: input.runId,
+        sha: input.sha.toLowerCase(),
+        findingsSha256: "0".repeat(64),
+        againstRunId: input.againstRunId ?? null,
+      },
+      groups: [],
+    });
+  } else if ((aliases.length > 0 || priorGroups) && input.sha && FULL_COMMIT_SHA.test(input.sha)) {
     const bytes = `${JSON.stringify(file, null, 2)}\n`;
     writeFindingGroups(
       input.runDir,
@@ -656,13 +684,16 @@ export function applyReviewerVerifications(
     reportedFindings: readonly LedgerFinding[];
     verifiedAttemptShas: Readonly<Record<string, string>>;
     extraAssessments?: readonly DiagnosedAssessment[];
+    requiredFindingIds?: readonly string[];
   },
 ): LedgerFinding[] {
   if (!input.sha || !FULL_COMMIT_SHA.test(input.sha)) return [...findings];
+  const requiredFindingIds = input.requiredFindingIds ?? [];
   const diagnosed = buildAssessmentDiagnostics({
     runId: input.runId,
     sha: input.sha,
-    requiredFindingIds: [],
+    requiredFindingIds,
+    extraAssessments: input.extraAssessments,
     attempts: input.attempts
       .filter((attempt) => Boolean(attempt.workspace) && attempt.attemptId !== "aggregator")
       .map((attempt) => ({
@@ -673,7 +704,10 @@ export function applyReviewerVerifications(
         agentName: attempt.agentName,
       })),
   });
-  const valid = [...diagnosed.valid, ...(input.extraAssessments ?? [])];
+  const extraKeys = new Set(
+    (input.extraAssessments ?? []).map((row) => `${row.attemptId}:${row.assessment.findingId}`),
+  );
+  const valid = diagnosed.valid;
   const assessments = new Map<string, FindingVerification[]>();
   for (const row of valid) {
     const { findingId, ...assessment } = row.assessment;
@@ -704,7 +738,17 @@ export function applyReviewerVerifications(
       if (stillOpen) return { ...row, status: "open" as const, verification: stillOpen };
       const reported = matchFinding(row, input.reportedFindings, new Set()) !== null;
       const closure = receipts.find((receipt) => receipt.outcome === "verified_closed");
-      if (closure && input.complete && !reported) {
+      const remainingInvalid = diagnosed.diagnostics.items.some(
+        (item) =>
+          item.findingId === row.id &&
+          (item.status === "invalid" || item.status === "semantic_mismatch") &&
+          item.attemptId !== "coverage" &&
+          !extraKeys.has(`${item.attemptId}:${row.id}`),
+      );
+      const requiredIncomplete =
+        requiredFindingIds.includes(row.id) &&
+        (remainingInvalid || diagnosed.diagnostics.coverageComplete === false);
+      if (closure && input.complete && !reported && !requiredIncomplete) {
         return { ...row, status: "closed" as const, verification: closure };
       }
       const unevaluated = receipts.find((receipt) => receipt.outcome === "not_evaluated");
