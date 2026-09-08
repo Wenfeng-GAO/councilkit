@@ -20,7 +20,13 @@ import {
   extractFinalOutput,
   spawnEnvForDriver,
 } from "./driver-commands";
+import { classifyDriverTerminal } from "./driver-terminal";
 import { formatDurationMs } from "./duration";
+import {
+  type ExecutionRevision,
+  type ToolFingerprint,
+  verifySpawnFingerprint,
+} from "./invocation-manifest";
 import { LiveEventCollector, type RawLiveEvent } from "./live-events";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -42,6 +48,8 @@ export type AttemptStatus = "success" | "failure";
 export interface AttemptFailure {
   code: string;
   message: string;
+  errorClass?: string;
+  retryable?: boolean;
 }
 
 /** Normalized exit code (P1-4): a subprocess killed by timeout/abort is recorded
@@ -185,6 +193,10 @@ export interface RunnerOptions {
    * delete-then-recreate path; absent for callers that don't own a workspace
    * (probe / Aggregator never retry, and tests can inject a fake). */
   rebuildWorkspaceBeforeRetry?: (spec: AttemptSpec) => void | Promise<void>;
+  /** Frozen executable fingerprints; spawn is refused on drift. */
+  frozenTools?: readonly ToolFingerprint[];
+  /** Explicit operator-recorded replacement binaries for this run. */
+  executionRevision?: ExecutionRevision | null;
 }
 
 export interface RunAttemptsOutcome {
@@ -324,6 +336,7 @@ export async function runAttempts(
  * runner. A second failure is final — there is never a third try. */
 function shouldRetry(result: AttemptResult, signal: AbortSignal): boolean {
   if (signal.aborted) return false;
+  if (result.failure?.retryable === false) return false;
   if (result.failure?.code !== "EXIT") return false;
   if (typeof result.exitCode !== "number" || result.exitCode === 0) return false;
   return result.durationMs < 120_000;
@@ -343,6 +356,8 @@ export async function spawnOnce(
     onActivity: opts.onActivity,
     onLiveEvent: opts.onLiveEvent,
     timers: opts.timers,
+    frozenTools: opts.frozenTools,
+    executionRevision: opts.executionRevision,
   });
 }
 
@@ -357,12 +372,38 @@ async function runOne(
     onActivity?: RunnerOptions["onActivity"];
     onLiveEvent?: RunnerOptions["onLiveEvent"];
     timers?: RunnerTimers;
+    frozenTools?: readonly ToolFingerprint[];
+    executionRevision?: ExecutionRevision | null;
   },
 ): Promise<AttemptResult> {
   const timers = opts.timers ?? defaultTimers;
   const started = timers.now();
   const spawnFn = opts.spawnImpl ?? defaultSpawn;
   let lastActivity: string | null = null;
+
+  if (opts.frozenTools && opts.frozenTools.length > 0) {
+    const verdict = verifySpawnFingerprint(spec, opts.frozenTools, opts.executionRevision);
+    if (!verdict.ok) {
+      return {
+        attemptId: spec.attemptId,
+        agentId: spec.agentId,
+        agentName: spec.agentName,
+        driverId: spec.driverId,
+        modelId: spec.modelId,
+        status: "failure",
+        output: "",
+        exitCode: null,
+        durationMs: 0,
+        workspace: spec.cwd,
+        failure: {
+          code: verdict.code,
+          message: verdict.message,
+          errorClass: "tool_drift",
+          retryable: false,
+        },
+      };
+    }
+  }
 
   // Heartbeat (P2-1): every heartbeatIntervalMs while the Attempt runs.
   // Always cleared in finally so a finished Attempt never heartbeats again
@@ -420,15 +461,42 @@ async function runOne(
 
   let failure: AttemptFailure | undefined;
   if (out.error !== undefined) {
-    failure = { code: "SPAWN_ERROR", message: out.error };
+    failure = { code: "SPAWN_ERROR", message: out.error, retryable: false };
   } else if (out.timedOut) {
-    failure = { code: "TIMEOUT", message: `timed out after ${formatDurationMs(opts.timeoutMs)}` };
+    failure = {
+      code: "TIMEOUT",
+      message: `timed out after ${formatDurationMs(opts.timeoutMs)}`,
+      retryable: false,
+    };
   } else if (out.aborted) {
-    failure = { code: "ABORTED", message: "aborted by cancellation signal" };
-  } else if (out.exitCode !== 0) {
-    failure = { code: "EXIT", message: formatExitFailure(out.exitCode, out.stderr) };
-  } else if (extracted === null || extracted.trim().length === 0) {
-    failure = { code: "NO_OUTPUT", message: "no final output extracted from driver" };
+    failure = { code: "ABORTED", message: "aborted by cancellation signal", retryable: false };
+  } else {
+    const terminal = classifyDriverTerminal({
+      stdout: out.stdout,
+      stderr: out.stderr,
+      exitCode: out.exitCode,
+    });
+    if (out.exitCode !== 0) {
+      failure = {
+        code: "EXIT",
+        message: terminal?.message ?? formatExitFailure(out.exitCode, out.stderr),
+        errorClass: terminal?.errorClass,
+        retryable: terminal?.retryable ?? true,
+      };
+    } else if (terminal && !terminal.retryable) {
+      failure = {
+        code: "EXIT",
+        message: terminal.message,
+        errorClass: terminal.errorClass,
+        retryable: false,
+      };
+    } else if (extracted === null || extracted.trim().length === 0) {
+      failure = {
+        code: "NO_OUTPUT",
+        message: "no final output extracted from driver",
+        retryable: false,
+      };
+    }
   }
 
   return {

@@ -31,6 +31,11 @@ import {
   parseLandingsText,
   parsePlanLockFile,
 } from "./cli-ledger";
+import { FINDING_GROUPS_FILE, type FindingGroupsFile, findingGroupsFileSchema } from "./finding-groups";
+import {
+  ASSESSMENT_DIAGNOSTICS_FILE,
+  assessmentDiagnosticsFileSchema,
+} from "./reviewer-assessment";
 import {
   CLI_RUN_STATUS_FILE,
   type CliRunLiveStatus,
@@ -101,6 +106,7 @@ export interface CliRunDetail extends CliRunSummary {
   planLock: PlanLockFile | null;
   landings: LandingRecord[];
   documents: CliRunDocumentDto[];
+  findingGroups: FindingGroupsFile | null;
 }
 
 export function isCliRunId(runId: string): boolean {
@@ -164,6 +170,7 @@ export function readCliRun(
   const planLock = readPlanLock(join(root, runId, CLI_RUN_PLAN_LOCK_FILE));
   const landings = readLandings(join(root, runId, CLI_RUN_LANDINGS_FILE));
   const documents = summary.kind === "squad" ? readSquadDocuments(join(root, runId)) : [];
+  const findingGroups = readOptionalFindingGroups(join(root, runId, FINDING_GROUPS_FILE));
   return {
     ...summary,
     markdown: report.text,
@@ -174,6 +181,7 @@ export function readCliRun(
     planLock,
     landings,
     documents,
+    findingGroups,
   };
 }
 
@@ -241,6 +249,18 @@ function readFindings(path: string): FindingsFile | null {
   const stat = safeLstat(path);
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
   return parseFindingsFile(readCapped(path, 512 * 1024).text);
+}
+
+function readOptionalFindingGroups(path: string): FindingGroupsFile | null {
+  const stat = safeLstat(path);
+  if (stat === null) return null;
+  if (!stat.isFile() || stat.isSymbolicLink()) return null;
+  try {
+    const parsed = findingGroupsFileSchema.safeParse(JSON.parse(readCapped(path, 256 * 1024).text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }
 
 function readPlanLock(path: string): PlanLockFile | null {
@@ -461,5 +481,19 @@ function readReviewEvidence(dir: string, runId: string, head: string): ReviewEvi
     prUrl: started?.task?.pr ?? null,
     againstRunId: started?.task?.against ?? null,
     ledger: readFindings(join(dir, CLI_RUN_FINDINGS_FILE)),
+    evidenceComplete: readEvidenceComplete(join(dir, ASSESSMENT_DIAGNOSTICS_FILE)),
   });
+}
+
+function readEvidenceComplete(path: string): boolean | undefined {
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return undefined;
+  try {
+    const parsed = assessmentDiagnosticsFileSchema.safeParse(
+      JSON.parse(readCapped(path, 256 * 1024).text),
+    );
+    return parsed.success ? parsed.data.coverageComplete : false;
+  } catch {
+    return false;
+  }
 }

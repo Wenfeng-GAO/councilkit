@@ -156,3 +156,17 @@ describe("cli bare CSRF token redaction (F8, no cookie present)", () => {
     expect(human).toContain(REDACT_PLACEHOLDER);
   });
 });
+
+describe("driver terminal secret hygiene", () => {
+  it("redacts sk- tokens from classified terminal messages", async () => {
+    const { classifyDriverTerminal } = await import("../src/auto/driver-terminal");
+    const terminal = classifyDriverTerminal({
+      stdout: "",
+      stderr: "authentication failed sk-abcdefghijklmnopqrstuvwxyz",
+      exitCode: 1,
+    });
+    expect(terminal?.errorClass).toBe("auth");
+    expect(terminal?.message).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+    expect(terminal?.message).toContain("[redacted]");
+  });
+});

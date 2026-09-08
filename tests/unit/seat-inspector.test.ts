@@ -1,4 +1,4 @@
-import { formatAttemptMs, matchSeatAttempt } from "@/lib/seat-inspector";
+import { formatAttemptMs, inspectorDuration, matchSeatAttempt } from "@/lib/seat-inspector";
 import { describe, expect, it } from "vitest";
 
 const seats = [
@@ -50,5 +50,17 @@ describe("formatAttemptMs", () => {
     expect(formatAttemptMs(900)).toBe("0s");
     expect(formatAttemptMs(4000)).toBe("4s");
     expect(formatAttemptMs(125000)).toBe("2m05s");
+  });
+});
+
+describe("inspectorDuration", () => {
+  const span = { hasTimeline: true, spanMs: 12_000, eventCount: 4 };
+
+  it("running seats keep receipt elapsed and do not overlay live span", () => {
+    expect(inspectorDuration(45_000, span, "running")).toBe("45s");
+  });
+
+  it("finished seats show receipt and process span separately", () => {
+    expect(inspectorDuration(90_000, span, "success")).toBe("1m30s · 过程 12s");
   });
 });

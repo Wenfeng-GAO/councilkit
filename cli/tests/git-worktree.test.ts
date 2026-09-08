@@ -57,4 +57,14 @@ describe("git worktree helpers", () => {
     });
     expect(pinned).toBe(sha);
   });
+
+  it("refuses to use a local ref when git fetch fails", async () => {
+    await expect(
+      resolveLocalPrSha({
+        repo,
+        branch: "feature",
+        runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "denied" }),
+      }),
+    ).rejects.toThrow(/stale local ref/);
+  });
 });

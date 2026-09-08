@@ -7,7 +7,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
 ## 前置条件
 
 - macOS（V1 仅支持 macOS）。
-- Node.js **22**（精确主版本；Runtime Host 启动时校验，其他主版本会以结构化错误拒绝启动并退出）。
+- Node.js **22**（精确主版本；`cli/package.json` `engines.node=^22` 是下限，不以最新 patch 冒充 floor。Runtime Host 启动时校验，其他主版本会以结构化错误拒绝启动并退出）。
 - pnpm。
 - Chromium（仅 `pnpm test:e2e` 需要）。
 - 至少一个已安装并登录的本机 CLI：
@@ -158,7 +158,8 @@ pnpm exec councilkit ideate "一句话创意" --background "用户、约束、�
 - **不经 Runtime Host**：CLI 直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK。claude 仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）；kimi 用 `-p`（无 `--auto`，自主权限由 config 提供）；codex 用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`；cursor-agent 用 `--print --output-format stream-json`，`auto` 省略 `--model`。
 - **信任模型**：全能力 + auto-approve + 隔离 cwd。子进程以**用户本人权限**运行、继承正常用户环境，**信任级等同于你亲手敲这条命令**。不可信 PR = PR 代码会被执行（测试/lint/构建），与 CI 同级风险，你用一条命令显式发起即视为知情同意。替代 permission flow 的不是策略引擎，而是「隔离 cwd + 用户同级信任 + 显式发起」三件套。
 - `--agents ... --aggregator <id>`：agentIds→Attempts、aggregator∈agents；`--council <ref>`：`council.agentIds`→Attempts、`council.reporterAgentId`→Aggregator、`council.rounds` 忽略、`council.topic` 注入任务模板。默认 Aggregator 是 grok（`review-adversarial`）。Aggregator 自身也先跑一遍 Attempt（其 findings 进对比），再做一次聚合 spawn。
-- 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 默认 45m（cld/kimi/grok），`--codex-timeout` 默认 90m。`--concurrency` 默认 10。失败席：`councilkit review <url> --resume <run-id>` 只重跑失败 Attempt，成功席复用。
+- 失败 tolerate：单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常；**瞬态失败（<120s 内非零 EXIT）自动重试一次**（quota/auth/model、超时/无输出/探针失败不重试），transcript 记录 `attemptNumber`/`retryOf`；全失败 → 不聚合、确定性失败报告、exit 4；聚合失败 → INCOMPLETE 报告 + exit 4；SIGINT → 尽力落盘、exit 130。`--timeout` 默认 45m（cld/kimi/grok），`--codex-timeout` 默认 90m。`--concurrency` 默认 10。失败席：`councilkit review <url> --resume <run-id>` 只重跑失败 Attempt，成功席复用；恢复入口先读 `runs/<run-id>/invocation-manifest.v1.json`（含 `--focus`/`--task`，shell 单引号转义）。
+- **Live Transcript**：每个 attempt 的 driver 过程事件写入 `runs/<run-id>/live/<attemptId>.jsonl`（观察层，不进 transcript/report）。审查模板在 `cli/src/auto/templates/review.ts`。报告页席位「过程」里运行时长用 receipt/elapsed，live span 单列，running 时不以 span 盖过 elapsed。
 - **Finding 账本**：每次 review 产生 `findings.json`，`--against <prior-run>` 优先保留原问题 ID，并保留独立审查者报告的发现。失败、未覆盖、聚合报告未再提及都不会关闭旧问题。`fix` 的复审默认带 `--against`。
 - **关闭证据**：`apply` 只记录 `repairClaim`。关闭需要成功的独立审查者提交结构化验证，绑定本次完整候选 SHA，并提供测试命令或代码位置；控制器核对审查 worktree 的 HEAD 与受跟踪文件没有变化。聚合器不能代写关闭凭据，仍成立的发现优先于关闭声明。旧 `closed` 没有验证凭据时显示“历史未验证”，重大项仍待处理。证据来自独立模型审查，不能理解为控制器已经重跑并认证了其所有测试。
 

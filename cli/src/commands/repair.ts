@@ -1,8 +1,9 @@
-import { realpathSync, writeFileSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
+import { loadFindingGroups } from "../auto/finding-groups";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
-import { isCompleteReviewRun } from "@shared/runtime/review-case";
+import { canExportRepairPackage } from "@shared/runtime/review-case";
 import { errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
@@ -33,15 +34,38 @@ export async function runRepair(argv: string[], out: OutputSink): Promise<void> 
   if (!run) throw errors.usage("review run not found");
   if (run.hasPlanLock && !run.planLock)
     throw errors.usage("plan.lock.json is invalid or truncated");
+  const runDir = join(resolvePaths().runsRoot, runId);
+  let findingGroups = null;
+  try {
+    let findingsBytes: string | undefined;
+    try {
+      findingsBytes = readFileSync(join(runDir, "findings.json"), "utf8");
+    } catch {
+      findingsBytes = undefined;
+    }
+    findingGroups = loadFindingGroups({
+      runDir,
+      ledger: {
+        runId,
+        sha: run.reviewEvidence?.sha ?? null,
+        findings: run.findings,
+        againstRunId: run.reviewEvidence?.againstRunId ?? null,
+      },
+      findingsBytes,
+    });
+  } catch (error) {
+    throw errors.usage(error instanceof Error ? error.message : "invalid finding-groups sidecar");
+  }
   let task: RepairPackage;
   try {
     task = buildRepairPackage({
       runId,
-      complete: isCompleteReviewRun(run),
+      complete: canExportRepairPackage(run),
       prUrl: run.reviewEvidence?.prUrl ?? null,
       ledger: { runId, sha: run.reviewEvidence?.sha ?? null, findings: run.findings },
       planLock: run.planLock,
       clusterId: typeof values.cluster === "string" ? values.cluster : undefined,
+      findingGroups,
     });
   } catch (error) {
     throw errors.usage(error instanceof Error ? error.message : "invalid repair source");

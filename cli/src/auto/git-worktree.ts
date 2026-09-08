@@ -41,25 +41,26 @@ export async function resolveLocalPrSha(opts: {
     }
     return pinned;
   }
-  await runCommand({
+  const fetched = await runCommand({
     executable: "git",
     argv: ["fetch", "origin", opts.branch, "--update-head-ok"],
     cwd: opts.repo,
     env,
     timeoutMs: 5 * 60 * 1000,
   });
-  const candidates = [
-    `refs/remotes/origin/${opts.branch}`,
-    `refs/heads/${opts.branch}`,
-    opts.branch,
-  ];
-  for (const ref of candidates) {
-    const sha = await gitRevParse(opts.repo, ref, runCommand, env);
-    if (sha !== null) return sha;
+  if (fetched.exitCode !== 0) {
+    throw errors.runFailed(
+      `git fetch origin ${opts.branch} failed; refusing to review a stale local ref`,
+    );
   }
-  throw errors.usage(
-    `branch "${opts.branch}" is not in the local clone. Fetch it, or pass --repo to the right checkout.`,
-  );
+  const originRef = `refs/remotes/origin/${opts.branch}`;
+  const sha = await gitRevParse(opts.repo, originRef, runCommand, env);
+  if (sha === null) {
+    throw errors.usage(
+      `branch "${opts.branch}" was fetched but origin/${opts.branch} is not a usable SHA`,
+    );
+  }
+  return sha;
 }
 
 export async function addDetachedWorktree(opts: {

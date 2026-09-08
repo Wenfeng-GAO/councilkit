@@ -24,6 +24,9 @@ export { parseAntCodePrUrl };
  * Keeps the whole prompt well under ARG_MAX even with many Attempts. */
 export const MAX_ATTEMPT_OUTPUT_IN_PROMPT = 100 * 1024;
 
+/** Distinctive marker so spawn fakes and classify() can detect a correction. */
+export const CORRECTION_PROMPT_MARKER = "有界 assessment 格式纠错";
+
 /** Total byte budget for the assembled aggregate prompt. kimi delivers the
  * prompt as an argv element, so the whole prompt must stay under ARG_MAX; this
  * budget is enforced by proportional truncation then oldest-output omission. */
@@ -48,12 +51,20 @@ export interface ReviewTask {
   againstLedger?: string;
 }
 
+export interface FrozenAttemptContext {
+  headSha: string;
+  mergeBaseSha: string | null;
+  diffHash: string;
+  verifiedCli: string;
+}
+
 export interface AttemptPromptInput {
   agentName: string;
   personaPrompt: string;
   /** PR reviews with a local clone use a detached worktree; otherwise empty cwd. */
   workspaceMode?: "empty" | "worktree";
   task: ReviewTask;
+  frozenContext?: FrozenAttemptContext;
 }
 
 const ATTEMPT_CONTRACT = `## 发现
@@ -172,16 +183,46 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
       "全量 build 前先评估时长，优先定向测试。",
     );
   }
-  // The diff-to-file guidance is PR-specific (gh pr diff / antcode pr diff):
-  // under `--task` there is no PR target, so asking the reviewer to land a PR
-  // diff first is meaningless noise (reviewer finding: it was injected
-  // unconditionally, even in --task mode).
-  if (input.task.pr && input.task.pr.trim().length > 0) {
+  // The diff-to-file guidance is PR-specific. A frozen snapshot replaces
+  // per-seat `gh pr diff` / `antcode pr diff` so every Attempt sees the same
+  // colorless bytes. `--task` has no PR target, so neither hint is injected.
+  if (input.frozenContext) {
+    const merge = input.frozenContext.mergeBaseSha ?? "unknown";
+    lines.push(
+      `冻结审查上下文已写入本工作区 review-context.md / review-context.diff（head ${input.frozenContext.headSha}，merge-base ${merge}，diff sha256 ${input.frozenContext.diffHash}）。`,
+      `已验证 CLI：${input.frozenContext.verifiedCli}。不要再自行 gh pr diff / antcode pr diff。`,
+    );
+  } else if (input.task.pr && input.task.pr.trim().length > 0) {
     lines.push("先用 gh pr diff / antcode pr diff 落盘到文件再分段读取，避免盲目目录探索。");
   }
   lines.push("", "## 输出契约（最终消息即交付物，过程输出不算）", "", ATTEMPT_CONTRACT);
   lines.push("", "只输出上面的 Markdown，不要输出多余寒暄或过程日志。");
   return lines.join("\n");
+}
+
+export function buildCorrectionPrompt(input: {
+  agentName: string;
+  requestedFindingIds: readonly string[];
+  errorPaths: readonly string[];
+  candidateSha: string;
+}): string {
+  const ids = input.requestedFindingIds.map((id) => `- ${id}`).join("\n");
+  const paths = input.errorPaths.map((path) => `- ${path}`).join("\n");
+  return [
+    `你是 ${input.agentName}，正在做${CORRECTION_PROMPT_MARKER}。`,
+    "",
+    "只重发 requested finding ID 的 councilkit-findings fenced JSON 数组。",
+    "禁止改 outcome、method、reason、evidence；禁止新增 ID；禁止 verifiedAt 或其它额外键。",
+    `候选 SHA 必须仍是 ${input.candidateSha}。`,
+    "",
+    "Requested IDs:",
+    ids || "- (none)",
+    "",
+    "Diagnosed error paths:",
+    paths || "- (none)",
+    "",
+    "只输出一个 ```councilkit-findings 代码块。",
+  ].join("\n");
 }
 
 export interface AttemptSummaryForAggregate {

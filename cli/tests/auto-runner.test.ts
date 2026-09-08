@@ -6,12 +6,21 @@
  * ChildProcess (EventEmitter + PassThrough) — never a real subprocess.
  */
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AttemptSpec } from "../src/auto/driver-commands";
+import { fingerprintExecutable } from "../src/auto/invocation-manifest";
 import { LiveEventCollector, type RawLiveEvent } from "../src/auto/live-events";
 import {
   type AttemptResult,
@@ -326,6 +335,35 @@ describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", ()
     expect(finishes[1].retryOf).toBe(1);
   });
 
+  it("refuses spawn when frozen tool bytes drift and does not retry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-runner-fp-"));
+    const bin = join(dir, "cld");
+    writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    chmodSync(bin, 0o755);
+    const frozen = fingerprintExecutable("claude-stream-json", bin);
+    writeFileSync(bin, "#!/bin/sh\nexit 99\n");
+    let spawnCalls = 0;
+    try {
+      const result = await spawnOnce(
+        { ...spec("0"), executable: bin, driverId: "claude-stream-json" },
+        {
+          frozenTools: [frozen],
+          spawnImpl: async () => {
+            spawnCalls += 1;
+            return { stdout: "ok", exitCode: 0, timedOut: false, aborted: false };
+          },
+        },
+      );
+      expect(spawnCalls).toBe(0);
+      expect(result.status).toBe("failure");
+      expect(result.failure?.code).toBe("DRIVER_DRIFT");
+      expect(result.failure?.retryable).toBe(false);
+      expect(result.failure?.errorClass).toBe("tool_drift");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does NOT retry when the EXIT failure takes exactly 120000ms (boundary)", async () => {
     const { spawn, calls } = exitFailSpawn();
     const { results } = await runAttempts([spec("0")], {
@@ -335,6 +373,55 @@ describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", ()
     expect(calls()).toBe(1);
     expect(results[0].attemptNumber).toBe(1);
     expect(results[0].retryOf).toBeUndefined();
+  });
+
+  it("does NOT retry a quota EXIT even when duration is under 120s", async () => {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return {
+        stdout: JSON.stringify({
+          type: "error",
+          error: { type: "usage_limit_exceeded", message: "quota exceeded" },
+        }),
+        stderr: "warning: stale cache",
+        exitCode: 1,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 1_000]),
+    });
+    expect(calls).toBe(1);
+    expect(results[0]?.failure?.errorClass).toBe("quota");
+    expect(results[0]?.failure?.retryable).toBe(false);
+    expect(results[0]?.retryOf).toBeUndefined();
+  });
+
+  it("treats an exit-0 structured quota failure as a non-retryable EXIT", async () => {
+    let calls = 0;
+    const spawn: SpawnImpl = async () => {
+      calls++;
+      return {
+        stdout: JSON.stringify({
+          type: "error",
+          error: { type: "usage_limit_exceeded", message: "quota exceeded" },
+        }),
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    const { results } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      timers: stepClock([0, 500]),
+    });
+    expect(calls).toBe(1);
+    expect(results[0]?.status).toBe("failure");
+    expect(results[0]?.failure?.errorClass).toBe("quota");
+    expect(results[0]?.failure?.retryable).toBe(false);
   });
 
   it("does NOT retry a TIMEOUT failure", async () => {

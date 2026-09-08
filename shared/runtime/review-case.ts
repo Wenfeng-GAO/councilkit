@@ -12,6 +12,7 @@ export const reviewEvidenceSchema = z
     blockingIds: z.array(z.string()).max(200),
     unverifiedFixIds: z.array(z.string()).max(200),
     openIds: z.array(z.string()).max(200),
+    evidenceComplete: z.boolean().optional(),
   })
   .strict();
 export type ReviewEvidence = z.infer<typeof reviewEvidenceSchema>;
@@ -36,6 +37,7 @@ export function summarizeReviewEvidence(input: {
   prUrl: string | null;
   againstRunId: string | null;
   ledger: FindingsFile | null;
+  evidenceComplete?: boolean;
 }): ReviewEvidence {
   const ledger = input.ledger?.runId === input.runId ? input.ledger : null;
   const sha = /^[0-9a-f]{40}$/i.test(ledger?.sha ?? "") ? (ledger?.sha ?? null) : null;
@@ -53,6 +55,7 @@ export function summarizeReviewEvidence(input: {
     openIds: unresolved
       .filter((row) => row.status !== "accepted" || isFindingBlocking(row, sha))
       .map((row) => row.id),
+    ...(input.evidenceComplete === undefined ? {} : { evidenceComplete: input.evidenceComplete }),
   };
 }
 
@@ -68,6 +71,12 @@ export function isCompleteReviewRun(run: ReviewCaseRun | null | undefined): bool
   return (
     run?.kind === "review" && run.status === "completed" && run.reviewEvidence?.complete === true
   );
+}
+
+/** Execution success is not enough when required assessments are missing or invalid. */
+export function canExportRepairPackage(run: ReviewCaseRun | null | undefined): boolean {
+  if (!isCompleteReviewRun(run)) return false;
+  return run?.reviewEvidence?.evidenceComplete !== false;
 }
 
 /** Each run contributes once, and only through the selected baseline's against chain. */

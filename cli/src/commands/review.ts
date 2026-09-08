@@ -1,12 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { type Stats, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import {
   CLI_RUN_STATUS_FILE,
   type CliRunLiveHeartbeat,
   liveStateFromRecords,
   withLiveHeartbeats,
 } from "@shared/runtime/cli-run-progress";
+import {
+  type DiagnosedAssessment,
+  diagnoseAttemptAssessments,
+} from "@shared/runtime/reviewer-assessment";
 import { reviewModelsSchema } from "@shared/runtime/schemas";
 /**
  * `councilkit review` — N fully-autonomous agents independently review the same
@@ -29,7 +34,22 @@ import {
   writeCanonicalReviewReport,
   writeReviewReportCopy,
 } from "../auto/aggregate";
-import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
+import {
+  appendCorrectionRecord,
+  assertCorrectionAllowed,
+  completeCorrectionRecord,
+  formatCorrectableIds,
+  loadAssessmentCorrections,
+  projectCorrectionOutput,
+  sha256Text,
+  writeAssessmentCorrections,
+} from "../auto/assessment-correction";
+import {
+  type RunCommand,
+  defaultRunCommand,
+  gitHeadSha,
+  inspectPullRequest,
+} from "../auto/checkout-pr";
 import {
   type AttemptSpec,
   DRIVER_PROBE_PROMPT,
@@ -40,6 +60,16 @@ import {
 import { formatDurationMs } from "../auto/duration";
 import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
 import {
+  type ExecutionRevision,
+  type ToolFingerprint,
+  fingerprintsFromSpecs,
+  formatResumeCommand,
+  readExecutionRevision,
+  readInvocationManifest,
+  resumeArgvFromManifest,
+  writeInvocationManifest,
+} from "../auto/invocation-manifest";
+import {
   type FindingsFile,
   againstDiffRange,
   formatLedgerForPrompt,
@@ -48,6 +78,11 @@ import {
 } from "../auto/ledger";
 import { LiveEventWriter, type RawLiveEvent } from "../auto/live-events";
 import { type LocalRepo, resolveLocalRepo } from "../auto/local-repo";
+import {
+  copyFrozenContextIntoWorkspace,
+  freezeReviewContext,
+  persistFrozenContext,
+} from "../auto/review-context";
 import { reviewModelAgents } from "../auto/review-models";
 import {
   type AttemptResult,
@@ -61,6 +96,7 @@ import {
   type ReviewTask,
   buildAggregatePrompt,
   buildAttemptPrompt,
+  buildCorrectionPrompt,
 } from "../auto/templates/review";
 import {
   type AggregationFinishedRecord,
@@ -552,34 +588,131 @@ export async function runReview(
   }
   probeAgents.set(probeKey(aggregatorAgent), aggregatorAgent);
 
-  const probeResults: DriverProbeRecord[] = [];
-  const probeCwd = join(runDir, "probe");
-  mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
-  const probeByModel = new Map<string, DriverProbeRecord>();
-  for (const [key, probeAgent] of probeAgents) {
+  const probeJobs = [...probeAgents.entries()].map(([key, probeAgent], index) => {
     const driverId = probeAgent.driverSelection.driverId;
-    const spec = buildProbeSpec(probeAgent, {
-      probeId: `probe-${driverId}`,
-      cwd: probeCwd,
-      prompt: DRIVER_PROBE_PROMPT,
-    });
-    const result = await spawnOnce(spec, {
-      timeoutMs: probeTimeoutMs(driverId),
-      signal: controller.signal,
-      spawnImpl: deps.spawnImpl,
-    });
-    probeResults.push({
-      driverId,
-      modelId: probeAgent.modelId,
-      status: result.status,
-      durationMs: result.durationMs,
-      failure: result.failure ?? null,
-    });
-    probeByModel.set(key, probeResults[probeResults.length - 1] as DriverProbeRecord);
-    out.progress(
-      `  probe ${driverId} (${probeAgent.modelId}) -> ${result.status === "success" ? "ok" : "unreachable"}`,
-    );
+    const probeId = `probe-${index}-${driverId}`;
+    const probeCwd = join(runDir, "probe", probeId);
+    mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
+    return {
+      key,
+      probeAgent,
+      probeId,
+      spec: buildProbeSpec(probeAgent, {
+        probeId,
+        cwd: probeCwd,
+        prompt: DRIVER_PROBE_PROMPT,
+      }),
+    };
+  });
+  const executionRevision = readExecutionRevision(runDir);
+  const frozenTools: ToolFingerprint[] =
+    resumeRaw !== undefined
+      ? (readInvocationManifest(runDir)?.tools ??
+        fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]))
+      : fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]);
+  if (resumeRaw === undefined) {
+    try {
+      writeInvocationManifest(runDir, {
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task: {
+          ...(task.pr ? { pr: task.pr } : {}),
+          ...(task.task ? { task: task.task } : {}),
+          ...(task.focus ? { focus: task.focus } : {}),
+          ...(task.against ? { against: task.against } : {}),
+        },
+        repoRealpath: localRepo ? localRepo.path : null,
+        reviewedSha: reviewedSha && /^[0-9a-f]{40}$/i.test(reviewedSha) ? reviewedSha : null,
+        timeoutMs,
+        concurrency: concurrency ?? null,
+        agents: attemptAgents.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          driverId: agent.driverSelection.driverId,
+          modelId: agent.modelId,
+          options: { ...agent.driverSelection.options },
+        })),
+        aggregator: {
+          id: aggregatorAgent.id,
+          driverId: aggregatorAgent.driverSelection.driverId,
+          modelId: aggregatorAgent.modelId,
+        },
+        tools: frozenTools,
+      });
+    } catch {
+      /* spawn-time check still uses in-memory frozenTools */
+    }
   }
+
+  const probeSlots: Array<DriverProbeRecord | undefined> = new Array(probeJobs.length);
+  const probeByModel = new Map<string, DriverProbeRecord>();
+  const runningProbe = new Set<number>();
+  const preflightWriter = createPreflightWriter(runDir, resumeRoot);
+  const probeSeats = (): Array<{
+    attemptId: string;
+    agentName: string;
+    driverId: string;
+    modelId: string;
+    status: "queued" | "running" | "success" | "failure";
+  }> =>
+    probeJobs.map((job, index) => ({
+      attemptId: job.probeId,
+      agentName: job.probeAgent.name,
+      driverId: job.probeAgent.driverSelection.driverId,
+      modelId: job.probeAgent.modelId,
+      status: probeSlots[index]
+        ? probeSlots[index]?.status === "success"
+          ? ("success" as const)
+          : ("failure" as const)
+        : runningProbe.has(index)
+          ? ("running" as const)
+          : ("queued" as const),
+    }));
+  await preflightWriter.write(probeSeats());
+
+  const PROBE_CONCURRENCY = 2;
+  let probeCursor = 0;
+  const probeWorker = async (): Promise<void> => {
+    for (;;) {
+      if (controller.signal.aborted) break;
+      const i = probeCursor++;
+      if (i >= probeJobs.length) break;
+      const job = probeJobs[i];
+      if (!job) break;
+      runningProbe.add(i);
+      await preflightWriter.write(probeSeats());
+      const result = await spawnOnce(job.spec, {
+        timeoutMs: probeTimeoutMs(job.probeAgent.driverSelection.driverId),
+        signal: controller.signal,
+        spawnImpl: deps.spawnImpl,
+        frozenTools,
+        executionRevision,
+      });
+      const record: DriverProbeRecord = {
+        driverId: job.probeAgent.driverSelection.driverId,
+        modelId: job.probeAgent.modelId,
+        status: result.status,
+        durationMs: result.durationMs,
+        failure: persistableFailure(result.failure),
+      };
+      probeSlots[i] = record;
+      probeByModel.set(job.key, record);
+      runningProbe.delete(i);
+      await preflightWriter.write(probeSeats());
+      out.progress(
+        `  probe ${record.driverId} (${record.modelId}) -> ${result.status === "success" ? "ok" : "unreachable"}`,
+      );
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(1, probeJobs.length)) }, () =>
+      probeWorker(),
+    ),
+  );
+  const probeResults: DriverProbeRecord[] = probeSlots.filter(
+    (row): row is DriverProbeRecord => row !== undefined,
+  );
 
   const transcript: ReviewTranscriptRecord[] = [...priorRecords];
   if (resumeRaw === undefined) {
@@ -607,6 +740,38 @@ export async function runReview(
       probe: probeResults,
     };
     transcript.push(startedRecord);
+    try {
+      writeInvocationManifest(runDir, {
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task: {
+          ...(task.pr ? { pr: task.pr } : {}),
+          ...(task.task ? { task: task.task } : {}),
+          ...(task.focus ? { focus: task.focus } : {}),
+          ...(task.against ? { against: task.against } : {}),
+        },
+        repoRealpath: localRepo ? localRepo.path : null,
+        reviewedSha: reviewedSha && /^[0-9a-f]{40}$/i.test(reviewedSha) ? reviewedSha : null,
+        timeoutMs,
+        concurrency: concurrency ?? null,
+        agents: attemptAgents.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          driverId: agent.driverSelection.driverId,
+          modelId: agent.modelId,
+          options: { ...agent.driverSelection.options },
+        })),
+        aggregator: {
+          id: aggregatorAgent.id,
+          driverId: aggregatorAgent.driverSelection.driverId,
+          modelId: aggregatorAgent.modelId,
+        },
+        tools: frozenTools,
+      });
+    } catch {
+      /* manifest is observational for resume; missing file falls back to task fields */
+    }
   } else {
     // Append — never rewrite — the resume marker with THIS run's probe set.
     const resumedRecord: ReviewResumedRecord = {
@@ -636,7 +801,7 @@ export async function runReview(
       output: r.status === "success" ? r.output : null,
       exitCode: r.exitCode,
       durationMs: r.durationMs,
-      failure: r.failure ?? null,
+      failure: persistableFailure(r.failure),
       activity: r.activity,
       // Transient-retry chain (plan §"瞬态重试"): every physical execution is
       // recorded; the retried second try carries retryOf=1. Older records and
@@ -695,7 +860,35 @@ export async function runReview(
     // Aggregator driver unreachable → the whole run aborts BEFORE any attempt
     // spawn or workspace creation: exit 3, deterministic INCOMPLETE report.
     const aggProbe = probeByModel.get(probeKey(aggregatorAgent));
-    if (aggProbe === undefined || aggProbe.status !== "success") {
+    if (controller.signal.aborted) {
+      for (const spec of runnableSpecs) {
+        const cancelled: AttemptResult = {
+          attemptId: spec.attemptId,
+          agentId: spec.agentId,
+          agentName: spec.agentName,
+          driverId: spec.driverId,
+          modelId: spec.modelId,
+          status: "failure",
+          output: "",
+          exitCode: "killed",
+          durationMs: 0,
+          workspace: spec.cwd,
+          failure: {
+            code: "ABORTED",
+            message: "run aborted by signal",
+          },
+        };
+        presolved.push(cancelled);
+        recordAttemptFinished(cancelled);
+      }
+      const params = buildExecuteParams();
+      outcome = await finalize(params, new Date().toISOString(), mergeOrdered(presolved), null, {
+        status: "interrupted",
+        exitCode: EXIT.interrupted,
+        incomplete: true,
+        failure: { phase: "probe", code: "ABORTED", message: "run aborted by signal" },
+      });
+    } else if (aggProbe === undefined || aggProbe.status !== "success") {
       // Attempts whose own driver probed OK never run either (the run aborts
       // before the runner): record them as CANCELLED so every attempt has a
       // terminal transcript record and appears in the report.
@@ -758,9 +951,13 @@ export async function runReview(
       trustedRoot = trustedRootBound;
       if (localRepo !== null && task.pr) {
         let branch = "HEAD";
+        let targetRef: string | null = null;
+        let host: "github" | "antcode" = "github";
         if (deps.worktreeRef === undefined) {
           const meta = await inspectPullRequest(task.pr, runCommand, env);
           branch = meta.branch;
+          targetRef = meta.baseBranch ?? null;
+          host = meta.host;
           out.progress(`  worktree branch: ${branch}`);
         }
         const sha = await resolveLocalPrSha({
@@ -772,6 +969,34 @@ export async function runReview(
         });
         reviewedSha = sha;
         out.progress(`  worktree ${sha.slice(0, 12)}`);
+        const frozen = await freezeReviewContext({
+          repo: localRepo.path,
+          headSha: sha,
+          sourceRef: branch,
+          targetRef,
+          host,
+          runCommand,
+          env,
+        });
+        persistFrozenContext(runDir, frozen);
+        const frozenPrompt = {
+          headSha: frozen.headSha,
+          mergeBaseSha: frozen.mergeBaseSha,
+          diffHash: frozen.diffHash,
+          verifiedCli: frozen.verifiedCli,
+        };
+        for (let i = 0; i < rerunSpecs.length; i++) {
+          const agent = rerunAgents[i];
+          const spec = rerunSpecs[i];
+          if (!agent || !spec) continue;
+          spec.prompt = buildAttemptPrompt({
+            agentName: agent.name,
+            personaPrompt: agent.personaPrompt,
+            task,
+            workspaceMode: "worktree",
+            frozenContext: frozenPrompt,
+          });
+        }
         if (againstFindings?.sha) {
           const widened = againstDiffRange({
             findingsSha: againstFindings.sha,
@@ -790,6 +1015,7 @@ export async function runReview(
                 personaPrompt: agent.personaPrompt,
                 task,
                 workspaceMode: "worktree",
+                frozenContext: frozenPrompt,
               });
             }
             out.progress(`  against range: ${widened}`);
@@ -808,11 +1034,15 @@ export async function runReview(
             runCommand,
             env,
           });
+          copyFrozenContextIntoWorkspace(runDir, spec.cwd);
         }
       } else {
         for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
       }
       recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
+      if (existsSync(join(runDir, "review-context.md"))) {
+        copyFrozenContextIntoWorkspace(runDir, aggregatorWorkspace);
+      }
       const params = buildExecuteParams();
       outcome = await executeReview(params, runnableSpecs);
     }
@@ -862,6 +1092,10 @@ export async function runReview(
       liveBeats,
       runCommand,
       reviewedSha,
+      attemptAgents,
+      frozenTools,
+      executionRevision,
+      extraAssessments: [],
       // Heartbeat always writes status.json (including --json). Human mode
       // also prints a 仍在运行 line; JSON mode stays silent on stderr.
       heartbeat: { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
@@ -919,6 +1153,10 @@ interface ExecuteParams {
   liveBeats: Map<string, CliRunLiveHeartbeat>;
   runCommand: RunCommand;
   reviewedSha: string | null;
+  attemptAgents: AgentRecord[];
+  frozenTools: readonly ToolFingerprint[];
+  executionRevision: ExecutionRevision | null;
+  extraAssessments: DiagnosedAssessment[];
 }
 
 async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<ReviewOutcome> {
@@ -955,6 +1193,8 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       noteLiveBeat(p, attemptId, undefined, lastActivity, true);
     },
     onLiveEvent,
+    frozenTools: p.frozenTools,
+    executionRevision: p.executionRevision,
     onAttemptFinish: (r: AttemptResult) => {
       liveWriter.flush(r.attemptId);
       // Mark resume-rerun results BEFORE persistence — assigning after
@@ -1072,6 +1312,8 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     });
   }
 
+  await runAssessmentCorrections(p, results);
+
   // --- aggregation --------------------------------------------------------
   const aggregatePrompt = buildAggregatePrompt({
     aggregatorName: p.aggregatorAgent.name,
@@ -1100,6 +1342,8 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     ),
     signal: p.signal,
     spawnImpl: p.spawnImpl,
+    frozenTools: p.frozenTools,
+    executionRevision: p.executionRevision,
     heartbeatIntervalMs: p.heartbeat?.intervalMs,
     timers: p.heartbeat?.timers,
     onHeartbeat: (
@@ -1130,7 +1374,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     output: aggregation.status === "success" ? aggregation.output : null,
     exitCode: aggregation.exitCode,
     durationMs: aggregation.durationMs,
-    failure: aggregation.failure ?? null,
+    failure: persistableFailure(aggregation.failure),
     activity: aggregation.activity,
   };
   p.transcript.push(aggRec);
@@ -1370,6 +1614,7 @@ async function finalize(
         : null,
       attempts: results,
       verifiedAttemptShas,
+      extraAssessments: p.extraAssessments,
       reviewComplete:
         outcomeFields.status === "completed" &&
         !outcomeFields.incomplete &&
@@ -1401,7 +1646,7 @@ async function finalize(
     failure: outcomeFields.failure,
     resumeCommand:
       outcomeFields.incomplete && results.some((r) => r.status === "failure")
-        ? buildResumeCommand(p.runId, p.task)
+        ? buildResumeCommand(p.runId, p.task, p.runDir)
         : null,
   };
 }
@@ -1424,6 +1669,13 @@ function summarizeAttempt(r: AttemptResult): AttemptResult {
     attemptNumber: r.attemptNumber,
     retryOf: r.retryOf,
   };
+}
+
+function persistableFailure(
+  failure: AttemptResult["failure"] | null | undefined,
+): { code: string; message: string } | null {
+  if (!failure) return null;
+  return { code: failure.code, message: failure.message };
 }
 
 function createWorkspace(workspace: string): void {
@@ -1517,18 +1769,220 @@ function persistLiveStatus(
   atomicWriteFile(join(runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(next)}\n`);
 }
 
+function createPreflightWriter(
+  runDir: string,
+  resumeRoot: TrustedRoot | null,
+): {
+  write: (
+    seats: Array<{
+      attemptId: string;
+      agentName: string;
+      driverId: string;
+      modelId: string;
+      status: "queued" | "running" | "success" | "failure";
+    }>,
+  ) => Promise<void>;
+} {
+  let seq = 0;
+  let latestWritten = 0;
+  let tail = Promise.resolve();
+  return {
+    write(seats) {
+      const my = ++seq;
+      const snapshot = seats.map((seat) => ({ ...seat }));
+      tail = tail.then(() => {
+        if (my < latestWritten) return;
+        persistPreflightStatus(runDir, snapshot, resumeRoot);
+        latestWritten = my;
+      });
+      return tail;
+    },
+  };
+}
+
+async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult[]): Promise<void> {
+  const sha = p.reviewedSha;
+  if (!sha || !FULL_COMMIT_SHA.test(sha)) return;
+  let records = loadAssessmentCorrections(p.runDir);
+  for (const result of results) {
+    if (result.attemptId === "aggregator" || result.status !== "success") continue;
+    if (!result.workspace) continue;
+    const agent = p.attemptAgents.find((row) => row.id === result.agentId);
+    if (!agent) continue;
+    const diagnosed = diagnoseAttemptAssessments({
+      attemptId: result.attemptId,
+      output: result.output,
+      candidateSha: sha,
+    });
+    const { findingIds, errorPaths } = formatCorrectableIds(diagnosed.items, result.attemptId);
+    if (findingIds.length === 0) continue;
+    const identity = {
+      agentId: result.agentId,
+      driverId: result.driverId,
+      modelId: result.modelId,
+    };
+    const frozenIdentity = {
+      agentId: agent.id,
+      driverId: agent.driverSelection.driverId,
+      modelId: agent.modelId,
+    };
+    const head = await gitHeadSha(result.workspace, p.runCommand, process.env);
+    const diff = await p.runCommand({
+      executable: "git",
+      argv: ["diff", "--quiet", "HEAD"],
+      cwd: result.workspace,
+      env: process.env,
+    });
+    const trackedClean = diff.exitCode === 0;
+    const tool = p.frozenTools.find((row) => row.name === result.driverId);
+    try {
+      assertCorrectionAllowed({
+        records,
+        attemptId: result.attemptId,
+        attemptStatus: result.status,
+        identity,
+        frozenIdentity,
+        candidateSha: sha,
+        workspaceHead: head ?? "",
+        trackedClean,
+      });
+    } catch {
+      continue;
+    }
+    if (!tool) continue;
+    const correctionId = `corr-${result.attemptId}`;
+    const intent = appendCorrectionRecord(records, {
+      correctionId,
+      sourceRunId: p.runId,
+      sourceAttemptId: result.attemptId,
+      identity,
+      sourceOutputSha256: sha256Text(result.output),
+      candidateSha: sha,
+      requestedFindingIds: findingIds,
+      errorPaths,
+      executionId: `exec-${result.attemptId}-1`,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      correctionOutputSha256: null,
+      accepted: false,
+      reason: "format",
+      toolFingerprint: { name: tool.name, realpath: tool.realpath, sha256: tool.sha256 },
+      trackedCleanBefore: true,
+      trackedCleanAfter: null,
+    });
+    writeAssessmentCorrections(p.runDir, intent);
+    records = intent;
+    const spec = buildSpawnSpec(agent, {
+      attemptId: `corr-${result.attemptId}`,
+      workspace: result.workspace,
+      prompt: buildCorrectionPrompt({
+        agentName: result.agentName,
+        requestedFindingIds: findingIds,
+        errorPaths,
+        candidateSha: sha,
+      }),
+    });
+    p.out.progress(
+      `  correction ${result.agentName} re-emitting ${findingIds.length} assessment(s)`,
+    );
+    const spawned = await spawnOnce(spec, {
+      timeoutMs: timeoutForDriver(agent.driverSelection.driverId, p.timeoutMs, p.codexTimeoutMs),
+      signal: p.signal,
+      spawnImpl: p.spawnImpl,
+      frozenTools: p.frozenTools,
+      executionRevision: p.executionRevision,
+    });
+    mkdirSync(join(p.runDir, "corrections"), { recursive: true, mode: 0o700 });
+    atomicWriteFile(join(p.runDir, "corrections", `${result.attemptId}.md`), `${spawned.output}\n`);
+    const afterDiff = await p.runCommand({
+      executable: "git",
+      argv: ["diff", "--quiet", "HEAD"],
+      cwd: result.workspace,
+      env: process.env,
+    });
+    const projected = projectCorrectionOutput({
+      originalOutput: result.output,
+      correctionOutput: spawned.output,
+      candidateSha: sha,
+      requestedFindingIds: findingIds,
+      sourceAttemptId: result.attemptId,
+    });
+    const accepted =
+      spawned.status === "success" && !projected.substantialChange && projected.valid.length > 0;
+    records = completeCorrectionRecord(records, {
+      correctionId,
+      endedAt: new Date().toISOString(),
+      correctionOutputSha256: sha256Text(spawned.output),
+      accepted,
+      trackedCleanAfter: afterDiff.exitCode === 0,
+      reason: projected.substantialChange
+        ? "substantial_rejudgment"
+        : accepted
+          ? "format"
+          : "rejected",
+    });
+    writeAssessmentCorrections(p.runDir, records);
+    if (accepted) p.extraAssessments.push(...projected.valid);
+  }
+}
+
+function persistPreflightStatus(
+  runDir: string,
+  seats: Array<{
+    attemptId: string;
+    agentName: string;
+    driverId: string;
+    modelId: string;
+    status: "queued" | "running" | "success" | "failure";
+  }>,
+  resumeRoot: TrustedRoot | null = null,
+): void {
+  if (resumeRoot !== null) revalidateTrustedRoot(resumeRoot);
+  const now = new Date().toISOString();
+  const live = {
+    version: 1 as const,
+    status: "running" as const,
+    progress: {
+      phase: "preflight" as const,
+      updatedAt: now,
+      attempts: seats.map((seat) => ({
+        attemptId: seat.attemptId,
+        agentName: seat.agentName,
+        driverId: seat.driverId,
+        modelId: seat.modelId,
+        role: "attempt" as const,
+        status: seat.status,
+        durationMs: null,
+        lastActivity: null,
+      })),
+    },
+    pipeline: null,
+  };
+  atomicWriteFile(join(runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(live)}\n`);
+}
+
 function timeoutForDriver(driverId: string, timeoutMs: number, codexTimeoutMs: number): number {
   return driverId === "codex-app-server" ? codexTimeoutMs : timeoutMs;
 }
 
-function buildResumeCommand(runId: string, task: ReviewTask): string {
+function buildResumeCommand(runId: string, task: ReviewTask, runDir?: string): string {
+  if (runDir) {
+    const manifest = readInvocationManifest(runDir);
+    if (manifest && manifest.runId === runId) {
+      return formatResumeCommand(resumeArgvFromManifest(manifest));
+    }
+  }
   if (task.pr && task.pr.trim().length > 0) {
-    return `councilkit review ${task.pr.trim()} --resume ${runId}`;
+    return `councilkit review ${shellSingleQuote(task.pr.trim())} --resume ${shellSingleQuote(runId)}`;
   }
   if (task.task && task.task.trim().length > 0) {
-    return `councilkit review --resume ${runId} --task ${JSON.stringify(task.task.trim())}`;
+    return `councilkit review --resume ${shellSingleQuote(runId)} --task ${shellSingleQuote(task.task.trim())}`;
   }
-  return `councilkit review --resume ${runId}`;
+  return `councilkit review --resume ${shellSingleQuote(runId)}`;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function noteLiveBeat(

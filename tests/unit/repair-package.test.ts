@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
 import type { FindingsFile, PlanLockFile } from "@shared/runtime/cli-ledger";
 import {
+  FINDING_GROUPS_KIND,
+  type FindingGroupsFile,
+  FindingGroupsError,
+  validateFindingGroups,
+} from "@shared/runtime/finding-groups";
+import {
   buildRepairPackage,
   repairExportCommand,
   repairPackageSchema,
@@ -169,4 +175,75 @@ describe("repair package", () => {
   it("produces shell-literal export commands without injecting a cluster", () => {
     expect(repairExportCommand(runId, "a'b")).toContain("--cluster 'a'\\''b'");
   });
+  it("exports two original IDs with a shared rootCause without adding package fields", () => {
+    const raw = readFileSync(
+      new URL("../fixtures/repair-package-shared-root.v1.json", import.meta.url),
+      "utf8",
+    );
+    const value = JSON.parse(raw);
+    const parsed = repairPackageSchema.parse(value);
+    expect(parsed.findings.map((row) => row.id)).toEqual(["F-ALIAS-A", "F-ALIAS-B"]);
+    expect(new Set(parsed.findings.map((row) => row.rootCause))).toEqual(
+      new Set(["RC-STABLE-CANCEL"]),
+    );
+    expect(repairPackageSchema.safeParse({ ...value, canonicalId: "nope" }).success).toBe(false);
+  });
+  it("fills a shared rootCause from sidecar groups and falls back to id without sidecar", () => {
+    const source = ledger();
+    const groups = sampleGroups(source, "RC-STABLE-CANCEL", ["F-1", "F-2"]);
+    const grouped = buildRepairPackage({ ...input(), ledger: source, findingGroups: groups });
+    expect(grouped.findings.map((row) => row.id)).toEqual(["F-1", "F-2"]);
+    expect(grouped.findings.map((row) => row.rootCause)).toEqual([
+      "RC-STABLE-CANCEL",
+      "RC-STABLE-CANCEL",
+    ]);
+    const legacy = buildRepairPackage(input());
+    expect(legacy.findings[0]?.rootCause).toBe("F-1");
+    expect(legacy.findings[1]?.rootCause).toBe("F-2");
+  });
+  it("rejects a present sidecar with unknown members, conflicts, or the wrong run", () => {
+    const source = ledger();
+    expect(() =>
+      validateFindingGroups(sampleGroups(source, "RC", ["F-1", "missing"]), new Set(["F-1", "F-2"])),
+    ).toThrow(FindingGroupsError);
+    const conflict: FindingGroupsFile = {
+      ...sampleGroups(source, "RC-A", ["F-1"]),
+      groups: [
+        { rootCauseId: "RC-A", findingIds: ["F-1"], aliases: [], basis: "a" },
+        { rootCauseId: "RC-B", findingIds: ["F-1"], aliases: [], basis: "b" },
+      ],
+    };
+    expect(() => validateFindingGroups(conflict, new Set(["F-1", "F-2"]))).toThrow(/conflict/);
+    expect(() =>
+      buildRepairPackage({
+        ...input(),
+        findingGroups: sampleGroups({ ...source, runId: "other" }, "RC", ["F-1", "F-2"]),
+      }),
+    ).toThrow("finding-groups");
+  });
 });
+
+function sampleGroups(
+  ledgerFile: FindingsFile,
+  root: string,
+  ids: string[],
+): FindingGroupsFile {
+  return {
+    version: 1,
+    kind: FINDING_GROUPS_KIND,
+    source: {
+      runId: ledgerFile.runId,
+      sha: ledgerFile.sha ?? sha,
+      findingsSha256: "b".repeat(64),
+      againstRunId: null,
+    },
+    groups: [
+      {
+        rootCauseId: root,
+        findingIds: ids,
+        aliases: ids.slice(1),
+        basis: "explicit shared root; grouping is not close authority",
+      },
+    ],
+  };
+}

@@ -13,6 +13,7 @@ import {
   parsePlanDocument,
   persistFindingsFromReport,
   resolveClusterCloses,
+  classifyAgainstPriorWithAliases,
 } from "../src/auto/ledger";
 import type { LedgerFinding } from "../src/auto/ledger";
 import type { AttemptResult } from "../src/auto/runner";
@@ -148,6 +149,27 @@ describe("ledger classify", () => {
     expect(classified.find((row) => row.id === "b--two")?.status).toBe("open");
     expect(classified.find((row) => row.id === "c--ok")?.status).toBe("accepted");
     expect(classified.find((row) => row.id === "d--new")?.status).toBe("open");
+  });
+
+  it("records against-chain aliases without letting a shared root close either original ID", () => {
+    const prior = [
+      finding({ id: "F-ORIG", title: "cancel dispatch", status: "open", severity: "major" }),
+    ];
+    const next = [
+      finding({
+        id: "misc--cancel-again",
+        title: "wording changed",
+        text: "`F-ORIG` still fires after cancel",
+        status: "open",
+        severity: "major",
+      }),
+    ];
+    const classified = classifyAgainstPriorWithAliases(prior, next);
+    expect(classified.findings[0]?.id).toBe("F-ORIG");
+    expect(classified.aliases).toEqual([
+      expect.objectContaining({ originalId: "F-ORIG", aliasId: "misc--cancel-again" }),
+    ]);
+    expect(classified.findings[0]?.status).toBe("open");
   });
 
   it("sorts classified findings by severity then status", () => {
@@ -301,6 +323,22 @@ describe("independent finding verification", () => {
     { method: "code_trace", command: undefined },
   ])("rejects mismatched or unqualified close: %j", (overrides) => {
     expect(isFindingBlocking(verify([assessment(overrides)]), CANDIDATE_SHA)).toBe(true);
+  });
+  it("does not close on verifiedAt extras or locations ranges", () => {
+    expect(isFindingBlocking(verify([assessment({ verifiedAt: "2026-09-07T00:00:00.000Z" })]))).toBe(
+      true,
+    );
+    expect(
+      isFindingBlocking(
+        verify([
+          assessment({
+            method: "code_trace",
+            command: undefined,
+            locations: ["pkg/eventlog/log.go:1-20"],
+          }),
+        ]),
+      ),
+    ).toBe(true);
   });
   it("accepts an explicit source trace and records not_evaluated without closing", () => {
     expect(

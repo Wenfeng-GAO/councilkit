@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 /**
  * review command: arg-validation matrix + an end-to-end run with a fake spawn
  * (zero real processes, plan §测试). Asserts the report's five aggregation
@@ -25,8 +26,10 @@ import {
   parseFindingsFile,
 } from "@shared/runtime/cli-ledger";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ASSESSMENT_CORRECTIONS_FILE } from "../src/auto/assessment-correction";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
+import { CORRECTION_PROMPT_MARKER } from "../src/auto/templates/review";
 import { readReviewTranscript } from "../src/auto/transcript";
 import { dispatch } from "../src/cli";
 import { ReviewExit, runReview } from "../src/commands/review";
@@ -1006,6 +1009,154 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(outcome.incomplete).toBe(true);
     expect(outcome.attemptFailures).toHaveLength(1);
   });
+
+  it("corrects an invalid assessment once without overwriting original output", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const repo = seedGitRepo();
+    writeFileSync(join(repo, "source.ts"), "export const retained = true;\n");
+    execFileSync("git", ["add", "source.ts"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "candidate"], { cwd: repo });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const priorId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeeb";
+    const paths = resolvePaths();
+    mkdirSync(paths.runDir(priorId), { recursive: true });
+    writeFileSync(
+      join(paths.runDir(priorId), "findings.json"),
+      JSON.stringify({
+        version: 1,
+        runId: priorId,
+        extractedAt: "2026-08-24",
+        sha,
+        againstRunId: null,
+        againstRange: null,
+        findings: [
+          {
+            id: "persist--lost",
+            severity: "critical",
+            status: "open",
+            title: "Write failure loses text",
+            text: "write failure loses text",
+            source: "unique",
+            reviewer: "original",
+            files: ["source.ts"],
+          },
+        ],
+      }),
+    );
+    const invalidFence = `\`\`\`councilkit-findings\n${JSON.stringify([
+      {
+        findingId: "persist--lost",
+        candidateSha: sha,
+        outcome: "verified_closed",
+        method: "code_trace",
+        reason: "Failure now retains the unique copy",
+        evidence: "The error branch returns without clearing retained text",
+        locations: ["source.ts:1"],
+        verifiedAt: "2026-09-07T00:00:00.000Z",
+      },
+    ])}\n\`\`\``;
+    const validFence = `\`\`\`councilkit-findings\n${JSON.stringify([
+      {
+        findingId: "persist--lost",
+        candidateSha: sha,
+        outcome: "verified_closed",
+        method: "code_trace",
+        reason: "Failure now retains the unique copy",
+        evidence: "The error branch returns without clearing retained text",
+        locations: ["source.ts:1"],
+      },
+    ])}\n\`\`\``;
+    let correctionSpawns = 0;
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
+      if (input.prompt.includes("对比汇总")) {
+        return claudeEnvelope("## 概览\nReview complete\n## 结论\napprove");
+      }
+      if (input.prompt.includes(CORRECTION_PROMPT_MARKER)) {
+        correctionSpawns += 1;
+        return claudeEnvelope(validFence);
+      }
+      if (input.prompt.startsWith("你是 Alice，")) {
+        return claudeEnvelope(`## 发现\n无新问题\n## 结论\napprove\n${invalidFence}`);
+      }
+      return claudeEnvelope("## 发现\n无新问题\n## 结论\napprove");
+    };
+    const sink = makeSink();
+    let exitCode = -1;
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--pr",
+          "https://github.com/acme/repo/pull/9",
+          "--repo",
+          repo,
+          "--against",
+          priorId,
+        ],
+        sink,
+        { spawnImpl: spawn, worktreeRef: "HEAD" },
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExit);
+      exitCode = (error as ReviewExit).exitCode;
+    }
+    expect(exitCode).toBe(0);
+    expect(correctionSpawns).toBe(1);
+    const outcome = sink.finished as { runId: string; reportPath: string };
+    const runDir = paths.runDir(outcome.runId);
+    const transcript = readFileSync(paths.transcript(outcome.runId), "utf8");
+    expect(transcript).toContain("verifiedAt");
+    expect(existsSync(join(runDir, ASSESSMENT_CORRECTIONS_FILE))).toBe(true);
+    expect(existsSync(join(runDir, "corrections"))).toBe(true);
+    expect(readFileSync(outcome.reportPath, "utf8")).toContain("verifiedAt");
+    const originalOutputHash = sha256Of(
+      JSON.parse(
+        transcript
+          .trim()
+          .split("\n")
+          .find((line) => line.includes('"kind":"attempt.finished"')) ?? "{}",
+      ).output,
+    );
+    const resumeSink = makeSink();
+    let resumeCode = -1;
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--pr",
+          "https://github.com/acme/repo/pull/9",
+          "--repo",
+          repo,
+          "--against",
+          priorId,
+          "--resume",
+          outcome.runId,
+        ],
+        resumeSink,
+        { spawnImpl: spawn, worktreeRef: "HEAD" },
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExit);
+      resumeCode = (error as ReviewExit).exitCode;
+    }
+    expect(resumeCode).toBe(0);
+    expect(correctionSpawns).toBe(1);
+    const resumedTranscript = readFileSync(paths.transcript(outcome.runId), "utf8");
+    const resumedOutput = JSON.parse(
+      resumedTranscript
+        .trim()
+        .split("\n")
+        .find((line) => line.includes('"kind":"attempt.finished"')) ?? "{}",
+    ).output;
+    expect(sha256Of(resumedOutput)).toBe(originalOutputHash);
+  });
 });
 
 /**
@@ -1097,7 +1248,13 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
   async function runCapturing(
     args: string[],
     sink: FakeSink,
-    deps: { spawnImpl: SpawnImpl; timers?: RunnerTimers; heartbeatIntervalMs?: number },
+    deps: {
+      spawnImpl: SpawnImpl;
+      timers?: RunnerTimers;
+      heartbeatIntervalMs?: number;
+      worktreeRef?: string;
+      abortController?: AbortController;
+    },
   ): Promise<number> {
     let exitCode = -1;
     try {
@@ -2312,7 +2469,120 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     };
     expect(outcome.incomplete).toBe(true);
     expect(outcome.resumeCommand).toBe(
-      `councilkit review --resume ${outcome.runId} --task "the-task"`,
+      `councilkit review --resume '${outcome.runId}' --task 'the-task'`,
     );
   });
+
+  it("resume command from the frozen manifest keeps --focus and shell-quotes dollars", async () => {
+    const { aliceId, bobId } = seedTwo();
+    const sink = makeSink();
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
+      return { stdout: "", exitCode: 0, timedOut: true, aborted: false };
+    };
+    const exitCode = await runCapturing(
+      [...twoAgentArgs(aliceId, bobId, "task $HOME"), "--focus", "don't leak"],
+      sink,
+      { spawnImpl: spawn },
+    );
+    expect(exitCode).toBe(4);
+    const outcome = sink.finished as { resumeCommand: string | null };
+    expect(outcome.resumeCommand).toContain("--focus");
+    expect(outcome.resumeCommand).toContain("'don'\\''t leak'");
+    expect(outcome.resumeCommand).toContain("'task $HOME'");
+    expect(outcome.resumeCommand?.includes("task $HOME")).toBe(true);
+  });
+
+  it("each distinct probe key gets its own cwd and TMPDIR", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const a = store.createAgent({
+      name: "Alice",
+      personaPrompt: "senior",
+      modelId: "m1",
+      color: "#111111",
+      driverSelection: ds,
+    });
+    const b = store.createAgent({
+      name: "Bob",
+      personaPrompt: "security",
+      modelId: "m2",
+      color: "#222222",
+      driverSelection: ds,
+    });
+    const cwds: string[] = [];
+    const tmps: Array<string | undefined> = [];
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) {
+        cwds.push(input.cwd);
+        tmps.push(input.envOverlay?.TMPDIR);
+        return claudeEnvelope("ok");
+      }
+      return claudeEnvelope(
+        ["## 发现", "- [nit] x:1 — ok → n/a", "## 验证", "未验证", "## 结论", "comment"].join("\n"),
+      );
+    };
+    const sink = makeSink();
+    const exitCode = await runCapturing(
+      ["--agents", JSON.stringify([a.id, b.id]), "--aggregator", "Bob", "--task", "x"],
+      sink,
+      { spawnImpl: spawn },
+    );
+    expect(exitCode).toBe(0);
+    expect(cwds.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(cwds).size).toBe(cwds.length);
+    expect(tmps.every((tmp) => typeof tmp === "string" && tmp.endsWith(".tmp"))).toBe(true);
+    expect(new Set(tmps).size).toBe(tmps.length);
+  });
+
+  it("runs distinct probe keys in a bounded pool and skips queued keys after abort", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const agents = ["Alice", "Bob", "Carol"].map((name, index) =>
+      store.createAgent({
+        name,
+        personaPrompt: "p",
+        modelId: `m${index + 1}`,
+        color: `#${index + 1}${index + 1}${index + 1}${index + 1}${index + 1}${index + 1}`,
+        driverSelection: ds,
+      }),
+    );
+    const started: string[] = [];
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    const ac = new AbortController();
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) {
+        started.push(input.cwd);
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        if (inFlight === 2) ac.abort();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        inFlight -= 1;
+        return { stdout: "", exitCode: null, timedOut: false, aborted: input.signal.aborted };
+      }
+      return claudeEnvelope("## 发现\n- ok\n## 验证\n未验证\n## 结论\ncomment");
+    };
+    const sink = makeSink();
+    const exitCode = await runCapturing(
+      [
+        "--agents",
+        JSON.stringify(agents.map((agent) => agent.id)),
+        "--aggregator",
+        "Carol",
+        "--task",
+        "x",
+      ],
+      sink,
+      { spawnImpl: spawn, abortController: ac },
+    );
+    expect(exitCode).toBe(130);
+    expect(maxConcurrent).toBeGreaterThanOrEqual(2);
+    expect(started.length).toBeLessThan(3);
+    expect(new Set(started).size).toBe(started.length);
+  });
 });
+
+function sha256Of(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}

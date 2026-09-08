@@ -133,6 +133,24 @@ describe("LiveEventCollector", () => {
     ]);
   });
 
+  it("codex: file_change and custom_tool_call are tool events", () => {
+    const lines = [
+      JSON.stringify({
+        type: "item.started",
+        item: { type: "file_change", path: "cli/src/auto/review-context.ts" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { type: "custom_tool_call", name: "mcp_read", query: "docs" },
+      }),
+    ].join("\n");
+    const coll = new LiveEventCollector("codex-app-server");
+    expect(feedLines(coll, `${lines}\n`)).toEqual([
+      { type: "tool.started", name: "file_change", summary: "cli/src/auto/review-context.ts" },
+      { type: "tool.completed", name: "mcp_read", summary: "docs" },
+    ]);
+  });
+
   it("cursor: assistant text + tool_call started/completed", () => {
     const lines = [
       JSON.stringify({

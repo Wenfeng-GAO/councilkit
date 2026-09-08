@@ -53,6 +53,7 @@ describe("checkoutPullRequest command sequence", () => {
         return {
           stdout: JSON.stringify({
             headRefName: "feat-x",
+            baseRefName: "main",
             headRepository: { nameWithOwner: "acme/repo" },
             headRepositoryOwner: { login: "acme" },
           }),
@@ -73,6 +74,7 @@ describe("checkoutPullRequest command sequence", () => {
     );
     expect(result.host).toBe("github");
     expect(result.branch).toBe("feat-x");
+    expect(result.baseBranch).toBe("main");
     expect(calls[0]?.[0]).toBe("gh");
     expect(calls[0]?.slice(1, 3)).toEqual(["pr", "view"]);
     expect(calls.some((c) => c[0] === "gh" && c.includes("clone"))).toBe(true);

@@ -1,6 +1,7 @@
 import type { CliRunStatusDto, CliRunSummaryDto } from "@shared/runtime/schemas";
 
 const PHASE_LABEL = {
+  preflight: "预检中",
   attempts: "席位审查中",
   aggregating: "正在汇总",
   done: "已结束",

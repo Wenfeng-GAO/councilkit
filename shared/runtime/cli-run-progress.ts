@@ -8,6 +8,7 @@ import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
 export const CLI_RUN_STATUS_FILE = "status.json";
 
 export const CLI_RUN_PROGRESS_PHASES = [
+  "preflight",
   "attempts",
   "aggregating",
   "done",
@@ -71,6 +72,12 @@ export interface CliRunAttemptProgress {
   durationMs: number | null;
   /** Last observed tool/command while the attempt is running; null otherwise. */
   lastActivity: string | null;
+  lastTokenAt?: string | null;
+  lastToolAt?: string | null;
+  lastArtifactAt?: string | null;
+  activitySpanMs?: number | null;
+  requestedModelId?: string | null;
+  observedModelId?: string | null;
 }
 
 /** Mid-run overlay written on heartbeat / stream activity. */
@@ -80,6 +87,12 @@ export interface CliRunLiveHeartbeat {
   lastActivity?: string | null;
   /** Promote a queued seat to running when the worker actually claims it. */
   started?: boolean;
+  lastTokenAt?: string | null;
+  lastToolAt?: string | null;
+  lastArtifactAt?: string | null;
+  activitySpanMs?: number | null;
+  requestedModelId?: string | null;
+  observedModelId?: string | null;
 }
 
 const LAST_ACTIVITY_MAX = 240;
@@ -276,10 +289,16 @@ export function liveStateFromRecords(
       aggregatorStatus = aggregation.status;
       aggregatorDuration = aggregation.durationMs;
       phase = sawFinished ? "done" : "aggregating";
-    } else if (ideateStage === "aggregating" || (proposalsTerminal && debatesTerminal && anyAttemptSuccess)) {
+    } else if (
+      ideateStage === "aggregating" ||
+      (proposalsTerminal && debatesTerminal && anyAttemptSuccess)
+    ) {
       aggregatorStatus = "running";
       phase = "aggregating";
-    } else if (ideateStage === "debating" || (proposalsTerminal && debateRows.length > 0 && !debatesTerminal)) {
+    } else if (
+      ideateStage === "debating" ||
+      (proposalsTerminal && debateRows.length > 0 && !debatesTerminal)
+    ) {
       phase = "debating";
     } else if (sawFinished) {
       phase = "done";
@@ -340,6 +359,12 @@ export function applyLiveHeartbeat(live: CliRunLiveState, beat: CliRunLiveHeartb
     if (beat.lastActivity !== undefined) {
       row.lastActivity = clipActivity(beat.lastActivity);
     }
+    if (beat.lastTokenAt !== undefined) row.lastTokenAt = beat.lastTokenAt;
+    if (beat.lastToolAt !== undefined) row.lastToolAt = beat.lastToolAt;
+    if (beat.lastArtifactAt !== undefined) row.lastArtifactAt = beat.lastArtifactAt;
+    if (beat.activitySpanMs !== undefined) row.activitySpanMs = beat.activitySpanMs;
+    if (beat.requestedModelId !== undefined) row.requestedModelId = beat.requestedModelId;
+    if (beat.observedModelId !== undefined) row.observedModelId = beat.observedModelId;
   }
 }
 
@@ -562,6 +587,19 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
       : typeof row.lastActivity === "string"
         ? clipActivity(row.lastActivity)
         : null;
+  const optionalStamp = (value: unknown): string | null | undefined => {
+    if (value === undefined) return undefined;
+    if (value === null) return null;
+    return typeof value === "string" ? value : undefined;
+  };
+  const activitySpanMs =
+    row.activitySpanMs === undefined
+      ? undefined
+      : row.activitySpanMs === null
+        ? null
+        : typeof row.activitySpanMs === "number"
+          ? row.activitySpanMs
+          : undefined;
   return {
     attemptId: row.attemptId,
     agentName: row.agentName,
@@ -571,6 +609,12 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
     status,
     durationMs,
     lastActivity,
+    lastTokenAt: optionalStamp(row.lastTokenAt),
+    lastToolAt: optionalStamp(row.lastToolAt),
+    lastArtifactAt: optionalStamp(row.lastArtifactAt),
+    activitySpanMs,
+    requestedModelId: optionalStamp(row.requestedModelId),
+    observedModelId: optionalStamp(row.observedModelId),
   };
 }
 

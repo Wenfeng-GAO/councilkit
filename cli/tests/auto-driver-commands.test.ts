@@ -271,6 +271,21 @@ describe("cli auto driver-commands", () => {
       ]);
     });
 
+    it("codex: explicit reasoningEffort is appended via -c model_reasoning_effort", () => {
+      const withEffort = {
+        driverId: "codex-app-server" as const,
+        options: { reasoningEffort: "high" },
+      };
+      const spec = buildSpawnSpec(agent(withEffort, "gpt-5"), {
+        attemptId: "attempt-0",
+        workspace: "/ws",
+        prompt: "review",
+        env: env(tmp),
+      });
+      expect(spec.argv).toContain("-c");
+      expect(spec.argv).toContain("model_reasoning_effort=high");
+    });
+
     it("claude non-cfuse route → usage error before spawn", () => {
       const badRoute = {
         driverId: "claude-stream-json" as const,
@@ -336,6 +351,7 @@ describe("cli auto driver-commands", () => {
       expect(spec.promptStdin).toBe(true);
       expect(spec.cwd).toBe("/probe-cwd");
       expect(spec.executable).toBe(join(tmp, "cld"));
+      expect(spec.envOverlay?.TMPDIR).toBe(join("/probe-cwd", ".tmp"));
     });
 
     it("kimi: same argv shape as review (prompt delivered via -p)", () => {
@@ -356,6 +372,17 @@ describe("cli auto driver-commands", () => {
       expect(spec.argv).toEqual(["exec", "--skip-git-repo-check", "-m", "gpt-5", "--json", "-"]);
       expect(spec.promptStdin).toBe(true);
       expect(spec.lastMessageFile).toBeUndefined();
+      expect(spec.argv).not.toContain("-c");
+    });
+
+    it("codex probe: explicit reasoningEffort is appended via -c", () => {
+      const withEffort = {
+        driverId: "codex-app-server" as const,
+        options: { reasoningEffort: "high" },
+      };
+      const spec = buildProbeSpec(agent(withEffort, "gpt-5"), probeOpts());
+      expect(spec.argv).toContain("-c");
+      expect(spec.argv).toContain("model_reasoning_effort=high");
     });
 
     it("grok: isolate probe cwd and cap turns so a live TUI cannot stall it", () => {
@@ -1157,9 +1184,7 @@ describe("ideate restricted invocation", () => {
       prompt: "idea",
       env: env(),
     });
-    expect(spec.argv).toEqual(
-      expect.arrayContaining(["-s", "read-only", "--ignore-user-config"]),
-    );
+    expect(spec.argv).toEqual(expect.arrayContaining(["-s", "read-only", "--ignore-user-config"]));
     expect(spec.argv).not.toContain("workspace-write");
     expect(spec.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
