@@ -369,4 +369,27 @@ describe("review evidence completeness", () => {
     expect(blocked?.reviewEvidence?.evidenceComplete).toBe(false);
     expect(canExportRepairPackage(blocked)).toBe(false);
   });
+
+  it("treats a present unknown-version finding-groups sidecar as incomplete evidence", async () => {
+    const { canExportRepairPackage } = await import("@shared/runtime/review-case");
+    seedReview();
+    expect(canExportRepairPackage(readCliRun(REVIEW_ID, process.env))).toBe(true);
+    writeFileSync(
+      join(home, "runs", REVIEW_ID, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 99,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: REVIEW_ID,
+          sha: "a".repeat(40),
+          findingsSha256: "b".repeat(64),
+          againstRunId: null,
+        },
+        groups: [],
+      }),
+    );
+    const blocked = readCliRun(REVIEW_ID, process.env);
+    expect(blocked?.findingGroups).toBeNull();
+    expect(canExportRepairPackage(blocked)).toBe(false);
+  });
 });

@@ -67,7 +67,9 @@ export class FindingGroupsError extends Error {
 }
 
 /** Map each original finding id to a stable rootCause. Missing sidecar → id. */
-export function rootCauseByFindingId(groups: FindingGroupsFile | null | undefined): Map<string, string> {
+export function rootCauseByFindingId(
+  groups: FindingGroupsFile | null | undefined,
+): Map<string, string> {
   const map = new Map<string, string>();
   if (!groups) return map;
   for (const group of groups.groups) {
@@ -97,7 +99,7 @@ export function validateFindingGroups(
   const claimed = new Map<string, string>();
   const membersOfRoot = new Map<string, Set<string>>();
   for (const [index, group] of groups.groups.entries()) {
-    for (const id of group.findingIds) {
+    for (const id of [...group.findingIds, ...group.aliases]) {
       const previous = claimed.get(id);
       if (previous !== undefined && previous !== group.rootCauseId) {
         throw new FindingGroupsError(
@@ -105,7 +107,7 @@ export function validateFindingGroups(
         );
       }
       claimed.set(id, group.rootCauseId);
-      if (knownIds && !knownIds.has(id)) {
+      if (knownIds && group.findingIds.includes(id) && !knownIds.has(id)) {
         throw new FindingGroupsError(`finding-groups unknown member: ${id}`);
       }
     }
@@ -123,4 +125,3 @@ export function validateFindingGroups(
     }
   }
 }
-

@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   fingerprintExecutable,
+  matchExecutionRevision,
   readExecutionRevision,
+  readInvocationManifest,
   verifySpawnFingerprint,
   writeExecutionRevision,
 } from "../src/auto/invocation-manifest";
@@ -60,5 +62,40 @@ describe("invocation fingerprint drift", () => {
   it("does not mix frozen and live hashes when no revision is recorded", () => {
     const skip = verifySpawnFingerprint({ driverId: "claude-stream-json", executable: "fake" }, []);
     expect(skip.ok).toBe(true);
+  });
+
+  it("refuses a truncated or unknown-version manifest instead of treating it as missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-manifest-"));
+    try {
+      writeFileSync(join(dir, "invocation-manifest.v1.json"), "{");
+      expect(() => readInvocationManifest(dir)).toThrow(/not JSON/);
+      writeFileSync(
+        join(dir, "invocation-manifest.v1.json"),
+        JSON.stringify({ version: 99, kind: "councilkit-invocation-manifest" }),
+      );
+      expect(() => readInvocationManifest(dir)).toThrow(/unknown/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an execution revision copied from another run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-rev-"));
+    try {
+      writeExecutionRevision(dir, {
+        version: 1,
+        kind: "councilkit-execution-revision",
+        runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        reason: "copied",
+        recordedAt: "2026-09-08T00:00:00.000Z",
+        acceptedTools: [],
+      });
+      const revision = readExecutionRevision(dir);
+      expect(() =>
+        matchExecutionRevision(revision, "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2"),
+      ).toThrow(/does not belong to this run/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

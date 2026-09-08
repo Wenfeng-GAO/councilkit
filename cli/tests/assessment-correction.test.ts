@@ -204,6 +204,135 @@ describe("assessment correction", () => {
     expect(changed.valid).toHaveLength(0);
   });
 
+  it("refuses to invent a close or replace evidence fields", () => {
+    const missingOutcome = fence([
+      {
+        findingId: "F-1",
+        candidateSha: SHA,
+        method: "code_trace",
+        reason: "still reproduces",
+        evidence: "same call path",
+        locations: ["src/a.ts:1"],
+      },
+    ]);
+    const invented = projectCorrectionOutput({
+      originalOutput: missingOutcome,
+      correctionOutput: fence([
+        {
+          findingId: "F-1",
+          candidateSha: SHA,
+          outcome: "verified_closed",
+          method: "regression_test",
+          reason: "now closed",
+          evidence: "new test",
+          command: "pnpm test",
+        },
+      ]),
+      candidateSha: SHA,
+      requestedFindingIds: ["F-1"],
+      sourceAttemptId: "attempt-0",
+    });
+    expect(invented.substantialChange).toBe(true);
+    expect(invented.valid).toHaveLength(0);
+
+    const illegal = fence([{ ...validRow("F-1"), verifiedAt: "x" }]);
+    const swapped = projectCorrectionOutput({
+      originalOutput: illegal,
+      correctionOutput: fence([
+        {
+          ...validRow("F-1"),
+          command: "pnpm test extra",
+          evidence: "brand new proof",
+        },
+      ]),
+      candidateSha: SHA,
+      requestedFindingIds: ["F-1"],
+      sourceAttemptId: "attempt-0",
+    });
+    expect(swapped.substantialChange).toBe(true);
+    expect(swapped.valid).toHaveLength(0);
+  });
+
+  it("marks coverage incomplete for invalid peers or contradictory outcomes on the same id", () => {
+    const closed = {
+      ...validRow("F-1"),
+      outcome: "verified_closed",
+      method: "code_trace",
+    };
+    const invalidPeer = buildAssessmentDiagnostics({
+      runId: "run",
+      sha: SHA,
+      requiredFindingIds: ["F-1"],
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          status: "success",
+          exitCode: 0,
+          agentName: "A",
+          output: fence([closed]),
+        },
+        {
+          attemptId: "attempt-1",
+          status: "success",
+          exitCode: 0,
+          agentName: "B",
+          output: fence([{ ...validRow("F-1"), verifiedAt: "x" }]),
+        },
+      ],
+    });
+    expect(invalidPeer.diagnostics.coverageComplete).toBe(false);
+
+    const conflict = buildAssessmentDiagnostics({
+      runId: "run",
+      sha: SHA,
+      requiredFindingIds: ["F-1"],
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          status: "success",
+          exitCode: 0,
+          agentName: "A",
+          output: fence([closed]),
+        },
+        {
+          attemptId: "attempt-1",
+          status: "success",
+          exitCode: 0,
+          agentName: "B",
+          output: fence([validRow("F-1")]),
+        },
+      ],
+    });
+    expect(conflict.diagnostics.coverageComplete).toBe(false);
+  });
+
+  it("treats accepted extraAssessments as the coverage projection", () => {
+    const original = fence([{ ...validRow("F-1"), verifiedAt: "x" }]);
+    const extra = projectCorrectionOutput({
+      originalOutput: original,
+      correctionOutput: fence([validRow("F-1")]),
+      candidateSha: SHA,
+      requestedFindingIds: ["F-1"],
+      sourceAttemptId: "attempt-0",
+    });
+    const diagnosed = buildAssessmentDiagnostics({
+      runId: "run",
+      sha: SHA,
+      requiredFindingIds: ["F-1"],
+      extraAssessments: extra.valid,
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          status: "success",
+          exitCode: 0,
+          agentName: "R",
+          output: original,
+        },
+      ],
+    });
+    expect(diagnosed.diagnostics.coverageComplete).toBe(true);
+  });
+
   it("persists intent before completion and upserts the same correctionId", () => {
     const dir = mkdtempSync(join(tmpdir(), "ck-corr-"));
     const identity = { agentId: "a", driverId: "grok-stream-json", modelId: "g" };

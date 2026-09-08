@@ -94,11 +94,17 @@ describe("cli auto templates — attempt prompt", () => {
       requestedFindingIds: ["persist--lost"],
       errorPaths: ["/blocks/0/0"],
       candidateSha: "a".repeat(40),
+      originalArtifactPath: "assessment-correction-source.md",
+      originalAssessment:
+        '```councilkit-findings\n[{"findingId":"persist--lost","reason":"still reproduces"}]\n```',
     });
     expect(prompt).toContain(CORRECTION_PROMPT_MARKER);
     expect(prompt).toContain("persist--lost");
     expect(prompt).toContain("councilkit-findings");
     expect(prompt).toContain("禁止 verifiedAt");
+    expect(prompt).toContain("```councilkit-findings");
+    expect(prompt).toContain("assessment-correction-source.md");
+    expect(prompt).toContain("still reproduces");
   });
 
   it("describes full autonomy (fetch/clone/checkout/test/lint)", () => {

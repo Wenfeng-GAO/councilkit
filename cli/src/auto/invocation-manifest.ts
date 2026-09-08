@@ -6,7 +6,10 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { errors } from "../errors";
 import { atomicWriteJson } from "../store/atomic-write";
+import type { AgentRecord } from "../store/schemas";
+import { driverSelectionSchema } from "../store/schemas";
 import type { ReviewTask } from "./templates/review";
 
 export const INVOCATION_MANIFEST_FILE = "invocation-manifest.v1.json";
@@ -130,7 +133,15 @@ export function verifySpawnFingerprint(
   spec: { driverId: string; executable: string },
   frozenTools: readonly ToolFingerprint[],
   acceptedRevision?: ExecutionRevision | null,
+  expectedRunId?: string,
 ): FingerprintVerdict {
+  if (acceptedRevision && expectedRunId && acceptedRevision.runId !== expectedRunId) {
+    return {
+      ok: false,
+      code: "DRIVER_DRIFT",
+      message: "execution revision does not belong to this run",
+    };
+  }
   const frozen = frozenTools.find((tool) => tool.name === spec.driverId);
   if (!frozen) return { ok: true };
   let live: ToolFingerprint;
@@ -199,14 +210,92 @@ export function writeInvocationManifest(runDir: string, manifest: InvocationMani
 
 export function readInvocationManifest(runDir: string): InvocationManifest | null {
   const path = join(runDir, INVOCATION_MANIFEST_FILE);
+  let stat: ReturnType<typeof lstatSync>;
   try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
-    const parsed = invocationManifestSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
-    return parsed.success ? parsed.data : null;
+    stat = lstatSync(path);
   } catch {
     return null;
   }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw errors.io("invocation manifest is not a regular file");
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    throw errors.io("invocation manifest is unreadable");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw errors.io("invocation manifest is not JSON");
+  }
+  const result = invocationManifestSchema.safeParse(parsed);
+  if (!result.success) {
+    const version =
+      parsed !== null && typeof parsed === "object" && "version" in parsed
+        ? (parsed as { version?: unknown }).version
+        : undefined;
+    if (version !== 1) {
+      throw errors.io("invocation manifest version is unknown");
+    }
+    throw errors.io("invocation manifest is invalid");
+  }
+  return result.data;
+}
+
+export function requireInvocationManifest(runDir: string): InvocationManifest {
+  const manifest = readInvocationManifest(runDir);
+  if (manifest === null) {
+    throw errors.io("invocation manifest is missing");
+  }
+  return manifest;
+}
+
+export function matchExecutionRevision(
+  revision: ExecutionRevision | null,
+  runId: string,
+): ExecutionRevision | null {
+  if (revision === null) return null;
+  if (revision.runId !== runId) {
+    throw errors.runFailed("execution revision does not belong to this run");
+  }
+  return revision;
+}
+
+export function overlayFrozenAgent(
+  agent: AgentRecord,
+  frozen: InvocationManifest["agents"][number],
+): AgentRecord {
+  const selection = driverSelectionSchema.parse({
+    driverId: frozen.driverId,
+    options: frozen.options,
+  });
+  return {
+    ...agent,
+    name: frozen.name,
+    modelId: frozen.modelId,
+    driverSelection: selection,
+  };
+}
+
+export function stubAgentFromFrozen(frozen: InvocationManifest["agents"][number]): AgentRecord {
+  return overlayFrozenAgent(
+    {
+      id: frozen.id,
+      name: frozen.name,
+      personaPrompt: "Frozen reviewer from invocation manifest.",
+      modelId: frozen.modelId,
+      color: "#808080",
+      enabled: true,
+      driverSelection: driverSelectionSchema.parse({
+        driverId: frozen.driverId,
+        options: frozen.options,
+      }),
+    },
+    frozen,
+  );
 }
 
 export function resumeArgvFromManifest(manifest: InvocationManifest): string[] {

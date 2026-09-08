@@ -1067,6 +1067,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       },
     ])}\n\`\`\``;
     let correctionSpawns = 0;
+    let correctionPrompt = "";
     const spawn: SpawnImpl = async (input) => {
       if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
       if (input.prompt.includes("对比汇总")) {
@@ -1074,6 +1075,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       }
       if (input.prompt.includes(CORRECTION_PROMPT_MARKER)) {
         correctionSpawns += 1;
+        correctionPrompt = input.prompt;
         return claudeEnvelope(validFence);
       }
       if (input.prompt.startsWith("你是 Alice，")) {
@@ -1106,6 +1108,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     }
     expect(exitCode).toBe(0);
     expect(correctionSpawns).toBe(1);
+    expect(correctionPrompt).toContain("assessment-correction-source.md");
+    expect(correctionPrompt).toContain("verifiedAt");
     const outcome = sink.finished as { runId: string; reportPath: string };
     const runDir = paths.runDir(outcome.runId);
     const transcript = readFileSync(paths.transcript(outcome.runId), "utf8");
@@ -1156,6 +1160,220 @@ describe("cli review command — end-to-end (fake spawn)", () => {
         .find((line) => line.includes('"kind":"attempt.finished"')) ?? "{}",
     ).output;
     expect(sha256Of(resumedOutput)).toBe(originalOutputHash);
+    const resumedFindings = parseFindingsFile(readFileSync(join(runDir, "findings.json"), "utf8"));
+    if (!resumedFindings) throw new Error("expected findings.json after resume");
+    const closed = resumedFindings.findings.find((row) => row.id === "persist--lost");
+    expect(closed && isFindingVerifiedClosed(closed, sha)).toBe(true);
+    const diagnostics = JSON.parse(
+      readFileSync(join(runDir, "assessment-diagnostics.v1.json"), "utf8"),
+    ) as { coverageComplete: boolean };
+    expect(diagnostics.coverageComplete).toBe(true);
+  });
+
+  it("resumes with the frozen model after the Store agent is mutated", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const sink = makeSink();
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "freeze spec",
+        ],
+        sink,
+        { spawnImpl: fakeSpawn() },
+      );
+    } catch (error) {
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    const runId = (sink.finished as { runId: string }).runId;
+    const store = new Store();
+    store.updateAgent(agentIds[0], { modelId: "mutated-model" });
+    const resumeSink = makeSink();
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "freeze spec",
+          "--resume",
+          runId,
+        ],
+        resumeSink,
+        { spawnImpl: fakeSpawn() },
+      );
+    } catch (error) {
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    const manifest = JSON.parse(
+      readFileSync(join(resolvePaths().runDir(runId), "invocation-manifest.v1.json"), "utf8"),
+    ) as { agents: Array<{ id: string; modelId: string }> };
+    expect(manifest.agents.find((row) => row.id === agentIds[0])?.modelId).toBe("antchat/GLM-5.2");
+    expect(store.getAgent(agentIds[0]).modelId).toBe("mutated-model");
+  });
+
+  it("refuses resume when the invocation manifest is truncated", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const sink = makeSink();
+    try {
+      await runReview(
+        ["--agents", JSON.stringify(agentIds), "--aggregator", aggregatorName, "--task", "x"],
+        sink,
+        { spawnImpl: fakeSpawn() },
+      );
+    } catch (error) {
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    const runId = (sink.finished as { runId: string }).runId;
+    writeFileSync(join(resolvePaths().runDir(runId), "invocation-manifest.v1.json"), "{");
+    await expect(
+      runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--resume",
+          runId,
+        ],
+        makeSink(),
+        { spawnImpl: fakeSpawn() },
+      ),
+    ).rejects.toThrow(/not JSON|invocation manifest/);
+  });
+
+  it("rebuilds Kimi argv so -p carries the frozen context prompt", async () => {
+    const store = new Store();
+    const kimi = store.createAgent({
+      name: "Kimi",
+      personaPrompt: "k",
+      modelId: "kimi-code/k3",
+      color: "#abcdef",
+      driverSelection: { driverId: "kimi-stream-json", options: {} },
+    });
+    const repo = seedGitRepo();
+    const argvPrompts: string[] = [];
+    const spawn: SpawnImpl = async (input) => {
+      const pIndex = input.argv.indexOf("-p");
+      if (pIndex >= 0) argvPrompts.push(String(input.argv[pIndex + 1] ?? ""));
+      if (input.prompt === DRIVER_PROBE_PROMPT) {
+        return {
+          stdout: JSON.stringify({ role: "assistant", content: "ok" }),
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          role: "assistant",
+          content: "## Findings\nnone\n## Verdict\napprove",
+        }),
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify([kimi.id]),
+          "--aggregator",
+          kimi.id,
+          "--pr",
+          "https://github.com/acme/repo/pull/9",
+          "--repo",
+          repo,
+        ],
+        makeSink(),
+        { spawnImpl: spawn, worktreeRef: "HEAD" },
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExit);
+    }
+    expect(argvPrompts.some((prompt) => prompt.includes("review-context.md"))).toBe(true);
+  });
+
+  it("copies frozen context into a retried worktree", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const repo = seedGitRepo();
+    let attemptFails = 0;
+    const seenFrozen: boolean[] = [];
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
+      if (input.prompt.includes("对比汇总")) {
+        return claudeEnvelope("## 概览\nReview complete\n## 结论\napprove");
+      }
+      if (input.cwd.includes("attempt-0") && !input.prompt.includes(CORRECTION_PROMPT_MARKER)) {
+        seenFrozen.push(existsSync(join(input.cwd, "review-context.md")));
+        if (attemptFails === 0) {
+          attemptFails += 1;
+          return { stdout: "", exitCode: 1, timedOut: false, aborted: false };
+        }
+      }
+      return claudeEnvelope("## Findings\nnone\n## Verdict\napprove");
+    };
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--pr",
+          "https://github.com/acme/repo/pull/9",
+          "--repo",
+          repo,
+        ],
+        makeSink(),
+        { spawnImpl: spawn, worktreeRef: "HEAD" },
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExit);
+    }
+    expect(attemptFails).toBe(1);
+    expect(seenFrozen.length).toBeGreaterThanOrEqual(2);
+    expect(seenFrozen[0]).toBe(true);
+    expect(seenFrozen[1]).toBe(true);
+  });
+
+  it("writes reviewedSha after the candidate is resolved", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const repo = seedGitRepo();
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const sink = makeSink();
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--pr",
+          "https://github.com/acme/repo/pull/9",
+          "--repo",
+          repo,
+        ],
+        sink,
+        { spawnImpl: fakeSpawn(), worktreeRef: "HEAD" },
+      );
+    } catch (error) {
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    const runId = (sink.finished as { runId: string }).runId;
+    const manifest = JSON.parse(
+      readFileSync(join(resolvePaths().runDir(runId), "invocation-manifest.v1.json"), "utf8"),
+    ) as { reviewedSha: string | null };
+    expect(manifest.reviewedSha).toBe(sha);
   });
 });
 

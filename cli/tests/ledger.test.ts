@@ -1,19 +1,20 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isFindingBlocking, isFindingVerifiedClosed } from "@shared/runtime/cli-ledger";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildFindingGroups, hashFindingsBytes } from "../src/auto/finding-groups";
 import {
   againstDiffRange,
   applyReviewerVerifications,
   classifyAgainstPrior,
+  classifyAgainstPriorWithAliases,
   extractFindingsFromReport,
   formatLedgerForPrompt,
   markFindingsRepairClaimed,
   parsePlanDocument,
   persistFindingsFromReport,
   resolveClusterCloses,
-  classifyAgainstPriorWithAliases,
 } from "../src/auto/ledger";
 import type { LedgerFinding } from "../src/auto/ledger";
 import type { AttemptResult } from "../src/auto/runner";
@@ -325,9 +326,9 @@ describe("independent finding verification", () => {
     expect(isFindingBlocking(verify([assessment(overrides)]), CANDIDATE_SHA)).toBe(true);
   });
   it("does not close on verifiedAt extras or locations ranges", () => {
-    expect(isFindingBlocking(verify([assessment({ verifiedAt: "2026-09-07T00:00:00.000Z" })]))).toBe(
-      true,
-    );
+    expect(
+      isFindingBlocking(verify([assessment({ verifiedAt: "2026-09-07T00:00:00.000Z" })])),
+    ).toBe(true);
     expect(
       isFindingBlocking(
         verify([
@@ -501,5 +502,142 @@ describe("ledger persist", () => {
     expect(row.reviewer).toBe("independent reviewer");
     expect(row.text).toContain("ENOSPC destroys the only copy");
     expect(isFindingBlocking(row, CANDIDATE_SHA)).toBe(true);
+  });
+
+  it("uses extraAssessments for both close projection and coverage diagnostics", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-extra-"));
+    dirs.push(dir);
+    const original = {
+      findingId: "F-1",
+      candidateSha: CANDIDATE_SHA,
+      outcome: "still_open",
+      method: "code_trace",
+      reason: "still reproduces",
+      evidence: "same call path",
+      locations: ["src/a.ts:1"],
+      verifiedAt: "x",
+    };
+    const extra = {
+      assessment: {
+        findingId: "F-1",
+        candidateSha: CANDIDATE_SHA,
+        outcome: "still_open" as const,
+        method: "code_trace" as const,
+        reason: "still reproduces",
+        evidence: "same call path",
+        locations: ["src/a.ts:1"],
+      },
+      attemptId: "attempt-0",
+      reviewer: "independent reviewer",
+    };
+    persistFindingsFromReport({
+      runDir: dir,
+      runId: "ck-review-current",
+      sha: CANDIDATE_SHA,
+      markdown: "# Autonomous Review Report\n\n---\n\n## 结论\ncomment",
+      againstRunId: "prior",
+      prior: {
+        version: 1,
+        runId: "prior",
+        extractedAt: "t",
+        sha: CANDIDATE_SHA,
+        againstRunId: null,
+        againstRange: null,
+        findings: [finding({ id: "F-1", title: "open hole" })],
+      },
+      attempts: [reviewer([original])],
+      extraAssessments: [extra],
+      reviewComplete: true,
+    });
+    const diagnostics = JSON.parse(
+      readFileSync(join(dir, "assessment-diagnostics.v1.json"), "utf8"),
+    ) as { coverageComplete: boolean };
+    expect(diagnostics.coverageComplete).toBe(true);
+  });
+
+  it("inherits a stable against finding-groups root without new aliases", () => {
+    const inherited = buildFindingGroups({
+      runId: "ck-review-current",
+      sha: CANDIDATE_SHA,
+      findings: [finding({ id: "F-1", title: "one" }), finding({ id: "F-2", title: "two" })],
+      againstRunId: "prior",
+      findingsSha256: "b".repeat(64),
+      matches: [],
+      priorGroups: {
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: "prior",
+          sha: CANDIDATE_SHA,
+          findingsSha256: "b".repeat(64),
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE",
+            findingIds: ["F-1", "F-2"],
+            aliases: [],
+            basis: "same hole",
+          },
+        ],
+      },
+    });
+    expect(inherited.groups.map((row) => row.rootCauseId)).toEqual(["RC-STABLE"]);
+
+    const root = mkdtempSync(join(tmpdir(), "ck-ledger-groups-"));
+    dirs.push(root);
+    const priorId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+    const currentId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const priorDir = join(root, priorId);
+    const currentDir = join(root, currentId);
+    mkdirSync(priorDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    const priorFindings = {
+      version: 1 as const,
+      runId: priorId,
+      extractedAt: "t",
+      sha: CANDIDATE_SHA,
+      againstRunId: null,
+      againstRange: null,
+      findings: [finding({ id: "F-1", title: "one" }), finding({ id: "F-2", title: "two" })],
+    };
+    writeFileSync(join(priorDir, "findings.json"), `${JSON.stringify(priorFindings, null, 2)}\n`);
+    const priorBytes = `${JSON.stringify(priorFindings, null, 2)}\n`;
+    writeFileSync(
+      join(priorDir, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: priorId,
+          sha: CANDIDATE_SHA,
+          findingsSha256: hashFindingsBytes(priorBytes),
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE",
+            findingIds: ["F-1", "F-2"],
+            aliases: [],
+            basis: "same hole",
+          },
+        ],
+      }),
+    );
+    persistFindingsFromReport({
+      runDir: currentDir,
+      runId: currentId,
+      sha: CANDIDATE_SHA,
+      markdown:
+        "# Autonomous Review Report\n\n---\n\n## 共识发现\n- [major] one\n- [major] two\n\n## 结论\ncomment",
+      againstRunId: priorId,
+      prior: priorFindings,
+      attempts: [],
+      reviewComplete: true,
+    });
+    const groups = JSON.parse(readFileSync(join(currentDir, "finding-groups.v1.json"), "utf8")) as {
+      groups: Array<{ rootCauseId: string }>;
+    };
+    expect(groups.groups.map((row) => row.rootCauseId)).toContain("RC-STABLE");
   });
 });

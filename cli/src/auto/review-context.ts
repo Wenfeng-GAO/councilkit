@@ -88,17 +88,25 @@ export async function freezeReviewContext(opts: {
     baseSha =
       (await gitRevParse(opts.repo, originTarget, runCommand, env)) ??
       (await gitRevParse(opts.repo, targetRef, runCommand, env));
-    if (baseSha !== null) {
-      const merged = await runCommand({
-        executable: "git",
-        argv: ["merge-base", head, baseSha],
-        cwd: opts.repo,
-        env,
-      });
-      if (merged.exitCode === 0) {
-        const sha = merged.stdout.trim();
-        mergeBaseSha = /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
-      }
+    if (baseSha === null) {
+      throw errors.runFailed(
+        `cannot resolve target ref "${targetRef}"; refusing a head...head empty diff`,
+      );
+    }
+    const merged = await runCommand({
+      executable: "git",
+      argv: ["merge-base", head, baseSha],
+      cwd: opts.repo,
+      env,
+    });
+    if (merged.exitCode === 0) {
+      const sha = merged.stdout.trim();
+      mergeBaseSha = /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
+    }
+    if (mergeBaseSha === null) {
+      throw errors.runFailed(
+        `cannot resolve merge-base of ${head} and ${baseSha}; refusing a head...head empty diff`,
+      );
     }
   }
   const from = mergeBaseSha ?? head;

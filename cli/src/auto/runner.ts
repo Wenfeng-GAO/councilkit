@@ -483,12 +483,14 @@ async function runOne(
         errorClass: terminal?.errorClass,
         retryable: terminal?.retryable ?? true,
       };
-    } else if (terminal && !terminal.retryable) {
+    } else if (terminal) {
+      // Any structured terminal on exit 0 is still a failure. retryable only
+      // feeds shouldRetry (which already requires a non-zero EXIT).
       failure = {
         code: "EXIT",
         message: terminal.message,
         errorClass: terminal.errorClass,
-        retryable: false,
+        retryable: terminal.retryable,
       };
     } else if (extracted === null || extracted.trim().length === 0) {
       failure = {

@@ -257,6 +257,73 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(r.output).toBe("hello");
   });
 
+  it("does not treat a successful security finding as an auth driver failure", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "The endpoint permits unauthorized access.",
+      }),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce(spec("0"), { spawnImpl: spawn });
+    expect(r.status).toBe("success");
+    expect(r.failure).toBeUndefined();
+    expect(r.output).toContain("unauthorized access");
+  });
+
+  it("fails exit 0 when a later structured turn.failed reports a network error", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: [
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "partial report",
+        }),
+        JSON.stringify({ type: "turn.failed", error: { message: "network error" } }),
+      ].join("\n"),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce(spec("0"), { spawnImpl: spawn });
+    expect(r.status).toBe("failure");
+    expect(r.failure?.code).toBe("EXIT");
+    expect(r.failure?.errorClass).toBe("transport");
+  });
+
+  it("fails exit 0 for result is_error error_during_execution after a success body", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: [
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "partial report",
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          result: "boom",
+        }),
+      ].join("\n"),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce(spec("0"), { spawnImpl: spawn });
+    expect(r.status).toBe("failure");
+    expect(r.failure?.code).toBe("EXIT");
+  });
+
   it("onAttemptFinish throwing aborts in-flight attempts and propagates the error", async () => {
     let abortedSeen = false;
     const spawn: SpawnImpl = async (input) => {

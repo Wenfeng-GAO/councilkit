@@ -116,6 +116,37 @@ export function assertCorrectionAllowed(input: {
   }
 }
 
+const PROVABLE_OUTCOMES = new Set(["verified_closed", "still_open", "not_evaluated"]);
+const EVIDENCE_FIELDS = ["method", "reason", "evidence", "command", "locations"] as const;
+
+function originalAssessmentRows(output: string): Map<string, Record<string, unknown>> {
+  const rows = new Map<string, Record<string, unknown>>();
+  for (const block of extractAssessmentBlocks(output)) {
+    try {
+      const parsed = JSON.parse(block);
+      if (!Array.isArray(parsed)) continue;
+      for (const row of parsed) {
+        if (
+          row &&
+          typeof row === "object" &&
+          typeof (row as { findingId?: unknown }).findingId === "string"
+        ) {
+          rows.set((row as { findingId: string }).findingId, row as Record<string, unknown>);
+        }
+      }
+    } catch {
+      /* original block may be invalid JSON */
+    }
+  }
+  return rows;
+}
+
+function sameEvidenceField(left: unknown, right: unknown): boolean {
+  if (left === undefined && right === undefined) return true;
+  if (left === undefined || right === undefined) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function projectCorrectionOutput(input: {
   originalOutput: string;
   correctionOutput: string;
@@ -127,25 +158,7 @@ export function projectCorrectionOutput(input: {
   rejected: AssessmentDiagnosticItem[];
   substantialChange: boolean;
 } {
-  const originalOutcomes = new Map<string, string>();
-  for (const block of extractAssessmentBlocks(input.originalOutput)) {
-    try {
-      const parsed = JSON.parse(block);
-      if (!Array.isArray(parsed)) continue;
-      for (const row of parsed) {
-        if (
-          row &&
-          typeof row === "object" &&
-          typeof row.findingId === "string" &&
-          typeof row.outcome === "string"
-        ) {
-          originalOutcomes.set(row.findingId, row.outcome);
-        }
-      }
-    } catch {
-      /* original block may be invalid JSON */
-    }
-  }
+  const originals = originalAssessmentRows(input.originalOutput);
   const corrected = diagnoseAttemptAssessments({
     attemptId: "correction",
     output: input.correctionOutput,
@@ -168,8 +181,20 @@ export function projectCorrectionOutput(input: {
       });
       continue;
     }
-    const prior = originalOutcomes.get(row.assessment.findingId);
-    if (prior && prior !== row.assessment.outcome) {
+    const prior = originals.get(row.assessment.findingId);
+    const priorOutcome = typeof prior?.outcome === "string" ? prior.outcome : null;
+    if (!priorOutcome || !PROVABLE_OUTCOMES.has(priorOutcome)) {
+      substantialChange = true;
+      rejected.push({
+        findingId: row.assessment.findingId,
+        attemptId: "correction",
+        status: "semantic_mismatch",
+        errorClass: "unprovable_outcome",
+        errorPath: `/correction/${row.assessment.findingId}/outcome`,
+      });
+      continue;
+    }
+    if (priorOutcome !== row.assessment.outcome) {
       substantialChange = true;
       rejected.push({
         findingId: row.assessment.findingId,
@@ -177,6 +202,24 @@ export function projectCorrectionOutput(input: {
         status: "semantic_mismatch",
         errorClass: "substantial_rejudgment",
         errorPath: `/correction/${row.assessment.findingId}/outcome`,
+      });
+      continue;
+    }
+    let fieldReplaced: (typeof EVIDENCE_FIELDS)[number] | null = null;
+    for (const field of EVIDENCE_FIELDS) {
+      if (!sameEvidenceField(prior?.[field], row.assessment[field])) {
+        fieldReplaced = field;
+        break;
+      }
+    }
+    if (fieldReplaced) {
+      substantialChange = true;
+      rejected.push({
+        findingId: row.assessment.findingId,
+        attemptId: "correction",
+        status: "semantic_mismatch",
+        errorClass: "evidence_field_replaced",
+        errorPath: `/correction/${row.assessment.findingId}/${fieldReplaced}`,
       });
       continue;
     }
@@ -272,4 +315,38 @@ export function formatCorrectableIds(
     errorPaths.push(item.errorPath);
   }
   return { findingIds, errorPaths };
+}
+
+export function replayAcceptedCorrections(input: {
+  runDir: string;
+  candidateSha: string;
+  attempts: Iterable<{ attemptId: string; output: string }>;
+}): DiagnosedAssessment[] {
+  const records = loadAssessmentCorrections(input.runDir);
+  if (!records || !FULL_COMMIT_SHA.test(input.candidateSha)) return [];
+  const byId = new Map([...input.attempts].map((row) => [row.attemptId, row]));
+  const extras: DiagnosedAssessment[] = [];
+  for (const rec of records.records) {
+    if (!rec.accepted) continue;
+    const attempt = byId.get(rec.sourceAttemptId);
+    if (!attempt) continue;
+    let correctionOutput = "";
+    try {
+      correctionOutput = readFileSync(
+        join(input.runDir, "corrections", `${rec.sourceAttemptId}.md`),
+        "utf8",
+      );
+    } catch {
+      continue;
+    }
+    const projected = projectCorrectionOutput({
+      originalOutput: attempt.output,
+      correctionOutput,
+      candidateSha: input.candidateSha,
+      requestedFindingIds: rec.requestedFindingIds,
+      sourceAttemptId: rec.sourceAttemptId,
+    });
+    if (!projected.substantialChange) extras.push(...projected.valid);
+  }
+  return extras;
 }

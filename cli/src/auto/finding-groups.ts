@@ -5,15 +5,15 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { FindingsFile, LedgerFinding } from "@shared/runtime/cli-ledger";
 import {
   FINDING_GROUPS_FILE,
   FINDING_GROUPS_KIND,
-  type FindingGroupsFile,
   FindingGroupsError,
+  type FindingGroupsFile,
   findingGroupsFileSchema,
   validateFindingGroups,
 } from "@shared/runtime/finding-groups";
-import type { FindingsFile, LedgerFinding } from "@shared/runtime/cli-ledger";
 import { atomicWriteJson } from "../store/atomic-write";
 
 export { FINDING_GROUPS_FILE, FindingGroupsError } from "@shared/runtime/finding-groups";
@@ -33,21 +33,47 @@ export function buildFindingGroups(input: {
   againstRunId: string | null;
   findingsSha256: string;
   matches?: readonly { originalId: string; aliasId: string; basis: string }[];
+  priorGroups?: FindingGroupsFile | null;
 }): FindingGroupsFile {
   const known = new Set(input.findings.map((row) => row.id));
-  const byRoot = new Map<string, { findingIds: Set<string>; aliases: Set<string>; basis: string }>();
+  const byRoot = new Map<
+    string,
+    { findingIds: Set<string>; aliases: Set<string>; basis: string }
+  >();
+  const idToRoot = new Map<string, string>();
+  for (const group of input.priorGroups?.groups ?? []) {
+    const findingIds = group.findingIds.filter((id) => known.has(id));
+    if (findingIds.length === 0) continue;
+    const bucket = byRoot.get(group.rootCauseId) ?? {
+      findingIds: new Set<string>(),
+      aliases: new Set<string>(),
+      basis: group.basis,
+    };
+    for (const id of findingIds) {
+      bucket.findingIds.add(id);
+      idToRoot.set(id, group.rootCauseId);
+    }
+    for (const alias of group.aliases) {
+      bucket.aliases.add(alias);
+      if (!idToRoot.has(alias)) idToRoot.set(alias, group.rootCauseId);
+    }
+    bucket.basis = group.basis;
+    byRoot.set(group.rootCauseId, bucket);
+  }
   for (const match of input.matches ?? []) {
-    const root = match.originalId;
+    const root = idToRoot.get(match.originalId) ?? match.originalId;
     const bucket = byRoot.get(root) ?? {
       findingIds: new Set<string>(),
       aliases: new Set<string>(),
       basis: match.basis,
     };
-    if (known.has(root)) bucket.findingIds.add(root);
+    if (known.has(match.originalId)) bucket.findingIds.add(match.originalId);
     bucket.aliases.add(match.aliasId);
     if (known.has(match.aliasId)) bucket.findingIds.add(match.aliasId);
     bucket.basis = match.basis;
     byRoot.set(root, bucket);
+    idToRoot.set(match.originalId, root);
+    idToRoot.set(match.aliasId, root);
   }
   const groups = [...byRoot.entries()]
     .map(([rootCauseId, value]) => ({
@@ -77,7 +103,7 @@ export function writeFindingGroups(runDir: string, file: FindingGroupsFile): voi
 }
 
 export function readFindingGroupsFile(path: string): FindingGroupsFile {
-  let stat;
+  let stat: ReturnType<typeof lstatSync>;
   try {
     stat = lstatSync(path);
   } catch (error) {

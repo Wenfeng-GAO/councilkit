@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
+import { type Stats, existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import {
@@ -11,6 +11,7 @@ import {
 import {
   type DiagnosedAssessment,
   diagnoseAttemptAssessments,
+  extractAssessmentBlocks,
 } from "@shared/runtime/reviewer-assessment";
 import { reviewModelsSchema } from "@shared/runtime/schemas";
 /**
@@ -41,6 +42,7 @@ import {
   formatCorrectableIds,
   loadAssessmentCorrections,
   projectCorrectionOutput,
+  replayAcceptedCorrections,
   sha256Text,
   writeAssessmentCorrections,
 } from "../auto/assessment-correction";
@@ -57,16 +59,21 @@ import {
   buildSpawnSpec,
   probeTimeoutMs,
 } from "../auto/driver-commands";
+import { redactDriverDiagnostic } from "../auto/driver-terminal";
 import { formatDurationMs } from "../auto/duration";
 import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
 import {
   type ExecutionRevision,
+  type InvocationManifest,
   type ToolFingerprint,
   fingerprintsFromSpecs,
   formatResumeCommand,
+  matchExecutionRevision,
+  overlayFrozenAgent,
   readExecutionRevision,
   readInvocationManifest,
   resumeArgvFromManifest,
+  stubAgentFromFrozen,
   writeInvocationManifest,
 } from "../auto/invocation-manifest";
 import {
@@ -77,7 +84,7 @@ import {
   persistFindingsFromReport,
 } from "../auto/ledger";
 import { LiveEventWriter, type RawLiveEvent } from "../auto/live-events";
-import { type LocalRepo, resolveLocalRepo } from "../auto/local-repo";
+import { type LocalRepo, projectKeyFromPr, resolveLocalRepo } from "../auto/local-repo";
 import {
   copyFrozenContextIntoWorkspace,
   freezeReviewContext,
@@ -232,8 +239,15 @@ export async function runReview(
   // --- agents / aggregator resolution -------------------------------------
   const store = new Store();
   const paths = resolvePaths();
-  let attemptAgents: AgentRecord[];
-  let aggregatorAgent: AgentRecord;
+  let frozenManifest: InvocationManifest | null = null;
+  if (resumeRaw !== undefined) {
+    const resumeId = resumeRaw.trim();
+    if (RUN_ID_PATTERN.test(resumeId)) {
+      frozenManifest = readInvocationManifest(paths.runDir(resumeId));
+    }
+  }
+  let attemptAgents!: AgentRecord[];
+  let aggregatorAgent!: AgentRecord;
   let councilTopic: string | undefined;
 
   const reviewModels =
@@ -269,21 +283,40 @@ export async function runReview(
     try {
       council = store.getCouncil(councilRef);
     } catch (error) {
-      if (defaultedCouncil) {
+      if (frozenManifest) {
+        attemptAgents = frozenManifest.agents.map((frozen) => {
+          try {
+            return overlayFrozenAgent(store.getAgent(frozen.id), frozen);
+          } catch {
+            return stubAgentFromFrozen(frozen);
+          }
+        });
+        const aggFrozen =
+          frozenManifest.agents.find((row) => row.id === frozenManifest.aggregator.id) ?? null;
+        aggregatorAgent =
+          attemptAgents.find((agent) => agent.id === frozenManifest.aggregator.id) ??
+          (aggFrozen ? stubAgentFromFrozen(aggFrozen) : (attemptAgents[0] as AgentRecord));
+        councilTopic = undefined;
+        task.councilTopic = undefined;
+        council = null as unknown as CouncilRecord;
+      } else if (defaultedCouncil) {
         throw errors.usage(
           "no --council/--agents given and default pr-jury is missing; run `councilkit init` or pass --council/--agents",
         );
+      } else {
+        throw error;
       }
-      throw error;
     }
-    councilTopic = council.topic.trim().length > 0 ? council.topic : undefined;
-    task.councilTopic = councilTopic;
-    attemptAgents = store.councilAgents(council);
-    aggregatorAgent = attemptAgents.find(
-      (agent) => agent.id === council.reporterAgentId,
-    ) as AgentRecord;
-    if (!aggregatorAgent) {
-      throw errors.usage("council reporter (aggregator) is not among council agents");
+    if (council) {
+      councilTopic = council.topic.trim().length > 0 ? council.topic : undefined;
+      task.councilTopic = councilTopic;
+      attemptAgents = store.councilAgents(council);
+      aggregatorAgent = attemptAgents.find(
+        (agent) => agent.id === council.reporterAgentId,
+      ) as AgentRecord;
+      if (!aggregatorAgent) {
+        throw errors.usage("council reporter (aggregator) is not among council agents");
+      }
     }
   } else {
     if (values.aggregator === undefined) {
@@ -311,6 +344,21 @@ export async function runReview(
     if (!a.enabled) {
       throw errors.usage(`agent "${a.name}" is disabled; cannot participate in a review`);
     }
+  }
+
+  // Overlay frozen model/options so resume cannot mix a mutated Store identity.
+  if (frozenManifest) {
+    attemptAgents = attemptAgents.map((agent) => {
+      const frozen = frozenManifest.agents.find((row) => row.id === agent.id);
+      return frozen ? overlayFrozenAgent(agent, frozen) : agent;
+    });
+    const frozenAgg = frozenManifest.agents.find((row) => row.id === frozenManifest.aggregator.id);
+    aggregatorAgent = frozenAgg
+      ? overlayFrozenAgent(aggregatorAgent, frozenAgg)
+      : {
+          ...aggregatorAgent,
+          modelId: frozenManifest.aggregator.modelId,
+        };
   }
 
   const againstRaw = values.against as string | undefined;
@@ -341,12 +389,20 @@ export async function runReview(
   const env = process.env;
   let localRepo: LocalRepo | null = null;
   if (task.pr) {
-    localRepo = await resolveLocalRepo({
-      pr: task.pr,
-      repoFlag: values.repo as string | undefined,
-      runCommand,
-      env,
-    });
+    if (frozenManifest?.repoRealpath && existsSync(frozenManifest.repoRealpath)) {
+      localRepo = {
+        path: frozenManifest.repoRealpath,
+        project: projectKeyFromPr(task.pr) ?? "frozen",
+        source: "config",
+      };
+    } else {
+      localRepo = await resolveLocalRepo({
+        pr: task.pr,
+        repoFlag: values.repo as string | undefined,
+        runCommand,
+        env,
+      });
+    }
     out.progress(`  local repo: ${localRepo.path} (${localRepo.source})`);
   }
   const concurrencyRaw = values.concurrency as string | undefined;
@@ -604,10 +660,10 @@ export async function runReview(
       }),
     };
   });
-  const executionRevision = readExecutionRevision(runDir);
+  const executionRevision = matchExecutionRevision(readExecutionRevision(runDir), runId);
   const frozenTools: ToolFingerprint[] =
     resumeRaw !== undefined
-      ? (readInvocationManifest(runDir)?.tools ??
+      ? (frozenManifest?.tools ??
         fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]))
       : fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]);
   if (resumeRaw === undefined) {
@@ -963,11 +1019,43 @@ export async function runReview(
         const sha = await resolveLocalPrSha({
           repo: localRepo.path,
           branch,
-          pinnedRef: deps.worktreeRef,
+          pinnedRef: deps.worktreeRef ?? frozenManifest?.reviewedSha ?? undefined,
           runCommand,
           env,
         });
         reviewedSha = sha;
+        try {
+          writeInvocationManifest(runDir, {
+            version: 1,
+            kind: "councilkit-invocation-manifest",
+            runId,
+            task: {
+              ...(task.pr ? { pr: task.pr } : {}),
+              ...(task.task ? { task: task.task } : {}),
+              ...(task.focus ? { focus: task.focus } : {}),
+              ...(task.against ? { against: task.against } : {}),
+            },
+            repoRealpath: localRepo ? localRepo.path : null,
+            reviewedSha: /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null,
+            timeoutMs,
+            concurrency: concurrency ?? null,
+            agents: attemptAgents.map((agent) => ({
+              id: agent.id,
+              name: agent.name,
+              driverId: agent.driverSelection.driverId,
+              modelId: agent.modelId,
+              options: { ...agent.driverSelection.options },
+            })),
+            aggregator: {
+              id: aggregatorAgent.id,
+              driverId: aggregatorAgent.driverSelection.driverId,
+              modelId: aggregatorAgent.modelId,
+            },
+            tools: frozenTools,
+          });
+        } catch {
+          /* spawn-time check still uses in-memory frozenTools */
+        }
         out.progress(`  worktree ${sha.slice(0, 12)}`);
         const frozen = await freezeReviewContext({
           repo: localRepo.path,
@@ -989,13 +1077,21 @@ export async function runReview(
           const agent = rerunAgents[i];
           const spec = rerunSpecs[i];
           if (!agent || !spec) continue;
-          spec.prompt = buildAttemptPrompt({
+          const prompt = buildAttemptPrompt({
             agentName: agent.name,
             personaPrompt: agent.personaPrompt,
             task,
             workspaceMode: "worktree",
             frozenContext: frozenPrompt,
           });
+          const rebuilt = buildSpawnSpec(agent, {
+            attemptId: spec.attemptId,
+            workspace: spec.cwd,
+            prompt,
+          });
+          spec.prompt = rebuilt.prompt;
+          spec.argv = rebuilt.argv;
+          spec.promptStdin = rebuilt.promptStdin;
         }
         if (againstFindings?.sha) {
           const widened = againstDiffRange({
@@ -1010,13 +1106,21 @@ export async function runReview(
               const agent = rerunAgents[i];
               const spec = rerunSpecs[i];
               if (!agent || !spec) continue;
-              spec.prompt = buildAttemptPrompt({
+              const prompt = buildAttemptPrompt({
                 agentName: agent.name,
                 personaPrompt: agent.personaPrompt,
                 task,
                 workspaceMode: "worktree",
                 frozenContext: frozenPrompt,
               });
+              const rebuilt = buildSpawnSpec(agent, {
+                attemptId: spec.attemptId,
+                workspace: spec.cwd,
+                prompt,
+              });
+              spec.prompt = rebuilt.prompt;
+              spec.argv = rebuilt.argv;
+              spec.promptStdin = rebuilt.promptStdin;
             }
             out.progress(`  against range: ${widened}`);
           }
@@ -1095,7 +1199,11 @@ export async function runReview(
       attemptAgents,
       frozenTools,
       executionRevision,
-      extraAssessments: [],
+      extraAssessments: replayAcceptedCorrections({
+        runDir,
+        candidateSha: reviewedSha ?? "",
+        attempts: reusedByAttemptId.values(),
+      }),
       // Heartbeat always writes status.json (including --json). Human mode
       // also prints a 仍在运行 line; JSON mode stays silent on stderr.
       heartbeat: { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
@@ -1235,6 +1343,9 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
                 });
               } else {
                 recreateWorkspace(s.cwd, p.runDir, p.trustedRoot as TrustedRoot);
+              }
+              if (existsSync(join(p.runDir, "review-context.md"))) {
+                copyFrozenContextIntoWorkspace(p.runDir, s.cwd);
               }
             } catch (error) {
               if (error instanceof CliError) {
@@ -1675,7 +1786,7 @@ function persistableFailure(
   failure: AttemptResult["failure"] | null | undefined,
 ): { code: string; message: string } | null {
   if (!failure) return null;
-  return { code: failure.code, message: failure.message };
+  return { code: failure.code, message: redactDriverDiagnostic(failure.message) };
 }
 
 function createWorkspace(workspace: string): void {
@@ -1872,6 +1983,16 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
     });
     writeAssessmentCorrections(p.runDir, intent);
     records = intent;
+    const originalBlocks = extractAssessmentBlocks(result.output);
+    const originalAssessment =
+      originalBlocks.length > 0
+        ? originalBlocks.map((block) => `\`\`\`councilkit-findings\n${block}\n\`\`\``).join("\n\n")
+        : result.output;
+    const artifactName = "assessment-correction-source.md";
+    writeFileSync(join(result.workspace, artifactName), `${originalAssessment}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     const spec = buildSpawnSpec(agent, {
       attemptId: `corr-${result.attemptId}`,
       workspace: result.workspace,
@@ -1880,6 +2001,8 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
         requestedFindingIds: findingIds,
         errorPaths,
         candidateSha: sha,
+        originalAssessment,
+        originalArtifactPath: artifactName,
       }),
     });
     p.out.progress(

@@ -7,7 +7,7 @@
  * that ledger instead of rediscovering the whole PR vs master.
  */
 import { appendFileSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type ReviewFinding, parseReviewReport } from "@/lib/review-report";
 import {
   CLI_RUN_FINDINGS_FILE,
@@ -38,7 +38,12 @@ import {
   buildAssessmentDiagnostics,
 } from "@shared/runtime/reviewer-assessment";
 import { atomicWriteJson } from "../store/atomic-write";
-import { buildFindingGroups, hashFindingsBytes, writeFindingGroups } from "./finding-groups";
+import {
+  buildFindingGroups,
+  hashFindingsBytes,
+  loadFindingGroups,
+  writeFindingGroups,
+} from "./finding-groups";
 import type { AttemptResult } from "./runner";
 
 export {
@@ -436,6 +441,7 @@ export function persistFindingsFromReport(input: {
     runId: input.runId,
     sha: input.sha ?? null,
     requiredFindingIds,
+    extraAssessments: input.extraAssessments,
     attempts: (input.attempts ?? [])
       .filter((attempt) => Boolean(attempt.workspace) && attempt.attemptId !== "aggregator")
       .map((attempt) => ({
@@ -447,7 +453,18 @@ export function persistFindingsFromReport(input: {
       })),
   });
   atomicWriteJson(join(input.runDir, ASSESSMENT_DIAGNOSTICS_FILE), diagnostics);
-  if (aliases.length > 0 && input.sha && FULL_COMMIT_SHA.test(input.sha)) {
+  let priorGroups = null;
+  if (input.againstRunId && input.prior) {
+    try {
+      priorGroups = loadFindingGroups({
+        runDir: join(dirname(input.runDir), input.againstRunId),
+        ledger: input.prior,
+      });
+    } catch {
+      priorGroups = null;
+    }
+  }
+  if ((aliases.length > 0 || priorGroups) && input.sha && FULL_COMMIT_SHA.test(input.sha)) {
     const bytes = `${JSON.stringify(file, null, 2)}\n`;
     writeFindingGroups(
       input.runDir,
@@ -458,6 +475,7 @@ export function persistFindingsFromReport(input: {
         againstRunId: input.againstRunId ?? null,
         findingsSha256: hashFindingsBytes(bytes),
         matches: aliases,
+        priorGroups,
       }),
     );
   }

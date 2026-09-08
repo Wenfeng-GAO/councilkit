@@ -53,12 +53,9 @@ export async function resolveLocalPrSha(opts: {
       `git fetch origin ${opts.branch} failed; refusing to review a stale local ref`,
     );
   }
-  const originRef = `refs/remotes/origin/${opts.branch}`;
-  const sha = await gitRevParse(opts.repo, originRef, runCommand, env);
+  const sha = await gitRevParse(opts.repo, "FETCH_HEAD", runCommand, env);
   if (sha === null) {
-    throw errors.usage(
-      `branch "${opts.branch}" was fetched but origin/${opts.branch} is not a usable SHA`,
-    );
+    throw errors.usage(`branch "${opts.branch}" was fetched but FETCH_HEAD is not a usable SHA`);
   }
   return sha;
 }

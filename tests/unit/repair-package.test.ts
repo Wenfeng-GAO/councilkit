@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import type { FindingsFile, PlanLockFile } from "@shared/runtime/cli-ledger";
 import {
   FINDING_GROUPS_KIND,
-  type FindingGroupsFile,
   FindingGroupsError,
+  type FindingGroupsFile,
   validateFindingGroups,
 } from "@shared/runtime/finding-groups";
 import {
@@ -204,7 +204,10 @@ describe("repair package", () => {
   it("rejects a present sidecar with unknown members, conflicts, or the wrong run", () => {
     const source = ledger();
     expect(() =>
-      validateFindingGroups(sampleGroups(source, "RC", ["F-1", "missing"]), new Set(["F-1", "F-2"])),
+      validateFindingGroups(
+        sampleGroups(source, "RC", ["F-1", "missing"]),
+        new Set(["F-1", "F-2"]),
+      ),
     ).toThrow(FindingGroupsError);
     const conflict: FindingGroupsFile = {
       ...sampleGroups(source, "RC-A", ["F-1"]),
@@ -214,6 +217,16 @@ describe("repair package", () => {
       ],
     };
     expect(() => validateFindingGroups(conflict, new Set(["F-1", "F-2"]))).toThrow(/conflict/);
+    const aliasConflict: FindingGroupsFile = {
+      ...sampleGroups(source, "ROOT1", ["F-1"]),
+      groups: [
+        { rootCauseId: "ROOT1", findingIds: ["F-1"], aliases: ["F-3"], basis: "a" },
+        { rootCauseId: "ROOT2", findingIds: ["F-2"], aliases: ["F-3"], basis: "b" },
+      ],
+    };
+    expect(() => validateFindingGroups(aliasConflict, new Set(["F-1", "F-2", "F-3"]))).toThrow(
+      /conflict/,
+    );
     expect(() =>
       buildRepairPackage({
         ...input(),
@@ -223,11 +236,7 @@ describe("repair package", () => {
   });
 });
 
-function sampleGroups(
-  ledgerFile: FindingsFile,
-  root: string,
-  ids: string[],
-): FindingGroupsFile {
+function sampleGroups(ledgerFile: FindingsFile, root: string, ids: string[]): FindingGroupsFile {
   return {
     version: 1,
     kind: FINDING_GROUPS_KIND,

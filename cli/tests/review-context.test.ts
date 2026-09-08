@@ -59,4 +59,18 @@ describe("review-context colorless snapshot", () => {
     expect(readFileSync(join(root, "review-context.md"), "utf8")).toContain(head);
     expect(readFileSync(join(root, "review-context.diff"), "utf8")).toBe(ctx.colorlessDiff);
   });
+
+  it("fails closed when a provided target ref cannot be resolved", async () => {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    await expect(
+      freezeReviewContext({
+        repo,
+        headSha: head,
+        sourceRef: "HEAD",
+        targetRef: "origin/main",
+        host: "github",
+        runCommand: defaultRunCommand,
+      }),
+    ).rejects.toThrow(/refusing a head\.\.\.head empty diff/);
+  });
 });

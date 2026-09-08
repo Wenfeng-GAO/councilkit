@@ -118,7 +118,10 @@ export function diagnoseAttemptAssessments(input: {
       const result = reviewerAssessmentSchema.safeParse(row);
       if (!result.success) {
         const findingId =
-          row !== null && typeof row === "object" && "findingId" in row && typeof row.findingId === "string"
+          row !== null &&
+          typeof row === "object" &&
+          "findingId" in row &&
+          typeof row.findingId === "string"
             ? row.findingId.slice(0, 160)
             : null;
         const first = result.error.issues[0];
@@ -179,6 +182,7 @@ export function buildAssessmentDiagnostics(input: {
     output: string;
     agentName: string;
   }[];
+  extraAssessments?: readonly DiagnosedAssessment[];
 }): { diagnostics: AssessmentDiagnosticsFile; valid: DiagnosedAssessment[] } {
   const items: AssessmentDiagnosticItem[] = [];
   const valid: DiagnosedAssessment[] = [];
@@ -196,9 +200,19 @@ export function buildAssessmentDiagnostics(input: {
       valid.push({ ...row, reviewer: attempt.agentName });
     }
   }
-  const covered = new Set(
-    items.filter((item) => item.status === "valid" && item.findingId).map((item) => item.findingId),
-  );
+  const extras = input.extraAssessments ?? [];
+  for (const extra of extras) {
+    valid.push(extra);
+    items.push({
+      findingId: extra.assessment.findingId,
+      attemptId: extra.attemptId,
+      status: "valid",
+      errorClass: "ok",
+      errorPath: `/correction/${extra.assessment.findingId}`,
+    });
+  }
+  const extraKeys = new Set(extras.map((row) => `${row.attemptId}:${row.assessment.findingId}`));
+  const covered = new Set(valid.map((row) => row.assessment.findingId));
   for (const id of input.requiredFindingIds) {
     if (!covered.has(id)) {
       items.push({
@@ -209,8 +223,33 @@ export function buildAssessmentDiagnostics(input: {
         errorPath: `/required/${id}`,
       });
     }
+    const outcomes = new Set(
+      valid.filter((row) => row.assessment.findingId === id).map((row) => row.assessment.outcome),
+    );
+    if (outcomes.size > 1) {
+      items.push({
+        findingId: id,
+        attemptId: "coverage",
+        status: "semantic_mismatch",
+        errorClass: "contradictory_outcome",
+        errorPath: `/required/${id}/outcome`,
+      });
+    }
   }
-  const coverageComplete = input.requiredFindingIds.every((id) => covered.has(id));
+  const coverageComplete = input.requiredFindingIds.every((id) => {
+    const valids = valid.filter((row) => row.assessment.findingId === id);
+    if (valids.length === 0) return false;
+    const remainingInvalid = items.some(
+      (item) =>
+        item.findingId === id &&
+        (item.status === "invalid" || item.status === "semantic_mismatch") &&
+        item.attemptId !== "coverage" &&
+        !extraKeys.has(`${item.attemptId}:${id}`),
+    );
+    if (remainingInvalid) return false;
+    const outcomes = new Set(valids.map((row) => row.assessment.outcome));
+    return outcomes.size === 1;
+  });
   return {
     diagnostics: {
       version: 1,

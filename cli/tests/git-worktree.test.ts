@@ -67,4 +67,28 @@ describe("git worktree helpers", () => {
       }),
     ).rejects.toThrow(/stale local ref/);
   });
+
+  it("reads FETCH_HEAD from this fetch, not a stale origin tracking ref", async () => {
+    const calls: string[][] = [];
+    const sha = "b".repeat(40);
+    const result = await resolveLocalPrSha({
+      repo,
+      branch: "feature",
+      runCommand: async (input) => {
+        calls.push(input.argv);
+        if (input.argv[0] === "fetch") return { exitCode: 0, stdout: "", stderr: "" };
+        if (input.argv.includes("FETCH_HEAD"))
+          return { exitCode: 0, stdout: `${sha}\n`, stderr: "" };
+        if (input.argv.some((arg) => String(arg).includes("origin/feature"))) {
+          return { exitCode: 0, stdout: `${"c".repeat(40)}\n`, stderr: "" };
+        }
+        return { exitCode: 1, stdout: "", stderr: "missing" };
+      },
+    });
+    expect(result).toBe(sha);
+    expect(calls.some((argv) => argv.includes("FETCH_HEAD"))).toBe(true);
+    expect(calls.some((argv) => argv.some((arg) => String(arg).includes("origin/feature")))).toBe(
+      false,
+    );
+  });
 });

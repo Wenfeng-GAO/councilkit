@@ -205,10 +205,12 @@ export function buildCorrectionPrompt(input: {
   requestedFindingIds: readonly string[];
   errorPaths: readonly string[];
   candidateSha: string;
+  originalAssessment?: string;
+  originalArtifactPath?: string;
 }): string {
   const ids = input.requestedFindingIds.map((id) => `- ${id}`).join("\n");
   const paths = input.errorPaths.map((path) => `- ${path}`).join("\n");
-  return [
+  const lines = [
     `你是 ${input.agentName}，正在做${CORRECTION_PROMPT_MARKER}。`,
     "",
     "只重发 requested finding ID 的 councilkit-findings fenced JSON 数组。",
@@ -220,9 +222,19 @@ export function buildCorrectionPrompt(input: {
     "",
     "Diagnosed error paths:",
     paths || "- (none)",
-    "",
-    "只输出一个 ```councilkit-findings 代码块。",
-  ].join("\n");
+  ];
+  if (input.originalArtifactPath) {
+    lines.push(
+      "",
+      `Original assessment artifact: ${input.originalArtifactPath}`,
+      "Read that file and keep every evidence field byte-identical except dropping unknown keys.",
+    );
+  }
+  if (input.originalAssessment && input.originalAssessment.trim().length > 0) {
+    lines.push("", "Original assessment fence:", input.originalAssessment.trimEnd());
+  }
+  lines.push("", "只输出一个 ```councilkit-findings 代码块。");
+  return lines.join("\n");
 }
 
 export interface AttemptSummaryForAggregate {

@@ -157,16 +157,23 @@ describe("cli bare CSRF token redaction (F8, no cookie present)", () => {
   });
 });
 
-describe("driver terminal secret hygiene", () => {
-  it("redacts sk- tokens from classified terminal messages", async () => {
-    const { classifyDriverTerminal } = await import("../src/auto/driver-terminal");
-    const terminal = classifyDriverTerminal({
-      stdout: "",
-      stderr: "authentication failed sk-abcdefghijklmnopqrstuvwxyz",
-      exitCode: 1,
-    });
-    expect(terminal?.errorClass).toBe("auth");
-    expect(terminal?.message).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
-    expect(terminal?.message).toContain("[redacted]");
+it("redacts Cookie, csrf, Bearer, and session values from structured auth errors", async () => {
+  const { classifyDriverTerminal } = await import("../src/auto/driver-terminal");
+  const terminal = classifyDriverTerminal({
+    stdout: JSON.stringify({
+      type: "error",
+      error: {
+        type: "authentication_error",
+        message:
+          "unauthorized; Cookie: session=SYNTHETIC_SECRET; csrf=SYNTHETIC_CSRF Bearer abc.def",
+      },
+    }),
+    stderr: "",
+    exitCode: 1,
   });
+  expect(terminal?.errorClass).toBe("auth");
+  expect(terminal?.message).not.toContain("SYNTHETIC_SECRET");
+  expect(terminal?.message).not.toContain("SYNTHETIC_CSRF");
+  expect(terminal?.message).not.toContain("abc.def");
+  expect(terminal?.message).toContain("[redacted]");
 });
