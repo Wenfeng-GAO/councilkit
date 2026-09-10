@@ -22,6 +22,7 @@ import {
   SCOPE_STATES,
 } from "./contracts";
 import { usageSchema } from "./events";
+import { findingGroupsFileSchema } from "./finding-groups";
 import { reviewEvidenceSchema } from "./review-case";
 
 // ---------------------------------------------------------------------------
@@ -529,12 +530,19 @@ export const cliRunAttemptProgressSchema = z
     status: z.enum(["pending", "queued", "running", "success", "failure", "cancelled"]),
     durationMs: z.number().int().nonnegative().nullable(),
     lastActivity: z.string().max(240).nullable().optional(),
+    lastTokenAt: z.string().max(40).nullable().optional(),
+    lastToolAt: z.string().max(40).nullable().optional(),
+    lastArtifactAt: z.string().max(40).nullable().optional(),
+    activitySpanMs: z.number().int().nonnegative().nullable().optional(),
+    requestedModelId: z.string().max(200).nullable().optional(),
+    observedModelId: z.string().max(200).nullable().optional(),
   })
   .strict();
 
 export const cliRunProgressSchema = z
   .object({
     phase: z.enum([
+      "preflight",
       "attempts",
       "aggregating",
       "done",
@@ -651,6 +659,7 @@ export const cliRunDetailResponseSchema = cliRunSummarySchema.extend({
   planLock: planLockFileSchema.nullable().default(null),
   landings: z.array(landingRecordSchema).default([]),
   documents: z.array(cliRunDocumentSchema).default([]),
+  findingGroups: findingGroupsFileSchema.nullable().optional(),
 });
 export type CliRunDetailResponse = z.infer<typeof cliRunDetailResponseSchema>;
 

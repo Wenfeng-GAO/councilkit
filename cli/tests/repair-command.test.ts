@@ -143,4 +143,52 @@ describe("repair export CLI", () => {
     );
     expect(readCliRun(id)?.reviewEvidence?.complete).toBe(false);
   });
+  it("exports two IDs with a shared rootCause from a valid sidecar and refuses a corrupt sidecar", async () => {
+    const dir = seed();
+    const findings = JSON.parse(readFileSync(join(dir, "findings.json"), "utf8"));
+    findings.findings.push({
+      id: "F-2",
+      title: "alias",
+      severity: "major",
+      status: "open",
+      text: "same hole",
+      source: "unique",
+      reviewer: "R",
+      files: ["src/file.ts"],
+    });
+    writeFileSync(join(dir, "findings.json"), `${JSON.stringify(findings, null, 2)}\n`);
+    const bytes = readFileSync(join(dir, "findings.json"), "utf8");
+    const { createHash } = await import("node:crypto");
+    const hash = createHash("sha256").update(bytes, "utf8").digest("hex");
+    writeFileSync(
+      join(dir, "finding-groups.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: id,
+          sha: "a".repeat(40),
+          findingsSha256: hash,
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE-CANCEL",
+            findingIds: ["F-1", "F-2"],
+            aliases: ["F-2"],
+            basis: "shared fixture root",
+          },
+        ],
+      })}\n`,
+    );
+    const out = join(home, "repair-shared.json");
+    await runRepair(["export", "--run", id, "--out", out], sink);
+    const task = repairPackageSchema.parse(JSON.parse(readFileSync(out, "utf8")));
+    expect(task.findings.map((row) => row.id).sort()).toEqual(["F-1", "F-2"]);
+    expect(task.findings.every((row) => row.rootCause === "RC-STABLE-CANCEL")).toBe(true);
+    writeFileSync(join(dir, "finding-groups.v1.json"), `${JSON.stringify({ version: 99 })}\n`);
+    await expect(
+      runRepair(["export", "--run", id, "--out", join(home, "repair-bad.json")], sink),
+    ).rejects.toThrow(/finding-groups/);
+  });
 });

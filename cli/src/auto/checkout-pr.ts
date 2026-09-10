@@ -31,11 +31,16 @@ export interface CheckedOutPr {
   host: "github" | "antcode";
   branch: string;
   cloneUrl: string;
+  baseBranch: string;
+  headSha?: string;
+  baseSha?: string;
 }
 
 const DEFAULT_CMD_TIMEOUT_MS = 5 * 60 * 1000;
 const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
-const GH_JSON_FIELDS = "headRefName,headRepository,headRepositoryOwner,isCrossRepository,url";
+const FULL_SHA = /^[0-9a-f]{40}$/i;
+const GH_JSON_FIELDS =
+  "headRefName,baseRefName,headRefOid,baseRefOid,headRepository,headRepositoryOwner,isCrossRepository,url";
 
 /** Env for internal CLIs (antcode): strip proxies on that one command only. */
 export function internalToolEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -145,6 +150,9 @@ export async function inspectPullRequest(
       host: "github",
       branch: meta.branch,
       cloneUrl: meta.nameWithOwner,
+      baseBranch: meta.baseBranch,
+      ...(meta.headSha ? { headSha: meta.headSha } : {}),
+      ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
     };
   }
   if (findExecutable("antcode", env) === null) {
@@ -167,6 +175,7 @@ export async function inspectPullRequest(
     host: "antcode",
     branch: meta.branch,
     cloneUrl: meta.cloneUrl,
+    baseBranch: meta.baseBranch,
   };
 }
 
@@ -223,6 +232,9 @@ async function checkoutGitHub(
     host: "github",
     branch,
     cloneUrl: meta.nameWithOwner,
+    baseBranch: meta.baseBranch,
+    ...(meta.headSha ? { headSha: meta.headSha } : {}),
+    ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
   };
 }
 
@@ -260,6 +272,7 @@ async function checkoutAntCode(
     host: "antcode",
     branch,
     cloneUrl: meta.cloneUrl,
+    baseBranch: meta.baseBranch,
   };
 }
 
@@ -403,7 +416,13 @@ export async function pushCurrentBranch(
   }
 }
 
-function parseGhPrView(stdout: string): { branch: string; nameWithOwner: string } {
+function parseGhPrView(stdout: string): {
+  branch: string;
+  nameWithOwner: string;
+  baseBranch: string;
+  headSha?: string;
+  baseSha?: string;
+} {
   let rec: unknown;
   try {
     rec = JSON.parse(stdout);
@@ -418,6 +437,18 @@ function parseGhPrView(stdout: string): { branch: string; nameWithOwner: string 
   if (!BRANCH_RE.test(branch)) {
     throw errors.runFailed("gh pr view did not include a usable headRefName");
   }
+  const baseRaw = typeof row.baseRefName === "string" ? row.baseRefName : "";
+  if (!BRANCH_RE.test(baseRaw)) {
+    throw errors.runFailed("gh pr view did not include a usable baseRefName");
+  }
+  const headSha =
+    typeof row.headRefOid === "string" && FULL_SHA.test(row.headRefOid)
+      ? row.headRefOid.toLowerCase()
+      : undefined;
+  const baseSha =
+    typeof row.baseRefOid === "string" && FULL_SHA.test(row.baseRefOid)
+      ? row.baseRefOid.toLowerCase()
+      : undefined;
   const repo = row.headRepository;
   const owner = row.headRepositoryOwner;
   let nameWithOwner = "";
@@ -432,10 +463,14 @@ function parseGhPrView(stdout: string): { branch: string; nameWithOwner: string 
   if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(nameWithOwner)) {
     throw errors.runFailed("gh pr view did not include a usable head repository");
   }
-  return { branch, nameWithOwner };
+  return { branch, nameWithOwner, baseBranch: baseRaw, headSha, baseSha };
 }
 
-function parseAntCodePrShow(stdout: string): { branch: string; cloneUrl: string } {
+function parseAntCodePrShow(stdout: string): {
+  branch: string;
+  cloneUrl: string;
+  baseBranch: string;
+} {
   let rec: unknown;
   try {
     rec = JSON.parse(stdout);
@@ -450,6 +485,10 @@ function parseAntCodePrShow(stdout: string): { branch: string; cloneUrl: string 
   if (!BRANCH_RE.test(branch)) {
     throw errors.runFailed("antcode pr show did not include a usable source_branch");
   }
+  const targetRaw = typeof row.target_branch === "string" ? row.target_branch : "";
+  if (!BRANCH_RE.test(targetRaw)) {
+    throw errors.runFailed("antcode pr show did not include a usable target_branch");
+  }
   const source = row.source;
   let cloneUrl = "";
   if (source !== null && typeof source === "object") {
@@ -460,7 +499,7 @@ function parseAntCodePrShow(stdout: string): { branch: string; cloneUrl: string 
   if (cloneUrl.length === 0 || /[\n\r]/.test(cloneUrl)) {
     throw errors.runFailed("antcode pr show did not include a usable clone URL");
   }
-  return { branch, cloneUrl };
+  return { branch, cloneUrl, baseBranch: targetRaw };
 }
 
 function assertOk(result: RunCommandResult, label: string): void {

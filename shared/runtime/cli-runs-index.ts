@@ -7,6 +7,7 @@
  * Safety: never follow symlinks; runId is a closed token; a single corrupt
  * directory is skipped on list (detail of a bad id is not-found).
  */
+import { createHash } from "node:crypto";
 import {
   constants,
   type Stats,
@@ -42,7 +43,17 @@ import {
   parseLiveStateJson,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
+import {
+  FINDING_GROUPS_FILE,
+  type FindingGroupsFile,
+  findingGroupsFileSchema,
+  validateFindingGroups,
+} from "./finding-groups";
 import { type ReviewEvidence, summarizeReviewEvidence } from "./review-case";
+import {
+  ASSESSMENT_DIAGNOSTICS_FILE,
+  assessmentDiagnosticsFileSchema,
+} from "./reviewer-assessment";
 import {
   type CliRunDocumentDto,
   type CliRunHandoffDto,
@@ -101,6 +112,7 @@ export interface CliRunDetail extends CliRunSummary {
   planLock: PlanLockFile | null;
   landings: LandingRecord[];
   documents: CliRunDocumentDto[];
+  findingGroups: FindingGroupsFile | null;
 }
 
 export function isCliRunId(runId: string): boolean {
@@ -160,10 +172,17 @@ export function readCliRun(
     planStat?.isFile() && !planStat.isSymbolicLink()
       ? readCapped(planPath, MAX_CLI_REPORT_BYTES)
       : { text: "", truncated: false };
-  const findings = readFindings(join(root, runId, CLI_RUN_FINDINGS_FILE));
+  const findingsPath = join(root, runId, CLI_RUN_FINDINGS_FILE);
+  const findingsText = readFindingsText(findingsPath);
+  const findings = findingsText ? parseFindingsFile(findingsText) : null;
   const planLock = readPlanLock(join(root, runId, CLI_RUN_PLAN_LOCK_FILE));
   const landings = readLandings(join(root, runId, CLI_RUN_LANDINGS_FILE));
   const documents = summary.kind === "squad" ? readSquadDocuments(join(root, runId)) : [];
+  const groupsRead = readOptionalFindingGroups(
+    join(root, runId, FINDING_GROUPS_FILE),
+    findings,
+    findingsText,
+  );
   return {
     ...summary,
     markdown: report.text,
@@ -174,6 +193,11 @@ export function readCliRun(
     planLock,
     landings,
     documents,
+    findingGroups: groupsRead.groups,
+    reviewEvidence:
+      summary.reviewEvidence && groupsRead.invalid
+        ? { ...summary.reviewEvidence, evidenceComplete: false }
+        : summary.reviewEvidence,
   };
 }
 
@@ -237,10 +261,56 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
   };
 }
 
-function readFindings(path: string): FindingsFile | null {
+function readFindingsText(path: string): string | null {
   const stat = safeLstat(path);
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
-  return parseFindingsFile(readCapped(path, 512 * 1024).text);
+  const { text, truncated } = readCapped(path, 512 * 1024);
+  if (truncated) return text;
+  return text;
+}
+
+function readFindings(path: string): FindingsFile | null {
+  const text = readFindingsText(path);
+  return text ? parseFindingsFile(text) : null;
+}
+
+function readOptionalFindingGroups(
+  path: string,
+  findings: FindingsFile | null,
+  findingsText: string | null,
+): { groups: FindingGroupsFile | null; invalid: boolean } {
+  const stat = safeLstat(path);
+  if (stat === null) return { groups: null, invalid: false };
+  if (!stat.isFile() || stat.isSymbolicLink()) return { groups: null, invalid: true };
+  try {
+    const parsed = findingGroupsFileSchema.safeParse(JSON.parse(readCapped(path, 256 * 1024).text));
+    if (!parsed.success) return { groups: null, invalid: true };
+    const groups = parsed.data;
+    if (findings && groups.source.runId !== findings.runId) {
+      return { groups: null, invalid: true };
+    }
+    if (findings?.sha && groups.source.sha !== findings.sha.toLowerCase()) {
+      return { groups: null, invalid: true };
+    }
+    if (
+      findings?.againstRunId &&
+      groups.source.againstRunId &&
+      groups.source.againstRunId !== findings.againstRunId
+    ) {
+      return { groups: null, invalid: true };
+    }
+    if (findingsText) {
+      const actual = createHash("sha256").update(findingsText, "utf8").digest("hex");
+      if (actual !== groups.source.findingsSha256) return { groups: null, invalid: true };
+    }
+    validateFindingGroups(
+      groups,
+      findings ? new Set(findings.findings.map((row) => row.id)) : undefined,
+    );
+    return { groups, invalid: false };
+  } catch {
+    return { groups: null, invalid: true };
+  }
 }
 
 function readPlanLock(path: string): PlanLockFile | null {
@@ -461,5 +531,19 @@ function readReviewEvidence(dir: string, runId: string, head: string): ReviewEvi
     prUrl: started?.task?.pr ?? null,
     againstRunId: started?.task?.against ?? null,
     ledger: readFindings(join(dir, CLI_RUN_FINDINGS_FILE)),
+    evidenceComplete: readEvidenceComplete(join(dir, ASSESSMENT_DIAGNOSTICS_FILE)),
   });
+}
+
+function readEvidenceComplete(path: string): boolean | undefined {
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return undefined;
+  try {
+    const parsed = assessmentDiagnosticsFileSchema.safeParse(
+      JSON.parse(readCapped(path, 256 * 1024).text),
+    );
+    return parsed.success ? parsed.data.coverageComplete : false;
+  } catch {
+    return false;
+  }
 }

@@ -186,7 +186,12 @@ export class LiveEventCollector {
     if (item === null) return;
     const itemType = typeof item.type === "string" ? item.type : "";
     const isTool =
-      itemType === "command_execution" || itemType === "mcp_tool_call" || itemType === "web_search";
+      itemType === "command_execution" ||
+      itemType === "mcp_tool_call" ||
+      itemType === "web_search" ||
+      itemType === "file_change" ||
+      itemType === "custom_tool_call" ||
+      itemType === "code_execution";
     if (obj.type === "item.started") {
       if (!isTool) return;
       out.push({

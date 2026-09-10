@@ -57,4 +57,71 @@ describe("git worktree helpers", () => {
     });
     expect(pinned).toBe(sha);
   });
+
+  it("refuses to use a local ref when git fetch fails", async () => {
+    await expect(
+      resolveLocalPrSha({
+        repo,
+        branch: "feature",
+        runCommand: async () => ({ exitCode: 1, stdout: "", stderr: "denied" }),
+      }),
+    ).rejects.toThrow(/stale local ref/);
+  });
+
+  it("reads FETCH_HEAD from this fetch, not a stale origin tracking ref", async () => {
+    const calls: string[][] = [];
+    const sha = "b".repeat(40);
+    const destRefs: string[] = [];
+    const result = await resolveLocalPrSha({
+      repo,
+      branch: "feature",
+      runCommand: async (input) => {
+        calls.push(input.argv);
+        if (input.argv[0] === "fetch") {
+          const spec = input.argv.find((arg) => String(arg).includes("refs/councilkit/fetch/"));
+          if (spec) destRefs.push(String(spec).split(":")[1] ?? "");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (input.argv[0] === "update-ref") return { exitCode: 0, stdout: "", stderr: "" };
+        if (input.argv.includes("FETCH_HEAD"))
+          return { exitCode: 0, stdout: `${"c".repeat(40)}\n`, stderr: "" };
+        if (destRefs.some((ref) => input.argv.includes(ref))) {
+          return { exitCode: 0, stdout: `${sha}\n`, stderr: "" };
+        }
+        return { exitCode: 1, stdout: "", stderr: "missing" };
+      },
+    });
+    expect(result).toBe(sha);
+    expect(calls.some((argv) => argv.includes("FETCH_HEAD"))).toBe(false);
+    expect(destRefs).toHaveLength(1);
+  });
+
+  it("does not let a concurrent fetch overwrite this review's exclusive ref", async () => {
+    const shaA = "a".repeat(40);
+    const shaB = "b".repeat(40);
+    const shas = new Map<string, string>();
+    const runCommand: Parameters<typeof resolveLocalPrSha>[0]["runCommand"] = async (input) => {
+      if (input.argv[0] === "fetch") {
+        const spec = input.argv.find((arg) => String(arg).includes("refs/councilkit/fetch/"));
+        const dest = String(spec ?? "").split(":")[1] ?? "";
+        const src =
+          String(spec ?? "")
+            .split(":")[0]
+            ?.replace(/^\+/, "") ?? "";
+        shas.set(dest, src === "feature-a" ? shaA : shaB);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (input.argv[0] === "update-ref") return { exitCode: 0, stdout: "", stderr: "" };
+      const ref = input.argv[input.argv.length - 1] ?? "";
+      const sha = shas.get(ref);
+      if (sha) return { exitCode: 0, stdout: `${sha}\n`, stderr: "" };
+      return { exitCode: 1, stdout: "", stderr: "missing" };
+    };
+    const [gotA, gotB] = await Promise.all([
+      resolveLocalPrSha({ repo, branch: "feature-a", runCommand }),
+      resolveLocalPrSha({ repo, branch: "feature-b", runCommand }),
+    ]);
+    expect(gotA).toBe(shaA);
+    expect(gotB).toBe(shaB);
+  });
 });

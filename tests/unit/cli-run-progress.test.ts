@@ -320,6 +320,45 @@ describe("parseLiveStateJson pipeline", () => {
     expect(live?.progress.phase).toBe("implementing");
     expect(live?.handoff).toBeNull();
   });
+
+  it("accepts preflight phase and ignores unknown attempt keys", () => {
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "running",
+        extraTop: true,
+        progress: {
+          phase: "preflight",
+          updatedAt: "t0",
+          attempts: [
+            {
+              attemptId: "probe-0-claude-stream-json",
+              agentName: "Alice",
+              driverId: "claude-stream-json",
+              modelId: "m",
+              role: "attempt",
+              status: "running",
+              durationMs: 1200,
+              lastActivity: "probe",
+              lastTokenAt: "t-token",
+              lastToolAt: null,
+              requestedModelId: "m",
+              observedModelId: null,
+              futureField: "ok",
+            },
+          ],
+        },
+        pipeline: null,
+      }),
+    );
+    expect(live?.progress.phase).toBe("preflight");
+    expect(live?.progress.attempts[0]?.lastTokenAt).toBe("t-token");
+    expect(live?.progress.attempts[0]?.requestedModelId).toBe("m");
+    expect(live?.progress.attempts[0]?.observedModelId).toBeNull();
+    expect(
+      (live?.progress.attempts[0] as { futureField?: string } | undefined)?.futureField,
+    ).toBeUndefined();
+  });
 });
 
 describe("mapSquadObserveStatus", () => {

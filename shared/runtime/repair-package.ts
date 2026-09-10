@@ -6,6 +6,7 @@ import {
   isFindingBlocking,
   isFindingVerifiedClosed,
 } from "./cli-ledger";
+import { type FindingGroupsFile, resolveRootCause, validateFindingGroups } from "./finding-groups";
 
 const text = z
   .string()
@@ -111,15 +112,32 @@ export function buildRepairPackage(input: {
   runId: string;
   complete: boolean;
   prUrl: string | null;
-  ledger: Pick<FindingsFile, "runId" | "sha" | "findings"> | null;
+  ledger: Pick<FindingsFile, "runId" | "sha" | "findings" | "againstRunId"> | null;
   planLock: PlanLockFile | null;
   clusterId?: string;
+  findingGroups?: FindingGroupsFile | null;
 }): RepairPackage {
   const { ledger, planLock, clusterId } = input;
   if (!input.complete)
     throw new Error("需要完整成功的独立审查；失败或不完整的 run 不能导出修复任务。");
   if (!ledger || ledger.runId !== input.runId || !/^[0-9a-f]{40}$/i.test(ledger.sha ?? "")) {
     throw new Error("修复任务需要与本次 run 对应的 findings.json 和完整候选 SHA。");
+  }
+  if (input.findingGroups) {
+    validateFindingGroups(input.findingGroups, new Set(ledger.findings.map((row) => row.id)));
+    if (
+      input.findingGroups.source.runId !== input.runId ||
+      input.findingGroups.source.sha !== ledger.sha?.toLowerCase()
+    ) {
+      throw new Error("finding-groups sidecar does not match this run");
+    }
+    if (
+      ledger.againstRunId &&
+      input.findingGroups.source.againstRunId &&
+      input.findingGroups.source.againstRunId !== ledger.againstRunId
+    ) {
+      throw new Error("finding-groups sidecar against source does not match this run");
+    }
   }
   if (planLock && (planLock.sourceRunId !== input.runId || planLock.verdict !== "approve")) {
     throw new Error("修复方案尚未获准，或 plan.lock 不属于本次 run。");
@@ -141,7 +159,7 @@ export function buildRepairPackage(input: {
       id: row.id,
       title: row.title,
       severity: row.severity,
-      rootCause: row.id,
+      rootCause: resolveRootCause(row.id, input.findingGroups),
       invariant:
         plans
           .map((cluster) => cluster.invariants.trim())

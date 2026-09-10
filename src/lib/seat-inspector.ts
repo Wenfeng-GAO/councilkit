@@ -28,3 +28,23 @@ export function formatAttemptMs(ms: number): string {
   if (m === 0) return `${s}s`;
   return `${m}m${String(s).padStart(2, "0")}s`;
 }
+
+export function inspectorDuration(
+  receiptMs: number | null,
+  span: { hasTimeline: boolean; spanMs: number | null; eventCount: number } | null,
+  status?: string,
+): string | null {
+  if (status === "running") {
+    return receiptMs === null ? null : formatAttemptMs(receiptMs);
+  }
+  if (span?.hasTimeline && span.spanMs !== null) {
+    const spanText = formatAttemptMs(span.spanMs);
+    if (receiptMs === null) return spanText;
+    return `${formatAttemptMs(receiptMs)} · 过程 ${spanText}`;
+  }
+  if (receiptMs === null) return null;
+  if (span && span.eventCount > 0 && !span.hasTimeline) {
+    return `${formatAttemptMs(receiptMs)} · 过程无时间轴`;
+  }
+  return formatAttemptMs(receiptMs);
+}

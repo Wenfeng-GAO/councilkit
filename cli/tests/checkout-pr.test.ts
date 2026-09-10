@@ -53,6 +53,7 @@ describe("checkoutPullRequest command sequence", () => {
         return {
           stdout: JSON.stringify({
             headRefName: "feat-x",
+            baseRefName: "main",
             headRepository: { nameWithOwner: "acme/repo" },
             headRepositoryOwner: { login: "acme" },
           }),
@@ -73,6 +74,7 @@ describe("checkoutPullRequest command sequence", () => {
     );
     expect(result.host).toBe("github");
     expect(result.branch).toBe("feat-x");
+    expect(result.baseBranch).toBe("main");
     expect(calls[0]?.[0]).toBe("gh");
     expect(calls[0]?.slice(1, 3)).toEqual(["pr", "view"]);
     expect(calls.some((c) => c[0] === "gh" && c.includes("clone"))).toBe(true);
@@ -89,6 +91,7 @@ describe("checkoutPullRequest command sequence", () => {
         return {
           stdout: JSON.stringify({
             source_branch: "feat/live",
+            target_branch: "master",
             source: { ssh_url: "git@gitlab.alipay-inc.com:paas-core/agentrun.git" },
           }),
           stderr: "",
@@ -107,9 +110,33 @@ describe("checkoutPullRequest command sequence", () => {
     );
     expect(result.host).toBe("antcode");
     expect(result.branch).toBe("feat/live");
+    expect(result.baseBranch).toBe("master");
     const clone = calls.find((c) => c[0] === "git" && c[1] === "clone");
     expect(clone).toBeDefined();
     expect(clone).toContain("--branch");
     expect(clone).toContain("feat/live");
+  });
+
+  it("refuses GitHub PR metadata that omits baseRefName", async () => {
+    const runCommand: RunCommand = async (input) => {
+      if (input.argv[0] === "pr" && input.argv[1] === "view") {
+        return {
+          stdout: JSON.stringify({
+            headRefName: "feat-x",
+            headRepository: { nameWithOwner: "acme/repo" },
+            headRepositoryOwner: { login: "acme" },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    await expect(
+      checkoutPullRequest("https://github.com/acme/repo/pull/9", "/tmp/ws", runCommand, {
+        ...process.env,
+        PATH: process.env.PATH,
+      }),
+    ).rejects.toThrow(/baseRefName/);
   });
 });

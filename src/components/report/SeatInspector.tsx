@@ -1,6 +1,6 @@
 import { AttemptLiveTranscript } from "@/components/report/AttemptLiveTranscript";
 import { type LiveEventSpan, displayLastActivity } from "@/lib/live-transcript";
-import { formatAttemptMs } from "@/lib/seat-inspector";
+import { inspectorDuration } from "@/lib/seat-inspector";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -156,11 +156,11 @@ export function SeatInspector({
             </p>
             <p className="mt-2 font-command text-[0.68rem] text-muted">
               <span className={statusClass(selected.status)}>{ATTEMPT_LABEL[selected.status]}</span>
-              {inspectorDuration(selected.durationMs, span) ? (
+              {inspectorDuration(selected.durationMs, span, selected.status) ? (
                 <>
                   <span className="mx-1.5 text-edge">·</span>
                   {runId.startsWith("ck-squad-") ? "记录 " : ""}
-                  {inspectorDuration(selected.durationMs, span)}
+                  {inspectorDuration(selected.durationMs, span, selected.status)}
                 </>
               ) : null}
             </p>
@@ -229,13 +229,4 @@ function statusClass(status: AttemptRow["status"]): string {
 function inspectorSeatLabel(row: AttemptRow, attempts: readonly AttemptRow[]): string {
   const dup = attempts.filter((item) => item.agentName === row.agentName).length > 1;
   return dup ? `${row.agentName} · ${row.attemptId}` : row.agentName;
-}
-
-function inspectorDuration(receiptMs: number | null, span: LiveEventSpan | null): string | null {
-  if (span?.hasTimeline && span.spanMs !== null) return formatAttemptMs(span.spanMs);
-  if (receiptMs === null) return null;
-  if (span && span.eventCount > 0 && !span.hasTimeline) {
-    return `${formatAttemptMs(receiptMs)} · 过程无时间轴`;
-  }
-  return formatAttemptMs(receiptMs);
 }

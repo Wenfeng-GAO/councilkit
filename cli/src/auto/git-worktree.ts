@@ -2,10 +2,14 @@
  * Isolated git worktrees of a local clone, used as review Attempt cwd so
  * drivers do not each clone the PR themselves.
  */
+import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, rmSync } from "node:fs";
 import { errors } from "../errors";
 import { type TrustedRoot, assertWithinRoot, revalidateTrustedRoot } from "../fs-safe";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
+
+const FETCH_REF_PREFIX = "refs/councilkit/fetch";
+const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
 
 export async function gitRevParse(
   repo: string,
@@ -24,6 +28,49 @@ export async function gitRevParse(
   return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
 }
 
+/** Fetch a remote branch into a unique ref so concurrent reviews cannot share FETCH_HEAD. */
+export async function fetchRefExclusive(opts: {
+  repo: string;
+  branch: string;
+  runCommand: RunCommand;
+  env: NodeJS.ProcessEnv;
+  expectedSha?: string;
+}): Promise<string> {
+  const branch = opts.branch.replace(/^refs\/remotes\/origin\//, "").replace(/^origin\//, "");
+  if (!BRANCH_RE.test(branch)) {
+    throw errors.runFailed(`refusing to fetch unusable branch "${opts.branch}"`);
+  }
+  const destRef = `${FETCH_REF_PREFIX}/${randomUUID()}`;
+  const fetched = await opts.runCommand({
+    executable: "git",
+    argv: ["fetch", "origin", `+${branch}:${destRef}`, "--update-head-ok"],
+    cwd: opts.repo,
+    env: opts.env,
+    timeoutMs: 5 * 60 * 1000,
+  });
+  if (fetched.exitCode !== 0) {
+    throw errors.runFailed(
+      `git fetch origin ${branch} failed; refusing to review a stale local ref`,
+    );
+  }
+  const sha = await gitRevParse(opts.repo, destRef, opts.runCommand, opts.env);
+  await opts.runCommand({
+    executable: "git",
+    argv: ["update-ref", "-d", destRef],
+    cwd: opts.repo,
+    env: opts.env,
+  });
+  if (sha === null) {
+    throw errors.usage(`branch "${branch}" was fetched but the exclusive ref is not a usable SHA`);
+  }
+  if (opts.expectedSha && opts.expectedSha.toLowerCase() !== sha.toLowerCase()) {
+    throw errors.runFailed(
+      `fetched ${branch} SHA ${sha} does not match the expected PR head ${opts.expectedSha}`,
+    );
+  }
+  return sha;
+}
+
 export async function resolveLocalPrSha(opts: {
   repo: string;
   branch: string;
@@ -31,6 +78,7 @@ export async function resolveLocalPrSha(opts: {
   env?: NodeJS.ProcessEnv;
   /** Tests: skip fetch and use this ref (usually HEAD). */
   pinnedRef?: string;
+  expectedSha?: string;
 }): Promise<string> {
   const runCommand = opts.runCommand ?? defaultRunCommand;
   const env = opts.env ?? process.env;
@@ -41,25 +89,13 @@ export async function resolveLocalPrSha(opts: {
     }
     return pinned;
   }
-  await runCommand({
-    executable: "git",
-    argv: ["fetch", "origin", opts.branch, "--update-head-ok"],
-    cwd: opts.repo,
+  return fetchRefExclusive({
+    repo: opts.repo,
+    branch: opts.branch,
+    runCommand,
     env,
-    timeoutMs: 5 * 60 * 1000,
+    expectedSha: opts.expectedSha,
   });
-  const candidates = [
-    `refs/remotes/origin/${opts.branch}`,
-    `refs/heads/${opts.branch}`,
-    opts.branch,
-  ];
-  for (const ref of candidates) {
-    const sha = await gitRevParse(opts.repo, ref, runCommand, env);
-    if (sha !== null) return sha;
-  }
-  throw errors.usage(
-    `branch "${opts.branch}" is not in the local clone. Fetch it, or pass --repo to the right checkout.`,
-  );
 }
 
 export async function addDetachedWorktree(opts: {

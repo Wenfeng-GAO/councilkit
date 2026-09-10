@@ -16,10 +16,12 @@ import {
 } from "../src/auto/templates/plan";
 import {
   AGGREGATE_PROMPT_BUDGET,
+  CORRECTION_PROMPT_MARKER,
   MAX_ATTEMPT_OUTPUT_IN_PROMPT,
   buildAccessHint,
   buildAggregatePrompt,
   buildAttemptPrompt,
+  buildCorrectionPrompt,
   parseAntCodePrUrl,
   truncateForPrompt,
 } from "../src/auto/templates/review";
@@ -86,6 +88,25 @@ describe("cli auto templates — attempt prompt", () => {
     expect(prompt).toContain("audit deps");
   });
 
+  it("asks a bounded format correction to re-emit only requested IDs", () => {
+    const prompt = buildCorrectionPrompt({
+      agentName: "Alice",
+      requestedFindingIds: ["persist--lost"],
+      errorPaths: ["/blocks/0/0"],
+      candidateSha: "a".repeat(40),
+      originalArtifactPath: "assessment-correction-source.md",
+      originalAssessment:
+        '```councilkit-findings\n[{"findingId":"persist--lost","reason":"still reproduces"}]\n```',
+    });
+    expect(prompt).toContain(CORRECTION_PROMPT_MARKER);
+    expect(prompt).toContain("persist--lost");
+    expect(prompt).toContain("councilkit-findings");
+    expect(prompt).toContain("禁止 verifiedAt");
+    expect(prompt).toContain("```councilkit-findings");
+    expect(prompt).toContain("assessment-correction-source.md");
+    expect(prompt).toContain("still reproduces");
+  });
+
   it("describes full autonomy (fetch/clone/checkout/test/lint)", () => {
     const prompt = buildAttemptPrompt({ agentName: "A", personaPrompt: "", task });
     expect(prompt).toMatch(/完全自主/);
@@ -113,6 +134,24 @@ describe("cli auto templates — attempt prompt", () => {
     // The general autonomy guidance is still present in --task mode.
     expect(prompt).toContain("全量 build 前先评估时长，优先定向测试。");
     expect(prompt).toContain("audit the dependencies for known CVEs");
+  });
+
+  it("frozen context replaces per-seat gh/antcode diff guessing", () => {
+    const prompt = buildAttemptPrompt({
+      agentName: "A",
+      personaPrompt: "",
+      task: { pr: "https://github.com/acme/repo/pull/1" },
+      workspaceMode: "worktree",
+      frozenContext: {
+        headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        mergeBaseSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        diffHash: "c".repeat(64),
+        verifiedCli: "gh pr diff --color=never <url>",
+      },
+    });
+    expect(prompt).toContain("review-context.diff");
+    expect(prompt).toContain("不要再自行 gh pr diff / antcode pr diff");
+    expect(prompt).not.toContain("先用 gh pr diff / antcode pr diff 落盘到文件");
   });
 });
 

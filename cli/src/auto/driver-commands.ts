@@ -105,6 +105,13 @@ export function isCursorDefaultModel(modelId: string): boolean {
   return id === "auto" || id === "default" || id === "configured";
 }
 
+function codexEffortArgv(agent: AgentRecord): string[] {
+  if (agent.driverSelection.driverId !== "codex-app-server") return [];
+  const effort = agent.driverSelection.options.reasoningEffort;
+  if (typeof effort !== "string" || effort.trim().length === 0) return [];
+  return ["-c", `model_reasoning_effort=${effort.trim()}`];
+}
+
 export const GROK_LEADER_SOCK = ".grok-leader.sock";
 /** Per-spawn GROK_HOME under the attempt/probe cwd. Credentials only; no host skills. */
 export const GROK_ISOLATED_HOME_DIR = ".grok-home";
@@ -257,10 +264,7 @@ function writeIsolatedGrokSandbox(isolated: string): void {
   writeIsolatedTextFile(join(isolated, "sandbox.toml"), IDEATE_GROK_SANDBOX);
 }
 
-function writeIsolatedGrokConfig(
-  isolated: string,
-  contents: string = ISOLATED_GROK_CONFIG,
-): void {
+function writeIsolatedGrokConfig(isolated: string, contents: string = ISOLATED_GROK_CONFIG): void {
   writeIsolatedTextFile(join(isolated, "config.toml"), contents);
 }
 
@@ -437,15 +441,20 @@ function buildInvocation(
     case "codex-app-server": {
       if (opts.probe) {
         return {
-          argv: ["exec", "--skip-git-repo-check", "-m", agent.modelId, "--json", "-"],
+          argv: [
+            "exec",
+            "--skip-git-repo-check",
+            "-m",
+            agent.modelId,
+            ...codexEffortArgv(agent),
+            "--json",
+            "-",
+          ],
           promptStdin: true,
         };
       }
       const workspace = opts.workspace as string;
       const lastMessageFile = join(workspace, ".last-message.md");
-      // `--json` makes stdout JSONL (`item.*` events) so the activity collector
-      // can see tool calls; `-o` still carries the final message, so the final
-      // deliverable does not depend on parsing the event stream.
       return {
         argv: [
           "exec",
@@ -456,6 +465,7 @@ function buildInvocation(
           "--json",
           "-m",
           agent.modelId,
+          ...codexEffortArgv(agent),
           "-o",
           lastMessageFile,
           "-",
@@ -539,11 +549,7 @@ function buildIdeateInvocation(
       if (probe) {
         argv.push("--output-format", "json");
       } else {
-        argv.push(
-          "--output-format",
-          "streaming-messages-json",
-          "--include-partial-messages",
-        );
+        argv.push("--output-format", "streaming-messages-json", "--include-partial-messages");
       }
       argv.push(
         "-p",
@@ -584,9 +590,16 @@ function buildIdeateInvocation(
     }
     case "codex-app-server": {
       const lastMessageFile = join(workspace, ".last-message.md");
-      const argv = ["exec", "-s", "read-only", "--ignore-user-config", "--skip-git-repo-check", "--json"];
+      const argv = [
+        "exec",
+        "-s",
+        "read-only",
+        "--ignore-user-config",
+        "--skip-git-repo-check",
+        "--json",
+      ];
       if (!isCodexDefaultModel(agent.modelId)) argv.push("-m", agent.modelId);
-      argv.push("-o", lastMessageFile, "-");
+      argv.push(...codexEffortArgv(agent), "-o", lastMessageFile, "-");
       return { argv, promptStdin: true, lastMessageFile };
     }
     default: {
@@ -699,6 +712,12 @@ export function buildProbeSpec(
   }
   const executable = resolveExecutable(exeName, env);
   const invocation = buildInvocation(agent, { prompt, workspace: cwd, probe: true });
+  const tmp = join(cwd, ".tmp");
+  try {
+    mkdirSync(tmp, { recursive: true, mode: 0o700 });
+  } catch {
+    /* review.ts creates the probe cwd; unit tests may use a fake path */
+  }
   return {
     attemptId: probeId,
     agentId: agent.id,
@@ -708,6 +727,7 @@ export function buildProbeSpec(
     executable,
     cwd,
     prompt,
+    envOverlay: { TMPDIR: tmp, TMP: tmp, TEMP: tmp },
     ...invocation,
   };
 }

@@ -147,6 +147,7 @@ describe("cli apply command", () => {
         return {
           stdout: JSON.stringify({
             headRefName: "feat-x",
+            baseRefName: "main",
             headRepository: { nameWithOwner: "acme/repo", name: "repo" },
             headRepositoryOwner: { login: "acme" },
             url: PR_URL,

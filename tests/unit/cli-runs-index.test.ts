@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -282,5 +283,148 @@ describe("parseTranscriptMeta ideate integrity", () => {
       else process.env.COUNCILKIT_HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("review evidence completeness", () => {
+  let home: string;
+  let previous: string | undefined;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ck-review-evidence-"));
+    previous = process.env.COUNCILKIT_HOME;
+    process.env.COUNCILKIT_HOME = home;
+  });
+  afterEach(() => {
+    if (previous === undefined) Reflect.deleteProperty(process.env, "COUNCILKIT_HOME");
+    else process.env.COUNCILKIT_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  });
+  function seedReview() {
+    const dir = join(home, "runs", REVIEW_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({ kind: "review.started", runId: REVIEW_ID, startedAt: "t", task: {} })}\n${JSON.stringify({ kind: "review.finished", status: "completed", incomplete: false, endedAt: "t2" })}\n`,
+    );
+    writeFileSync(join(dir, "report.md"), "# review\n");
+    writeFileSync(
+      join(dir, "findings.json"),
+      JSON.stringify({
+        version: 1,
+        runId: REVIEW_ID,
+        extractedAt: "t",
+        sha: "a".repeat(40),
+        againstRunId: null,
+        againstRange: null,
+        findings: [
+          {
+            id: "F-1",
+            title: "open",
+            severity: "major",
+            status: "open",
+            text: "still",
+            source: "consensus",
+            reviewer: "R",
+            files: ["src/a.ts"],
+            verification: {
+              outcome: "still_open",
+              candidateSha: "a".repeat(40),
+              runId: REVIEW_ID,
+              attemptId: "attempt-0",
+              reviewer: "R",
+              method: "code_trace",
+              reason: "repro",
+              evidence: "path",
+              locations: ["src/a.ts:1"],
+              runComplete: true,
+            },
+          },
+        ],
+      }),
+    );
+    return dir;
+  }
+  it("treats missing diagnostics as unknown and a failed coverage sidecar as incomplete evidence", async () => {
+    const { canExportRepairPackage } = await import("@shared/runtime/review-case");
+    seedReview();
+    expect(canExportRepairPackage(readCliRun(REVIEW_ID, process.env))).toBe(true);
+    writeFileSync(
+      join(home, "runs", REVIEW_ID, "assessment-diagnostics.v1.json"),
+      JSON.stringify({
+        version: 1,
+        kind: "councilkit-assessment-diagnostics",
+        source: { runId: REVIEW_ID, sha: "a".repeat(40), requiredFindingIds: ["F-1"] },
+        coverageComplete: false,
+        items: [
+          {
+            findingId: "F-1",
+            attemptId: "coverage",
+            status: "missing",
+            errorClass: "missing_required_id",
+            errorPath: "/required/F-1",
+          },
+        ],
+      }),
+    );
+    const blocked = readCliRun(REVIEW_ID, process.env);
+    expect(blocked?.reviewEvidence?.evidenceComplete).toBe(false);
+    expect(canExportRepairPackage(blocked)).toBe(false);
+  });
+
+  it("treats a present unknown-version finding-groups sidecar as incomplete evidence", async () => {
+    const { canExportRepairPackage } = await import("@shared/runtime/review-case");
+    seedReview();
+    expect(canExportRepairPackage(readCliRun(REVIEW_ID, process.env))).toBe(true);
+    writeFileSync(
+      join(home, "runs", REVIEW_ID, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 99,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: REVIEW_ID,
+          sha: "a".repeat(40),
+          findingsSha256: "b".repeat(64),
+          againstRunId: null,
+        },
+        groups: [],
+      }),
+    );
+    const blocked = readCliRun(REVIEW_ID, process.env);
+    expect(blocked?.findingGroups).toBeNull();
+    expect(canExportRepairPackage(blocked)).toBe(false);
+  });
+
+  it("treats an againstRunId mismatch as incomplete evidence", async () => {
+    const { canExportRepairPackage } = await import("@shared/runtime/review-case");
+    const dir = seedReview();
+    const findingsText = readFileSync(join(dir, "findings.json"), "utf8");
+    const parsed = JSON.parse(findingsText) as Record<string, unknown>;
+    writeFileSync(
+      join(dir, "findings.json"),
+      JSON.stringify({
+        ...parsed,
+        againstRunId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      }),
+    );
+    const updated = readFileSync(join(dir, "findings.json"), "utf8");
+    const updatedHash = createHash("sha256").update(updated, "utf8").digest("hex");
+    writeFileSync(
+      join(dir, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: REVIEW_ID,
+          sha: "a".repeat(40),
+          findingsSha256: updatedHash,
+          againstRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        },
+        groups: [],
+      }),
+    );
+    const blocked = readCliRun(REVIEW_ID, process.env);
+    expect(blocked?.findingGroups).toBeNull();
+    expect(blocked?.reviewEvidence?.evidenceComplete).toBe(false);
+    expect(canExportRepairPackage(blocked)).toBe(false);
   });
 });

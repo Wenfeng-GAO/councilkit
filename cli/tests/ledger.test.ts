@@ -1,12 +1,14 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isFindingBlocking, isFindingVerifiedClosed } from "@shared/runtime/cli-ledger";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildFindingGroups, hashFindingsBytes } from "../src/auto/finding-groups";
 import {
   againstDiffRange,
   applyReviewerVerifications,
   classifyAgainstPrior,
+  classifyAgainstPriorWithAliases,
   extractFindingsFromReport,
   formatLedgerForPrompt,
   markFindingsRepairClaimed,
@@ -148,6 +150,27 @@ describe("ledger classify", () => {
     expect(classified.find((row) => row.id === "b--two")?.status).toBe("open");
     expect(classified.find((row) => row.id === "c--ok")?.status).toBe("accepted");
     expect(classified.find((row) => row.id === "d--new")?.status).toBe("open");
+  });
+
+  it("records against-chain aliases without letting a shared root close either original ID", () => {
+    const prior = [
+      finding({ id: "F-ORIG", title: "cancel dispatch", status: "open", severity: "major" }),
+    ];
+    const next = [
+      finding({
+        id: "misc--cancel-again",
+        title: "wording changed",
+        text: "`F-ORIG` still fires after cancel",
+        status: "open",
+        severity: "major",
+      }),
+    ];
+    const classified = classifyAgainstPriorWithAliases(prior, next);
+    expect(classified.findings[0]?.id).toBe("F-ORIG");
+    expect(classified.aliases).toEqual([
+      expect.objectContaining({ originalId: "F-ORIG", aliasId: "misc--cancel-again" }),
+    ]);
+    expect(classified.findings[0]?.status).toBe("open");
   });
 
   it("sorts classified findings by severity then status", () => {
@@ -302,6 +325,22 @@ describe("independent finding verification", () => {
   ])("rejects mismatched or unqualified close: %j", (overrides) => {
     expect(isFindingBlocking(verify([assessment(overrides)]), CANDIDATE_SHA)).toBe(true);
   });
+  it("does not close on verifiedAt extras or locations ranges", () => {
+    expect(
+      isFindingBlocking(verify([assessment({ verifiedAt: "2026-09-07T00:00:00.000Z" })])),
+    ).toBe(true);
+    expect(
+      isFindingBlocking(
+        verify([
+          assessment({
+            method: "code_trace",
+            command: undefined,
+            locations: ["pkg/eventlog/log.go:1-20"],
+          }),
+        ]),
+      ),
+    ).toBe(true);
+  });
   it("accepts an explicit source trace and records not_evaluated without closing", () => {
     expect(
       isFindingVerifiedClosed(
@@ -340,6 +379,46 @@ describe("independent finding verification", () => {
         }),
       ),
     ).toBe(true);
+  });
+  it("does not close when a peer seat is missing or has an illegal same-id row", () => {
+    const missingPeer = applyReviewerVerifications(
+      [finding({ id: "persist--lost", title: "Short write loses text" })],
+      {
+        sha: CANDIDATE_SHA,
+        runId: "ck-review-current",
+        complete: true,
+        requiredFindingIds: ["persist--lost"],
+        attempts: [
+          reviewer([assessment()]),
+          reviewer([], {
+            attemptId: "attempt-1",
+            output: "```councilkit-findings\n[]\n```",
+          }),
+        ],
+        reportedFindings: [],
+        verifiedAttemptShas: { "attempt-0": CANDIDATE_SHA, "attempt-1": CANDIDATE_SHA },
+      },
+    )[0];
+    expect(isFindingVerifiedClosed(missingPeer, CANDIDATE_SHA)).toBe(false);
+
+    const illegalPeer = applyReviewerVerifications(
+      [finding({ id: "persist--lost", title: "Short write loses text" })],
+      {
+        sha: CANDIDATE_SHA,
+        runId: "ck-review-current",
+        complete: true,
+        requiredFindingIds: ["persist--lost"],
+        attempts: [
+          reviewer([assessment()]),
+          reviewer([assessment({ outcome: "still_open", verifiedAt: "x" })], {
+            attemptId: "attempt-1",
+          }),
+        ],
+        reportedFindings: [],
+        verifiedAttemptShas: { "attempt-0": CANDIDATE_SHA, "attempt-1": CANDIDATE_SHA },
+      },
+    )[0];
+    expect(isFindingVerifiedClosed(illegalPeer, CANDIDATE_SHA)).toBe(false);
   });
 });
 
@@ -463,5 +542,242 @@ describe("ledger persist", () => {
     expect(row.reviewer).toBe("independent reviewer");
     expect(row.text).toContain("ENOSPC destroys the only copy");
     expect(isFindingBlocking(row, CANDIDATE_SHA)).toBe(true);
+  });
+
+  it("uses extraAssessments for both close projection and coverage diagnostics", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-extra-"));
+    dirs.push(dir);
+    const original = {
+      findingId: "F-1",
+      candidateSha: CANDIDATE_SHA,
+      outcome: "still_open",
+      method: "code_trace",
+      reason: "still reproduces",
+      evidence: "same call path",
+      locations: ["src/a.ts:1"],
+      verifiedAt: "x",
+    };
+    const extra = {
+      assessment: {
+        findingId: "F-1",
+        candidateSha: CANDIDATE_SHA,
+        outcome: "still_open" as const,
+        method: "code_trace" as const,
+        reason: "still reproduces",
+        evidence: "same call path",
+        locations: ["src/a.ts:1"],
+      },
+      attemptId: "attempt-0",
+      reviewer: "independent reviewer",
+    };
+    persistFindingsFromReport({
+      runDir: dir,
+      runId: "ck-review-current",
+      sha: CANDIDATE_SHA,
+      markdown: "# Autonomous Review Report\n\n---\n\n## 结论\ncomment",
+      againstRunId: "prior",
+      prior: {
+        version: 1,
+        runId: "prior",
+        extractedAt: "t",
+        sha: CANDIDATE_SHA,
+        againstRunId: null,
+        againstRange: null,
+        findings: [finding({ id: "F-1", title: "open hole" })],
+      },
+      attempts: [reviewer([original])],
+      extraAssessments: [extra],
+      reviewComplete: true,
+    });
+    const diagnostics = JSON.parse(
+      readFileSync(join(dir, "assessment-diagnostics.v1.json"), "utf8"),
+    ) as { coverageComplete: boolean };
+    expect(diagnostics.coverageComplete).toBe(true);
+  });
+
+  it("inherits a stable against finding-groups root without new aliases", () => {
+    const inherited = buildFindingGroups({
+      runId: "ck-review-current",
+      sha: CANDIDATE_SHA,
+      findings: [finding({ id: "F-1", title: "one" }), finding({ id: "F-2", title: "two" })],
+      againstRunId: "prior",
+      findingsSha256: "b".repeat(64),
+      matches: [],
+      priorGroups: {
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: "prior",
+          sha: CANDIDATE_SHA,
+          findingsSha256: "b".repeat(64),
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE",
+            findingIds: ["F-1", "F-2"],
+            aliases: [],
+            basis: "same hole",
+          },
+        ],
+      },
+    });
+    expect(inherited.groups.map((row) => row.rootCauseId)).toEqual(["RC-STABLE"]);
+
+    const root = mkdtempSync(join(tmpdir(), "ck-ledger-groups-"));
+    dirs.push(root);
+    const priorId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+    const currentId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const priorDir = join(root, priorId);
+    const currentDir = join(root, currentId);
+    mkdirSync(priorDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    const priorFindings = {
+      version: 1 as const,
+      runId: priorId,
+      extractedAt: "t",
+      sha: CANDIDATE_SHA,
+      againstRunId: null,
+      againstRange: null,
+      findings: [finding({ id: "F-1", title: "one" }), finding({ id: "F-2", title: "two" })],
+    };
+    writeFileSync(join(priorDir, "findings.json"), `${JSON.stringify(priorFindings, null, 2)}\n`);
+    const priorBytes = `${JSON.stringify(priorFindings, null, 2)}\n`;
+    writeFileSync(
+      join(priorDir, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: priorId,
+          sha: CANDIDATE_SHA,
+          findingsSha256: hashFindingsBytes(priorBytes),
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE",
+            findingIds: ["F-1", "F-2"],
+            aliases: [],
+            basis: "same hole",
+          },
+        ],
+      }),
+    );
+    persistFindingsFromReport({
+      runDir: currentDir,
+      runId: currentId,
+      sha: CANDIDATE_SHA,
+      markdown:
+        "# Autonomous Review Report\n\n---\n\n## 共识发现\n- [major] one\n- [major] two\n\n## 结论\ncomment",
+      againstRunId: priorId,
+      prior: priorFindings,
+      attempts: [],
+      reviewComplete: true,
+    });
+    const groups = JSON.parse(readFileSync(join(currentDir, "finding-groups.v1.json"), "utf8")) as {
+      groups: Array<{ rootCauseId: string }>;
+    };
+    expect(groups.groups.map((row) => row.rootCauseId)).toContain("RC-STABLE");
+  });
+
+  it("does not inherit or silently ungroup when the against sidecar is invalid", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-ledger-bad-groups-"));
+    dirs.push(root);
+    const priorId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+    const currentId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const priorDir = join(root, priorId);
+    const currentDir = join(root, currentId);
+    mkdirSync(priorDir, { recursive: true });
+    mkdirSync(currentDir, { recursive: true });
+    const priorFindings = {
+      version: 1 as const,
+      runId: priorId,
+      extractedAt: "t",
+      sha: CANDIDATE_SHA,
+      againstRunId: null,
+      againstRange: null,
+      findings: [finding({ id: "F-1", title: "one" })],
+    };
+    const priorBytes = `${JSON.stringify(priorFindings, null, 2)}\n`;
+    writeFileSync(join(priorDir, "findings.json"), priorBytes);
+    writeFileSync(
+      join(priorDir, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 99,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: priorId,
+          sha: CANDIDATE_SHA,
+          findingsSha256: hashFindingsBytes(priorBytes),
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE",
+            findingIds: ["F-1"],
+            aliases: [],
+            basis: "same hole",
+          },
+        ],
+      }),
+    );
+    persistFindingsFromReport({
+      runDir: currentDir,
+      runId: currentId,
+      sha: CANDIDATE_SHA,
+      markdown:
+        "# Autonomous Review Report\n\n---\n\n## 共识发现\n- [major] one\n\n## 结论\ncomment",
+      againstRunId: priorId,
+      prior: priorFindings,
+      attempts: [],
+      reviewComplete: true,
+    });
+    const poisoned = JSON.parse(
+      readFileSync(join(currentDir, "finding-groups.v1.json"), "utf8"),
+    ) as { source: { findingsSha256: string }; groups: unknown[] };
+    expect(poisoned.source.findingsSha256).toBe("0".repeat(64));
+    expect(poisoned.groups).toEqual([]);
+
+    writeFileSync(
+      join(priorDir, "finding-groups.v1.json"),
+      JSON.stringify({
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: priorId,
+          sha: CANDIDATE_SHA,
+          findingsSha256: "0".repeat(64),
+          againstRunId: null,
+        },
+        groups: [
+          {
+            rootCauseId: "RC-STABLE",
+            findingIds: ["F-1"],
+            aliases: [],
+            basis: "same hole",
+          },
+        ],
+      }),
+    );
+    const hashedDir = join(root, "ck-review-cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeee3");
+    mkdirSync(hashedDir, { recursive: true });
+    persistFindingsFromReport({
+      runDir: hashedDir,
+      runId: "ck-review-cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+      sha: CANDIDATE_SHA,
+      markdown:
+        "# Autonomous Review Report\n\n---\n\n## 共识发现\n- [major] one\n\n## 结论\ncomment",
+      againstRunId: priorId,
+      prior: priorFindings,
+      attempts: [],
+      reviewComplete: true,
+    });
+    const hashed = JSON.parse(readFileSync(join(hashedDir, "finding-groups.v1.json"), "utf8")) as {
+      groups: Array<{ rootCauseId: string }>;
+      source: { findingsSha256: string };
+    };
+    expect(hashed.groups.map((row) => row.rootCauseId)).not.toContain("RC-STABLE");
+    expect(hashed.source.findingsSha256).toBe("0".repeat(64));
   });
 });

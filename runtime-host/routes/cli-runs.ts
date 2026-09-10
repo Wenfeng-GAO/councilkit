@@ -14,7 +14,7 @@ import {
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
-import { CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
+import { CLI_RUN_STATUS_FILE, type CliRunProgressPhase } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { makeError } from "@shared/runtime/errors";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
@@ -113,7 +113,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             body.pr,
           );
         }
-        writeRunningStub(runId, "attempts");
+        writeRunningStub(runId, "preflight");
         return { runId, started: true };
       },
     },
@@ -333,9 +333,14 @@ function mapIdeateSpawnError(error: unknown): never {
   if (message.includes("product-jury")) {
     throw httpError(
       400,
-      makeError("BAD_REQUEST", "discovery", "default product-jury is missing; run `councilkit init`", {
-        retryable: false,
-      }),
+      makeError(
+        "BAD_REQUEST",
+        "discovery",
+        "default product-jury is missing; run `councilkit init`",
+        {
+          retryable: false,
+        },
+      ),
     );
   }
   throw httpError(
@@ -382,7 +387,7 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
   );
 }
 
-function writeRunningStub(runId: string, phase: "attempts" | "proposing" = "attempts"): void {
+function writeRunningStub(runId: string, phase: CliRunProgressPhase = "preflight"): void {
   const statusPath = join(resolveCliRunsRoot(), runId, CLI_RUN_STATUS_FILE);
   if (existsSync(statusPath)) return;
   const now = new Date().toISOString();

@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { buildRepairPackage, repairExportCommand } from "@shared/runtime/repair-package";
-import { isCompleteReviewRun } from "@shared/runtime/review-case";
+import { canExportRepairPackage } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useState } from "react";
 
@@ -15,11 +15,17 @@ export function RepairExportCard({ run }: { run: CliRunDetailResponse }) {
       throw new Error("plan.lock.json 无法读取，请先恢复完整方案。");
     const task = buildRepairPackage({
       runId: run.runId,
-      complete: isCompleteReviewRun(run),
+      complete: canExportRepairPackage(run),
       prUrl: run.reviewEvidence?.prUrl ?? null,
-      ledger: { runId: run.runId, sha: run.reviewEvidence?.sha ?? null, findings: run.findings },
+      ledger: {
+        runId: run.runId,
+        sha: run.reviewEvidence?.sha ?? null,
+        findings: run.findings,
+        againstRunId: run.reviewEvidence?.againstRunId ?? null,
+      },
       planLock: run.planLock,
       clusterId: clusterId || undefined,
+      findingGroups: run.findingGroups ?? null,
     });
     count = task.findings.length;
   } catch (error) {
