@@ -1,5 +1,6 @@
 import { CLAUDE_ROUTE_LABELS } from "@/components/settings/view-model";
 import { Select } from "@/components/ui/Select";
+import { driverLabel, isPersonaSeat, reviewSeatTitle } from "@/lib/seat-label";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
 import { readOrSaveReviewJury } from "@/runtime/review-jury-client";
@@ -22,13 +23,18 @@ const DRIVERS: { value: DriverId; label: string }[] = [
   { value: "kimi-stream-json", label: "Kimi" },
   { value: "cursor-stream-json", label: "Cursor" },
 ];
-const ROLES: Record<string, string> = {
-  "review-security": "安全审查",
-  "review-correctness": "正确性审查",
-  "review-maintainability": "可维护性审查",
-  "review-adversarial": "对抗审查",
-  "review-cursor": "综合审查",
-};
+function jurySeatHeading(agentName: string, seat: ReviewJurySeat): string {
+  return reviewSeatTitle({
+    agentName,
+    modelId: seat.modelId,
+    driverId: seat.driverSelection.driverId,
+  });
+}
+
+function jurySeatSubheading(agentName: string, seat: ReviewJurySeat): string {
+  if (isPersonaSeat(agentName)) return agentName;
+  return driverLabel(seat.driverSelection.driverId);
+}
 export interface JuryStatus {
   ready: boolean;
   summary: string;
@@ -65,14 +71,19 @@ export function DefaultReviewJury({
   const data = query.data;
   const seats = draft?.seats ?? data?.seats ?? [];
   const reporter = draft?.reporterAgentId ?? data?.reporterAgentId;
-  const reporterName = data?.agents.find((agent) => agent.agentId === reporter)?.name;
+  const reporterAgent = data?.agents.find((agent) => agent.agentId === reporter);
+  const reporterSeat = seats.find((seat) => seat.agentId === reporter);
+  const reporterHeading =
+    reporterAgent && reporterSeat
+      ? jurySeatHeading(reporterAgent.name, reporterSeat)
+      : (reporterAgent?.name ?? "待指定");
   const summary =
     query.isFetching && !data
       ? "正在读取默认席位"
       : query.isError
         ? "默认席位读取失败，请重新加载"
         : data
-          ? `${seats.length} 个默认席位 · ${ROLES[reporterName ?? ""] ?? reporterName ?? "待指定"}汇总`
+          ? `${seats.length} 个默认席位 · ${reporterHeading}汇总`
           : "正在读取默认席位";
   useEffect(() => {
     onStatusChange({
@@ -147,13 +158,14 @@ export function DefaultReviewJury({
             {seats.map((seat, index) => {
               const agent = data.agents.find((item) => item.agentId === seat.agentId);
               const name = agent?.name ?? seat.agentId;
+              const heading = jurySeatHeading(name, seat);
               return (
                 <li key={seat.agentId} className="ck-jury-seat" data-editing={!!draft}>
                   <div className="ck-jury-seat-heading">
                     <span className="ck-jury-number">{String(index + 1).padStart(2, "0")}</span>
                     <div>
-                      <h3>{ROLES[name] ?? name}</h3>
-                      <p>{name}</p>
+                      <h3>{heading}</h3>
+                      <p>{jurySeatSubheading(name, seat)}</p>
                     </div>
                     <div className="ck-jury-seat-actions">
                       {draft ? (
@@ -161,7 +173,7 @@ export function DefaultReviewJury({
                           <input
                             type="radio"
                             name="default-jury-reporter"
-                            aria-label={`由${ROLES[name] ?? name}汇总`}
+                            aria-label={`由${heading}汇总`}
                             checked={reporter === seat.agentId}
                             disabled={locked}
                             onChange={() => setDraft({ ...draft, reporterAgentId: seat.agentId })}
@@ -175,7 +187,7 @@ export function DefaultReviewJury({
                         <button
                           type="button"
                           className="ck-jury-remove"
-                          aria-label={`移除${ROLES[name] ?? name}`}
+                          aria-label={`移除${heading}`}
                           title={
                             reporter === seat.agentId ? "请先指定其他汇总席位" : "从默认班子中移除"
                           }
@@ -246,7 +258,11 @@ export function DefaultReviewJury({
                     )
                     .map((agent) => ({
                       value: agent.agentId,
-                      label: ROLES[agent.name] ?? agent.name,
+                      label: reviewSeatTitle({
+                        agentName: agent.name,
+                        modelId: agent.modelId,
+                        driverId: agent.driverSelection.driverId,
+                      }),
                     })),
                 ]}
               />

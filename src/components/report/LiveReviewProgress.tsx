@@ -1,6 +1,7 @@
 import { cliRunPhaseHeading } from "@/lib/cli-run-status";
 import { displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
+import { reviewSeatIdentity, reviewSeatTabLabel, reviewSeatTitle } from "@/lib/seat-label";
 import { squadRoleName } from "@/lib/squad-workspace";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
@@ -134,7 +135,6 @@ export function LiveReviewProgress({
   const ended = seats.filter((row) => isEndedAttempt(row.status)).length;
   const failed = seats.filter((row) => row.status === "failure").length;
   const running = seats.filter((row) => row.status === "running").length;
-  const seatNames = namesWithDuplicates(seats);
   const ideateGroups = run.kind === "ideate" ? groupIdeateSeats(seats) : null;
   return (
     <section className="ck-review-live" aria-labelledby="review-progress-title">
@@ -178,11 +178,7 @@ export function LiveReviewProgress({
               <ul className="ck-review-seat-grid">
                 {group.seats.map((attempt) => (
                   <li key={attempt.attemptId}>
-                    <ReviewSeat
-                      attempt={attempt}
-                      label={seatLabel(attempt, seatNames)}
-                      onInspect={onInspect}
-                    />
+                    <ReviewSeat attempt={attempt} siblings={seats} onInspect={onInspect} />
                   </li>
                 ))}
               </ul>
@@ -193,11 +189,7 @@ export function LiveReviewProgress({
         <ul className="ck-review-seat-grid">
           {seats.map((attempt) => (
             <li key={attempt.attemptId}>
-              <ReviewSeat
-                attempt={attempt}
-                label={seatLabel(attempt, seatNames)}
-                onInspect={onInspect}
-              />
+              <ReviewSeat attempt={attempt} siblings={seats} onInspect={onInspect} />
             </li>
           ))}
         </ul>
@@ -214,7 +206,7 @@ export function LiveReviewProgress({
             <ReviewSeat
               key={attempt.attemptId}
               attempt={attempt}
-              label={attempt.agentName}
+              siblings={aggregators}
               onInspect={onInspect}
             />
           ))}
@@ -223,12 +215,6 @@ export function LiveReviewProgress({
     </section>
   );
 }
-
-const IDEATE_ROLES: Record<string, string> = {
-  "ideate-product": "产品席",
-  "ideate-engineering": "工程席",
-  "ideate-challenger": "质疑席",
-};
 
 function groupIdeateSeats(seats: AttemptRow[]): Array<{ title: string; seats: AttemptRow[] }> {
   const proposals = seats.filter((row) => row.attemptId.startsWith("proposal-"));
@@ -253,52 +239,37 @@ function groupIdeateSeats(seats: AttemptRow[]): Array<{ title: string; seats: At
   return groups;
 }
 
-const REVIEW_ROLES: Record<string, string> = {
-  "review-security": "安全审查",
-  "review-correctness": "正确性审查",
-  "review-maintainability": "可维护性审查",
-  "review-adversarial": "对抗审查",
-  "review-cursor": "补充审查",
-};
-
 function ReviewSeat({
   attempt,
-  label,
+  siblings,
   onInspect,
 }: {
   attempt: AttemptRow;
-  label: string;
+  siblings: readonly AttemptRow[];
   onInspect: (attemptId: string) => void;
 }) {
   const running = attempt.status === "running";
   const waiting = attempt.status === "pending" || attempt.status === "queued";
   const activity = displayLastActivity(attempt.lastActivity);
+  const title = reviewSeatTabLabel(attempt, siblings, attempt.attemptId);
   return (
     <button
       type="button"
       className="ck-review-seat"
       data-status={attempt.status}
       aria-haspopup="dialog"
-      aria-label={`${running ? "过程进行中" : "查看过程"}：${label}`}
+      aria-label={`${running ? "过程进行中" : "查看过程"}：${title}`}
       onClick={() => onInspect(attempt.attemptId)}
     >
       <span className="ck-review-seat-top">
-        <strong>
-          {attempt.role === "aggregator"
-            ? "结果汇总"
-            : (IDEATE_ROLES[attempt.agentName] ??
-              REVIEW_ROLES[attempt.agentName] ??
-              attempt.agentName)}
-        </strong>
+        <strong>{reviewSeatTitle(attempt)}</strong>
         <span className={statusClass(attempt.status)}>
           {running ? <i className="ck-live-dot" aria-hidden /> : null}
           {ATTEMPT_LABEL[attempt.status]}
         </span>
       </span>
       <span className="ck-review-seat-model">{attempt.modelId}</span>
-      <span className="ck-review-seat-identity">
-        {label} · {attempt.driverId}
-      </span>
+      <span className="ck-review-seat-identity">{reviewSeatIdentity(attempt)}</span>
       <span className="ck-review-seat-activity" title={activity ?? undefined}>
         {running
           ? (activity ?? "等待新的过程记录…")

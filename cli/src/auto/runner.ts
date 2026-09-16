@@ -20,7 +20,7 @@ import {
   extractFinalOutput,
   spawnEnvForDriver,
 } from "./driver-commands";
-import { classifyDriverTerminal } from "./driver-terminal";
+import { classifyDriverTerminal, isCodexReconnectDiagnostic } from "./driver-terminal";
 import { formatDurationMs } from "./duration";
 import {
   type ExecutionRevision,
@@ -484,14 +484,20 @@ async function runOne(
         retryable: terminal?.retryable ?? true,
       };
     } else if (terminal) {
-      // Any structured terminal on exit 0 is still a failure. retryable only
-      // feeds shouldRetry (which already requires a non-zero EXIT).
-      failure = {
-        code: "EXIT",
-        message: terminal.message,
-        errorClass: terminal.errorClass,
-        retryable: terminal.retryable,
-      };
+      // Codex often logs Reconnecting... N/5 and then finishes the turn.
+      // Wait out that auto-retry: exit 0 + a deliverable is success.
+      const recoveredReconnect =
+        isCodexReconnectDiagnostic(terminal.message) &&
+        extracted !== null &&
+        extracted.trim().length > 0;
+      if (!recoveredReconnect) {
+        failure = {
+          code: "EXIT",
+          message: terminal.message,
+          errorClass: terminal.errorClass,
+          retryable: terminal.retryable,
+        };
+      }
     } else if (extracted === null || extracted.trim().length === 0) {
       failure = {
         code: "NO_OUTPUT",

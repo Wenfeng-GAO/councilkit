@@ -55,6 +55,14 @@ function isRetryableClass(errorClass: DriverErrorClass): boolean {
   return errorClass === "rate" || errorClass === "transport" || errorClass === "unknown";
 }
 
+/** Codex CLI prints this while it retries a dropped app-server stream. */
+const CODEX_RECONNECT =
+  /reconnecting\.\.\.\s*\d+\s*\/\s*\d+|stream disconnected before completion/i;
+
+export function isCodexReconnectDiagnostic(text: string): boolean {
+  return CODEX_RECONNECT.test(text);
+}
+
 function isStructuredErrorRow(row: Record<string, unknown>): boolean {
   const type = typeof row.type === "string" ? row.type : "";
   const subtype = typeof row.subtype === "string" ? row.subtype : "";
@@ -79,6 +87,11 @@ function isStructuredErrorRow(row: Record<string, unknown>): boolean {
 function isStructuredSuccessRow(row: Record<string, unknown>): boolean {
   const type = typeof row.type === "string" ? row.type : "";
   const subtype = typeof row.subtype === "string" ? row.subtype : "";
+  if (type === "item.completed") {
+    const item = row.item && typeof row.item === "object" ? (row.item as { type?: unknown }) : null;
+    return item?.type === "agent_message";
+  }
+  if (type === "turn.completed") return true;
   if (type !== "result") return false;
   if (row.is_error === true || subtype.includes("error")) return false;
   return subtype === "success" || subtype.length === 0 || row.is_error === false;
@@ -107,7 +120,8 @@ function parseStructuredTerminal(text: string): { errors: string[]; success: boo
     try {
       const row = JSON.parse(trimmed) as Record<string, unknown>;
       if (isStructuredErrorRow(row)) {
-        errors.push(structuredLabel(row));
+        const label = structuredLabel(row);
+        if (!isCodexReconnectDiagnostic(label)) errors.push(label);
         continue;
       }
       if (isStructuredSuccessRow(row)) success = true;
@@ -139,6 +153,7 @@ export function classifyDriverTerminal(input: {
   if (structured.success) return null;
   const fromStderr = pickClass(stderr);
   if (fromStderr === null) return null;
+  if (fromStderr === "transport" && isCodexReconnectDiagnostic(stderr)) return null;
   return {
     errorClass: fromStderr,
     retryable: isRetryableClass(fromStderr),

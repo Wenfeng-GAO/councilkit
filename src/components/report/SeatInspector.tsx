@@ -1,6 +1,7 @@
 import { AttemptLiveTranscript } from "@/components/report/AttemptLiveTranscript";
 import { type LiveEventSpan, displayLastActivity } from "@/lib/live-transcript";
 import { inspectorDuration } from "@/lib/seat-inspector";
+import { reviewSeatTabLabel } from "@/lib/seat-label";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -187,19 +188,11 @@ export function SeatInspector({
                 role="tab"
                 aria-selected={row.attemptId === selected.attemptId}
                 className="ck-inspector-tab"
-                title={
-                  row.role === "aggregator"
-                    ? `${row.agentName} · Aggregator`
-                    : inspectorSeatLabel(row, attempts)
-                }
+                title={inspectorSeatLabel(row, attempts)}
                 onClick={() => onSelect(row.attemptId)}
               >
                 {row.status === "running" ? <span className="ck-live-dot" aria-hidden /> : null}
-                <span className="truncate">
-                  {row.role === "aggregator"
-                    ? `${row.agentName} · 汇总`
-                    : inspectorSeatLabel(row, attempts)}
-                </span>
+                <span className="truncate">{inspectorSeatLabel(row, attempts)}</span>
               </button>
             ))}
           </div>
@@ -227,6 +220,5 @@ function statusClass(status: AttemptRow["status"]): string {
 }
 
 function inspectorSeatLabel(row: AttemptRow, attempts: readonly AttemptRow[]): string {
-  const dup = attempts.filter((item) => item.agentName === row.agentName).length > 1;
-  return dup ? `${row.agentName} · ${row.attemptId}` : row.agentName;
+  return reviewSeatTabLabel(row, attempts, row.attemptId);
 }

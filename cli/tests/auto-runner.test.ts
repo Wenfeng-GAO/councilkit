@@ -324,6 +324,66 @@ describe("cli auto runner — pool / tolerate (fake spawn)", () => {
     expect(r.failure?.code).toBe("EXIT");
   });
 
+  it("does not fail exit 0 when Codex reconnects and later completes", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: [
+        JSON.stringify({
+          type: "error",
+          message:
+            "Reconnecting... 1/5 (stream disconnected before completion: Transport error: network error: error decoding response body)",
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text: "## 发现\n\n- [major] perf" },
+        }),
+      ].join("\n"),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce({ ...spec("0"), driverId: "codex-app-server" }, { spawnImpl: spawn });
+    expect(r.status).toBe("success");
+    expect(r.failure).toBeUndefined();
+    expect(r.output).toContain("[major] perf");
+  });
+
+  it("treats a reconnect-only Codex stream with no deliverable as NO_OUTPUT", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: JSON.stringify({
+        type: "error",
+        message:
+          "Reconnecting... 1/5 (stream disconnected before completion: Transport error: network error: error decoding response body)",
+      }),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce({ ...spec("0"), driverId: "codex-app-server" }, { spawnImpl: spawn });
+    expect(r.status).toBe("failure");
+    expect(r.failure?.code).toBe("NO_OUTPUT");
+  });
+
+  it("still fails when Codex reconnects and later turn.failed", async () => {
+    const spawn: SpawnImpl = async () => ({
+      stdout: [
+        JSON.stringify({
+          type: "error",
+          message: "Reconnecting... 1/5 (stream disconnected before completion: network error)",
+        }),
+        JSON.stringify({ type: "turn.failed", error: { message: "network error" } }),
+      ].join("\n"),
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+      aborted: false,
+    });
+    const r = await spawnOnce({ ...spec("0"), driverId: "codex-app-server" }, { spawnImpl: spawn });
+    expect(r.status).toBe("failure");
+    expect(r.failure?.code).toBe("EXIT");
+  });
+
   it("does not treat an unrelated stderr warning as failure after a structured success result", async () => {
     const spawn: SpawnImpl = async () => ({
       stdout: JSON.stringify({
