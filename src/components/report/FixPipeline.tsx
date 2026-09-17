@@ -55,7 +55,7 @@ export function FixPipeline({
     pipeline?.applyStatus === "failure" ||
     followUpFailed ||
     (pipeline?.phase === "done" && Boolean(pipeline.summary?.includes("failed")));
-  const liveHint = liveStatusText({
+  const liveHint = fixPipelineLiveStatus({
     busy,
     pendingAction,
     pipeline,
@@ -133,7 +133,7 @@ export function FixPipeline({
   );
 }
 
-function liveStatusText(input: {
+export function fixPipelineLiveStatus(input: {
   busy: boolean;
   pendingAction: "fix" | "re-review" | null;
   pipeline: CliRunPipelineDto | null;
@@ -166,11 +166,17 @@ function liveStatusText(input: {
     return { tone: "info", text: "复审还在跑。" };
   }
   if (input.failed) {
+    const reReviewFailed =
+      pipeline !== null &&
+      pipeline.applyStatus === "failure" &&
+      pipeline.planVerdict === null &&
+      pipeline.followUpRunId !== null;
+    const prefix = reReviewFailed ? "复审没有完成" : "修复没有完成";
     return {
       tone: "error",
       text: pipeline?.summary
-        ? `修复没有完成：${pipeline.summary}`
-        : "修复没有完成。可以再点一次「立即修复」。",
+        ? `${prefix}：${pipeline.summary}`
+        : `${prefix}。可以再点一次「立即修复」。`,
     };
   }
   if (pipeline?.applyStatus === "success") {

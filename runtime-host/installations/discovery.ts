@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
-import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { DriverId } from "@shared/runtime/contracts";
+import { defaultDriverWellKnownBinDirs } from "@shared/runtime/driver-bins";
 
 /**
  * PATH/well-known discovery of `cld`, `codex` and — for the `cld` composite
@@ -63,21 +63,6 @@ const DRIVER_BY_NAME: Record<InstallationName, DriverId> = {
   "cursor-agent": "cursor-stream-json",
 };
 
-function defaultWellKnownDirs(env: NodeJS.ProcessEnv): string[] {
-  const home = env.HOME ?? homedir();
-  return [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    join(home, ".local", "bin"),
-    join(home, "bin"),
-    // kimi-code installs its binary under its own data dir, not always on PATH.
-    join(home, ".kimi-code", "bin"),
-    // grok TUI installs its binary under ~/.grok/bin (often not on PATH).
-    join(home, ".grok", "bin"),
-  ];
-}
-
 /** Scan directories in order: inherited PATH first, then well-known dirs. */
 export function discoveryDirs(
   options: DiscoveryOptions = {},
@@ -90,7 +75,7 @@ export function discoveryDirs(
     seen.add(entry);
     dirs.push({ dir: entry, source: "path" });
   }
-  for (const dir of options.wellKnownDirs ?? defaultWellKnownDirs(env)) {
+  for (const dir of options.wellKnownDirs ?? defaultDriverWellKnownBinDirs(env)) {
     if (!dir || seen.has(dir)) continue;
     seen.add(dir);
     dirs.push({ dir, source: "well-known" });

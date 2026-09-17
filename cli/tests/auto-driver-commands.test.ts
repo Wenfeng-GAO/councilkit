@@ -100,6 +100,60 @@ describe("cli auto driver-commands", () => {
       expect(err.message).toContain("nope-nope");
     });
 
+    it("finds kimi under ~/.kimi-code/bin when PATH does not contain it", () => {
+      const userHome = mkdtempSync(join(tmpdir(), "councilkit-dc-home-"));
+      try {
+        const vendor = join(userHome, ".kimi-code", "bin");
+        mkdirSync(vendor, { recursive: true });
+        const kimi = join(vendor, "kimi");
+        writeFileSync(kimi, "#!/bin/sh\necho hi\n");
+        chmodSync(kimi, 0o755);
+        const emptyPath = mkdtempSync(join(tmpdir(), "councilkit-dc-empty-"));
+        try {
+          expect(resolveExecutable("kimi", { PATH: emptyPath, HOME: userHome })).toBe(kimi);
+        } finally {
+          rmSync(emptyPath, { recursive: true, force: true });
+        }
+      } finally {
+        rmSync(userHome, { recursive: true, force: true });
+      }
+    });
+
+    it("finds grok under ~/.grok/bin when PATH does not contain it", () => {
+      const userHome = mkdtempSync(join(tmpdir(), "councilkit-dc-grok-"));
+      try {
+        const vendor = join(userHome, ".grok", "bin");
+        mkdirSync(vendor, { recursive: true });
+        const grok = join(vendor, "grok");
+        writeFileSync(grok, "#!/bin/sh\necho hi\n");
+        chmodSync(grok, 0o755);
+        expect(resolveExecutable("grok", { PATH: tmp, HOME: userHome })).toBe(join(tmp, "grok"));
+        const emptyPath = mkdtempSync(join(tmpdir(), "councilkit-dc-empty-"));
+        try {
+          expect(resolveExecutable("grok", { PATH: emptyPath, HOME: userHome })).toBe(grok);
+        } finally {
+          rmSync(emptyPath, { recursive: true, force: true });
+        }
+      } finally {
+        rmSync(userHome, { recursive: true, force: true });
+      }
+    });
+
+    it("does not leak the real ~/.kimi-code/bin when HOME is isolated", () => {
+      const userHome = mkdtempSync(join(tmpdir(), "councilkit-dc-no-kimi-"));
+      const emptyPath = mkdtempSync(join(tmpdir(), "councilkit-dc-empty-"));
+      try {
+        const err = captureError(() =>
+          resolveExecutable("kimi", { PATH: emptyPath, HOME: userHome }),
+        );
+        expect(err.exitCode).toBe(2);
+        expect(err.message).toContain("kimi");
+      } finally {
+        rmSync(userHome, { recursive: true, force: true });
+        rmSync(emptyPath, { recursive: true, force: true });
+      }
+    });
+
     it("resolves an absolute path directly", () => {
       const abs = join(tmp, "cld");
       expect(resolveExecutable(abs, env(tmp))).toBe(abs);
@@ -304,16 +358,21 @@ describe("cli auto driver-commands", () => {
     });
 
     it("missing executable → usage error before spawn", () => {
-      const err = captureError(() =>
-        buildSpawnSpec(agent(KIMI), {
-          attemptId: "attempt-0",
-          workspace: "/ws",
-          prompt: "x",
-          env: { ...process.env, PATH: "/nonexistent-dir-xyz" },
-        }),
-      );
-      expect(err.exitCode).toBe(2);
-      expect(err.message).toContain("kimi");
+      const userHome = mkdtempSync(join(tmpdir(), "councilkit-dc-missing-"));
+      try {
+        const err = captureError(() =>
+          buildSpawnSpec(agent(KIMI), {
+            attemptId: "attempt-0",
+            workspace: "/ws",
+            prompt: "x",
+            env: { PATH: "/nonexistent-dir-xyz", HOME: userHome },
+          }),
+        );
+        expect(err.exitCode).toBe(2);
+        expect(err.message).toContain("kimi");
+      } finally {
+        rmSync(userHome, { recursive: true, force: true });
+      }
     });
 
     it("kimi: rejects an argv prompt over ARG_MAX with a readable usage error", () => {

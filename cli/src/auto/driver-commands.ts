@@ -1,8 +1,9 @@
 /**
  * Driver → spawn spec construction + final-output extraction (DESIGN §2, plan
  * §"三个 driver 的 spawn 规格"). Every driver is invoked as a fully-autonomous
- * single-shot subprocess; the CLI resolves the executable by PATH (fail-fast
- * before any spawn) and never goes through the Runtime Host.
+ * single-shot subprocess; the CLI resolves the executable by PATH then the
+ * same vendor homes Host discovery uses (`~/.kimi-code/bin`, `~/.grok/bin`)
+ * and never goes through the Runtime Host.
  *
  * Flag shapes are taken from `evidence/flag-facts.md` (measured), not memory:
  *  - claude (cld): only the `cfuse` route is supported; non-cfuse → usage.
@@ -32,6 +33,7 @@ import {
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 import {
@@ -297,21 +299,30 @@ function writeIsolatedTextFile(path: string, contents: string): void {
   }
 }
 
-/** Resolve a bare executable name against PATH (X_OK regular file), or verify an
- * absolute/relative path directly. Returns null when missing — `init` uses this
- * to discover which drivers exist without failing the whole command. */
+/** Resolve a bare executable name against PATH then vendor homes (X_OK regular
+ * file), or verify an absolute/relative path directly. Returns null when
+ * missing — `init` uses this to discover which drivers exist without failing
+ * the whole command. */
 export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
   if (name.length === 0) return null;
   if (name.includes("/")) {
     const abs = resolve(process.cwd(), name);
     return isExecutableFile(abs) ? abs : null;
   }
+  const seen = new Set<string>();
   const pathDirs = (env.PATH ?? "").split(delimiter);
   for (const dir of pathDirs) {
     // Empty PATH entries are the current directory by POSIX semantics; `resolve`
     // also absolutizes relative PATH entries so we never hand a relative
     // executable path to the spawner.
     const candidate = resolve(dir, name);
+    if (isExecutableFile(candidate)) return candidate;
+    seen.add(resolve(dir));
+  }
+  for (const dir of vendorDriverBinDirs(vendorHome(env))) {
+    const resolvedDir = resolve(dir);
+    if (seen.has(resolvedDir)) continue;
+    const candidate = join(resolvedDir, name);
     if (isExecutableFile(candidate)) return candidate;
   }
   return null;

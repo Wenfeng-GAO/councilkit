@@ -3,7 +3,7 @@
  * Expected names/colors/models are the product literals, not derived from
  * the implementation under test beyond importing the command.
  */
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -65,6 +65,7 @@ describe("councilkit init", () => {
   let oldHome: string | undefined;
   let oldPath: string | undefined;
   let oldCodex: string | undefined;
+  let oldUserHome: string | undefined;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ck-init-home-"));
@@ -73,8 +74,10 @@ describe("councilkit init", () => {
     oldHome = process.env.COUNCILKIT_HOME;
     oldPath = process.env.PATH;
     oldCodex = process.env.CODEX_HOME;
+    oldUserHome = process.env.HOME;
     process.env.COUNCILKIT_HOME = home;
     process.env.CODEX_HOME = codexHome;
+    process.env.HOME = home;
   });
 
   afterEach(() => {
@@ -84,6 +87,8 @@ describe("councilkit init", () => {
     else process.env.PATH = oldPath;
     if (oldCodex === undefined) process.env.CODEX_HOME = undefined;
     else process.env.CODEX_HOME = oldCodex;
+    if (oldUserHome === undefined) process.env.HOME = undefined;
+    else process.env.HOME = oldUserHome;
     rmSync(home, { recursive: true, force: true });
     rmSync(bin, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -263,6 +268,26 @@ describe("councilkit init", () => {
     ]);
     expect(out.createdCouncil.reporter).toBe("review-maintainability");
     expect(out.missingDrivers.sort()).toEqual(["cld", "codex", "cursor-agent", "grok"]);
+  });
+
+  it("creates review-maintainability when kimi lives only in ~/.kimi-code/bin", async () => {
+    process.env.PATH = bin;
+    const vendor = join(home, ".kimi-code", "bin");
+    mkdirSync(vendor, { recursive: true });
+    const kimi = join(vendor, "kimi");
+    writeFileSync(kimi, "#!/bin/sh\nexit 0\n");
+    chmodSync(kimi, 0o755);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdAgents: Array<{ name: string }>;
+      createdCouncil: { reporter: string };
+    };
+    expect(out.createdAgents.map((a) => a.name).sort()).toEqual([
+      "ideate-engineering",
+      "review-maintainability",
+    ]);
+    expect(out.createdCouncil.reporter).toBe("review-maintainability");
   });
 
   it("migrates an existing correctness seat off codex onto grok", async () => {

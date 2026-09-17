@@ -69,10 +69,19 @@ export function primaryRunStatus(run: {
   kind: CliRunSummaryDto["kind"];
   status: CliRunStatusDto;
   progress?: { phase: keyof typeof PHASE_LABEL } | null;
-  pipeline?: { phase: string; applyStatus?: string | null } | null;
+  pipeline?: {
+    phase: string;
+    applyStatus?: string | null;
+    planVerdict?: string | null;
+    followUpRunId?: string | null;
+  } | null;
   ideateIntegrity?: { incomplete: boolean } | null;
 }): { tone: "muted" | "info" | "success" | "error" | "warn"; text: string } {
-  if (run.pipeline?.applyStatus === "failure") return { tone: "error", text: "修复失败" };
+  if (run.pipeline?.applyStatus === "failure") {
+    const reReviewFailed =
+      (run.pipeline.planVerdict ?? null) === null && (run.pipeline.followUpRunId ?? null) !== null;
+    return { tone: "error", text: reReviewFailed ? "复审失败" : "修复失败" };
+  }
   if (run.pipeline && run.pipeline.phase !== "done") {
     return {
       tone: "info",

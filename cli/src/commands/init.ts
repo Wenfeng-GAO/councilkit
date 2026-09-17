@@ -1,6 +1,7 @@
 /**
- * `councilkit init` — discover local review drivers on PATH and write the
- * default PR-jury roster into the CLI store. Does not talk to the Runtime Host.
+ * `councilkit init` — discover local review drivers on PATH (and vendor
+ * homes `~/.kimi-code/bin` / `~/.grok/bin`) and write the default PR-jury
+ * roster into the CLI store. Does not talk to the Runtime Host.
  */
 import { findExecutable } from "../auto/driver-commands";
 import { errors } from "../errors";

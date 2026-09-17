@@ -41,6 +41,9 @@ const servicePath = [
   "/bin",
   join(home, ".local", "bin"),
   join(home, "bin"),
+  // Keep in sync with shared/runtime/driver-bins.ts — kimi/grok often live here.
+  join(home, ".kimi-code", "bin"),
+  join(home, ".grok", "bin"),
 ].join(":");
 
 function escapeXml(value) {

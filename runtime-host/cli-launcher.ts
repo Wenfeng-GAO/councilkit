@@ -9,8 +9,14 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
+import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
 import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
 import { resolveHostMode } from "./config";
+
+/** PATH plus vendor homes so Host-spawned review/fix can resolve kimi/grok. */
+export function cliRunSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return withDriverWellKnownPath(env);
+}
 
 export type CliRunAction = "fix" | "re-review" | "review" | "ideate";
 
@@ -86,7 +92,7 @@ export function defaultCliRunLauncher(): CliRunLauncher {
         const child = spawn(spawnSpec.execPath, [...spawnSpec.argvPrefix, ...args], {
           detached: true,
           stdio: ["ignore", logFd, logFd],
-          env: process.env,
+          env: cliRunSpawnEnv(process.env),
           cwd: process.cwd(),
         });
         const pid = child.pid;

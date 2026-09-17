@@ -57,6 +57,18 @@ describe("primaryRunStatus", () => {
     expect(
       primaryRunStatus({
         kind: "review",
+        status: "completed",
+        pipeline: {
+          phase: "done",
+          applyStatus: "failure",
+          planVerdict: null,
+          followUpRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        },
+      }),
+    ).toEqual({ tone: "error", text: "复审失败" });
+    expect(
+      primaryRunStatus({
+        kind: "review",
         status: "running",
         progress: { phase: "aggregating" },
       }),

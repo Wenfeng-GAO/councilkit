@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  cliRunSpawnEnv,
   handshakeReview,
   launchArgs,
   resolveCouncilkitLauncher,
@@ -25,6 +26,17 @@ afterEach(() => {
   if (oldHome === undefined) process.env.COUNCILKIT_HOME = undefined;
   else process.env.COUNCILKIT_HOME = oldHome;
   rmSync(home, { recursive: true, force: true });
+});
+
+describe("Host-spawned CLI PATH", () => {
+  it("keeps kimi-code on PATH for a stripped launchd environment", () => {
+    const env = cliRunSpawnEnv({
+      HOME: "/Users/example",
+      PATH: "/usr/bin:/bin:/Users/example/.local/bin:/Users/example/bin",
+    });
+    expect(env.PATH?.split(":")).toContain("/Users/example/.kimi-code/bin");
+    expect(env.PATH?.split(":")).toContain("/Users/example/.grok/bin");
+  });
 });
 
 describe("launchArgs", () => {

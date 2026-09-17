@@ -19,7 +19,9 @@ import { reviewModelsSchema } from "@shared/runtime/schemas";
  * task in isolated workspaces, then one of them (the Aggregator) synthesizes a
  * single report (DESIGN §0-§4, plan §文件清单/§"ReviewOutcome"). This command
  * deliberately bypasses the Runtime Host and spawns each driver directly by
- * PATH; the trust model is "user invoking this CLI by hand" (DESIGN §2 信任模型).
+ * PATH (then `~/.kimi-code/bin` / `~/.grok/bin`); the trust model is "user
+ * invoking this CLI by hand" (DESIGN §2 信任模型). Host-spawned review/fix
+ * inherits a stripped launchd PATH, so vendor homes must still resolve.
  *
  * Two forms:
  *  - `--agents '[id,...]' --aggregator <id>` : explicit attempt set + aggregator.
