@@ -215,7 +215,11 @@ export function ReportDetailPage() {
             </p>
           ) : null}
           {isSquad ? (
-            <SquadWorkspace key={query.data.runId} run={query.data} onInspect={setInspectId} />
+            <SquadWorkspace
+              key={`workspace:${query.data.runId}`}
+              run={query.data}
+              onInspect={setInspectId}
+            />
           ) : null}
           {query.data.kind === "review" && query.data.hasReport ? (
             <FixPipeline
@@ -265,8 +269,8 @@ export function ReportDetailPage() {
               <SafeMarkdown variant="document" content={query.data.markdown} />
             </article>
           )}
-          {query.data.status !== "running" ? (
-            <RepairExportCard key={query.data.runId} run={query.data} />
+          {reviewActions && query.data.status !== "running" ? (
+            <RepairExportCard key={`repair:${query.data.runId}`} run={query.data} />
           ) : null}
           {query.data.progress ? (
             <SeatInspector

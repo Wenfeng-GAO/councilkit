@@ -101,6 +101,7 @@ test("审查工作台分开统计 Aggregator，过程读取失败可恢复，手
   await expect(page.locator("body > .ck-inspector")).toHaveCount(1);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "paas-core / piston-sdk #7" })).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
@@ -152,4 +153,85 @@ test("结束的席位读取错误可手动重试，完成报告后显示导出�
   await page.getByRole("link", { name: "阅读报告正文 ↓" }).click();
   await expect(page.locator("#review-report-body")).toBeInViewport();
   await expect(page.getByRole("heading", { name: "paas-core / piston-sdk #7" })).toBeVisible();
+});
+
+const squadRunId = "ck-squad-00000000-0000-4000-8000-0000000000e4";
+const makeSquadRun = () => ({
+  runId: squadRunId,
+  kind: "squad",
+  status: "awaiting_orchestrator",
+  title: "squad-workspace-dup",
+  startedAt: new Date(Date.now() - 500000).toISOString(),
+  endedAt: new Date().toISOString(),
+  hasReport: true,
+  reportUrl: `/reports/${squadRunId}`,
+  markdown: "# Observation",
+  truncated: false,
+  progress: {
+    phase: "reviewing",
+    updatedAt: new Date().toISOString(),
+    attempts: [
+      {
+        attemptId: "coder-0",
+        agentName: "coder",
+        driverId: "host",
+        modelId: "grok-4.6",
+        role: "attempt",
+        status: "success",
+        durationMs: 90000,
+      },
+      {
+        attemptId: "review-0",
+        agentName: "reviewer",
+        driverId: "host",
+        modelId: "undeclared",
+        role: "attempt",
+        status: "success",
+        durationMs: 40000,
+      },
+    ],
+  },
+  documents: [
+    {
+      id: "brief",
+      title: "简报",
+      markdown: "# Brief\n- goal: Close residuals without restoring a PR.",
+      truncated: false,
+    },
+  ],
+  handoff: {
+    approved: false,
+    candidateSha: "a".repeat(40),
+    candidateStatus: "completed",
+  },
+});
+
+test("squad 席位抽屉开关后工作台仍只有一份", async ({ page }) => {
+  const data = makeSquadRun();
+  await page.route(`**/api/v1/cli-runs/${squadRunId}`, (route) =>
+    route.fulfill({ json: { ok: true, data } }),
+  );
+  await page.route("**/api/v1/cli-runs", (route) =>
+    route.fulfill({ json: { ok: true, data: { runs: [] } } }),
+  );
+  await page.route(`**/api/v1/cli-runs/${squadRunId}/attempts/*/live*`, (route) =>
+    route.fulfill({ json: { ok: true, data: { events: [], nextSeq: 0, done: true } } }),
+  );
+  await page.goto(`/reports/${squadRunId}`);
+  const workbench = page.getByRole("heading", { name: "工程任务工作台", exact: true });
+  await expect(workbench).toHaveCount(1);
+  await page.getByRole("button", { name: "查看过程：coder", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.locator("main .ck-inspector")).toHaveCount(0);
+  await expect(page.locator("body > .ck-inspector")).toHaveCount(1);
+  await expect(workbench).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(workbench).toHaveCount(1);
+  await expect(page.locator(".ck-squad-workspace")).toHaveCount(1);
+  await page.getByRole("button", { name: "查看过程：coder", exact: true }).click();
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(workbench).toHaveCount(1);
+  await expect(page.locator(".ck-squad-workspace")).toHaveCount(1);
 });
