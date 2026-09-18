@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type RunCommand,
   checkoutPullRequest,
+  inspectPullRequest,
   parseApplyPrUrl,
   parseGitHubPrUrl,
 } from "../src/auto/checkout-pr";
@@ -115,6 +116,21 @@ describe("checkoutPullRequest command sequence", () => {
     expect(clone).toBeDefined();
     expect(clone).toContain("--branch");
     expect(clone).toContain("feat/live");
+  });
+
+  it("AntCode: empty stdout plus old-CLI stderr is a JSON error that names the flag", async () => {
+    const runCommand: RunCommand = async () => ({
+      stdout: "",
+      stderr: "Error: unknown shorthand flag: 'P' in -P\nUsage:\n  antcode pull-request",
+      exitCode: 0,
+    });
+    await expect(
+      inspectPullRequest(
+        "https://code.alipay.com/common_release/opsnexus/pull_requests/1461",
+        runCommand,
+        { PATH: process.env.PATH },
+      ),
+    ).rejects.toThrow(/did not return JSON \(Error: unknown shorthand flag: 'P' in -P/);
   });
 
   it("refuses GitHub PR metadata that omits baseRefName", async () => {

@@ -24,17 +24,18 @@ describe("vendor driver bin dirs", () => {
     ]);
   });
 
-  it("appends vendor bins to a stripped launchd PATH without duplicating", () => {
+  it("puts user bins before Homebrew so launchd does not pick a stale antcode", () => {
     const home = "/Users/example";
-    const launchd = "/usr/bin:/bin:/Users/example/.local/bin:/Users/example/bin";
+    const launchd = "/opt/homebrew/bin:/usr/bin:/bin:/Users/example/.local/bin:/Users/example/bin";
     const next = withDriverWellKnownPath({ HOME: home, PATH: launchd });
     expect(next.PATH?.split(delimiter)).toEqual([
-      "/usr/bin",
-      "/bin",
       "/Users/example/.local/bin",
       "/Users/example/bin",
       "/Users/example/.kimi-code/bin",
       "/Users/example/.grok/bin",
+      "/opt/homebrew/bin",
+      "/usr/bin",
+      "/bin",
     ]);
     const again = withDriverWellKnownPath(next);
     expect(again.PATH).toBe(next.PATH);

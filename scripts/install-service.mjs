@@ -35,15 +35,17 @@ const dryRun = process.argv.includes("--dry-run");
 // installed CLIs (codex/cld) live next to the node binary itself.
 const servicePath = [
   dirname(process.execPath),
+  // User bins before Homebrew: ~/.local/bin/antcode (1.1 `pr show`) must beat
+  // /opt/homebrew/bin/antcode (older `pr view` CLI). Keep in sync with
+  // shared/runtime/driver-bins.ts.
+  join(home, ".local", "bin"),
+  join(home, "bin"),
+  join(home, ".kimi-code", "bin"),
+  join(home, ".grok", "bin"),
   "/usr/local/bin",
   "/opt/homebrew/bin",
   "/usr/bin",
   "/bin",
-  join(home, ".local", "bin"),
-  join(home, "bin"),
-  // Keep in sync with shared/runtime/driver-bins.ts — kimi/grok often live here.
-  join(home, ".kimi-code", "bin"),
-  join(home, ".grok", "bin"),
 ].join(":");
 
 function escapeXml(value) {

@@ -18,29 +18,27 @@ export function vendorDriverBinDirs(home: string): string[] {
   return [join(home, ".kimi-code", "bin"), join(home, ".grok", "bin")];
 }
 
-export function defaultDriverWellKnownBinDirs(env: NodeJS.ProcessEnv = process.env): string[] {
-  const home = vendorHome(env);
-  return [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/usr/bin",
-    join(home, ".local", "bin"),
-    join(home, "bin"),
-    ...vendorDriverBinDirs(home),
-  ];
+/** User-installed CLIs (antcode 1.1 `pr show`, cld shims) live here and must
+ * beat Homebrew's older same-named binaries on a launchd PATH. */
+export function userCliBinDirs(home: string): string[] {
+  return [join(home, ".local", "bin"), join(home, "bin")];
 }
 
-/** Append vendor bin dirs that are not already on PATH. PATH order is unchanged. */
+export function preferredCliBinDirs(home: string): string[] {
+  return [...userCliBinDirs(home), ...vendorDriverBinDirs(home)];
+}
+
+export function defaultDriverWellKnownBinDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const home = vendorHome(env);
+  return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", ...preferredCliBinDirs(home)];
+}
+
+/** Put user/vendor bin dirs first so Host-spawned review/fix sees the same
+ * `antcode`/`kimi` as an interactive shell. Homebrew stays on PATH after. */
 export function withDriverWellKnownPath(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const extra = vendorDriverBinDirs(vendorHome(env));
-  const parts = (env.PATH ?? "").split(delimiter);
-  const seen = new Set(parts.filter((dir) => dir.length > 0));
-  const appended: string[] = [];
-  for (const dir of extra) {
-    if (dir.length === 0 || seen.has(dir)) continue;
-    seen.add(dir);
-    appended.push(dir);
-  }
-  if (appended.length === 0) return env;
-  return { ...env, PATH: [...parts, ...appended].join(delimiter) };
+  const prefer = preferredCliBinDirs(vendorHome(env));
+  const rest = (env.PATH ?? "")
+    .split(delimiter)
+    .filter((dir) => dir.length > 0 && !prefer.includes(dir));
+  return { ...env, PATH: [...prefer, ...rest].join(delimiter) };
 }

@@ -784,6 +784,52 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(outcome.status).toBe("completed");
   });
 
+  it("AntCode inspect failure persists a failed run instead of leaving it running", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const store = new Store();
+    const reporter = store.getAgent(aggregatorName);
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "jury",
+      background: "bg",
+      targetOutput: "out",
+      agentIds,
+      rounds: 1,
+      reporterAgentId: reporter.id,
+    });
+    const sink = makeSink();
+    let exitCode = -1;
+    try {
+      await runReview(
+        [
+          "https://code.alipay.com/common_release/opsnexus/pull_requests/1461",
+          "--repo",
+          seedGitRepo(),
+        ],
+        sink,
+        {
+          spawnImpl: fakeSpawn(),
+          runCommand: async () => ({
+            stdout: "",
+            stderr: "Error: unknown shorthand flag: 'P' in -P",
+            exitCode: 0,
+          }),
+        },
+      );
+    } catch (e) {
+      expect(e).toBeInstanceOf(ReviewExit);
+      exitCode = (e as ReviewExit).exitCode;
+    }
+    expect(exitCode).toBe(4);
+    const outcome = sink.finished as { status: string; runId: string; incomplete: boolean };
+    expect(outcome.status).toBe("failed");
+    expect(outcome.incomplete).toBe(true);
+    const live = JSON.parse(
+      readFileSync(join(home, "runs", outcome.runId, "status.json"), "utf8"),
+    ) as { status: string };
+    expect(live.status).toBe("failed");
+  });
+
   it("SIGINT during aggregation → interrupted, exit 130, transcript/report persisted", async () => {
     const { agentIds, aggregatorName } = seed();
     const sink = makeSink();

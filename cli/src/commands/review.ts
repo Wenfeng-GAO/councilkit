@@ -955,163 +955,182 @@ export async function runReview(
         },
       });
     } else {
-      // Workspaces are created only now — after probing — and only for
-      // attempts that will actually spawn (plus the Aggregator). A rerun gets a
-      // PRISTINE workspace: delete-then-create, never a recursive mkdir over
-      // leftovers — a stale checkout would interfere with cloning and a stale
-      // `.last-message.md` would let a no-output process pass off the previous
-      // round's file as this round's deliverable (reviewer finding). Reused
-      // attempts are neither created nor deleted.
-      // Bind the trusted runs root ONCE (lstat + realpath): every workspace
-      // recreation — delete AND create — must stay under THIS pinned root,
-      // never under a run dir realpath that a swapped symlink could redirect
-      // outside the runs tree (reviewer findings). A RESUME reuses the root
-      // bound at the entry (revalidated here: a root swapped since entry —
-      // dev/ino changed — is fail-closed exit 5); it NEVER rebinds the
-      // current runsRoot, which would silently bless the swap.
-      let trustedRootBound: TrustedRoot | null;
-      if (resumeRoot !== null) {
-        revalidateTrustedRoot(resumeRoot);
-        trustedRootBound = resumeRoot;
-      } else {
-        trustedRootBound = bindTrustedRoot(paths.runsRoot);
-      }
-      if (trustedRootBound === null) {
-        throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
-      }
-      trustedRoot = trustedRootBound;
-      if (localRepo !== null && task.pr) {
-        let branch = "HEAD";
-        let targetRef: string | null = null;
-        let host: "github" | "antcode" = "github";
-        let expectedHeadSha: string | undefined;
-        let expectedTargetSha: string | undefined;
-        if (deps.worktreeRef === undefined) {
-          const meta = await inspectPullRequest(task.pr, runCommand, env);
-          branch = meta.branch;
-          targetRef = meta.baseBranch;
-          expectedHeadSha = meta.headSha;
-          expectedTargetSha = meta.baseSha;
-          host = meta.host;
-          out.progress(`  worktree branch: ${branch}`);
+      try {
+        // Workspaces are created only now — after probing — and only for
+        // attempts that will actually spawn (plus the Aggregator). A rerun gets a
+        // PRISTINE workspace: delete-then-create, never a recursive mkdir over
+        // leftovers — a stale checkout would interfere with cloning and a stale
+        // `.last-message.md` would let a no-output process pass off the previous
+        // round's file as this round's deliverable (reviewer finding). Reused
+        // attempts are neither created nor deleted.
+        // Bind the trusted runs root ONCE (lstat + realpath): every workspace
+        // recreation — delete AND create — must stay under THIS pinned root,
+        // never under a run dir realpath that a swapped symlink could redirect
+        // outside the runs tree (reviewer findings). A RESUME reuses the root
+        // bound at the entry (revalidated here: a root swapped since entry —
+        // dev/ino changed — is fail-closed exit 5); it NEVER rebinds the
+        // current runsRoot, which would silently bless the swap.
+        let trustedRootBound: TrustedRoot | null;
+        if (resumeRoot !== null) {
+          revalidateTrustedRoot(resumeRoot);
+          trustedRootBound = resumeRoot;
         } else {
-          // Test hook: the checkout is already pinned. Freeze against the local
-          // parent without touching origin — production never sets worktreeRef.
-          targetRef = "HEAD~1";
+          trustedRootBound = bindTrustedRoot(paths.runsRoot);
         }
-        const sha = await resolveLocalPrSha({
-          repo: localRepo.path,
-          branch,
-          pinnedRef: deps.worktreeRef ?? frozenManifest?.reviewedSha ?? undefined,
-          expectedSha: expectedHeadSha,
-          runCommand,
-          env,
-        });
-        reviewedSha = sha;
-        try {
-          persistManifest(sha);
-        } catch {
-          /* spawn-time check still uses in-memory frozenTools */
+        if (trustedRootBound === null) {
+          throw errors.io("the runs dir is missing (refusing to recreate workspaces)");
         }
-        out.progress(`  worktree ${sha.slice(0, 12)}`);
-        if (targetRef) {
-          const frozen = await freezeReviewContext({
+        trustedRoot = trustedRootBound;
+        if (localRepo !== null && task.pr) {
+          let branch = "HEAD";
+          let targetRef: string | null = null;
+          let host: "github" | "antcode" = "github";
+          let expectedHeadSha: string | undefined;
+          let expectedTargetSha: string | undefined;
+          if (deps.worktreeRef === undefined) {
+            const meta = await inspectPullRequest(task.pr, runCommand, env);
+            branch = meta.branch;
+            targetRef = meta.baseBranch;
+            expectedHeadSha = meta.headSha;
+            expectedTargetSha = meta.baseSha;
+            host = meta.host;
+            out.progress(`  worktree branch: ${branch}`);
+          } else {
+            // Test hook: the checkout is already pinned. Freeze against the local
+            // parent without touching origin — production never sets worktreeRef.
+            targetRef = "HEAD~1";
+          }
+          const sha = await resolveLocalPrSha({
             repo: localRepo.path,
-            headSha: sha,
-            sourceRef: branch,
-            targetRef,
-            host,
-            expectedTargetSha,
-            skipRemoteFetch: deps.worktreeRef !== undefined,
+            branch,
+            pinnedRef: deps.worktreeRef ?? frozenManifest?.reviewedSha ?? undefined,
+            expectedSha: expectedHeadSha,
             runCommand,
             env,
           });
-          persistFrozenContext(runDir, frozen);
-          const frozenPrompt = {
-            headSha: frozen.headSha,
-            mergeBaseSha: frozen.mergeBaseSha,
-            diffHash: frozen.diffHash,
-            verifiedCli: frozen.verifiedCli,
-          };
-          for (let i = 0; i < rerunSpecs.length; i++) {
-            const agent = rerunAgents[i];
-            const spec = rerunSpecs[i];
-            if (!agent || !spec) continue;
-            const prompt = buildAttemptPrompt({
-              agentName: agent.name,
-              personaPrompt: agent.personaPrompt,
-              task,
-              workspaceMode: "worktree",
-              frozenContext: frozenPrompt,
-            });
-            const rebuilt = buildSpawnSpec(agent, {
-              attemptId: spec.attemptId,
-              workspace: spec.cwd,
-              prompt,
-            });
-            spec.prompt = rebuilt.prompt;
-            spec.argv = rebuilt.argv;
-            spec.promptStdin = rebuilt.promptStdin;
+          reviewedSha = sha;
+          try {
+            persistManifest(sha);
+          } catch {
+            /* spawn-time check still uses in-memory frozenTools */
           }
-          if (againstFindings?.sha) {
-            const widened = againstDiffRange({
-              findingsSha: againstFindings.sha,
-              currentSha: sha,
-              fallback: task.againstRange ?? null,
+          out.progress(`  worktree ${sha.slice(0, 12)}`);
+          if (targetRef) {
+            const frozen = await freezeReviewContext({
+              repo: localRepo.path,
+              headSha: sha,
+              sourceRef: branch,
+              targetRef,
+              host,
+              expectedTargetSha,
+              skipRemoteFetch: deps.worktreeRef !== undefined,
+              runCommand,
+              env,
             });
-            if (widened && widened !== task.againstRange) {
-              task.againstRange = widened;
-              task.againstLedger = formatLedgerForPrompt(againstFindings, widened);
-              for (let i = 0; i < rerunSpecs.length; i++) {
-                const agent = rerunAgents[i];
-                const spec = rerunSpecs[i];
-                if (!agent || !spec) continue;
-                const prompt = buildAttemptPrompt({
-                  agentName: agent.name,
-                  personaPrompt: agent.personaPrompt,
-                  task,
-                  workspaceMode: "worktree",
-                  frozenContext: frozenPrompt,
-                });
-                const rebuilt = buildSpawnSpec(agent, {
-                  attemptId: spec.attemptId,
-                  workspace: spec.cwd,
-                  prompt,
-                });
-                spec.prompt = rebuilt.prompt;
-                spec.argv = rebuilt.argv;
-                spec.promptStdin = rebuilt.promptStdin;
+            persistFrozenContext(runDir, frozen);
+            const frozenPrompt = {
+              headSha: frozen.headSha,
+              mergeBaseSha: frozen.mergeBaseSha,
+              diffHash: frozen.diffHash,
+              verifiedCli: frozen.verifiedCli,
+            };
+            for (let i = 0; i < rerunSpecs.length; i++) {
+              const agent = rerunAgents[i];
+              const spec = rerunSpecs[i];
+              if (!agent || !spec) continue;
+              const prompt = buildAttemptPrompt({
+                agentName: agent.name,
+                personaPrompt: agent.personaPrompt,
+                task,
+                workspaceMode: "worktree",
+                frozenContext: frozenPrompt,
+              });
+              const rebuilt = buildSpawnSpec(agent, {
+                attemptId: spec.attemptId,
+                workspace: spec.cwd,
+                prompt,
+              });
+              spec.prompt = rebuilt.prompt;
+              spec.argv = rebuilt.argv;
+              spec.promptStdin = rebuilt.promptStdin;
+            }
+            if (againstFindings?.sha) {
+              const widened = againstDiffRange({
+                findingsSha: againstFindings.sha,
+                currentSha: sha,
+                fallback: task.againstRange ?? null,
+              });
+              if (widened && widened !== task.againstRange) {
+                task.againstRange = widened;
+                task.againstLedger = formatLedgerForPrompt(againstFindings, widened);
+                for (let i = 0; i < rerunSpecs.length; i++) {
+                  const agent = rerunAgents[i];
+                  const spec = rerunSpecs[i];
+                  if (!agent || !spec) continue;
+                  const prompt = buildAttemptPrompt({
+                    agentName: agent.name,
+                    personaPrompt: agent.personaPrompt,
+                    task,
+                    workspaceMode: "worktree",
+                    frozenContext: frozenPrompt,
+                  });
+                  const rebuilt = buildSpawnSpec(agent, {
+                    attemptId: spec.attemptId,
+                    workspace: spec.cwd,
+                    prompt,
+                  });
+                  spec.prompt = rebuilt.prompt;
+                  spec.argv = rebuilt.argv;
+                  spec.promptStdin = rebuilt.promptStdin;
+                }
+                out.progress(`  against range: ${widened}`);
               }
-              out.progress(`  against range: ${widened}`);
             }
           }
-        }
-        createWorkspace(join(runDir, "workspaces"));
-        for (const spec of runnableSpecs) {
-          spec.sourceRepo = localRepo.path;
-          spec.sourceSha = sha;
-          await addDetachedWorktree({
-            repo: localRepo.path,
-            dest: spec.cwd,
-            sha,
-            runDir,
-            root: trustedRoot,
-            runCommand,
-            env,
-          });
-          if (existsSync(join(runDir, "review-context.md"))) {
-            copyFrozenContextIntoWorkspace(runDir, spec.cwd);
+          createWorkspace(join(runDir, "workspaces"));
+          for (const spec of runnableSpecs) {
+            spec.sourceRepo = localRepo.path;
+            spec.sourceSha = sha;
+            await addDetachedWorktree({
+              repo: localRepo.path,
+              dest: spec.cwd,
+              sha,
+              runDir,
+              root: trustedRoot,
+              runCommand,
+              env,
+            });
+            if (existsSync(join(runDir, "review-context.md"))) {
+              copyFrozenContextIntoWorkspace(runDir, spec.cwd);
+            }
           }
+        } else {
+          for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
         }
-      } else {
-        for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
+        recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
+        if (existsSync(join(runDir, "review-context.md"))) {
+          copyFrozenContextIntoWorkspace(runDir, aggregatorWorkspace);
+        }
+        const params = buildExecuteParams();
+        outcome = await executeReview(params, runnableSpecs);
+      } catch (error) {
+        if (error instanceof ReviewExit) throw error;
+        // Workspace/fs-safe IO must stay fail-closed (exit 5, no ReviewExit).
+        if (error instanceof CliError && error.exitCode === EXIT.io) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        outcome = await finalize(
+          buildExecuteParams(),
+          new Date().toISOString(),
+          mergeOrdered(presolved),
+          null,
+          {
+            status: "failed",
+            exitCode: error instanceof CliError ? error.exitCode : EXIT.runFailed,
+            incomplete: true,
+            failure: { phase: "checkout", code: "CHECKOUT_FAILED", message },
+          },
+        );
       }
-      recreateWorkspace(aggregatorWorkspace, runDir, trustedRoot);
-      if (existsSync(join(runDir, "review-context.md"))) {
-        copyFrozenContextIntoWorkspace(runDir, aggregatorWorkspace);
-      }
-      const params = buildExecuteParams();
-      outcome = await executeReview(params, runnableSpecs);
     }
     // Await stdout flush of the final document BEFORE removing the signal
     // handlers and throwing the exit sentinel — main() process.exit()s on

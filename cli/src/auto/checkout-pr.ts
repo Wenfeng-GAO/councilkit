@@ -169,7 +169,7 @@ export async function inspectPullRequest(
     env: internalToolEnv(env),
   });
   assertOk(shown, "antcode pr show");
-  const meta = parseAntCodePrShow(shown.stdout);
+  const meta = parseAntCodePrShow(shown.stdout, shown.stderr);
   return {
     prUrl: parsed.url.toString(),
     host: "antcode",
@@ -258,7 +258,7 @@ async function checkoutAntCode(
     env: internalToolEnv(env),
   });
   assertOk(shown, "antcode pr show");
-  const meta = parseAntCodePrShow(shown.stdout);
+  const meta = parseAntCodePrShow(shown.stdout, shown.stderr);
   const cloned = await runCommand({
     executable: "git",
     argv: ["clone", "--depth", "1", "--branch", meta.branch, meta.cloneUrl, "."],
@@ -466,7 +466,10 @@ function parseGhPrView(stdout: string): {
   return { branch, nameWithOwner, baseBranch: baseRaw, headSha, baseSha };
 }
 
-function parseAntCodePrShow(stdout: string): {
+function parseAntCodePrShow(
+  stdout: string,
+  stderr = "",
+): {
   branch: string;
   cloneUrl: string;
   baseBranch: string;
@@ -475,7 +478,10 @@ function parseAntCodePrShow(stdout: string): {
   try {
     rec = JSON.parse(stdout);
   } catch {
-    throw errors.runFailed("antcode pr show did not return JSON");
+    const hint = (stderr.trim() || stdout.trim() || "empty stdout").replace(/\s+/g, " ");
+    throw errors.runFailed(
+      `antcode pr show did not return JSON (${hint.length > 300 ? `${hint.slice(0, 300)}…` : hint})`,
+    );
   }
   if (rec === null || typeof rec !== "object") {
     throw errors.runFailed("antcode pr show JSON was not an object");

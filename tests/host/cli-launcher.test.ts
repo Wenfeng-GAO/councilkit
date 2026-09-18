@@ -32,10 +32,13 @@ describe("Host-spawned CLI PATH", () => {
   it("keeps kimi-code on PATH for a stripped launchd environment", () => {
     const env = cliRunSpawnEnv({
       HOME: "/Users/example",
-      PATH: "/usr/bin:/bin:/Users/example/.local/bin:/Users/example/bin",
+      PATH: "/opt/homebrew/bin:/usr/bin:/bin:/Users/example/.local/bin:/Users/example/bin",
     });
     expect(env.PATH?.split(":")).toContain("/Users/example/.kimi-code/bin");
     expect(env.PATH?.split(":")).toContain("/Users/example/.grok/bin");
+    expect(env.PATH?.indexOf("/Users/example/.local/bin")).toBeLessThan(
+      env.PATH?.indexOf("/opt/homebrew/bin") ?? -1,
+    );
   });
 });
 
