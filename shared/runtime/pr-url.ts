@@ -59,3 +59,15 @@ export function projectKeyFromPr(pr: string): string | null {
   const ant = parseAntCodePrUrl(parsed.url);
   return ant ? ant.project : null;
 }
+
+/** Host-prefixed repo identity used by repair profiles. Browser-safe. */
+export function writerRepoFromPrUrl(prUrl: string): string | null {
+  const parsed = parseApplyPrUrl(prUrl);
+  if (parsed === null) return null;
+  if (parsed.kind === "github") {
+    const gh = parseGitHubPrUrl(parsed.url);
+    return gh ? `github.com/${gh.owner}/${gh.repo}`.toLowerCase() : null;
+  }
+  const ant = parseAntCodePrUrl(parsed.url);
+  return ant ? `code.alipay.com/${ant.project}`.toLowerCase() : null;
+}

@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/Button";
-import { isRepairProfileName } from "@shared/runtime/repair-lease";
+import { isRepairProfileName } from "@shared/runtime/repair-name";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useState } from "react";
 import { Link } from "react-router-dom";

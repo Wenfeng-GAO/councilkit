@@ -22,7 +22,7 @@ import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/h
 import { buildPrComment } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
-import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
+import { writerRepoFromPrUrl } from "@shared/runtime/pr-url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
