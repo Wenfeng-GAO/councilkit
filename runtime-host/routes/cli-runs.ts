@@ -31,7 +31,6 @@ import {
   parseRepairGrantRecord,
   parseRepairProfileRecord,
   profileIntegrityHash,
-  repairBranchHintsFromFrozenContext,
   verifyRepairGrantRecord,
 } from "@shared/runtime/repair-auth";
 import {
@@ -73,6 +72,7 @@ import {
   cliRunsListResponseSchema,
 } from "@shared/runtime/schemas";
 import { type CliRunLauncher, defaultCliRunLauncher, isPidAlive } from "../cli-launcher";
+import { resolveRepairBranchHints } from "../repair-branch-hints";
 import { type HostServices, type Route, httpError } from "../server";
 
 const PIPELINE_PID_FILE = "pipeline.pid";
@@ -224,7 +224,8 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       pattern: "/api/v1/cli-runs/repair/profiles",
       auth: "session",
       responseSchema: cliRunListRepairProfilesResponseSchema,
-      handler: (ctx): CliRunListRepairProfilesResponse => listRepairProfiles(ctx.query.get("from")),
+      handler: (ctx): Promise<CliRunListRepairProfilesResponse> =>
+        listRepairProfiles(ctx.query.get("from")),
     },
     {
       method: "POST",
@@ -647,16 +648,17 @@ function readHostRepairProfile(name: string): ReturnType<typeof parseRepairProfi
   }
 }
 
-function listRepairProfiles(from: string | null): CliRunListRepairProfilesResponse {
+async function listRepairProfiles(from: string | null): Promise<CliRunListRepairProfilesResponse> {
   if (!from || !isCliRunId(from)) {
     return {
       profiles: listHostRepairProfiles().map(toProfileSummary),
       sourceBranchHint: null,
       baseHint: null,
+      hintSource: null,
     };
   }
-  const hints = readBranchHints(from);
   const wantedPr = readCliRun(from, process.env)?.reviewEvidence?.prUrl ?? null;
+  const hints = await resolveRepairBranchHints({ runId: from, prUrl: wantedPr });
   const profiles = listHostRepairProfiles()
     .filter((row) => wantedPr !== null && row.prUrl === wantedPr)
     .map(toProfileSummary);
@@ -664,6 +666,7 @@ function listRepairProfiles(from: string | null): CliRunListRepairProfilesRespon
     profiles,
     sourceBranchHint: hints.sourceBranch,
     baseHint: hints.base,
+    hintSource: hints.hintSource,
   };
 }
 
@@ -772,21 +775,6 @@ function toProfileSummary(row: RepairProfileRecord): CliRunSaveRepairProfileResp
     sourceBranch: row.sourceBranch,
     base: row.base,
   };
-}
-
-function readBranchHints(runId: string): { sourceBranch: string | null; base: string | null } {
-  const path = join(resolveCliRunsRoot(), runId, "review-context.md");
-  try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) return emptyBranchHints();
-    return repairBranchHintsFromFrozenContext(readFileSync(path, "utf8"));
-  } catch {
-    return emptyBranchHints();
-  }
-}
-
-function emptyBranchHints(): { sourceBranch: string | null; base: string | null } {
-  return { sourceBranch: null, base: null };
 }
 
 function isEnoent(error: unknown): boolean {

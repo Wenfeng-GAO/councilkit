@@ -53,12 +53,21 @@ describe("RepairRunPanel", () => {
       createElement(RepairRunPanel, {
         run: review,
         profiles: [],
-        sourceBranchDefault: "feat/piston-413",
-        baseDefault: "master",
+        sourceBranchDefault: "hengzhuo/fix/session-replay-performance",
+        baseDefault: "sprint_independent-pre_S090011901586_20260911",
+        hintSource: "review",
       }),
     );
-    expect(html).toContain('value="feat/piston-413"');
-    expect(html).toContain('value="master"');
+    expect(html).toContain("已从本次审查冻结上下文识别");
+    expect(html).toContain("hengzhuo/fix/session-replay-performance");
+    expect(html).toContain("sprint_independent-pre_S090011901586_20260911");
+    expect(html).toContain('type="hidden"');
+  });
+
+  it("does not default the target branch to main", () => {
+    const html = render(createElement(RepairRunPanel, { run: review, profiles: [] }));
+    expect(html).not.toContain('value="main"');
+    expect(html).toContain("本 PR 的 base 分支");
   });
 
   it("rejects an empty source branch before save", () => {

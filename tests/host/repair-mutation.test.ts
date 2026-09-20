@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -271,6 +271,51 @@ describe("repair mutation handlers", () => {
     expect(listed.profiles.map((row) => row.name)).toEqual(["default"]);
     expect(listed.sourceBranchHint).toBe("feat-x");
     expect(listed.baseHint).toBe("main");
+    expect(listed.hintSource).toBe("review");
+  });
+
+  it("inspects the live PR when frozen review context is missing", async () => {
+    writeFileSync(
+      join(home, "runs", RUN_ID, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        runId: RUN_ID,
+        startedAt: "2026-09-20",
+        task: { pr: GH_PR },
+      })}\n`,
+    );
+    const bin = mkdtempSync(join(tmpdir(), "ck-gh-"));
+    writeFileSync(
+      join(bin, "gh"),
+      '#!/bin/sh\nprintf \'%s\\n\' \'{"headRefName":"feat-x","baseRefName":"main"}\'\n',
+    );
+    chmodSync(join(bin, "gh"), 0o755);
+    const prevPath = process.env.PATH;
+    const prevHome = process.env.HOME;
+    process.env.PATH = bin;
+    process.env.HOME = bin;
+    try {
+      const { routes } = routesWithLauncher();
+      const get = routes.find(
+        (route) => route.method === "GET" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+      );
+      if (get === undefined) throw new Error("missing list route");
+      const listed = (await get.handler({
+        ...ctx({}),
+        query: new URLSearchParams({ from: RUN_ID }),
+      })) as {
+        sourceBranchHint: string | null;
+        baseHint: string | null;
+        hintSource: string | null;
+      };
+      expect(listed.sourceBranchHint).toBe("feat-x");
+      expect(listed.baseHint).toBe("main");
+      expect(listed.hintSource).toBe("pr");
+    } finally {
+      process.env.PATH = prevPath;
+      process.env.HOME = prevHome;
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   it("refuses to save a profile whose repo does not match the PR", async () => {

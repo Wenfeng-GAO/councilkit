@@ -276,7 +276,8 @@ export function ReportDetailPage() {
               run={query.data}
               profiles={profilesQuery.data?.profiles ?? []}
               sourceBranchDefault={profilesQuery.data?.sourceBranchHint ?? ""}
-              baseDefault={profilesQuery.data?.baseHint ?? "main"}
+              baseDefault={profilesQuery.data?.baseHint ?? ""}
+              hintSource={profilesQuery.data?.hintSource ?? null}
               activeRepair={activeRepair}
               error={
                 actionError ??

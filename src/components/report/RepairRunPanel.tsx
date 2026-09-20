@@ -16,7 +16,7 @@ export function readRepairLaunchSummary(
 ): { ok: true; name: string; sourceBranch: string; base: string } | { ok: false; error: string } {
   const name = String(data.get("name") ?? "default").trim() || "default";
   const sourceBranch = String(data.get("sourceBranch") ?? "").trim();
-  const base = String(data.get("base") ?? "main").trim() || "main";
+  const base = String(data.get("base") ?? "").trim();
   if (!isRepairProfileName(name)) {
     return { ok: false, error: "profile 名必须是不含路径的短名" };
   }
@@ -29,6 +29,12 @@ export function readRepairLaunchSummary(
   return { ok: true, name, sourceBranch, base };
 }
 
+function hintSourceLabel(source: "pr" | "review" | "worktree"): string {
+  if (source === "pr") return "已从当前 PR 识别";
+  if (source === "worktree") return "已从本地仓库 worktree 识别";
+  return "已从本次审查冻结上下文识别";
+}
+
 export function RepairRunPanel({
   run,
   profiles = [],
@@ -39,7 +45,8 @@ export function RepairRunPanel({
   outerUsed = 0,
   outerMax = 10,
   sourceBranchDefault = "",
-  baseDefault = "main",
+  baseDefault = "",
+  hintSource = null,
   onStart,
   onStop,
   onResume,
@@ -61,6 +68,7 @@ export function RepairRunPanel({
   outerMax?: number;
   sourceBranchDefault?: string;
   baseDefault?: string;
+  hintSource?: "pr" | "review" | "worktree" | null;
   onStart?: (profile: string) => void;
   onStop?: () => void;
   onResume?: () => void;
@@ -142,7 +150,7 @@ export function RepairRunPanel({
           }}
         >
           <p className="text-sm text-muted">
-            还没有保存的修复授权，先填启动摘要。这三框冻结本 PR 的快进推送授权，不是 PR 地址。
+            还没有保存的修复授权。源分支和目标分支来自 PR 身份，不是 PR 地址。
           </p>
           <label className="flex flex-col gap-1">
             <span className="text-sm text-muted">profile 名</span>
@@ -155,30 +163,44 @@ export function RepairRunPanel({
             />
             <span className="text-xs text-muted">本机授权短名，一般保持 default。</span>
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-muted">源分支</span>
-            <input
-              name="sourceBranch"
-              defaultValue={sourceBranchDefault}
-              placeholder="例如 feat/foo"
-              aria-label="源分支"
-              required
-              autoComplete="off"
-              className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
-            />
-            <span className="text-xs text-muted">本 PR 的 head 分支，修复只允许快进推到这里。</span>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-sm text-muted">目标分支</span>
-            <input
-              name="base"
-              defaultValue={baseDefault || "main"}
-              aria-label="目标分支"
-              autoComplete="off"
-              className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
-            />
-            <span className="text-xs text-muted">本 PR 的 base 分支，须与远端一致。</span>
-          </label>
+          {sourceBranchDefault && baseDefault ? (
+            <div className="rounded border border-edge bg-canvas px-3 py-2">
+              <p className="text-sm text-fg">
+                {hintSource ? `${hintSourceLabel(hintSource)}：` : "已识别："}源分支{" "}
+                <code>{sourceBranchDefault}</code>，目标分支 <code>{baseDefault}</code>
+              </p>
+              <p className="mt-1 text-xs text-muted">保存后只允许快进推送到该源分支。</p>
+              <input type="hidden" name="sourceBranch" value={sourceBranchDefault} />
+              <input type="hidden" name="base" value={baseDefault} />
+            </div>
+          ) : (
+            <>
+              <label className="flex flex-col gap-1">
+                <span className="text-sm text-muted">源分支</span>
+                <input
+                  name="sourceBranch"
+                  defaultValue={sourceBranchDefault}
+                  placeholder="本 PR 的 head 分支"
+                  aria-label="源分支"
+                  required
+                  autoComplete="off"
+                  className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-sm text-muted">目标分支</span>
+                <input
+                  name="base"
+                  defaultValue={baseDefault}
+                  placeholder="本 PR 的 base 分支"
+                  aria-label="目标分支"
+                  required
+                  autoComplete="off"
+                  className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
+                />
+              </label>
+            </>
+          )}
           {formError ? <p className="text-sm text-error">{formError}</p> : null}
           <Button type="submit" disabled={pending}>
             保存授权并启动

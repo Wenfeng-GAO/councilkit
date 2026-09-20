@@ -100,6 +100,7 @@ describe("RuntimeClient repair profiles", () => {
         ],
         sourceBranchHint: "feat-x",
         baseHint: "main",
+        hintSource: "review",
       }),
     );
     const client = makeClient(fetchFn);
@@ -110,6 +111,7 @@ describe("RuntimeClient repair profiles", () => {
     expect(calls[0]?.headers[CSRF_HEADER_NAME]).toBeUndefined();
     expect(result.profiles).toHaveLength(1);
     expect(result.sourceBranchHint).toBe("feat-x");
+    expect(result.hintSource).toBe("review");
   });
 
   it("saveCliRepairProfile: POST mutation with closed-set body", async () => {

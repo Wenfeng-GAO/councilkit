@@ -124,12 +124,16 @@ export function repairBranchHintsFromFrozenContext(markdown: string): {
   return { sourceBranch: usableFrozenBranch(source), base: usableFrozenBranch(target) };
 }
 
-function usableFrozenBranch(value: string): string | null {
+export function usableRepairBranch(value: string): string | null {
   const branch = value.trim();
   if (!FROZEN_BRANCH_RE.test(branch) || branch.includes("..")) return null;
   if (branch === "HEAD" || branch === "unknown" || branch.startsWith("HEAD~")) return null;
   if (branch.startsWith("origin/")) return null;
   return branch;
+}
+
+function usableFrozenBranch(value: string): string | null {
+  return usableRepairBranch(value);
 }
 
 function isExpired(expiresAt: string | null, now: string): boolean {
