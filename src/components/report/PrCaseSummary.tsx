@@ -49,6 +49,14 @@ export function PrCaseSummary({
             打开有效证据 / 导出修复任务
           </Link>
         ) : null}
+        {state.prUrl && state.baseline ? (
+          <Link
+            to={`/reports?pr=${encodeURIComponent(state.prUrl)}&against=${state.baseline.runId}#review`}
+            className="hover:underline"
+          >
+            对照复审
+          </Link>
+        ) : null}
         {state.needsRecovery && state.latest ? (
           <Link to={`/reports/${state.latest.runId}`} className="hover:underline">
             打开最新运行并恢复

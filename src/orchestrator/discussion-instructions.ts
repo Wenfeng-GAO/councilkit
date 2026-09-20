@@ -112,16 +112,17 @@ export function wireKindOf(kind: ResultKind): "message" | "summary" {
 
 /**
  * Parse a summary's convergence vote from its trimmed last line. The vote is
- * ONLY recognized on a full last-line match of `收敛建议：是` / `收敛建议：否`;
- * any deviation (missing, mid-text, extra wording) reads as `false` — parsing
- * failure never blocks the summary commit (the orchestrator calls this AFTER
- * the commit lands). Whitespace around the value is tolerated.
+ * ONLY recognized on a full last-line match of `收敛建议：是` / `收敛建议：否`
+ * (full-width or ASCII colon). Any other deviation (missing, mid-text, extra
+ * wording) reads as `false` — parsing failure never blocks the summary commit
+ * (the orchestrator calls this AFTER the commit lands). Whitespace around the
+ * value is tolerated.
  */
 export function parseConvergenceSuggestion(summary: string): boolean {
   const trimmed = summary.trimEnd();
   if (trimmed.length === 0) return false;
   const newlineIndex = trimmed.lastIndexOf("\n");
   const lastLine = (newlineIndex === -1 ? trimmed : trimmed.slice(newlineIndex + 1)).trim();
-  const match = /^收敛建议：\s*(是|否)\s*$/.exec(lastLine);
+  const match = /^收敛建议[:：]\s*(是|否)\s*$/.exec(lastLine);
   return match?.[1] === "是";
 }

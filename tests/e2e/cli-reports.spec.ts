@@ -53,6 +53,12 @@ test("/reports 开始审查表单在有 fixture 时也可见", async ({ page }) 
   await expect(page.getByLabel("PR URL")).toBeVisible();
 });
 
+test("against 查询参数把表单切成对照复审", async ({ page }) => {
+  await page.goto("/reports?against=ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1#review");
+  await expect(page.getByRole("heading", { name: "对照复审" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "开始对照复审" })).toBeVisible();
+});
+
 test("/reports 本地仓库路径默认收在关闭的高级里", async ({ page }) => {
   await page.goto("/reports");
   const advanced = page

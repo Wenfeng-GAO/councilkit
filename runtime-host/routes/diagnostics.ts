@@ -74,7 +74,10 @@ export function diagnosticsRoutes(services: HostServices): Route[] {
           },
           installations: registry().list(),
           scopes: scopes().counts(),
-          logs: { recent: [...services.logger.recentProblems(50)] },
+          logs: {
+            recent: [...services.logger.recentProblems(50)],
+            diagnostics: [...services.logger.diagnostics()],
+          },
         };
       },
     },

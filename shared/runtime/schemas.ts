@@ -433,6 +433,17 @@ export const diagnosticLogRecordSchema = z
   .strict();
 export type DiagnosticLogRecord = z.infer<typeof diagnosticLogRecordSchema>;
 
+export const diagnosticEntrySchema = z
+  .object({
+    diagnosticId: z.string().min(1),
+    at: z.string().min(1),
+    kind: z.string().min(1),
+    message: z.string().min(1),
+    context: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+export type DiagnosticEntryDto = z.infer<typeof diagnosticEntrySchema>;
+
 /** Same-machine operator bundle, sanitized by construction: never carries
  * prompts, model output, tokens, cookies, secrets or env dumps, and Host
  * config paths (distDir/watchdogProgram/driverWorkRoot) stay out — only
@@ -460,7 +471,12 @@ export const diagnosticsResponseSchema = z
         eventConnections: z.number().int().nonnegative(),
       })
       .strict(),
-    logs: z.object({ recent: z.array(diagnosticLogRecordSchema) }).strict(),
+    logs: z
+      .object({
+        recent: z.array(diagnosticLogRecordSchema),
+        diagnostics: z.array(diagnosticEntrySchema),
+      })
+      .strict(),
   })
   .strict();
 export type DiagnosticsResponse = z.infer<typeof diagnosticsResponseSchema>;
@@ -751,6 +767,10 @@ export const cliRunStartReviewRequestSchema = z
   .object({
     pr: z.string().min(1),
     repo: z.string().min(1).optional(),
+    against: z
+      .string()
+      .regex(/^ck-review-[0-9a-fA-F-]+$/, "against must be a ck-review run id")
+      .optional(),
     reviewModels: reviewModelsSchema.optional(),
   })
   .strict();

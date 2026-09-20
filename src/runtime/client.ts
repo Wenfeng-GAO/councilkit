@@ -211,6 +211,13 @@ export class RuntimeClient {
     });
   }
 
+  refreshInstallations(): Promise<InstallationsResponse> {
+    return this.call("POST", "/api/v1/installations/refresh", {
+      schema: installationsResponseSchema,
+      auth: "mutation",
+    });
+  }
+
   /** Revalidation is read-only metadata work on the Host: session-level auth,
    * no CSRF mutation header. */
   revalidateInstallation(installationId: string): Promise<InstallationDto> {

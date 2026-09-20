@@ -94,6 +94,24 @@ describe("launchArgs", () => {
       }),
     ).toEqual(["review", "https://github.com/acme/repo/pull/126", "--run-id", RUN_ID]);
   });
+  it("passes --against through to the spawned review", () => {
+    expect(
+      launchArgs({
+        action: "review",
+        runId: RUN_ID,
+        logPath: "/tmp/x.log",
+        pr: "https://github.com/acme/repo/pull/126",
+        against: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+      }),
+    ).toEqual([
+      "review",
+      "https://github.com/acme/repo/pull/126",
+      "--run-id",
+      RUN_ID,
+      "--against",
+      "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+    ]);
+  });
 });
 
 describe("resolveCouncilkitSpawn", () => {

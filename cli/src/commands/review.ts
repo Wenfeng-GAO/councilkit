@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { type Stats, existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
+import {
+  FULL_COMMIT_SHA,
+  type FindingsFile,
+  isFindingVerifiedClosed,
+} from "@shared/runtime/cli-ledger";
 import {
   CLI_RUN_STATUS_FILE,
   type CliRunLiveHeartbeat,
@@ -80,7 +84,6 @@ import {
   writeInvocationManifest,
 } from "../auto/invocation-manifest";
 import {
-  type FindingsFile,
   againstDiffRange,
   formatLedgerForPrompt,
   loadAgainstContext,
@@ -1021,6 +1024,16 @@ export async function runReview(
             env,
           });
           reviewedSha = sha;
+          if (
+            againstFindings?.sha &&
+            FULL_COMMIT_SHA.test(againstFindings.sha) &&
+            againstFindings.sha.toLowerCase() === sha.toLowerCase() &&
+            !againstLedgerHasUnprovenWork(againstFindings, sha)
+          ) {
+            throw errors.usage(
+              `--against ${task.against} already has complete evidence for SHA ${sha.slice(0, 12)}; the PR has not changed. Use --resume ${task.against} if that run is incomplete.`,
+            );
+          }
           try {
             persistManifest(sha);
           } catch {
@@ -1094,7 +1107,12 @@ export async function runReview(
       } catch (error) {
         if (error instanceof ReviewExit) throw error;
         // Workspace/fs-safe IO must stay fail-closed (exit 5, no ReviewExit).
-        if (error instanceof CliError && error.exitCode === EXIT.io) throw error;
+        if (
+          error instanceof CliError &&
+          (error.exitCode === EXIT.io || error.exitCode === EXIT.usage)
+        ) {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : String(error);
         outcome = await finalize(
           buildExecuteParams(),
@@ -2230,6 +2248,13 @@ function renderHuman(o: ReviewOutcome): string {
     lines.push(`    ${o.resumeCommand}`);
   }
   return lines.join("\n");
+}
+
+function againstLedgerHasUnprovenWork(ledger: FindingsFile, sha: string): boolean {
+  return ledger.findings.some((row) => {
+    if (row.status === "accepted") return false;
+    return !isFindingVerifiedClosed(row, sha);
+  });
 }
 
 /** Sentinel carrying the review exit code up to main(). Mirrors RunExit. */

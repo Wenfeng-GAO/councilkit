@@ -67,4 +67,47 @@ describe("FindingLedger candidate evidence", () => {
       }
     },
   );
+
+  it("shows incomplete assessment coverage on the ledger summary", () => {
+    const sha = "a".repeat(40);
+    const run = cliRunDetailResponseSchema.parse({
+      runId: "review-coverage",
+      kind: "review",
+      status: "completed",
+      title: "Review",
+      startedAt: null,
+      endedAt: null,
+      hasReport: true,
+      reportUrl: "/reports/review-coverage",
+      progress: null,
+      markdown: "",
+      truncated: false,
+      reviewEvidence: {
+        complete: true,
+        sha,
+        prUrl: null,
+        againstRunId: "review-prior",
+        blockingIds: ["F-1"],
+        unverifiedFixIds: [],
+        openIds: ["F-1"],
+        evidenceComplete: false,
+        uncoveredIds: ["F-1"],
+      },
+      findings: [
+        {
+          id: "F-1",
+          title: "Content loss",
+          text: "Content loss",
+          severity: "critical",
+          status: "open",
+          source: "unique",
+          reviewer: null,
+          files: [],
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(createElement(FindingLedger, { run }));
+    expect(html).toContain("评估覆盖不完整");
+    expect(html).toContain("F-1");
+  });
 });

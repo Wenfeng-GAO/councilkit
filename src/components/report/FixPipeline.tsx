@@ -160,7 +160,13 @@ export function fixPipelineLiveStatus(input: {
     };
   }
   if (input.followUpFailed) {
-    return { tone: "error", text: "复审没有完成，代码没有改动。" };
+    return {
+      tone: "error",
+      text:
+        pipeline?.applyStatus === "success"
+          ? "落地已完成，但复审没有通过。"
+          : "复审没有完成，代码没有改动。",
+    };
   }
   if (input.followUpRunning) {
     return { tone: "info", text: "复审还在跑。" };

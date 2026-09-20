@@ -23,7 +23,16 @@ export function FindingLedger({ run }: { run: CliRunDetailResponse }) {
   const nextCluster = run.planLock?.clusters.find(
     (cluster) => !run.landings.some((row) => row.clusterId === cluster.id),
   );
-  const summary = `${formatLedgerSummary(counts, nextCluster?.id ?? null, findings, candidateSha)} · ${findings.filter((row) => isFindingBlocking(row, candidateSha)).length} 阻塞`;
+  const uncovered = run.reviewEvidence?.uncoveredIds ?? [];
+  const coverageNote =
+    run.reviewEvidence?.evidenceComplete === false
+      ? uncovered.length > 0
+        ? ` · 评估覆盖不完整，缺 ${uncovered.slice(0, 5).join("、")}`
+        : " · 评估覆盖不完整"
+      : run.reviewEvidence?.evidenceComplete === true
+        ? " · 评估覆盖完整"
+        : "";
+  const summary = `${formatLedgerSummary(counts, nextCluster?.id ?? null, findings, candidateSha)} · ${findings.filter((row) => isFindingBlocking(row, candidateSha)).length} 阻塞${coverageNote}`;
 
   return (
     <section className="border border-edge bg-surface px-4 py-4" aria-labelledby="ck-ledger">

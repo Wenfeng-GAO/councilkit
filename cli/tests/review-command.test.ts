@@ -1460,6 +1460,74 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     ) as { reviewedSha: string | null };
     expect(manifest.reviewedSha).toBe(sha);
   });
+
+  it("refuses --against when the prior ledger already covers this SHA", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const repo = seedGitRepo();
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const priorId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea";
+    const paths = resolvePaths();
+    mkdirSync(paths.runDir(priorId), { recursive: true });
+    writeFileSync(
+      join(paths.runDir(priorId), "findings.json"),
+      JSON.stringify({
+        version: 1,
+        runId: priorId,
+        extractedAt: "2026-09-20",
+        sha,
+        againstRunId: null,
+        againstRange: null,
+        findings: [
+          {
+            id: "persist--lost",
+            severity: "critical",
+            status: "closed",
+            title: "Write failure loses text",
+            text: "write failure loses text",
+            source: "unique",
+            reviewer: "original",
+            files: ["source.ts"],
+            verification: {
+              outcome: "verified_closed",
+              candidateSha: sha,
+              runId: priorId,
+              attemptId: "attempt-0",
+              reviewer: "original",
+              method: "code_trace",
+              reason: "Failure now retains the unique copy",
+              evidence: "error branch returns without clearing",
+              locations: ["source.ts:1"],
+              runComplete: true,
+            },
+          },
+        ],
+      }),
+    );
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--pr",
+          "https://github.com/acme/repo/pull/9",
+          "--repo",
+          repo,
+          "--against",
+          priorId,
+        ],
+        makeSink(),
+        { spawnImpl: fakeSpawn(), worktreeRef: "HEAD" },
+      );
+      throw new Error("expected unchanged SHA to be rejected");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).exitCode).toBe(2);
+      expect((error as CliError).message).toContain("has not changed");
+      expect((error as CliError).message).toContain(sha.slice(0, 12));
+    }
+  });
 });
 
 /**

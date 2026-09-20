@@ -199,6 +199,32 @@ afterEach(async () => {
   host = null;
 });
 
+describe("POST /api/v1/installations/refresh", () => {
+  it("re-runs discovery and returns the new inventory", async () => {
+    const refresh = vi.fn(() => [TRUSTED_DTO]);
+    host = await createTestHost({
+      extraServices: {
+        installationRegistry: {
+          list: () => [],
+          refresh,
+          get: () => undefined,
+          revalidate: () => TRUSTED_DTO,
+          assertExecutable: () => TRUSTED_RECORD,
+        },
+      },
+      routesFactory: (services) => installationRoutes(services),
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/installations/refresh`, {
+      method: "POST",
+      headers: authedHeaders(host),
+    });
+    expect(res.status).toBe(200);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    const body = (await res.json()) as { ok: true; data: { installations: InstallationDto[] } };
+    expect(body.data.installations).toEqual([TRUSTED_DTO]);
+  });
+});
+
 function readinessBody(installationId: string, modelId = CANONICAL_MODEL): string {
   return JSON.stringify({
     profile: {

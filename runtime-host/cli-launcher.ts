@@ -26,6 +26,7 @@ export interface CliRunLaunchRequest {
   logPath: string;
   pr?: string;
   repo?: string;
+  against?: string;
   reviewModels?: ReviewModels;
   idea?: string;
   background?: string;
@@ -139,6 +140,7 @@ export function launchArgs(input: CliRunLaunchRequest): string[] {
       args.push("--repo", input.repo);
     }
     if (input.reviewModels) args.push("--review-models", JSON.stringify(input.reviewModels));
+    if (input.against) args.push("--against", input.against);
     return args;
   }
   if (input.action === "re-review") {
@@ -163,7 +165,9 @@ export async function handshakeReview(
   const deadline = Date.now() + REVIEW_HANDSHAKE_MS;
   while (Date.now() < deadline) {
     if (exited) {
-      throw new Error(logTail(input.logPath) || `councilkit ${input.action} exited ${String(exitCode)}`);
+      throw new Error(
+        logTail(input.logPath) || `councilkit ${input.action} exited ${String(exitCode)}`,
+      );
     }
     if (isRealDir(runDir) && isPidAlive(pid)) {
       child.unref();
@@ -172,9 +176,12 @@ export async function handshakeReview(
     await sleep(REVIEW_HANDSHAKE_POLL_MS);
   }
   stopDetachedChild(child, pid);
-  throw Object.assign(new Error(`${input.action} handshake timed out waiting for the run directory`), {
-    code: "HANDSHAKE_TIMEOUT",
-  });
+  throw Object.assign(
+    new Error(`${input.action} handshake timed out waiting for the run directory`),
+    {
+      code: "HANDSHAKE_TIMEOUT",
+    },
+  );
 }
 
 function stopDetachedChild(child: ChildProcess, pid: number): void {

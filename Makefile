@@ -4,7 +4,7 @@
 update:
 	git pull
 	pnpm install --frozen-lockfile
-	pnpm build:cli
+	pnpm build
 
 build:
 	pnpm build:cli

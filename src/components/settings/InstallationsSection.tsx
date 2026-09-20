@@ -21,6 +21,8 @@ export interface InstallationsSectionProps {
   onShowRequirements: () => void;
   onRecheckDrivers: () => void;
   onShowDiagnostics: (driverId: DriverId) => void;
+  rediscovering?: boolean;
+  onRediscover?: () => void;
 }
 
 export function InstallationsSection({
@@ -34,6 +36,8 @@ export function InstallationsSection({
   onShowRequirements,
   onRecheckDrivers,
   onShowDiagnostics,
+  rediscovering = false,
+  onRediscover,
 }: InstallationsSectionProps) {
   return (
     <section aria-labelledby="settings-installations" className="flex flex-col gap-3">
@@ -45,6 +49,13 @@ export function InstallationsSection({
           Runtime Installation 是 Host 本机发现并验证的程序安装；登录由 CLI 自己管理，CouncilKit
           不读取或保存任何凭据。
         </p>
+        {hostOnline && onRediscover ? (
+          <div className="mt-2">
+            <Button variant="ghost" disabled={rediscovering} onClick={onRediscover}>
+              {rediscovering ? "正在重新发现…" : "重新发现本机 CLI"}
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       {!hostOnline ? (

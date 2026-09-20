@@ -177,6 +177,18 @@ describe("diagnostics route", () => {
     expect(dto.config).not.toHaveProperty("driverWorkRoot");
   });
 
+  it("exports the diagnostics ring, not only recentProblems", async () => {
+    host = await boot();
+    host.logger.diagnostic("probe_failed", "catalog probe timed out", {
+      driverId: "kimi-stream-json",
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/diagnostics`, {
+      headers: authedHeaders(host),
+    });
+    const body = (await res.json()) as { ok: true; data: DiagnosticsResponse };
+    expect(body.data.logs.diagnostics.some((entry) => entry.kind === "probe_failed")).toBe(true);
+  });
+
   it("includes recent warn/error lines and excludes info", async () => {
     host = await boot();
     host.logger.info("host.started", { mode: "production" });

@@ -13,6 +13,7 @@ export const reviewEvidenceSchema = z
     unverifiedFixIds: z.array(z.string()).max(200),
     openIds: z.array(z.string()).max(200),
     evidenceComplete: z.boolean().optional(),
+    uncoveredIds: z.array(z.string()).max(200).optional(),
   })
   .strict();
 export type ReviewEvidence = z.infer<typeof reviewEvidenceSchema>;
@@ -38,6 +39,7 @@ export function summarizeReviewEvidence(input: {
   againstRunId: string | null;
   ledger: FindingsFile | null;
   evidenceComplete?: boolean;
+  uncoveredIds?: string[];
 }): ReviewEvidence {
   const ledger = input.ledger?.runId === input.runId ? input.ledger : null;
   const sha = /^[0-9a-f]{40}$/i.test(ledger?.sha ?? "") ? (ledger?.sha ?? null) : null;
@@ -56,6 +58,9 @@ export function summarizeReviewEvidence(input: {
       .filter((row) => row.status !== "accepted" || isFindingBlocking(row, sha))
       .map((row) => row.id),
     ...(input.evidenceComplete === undefined ? {} : { evidenceComplete: input.evidenceComplete }),
+    ...(input.uncoveredIds && input.uncoveredIds.length > 0
+      ? { uncoveredIds: input.uncoveredIds.slice(0, 200) }
+      : {}),
   };
 }
 

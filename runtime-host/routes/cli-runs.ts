@@ -100,6 +100,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
               runId,
               pr: body.pr,
               repo: body.repo,
+              against: body.against,
               reviewModels: body.reviewModels,
               logPath,
             }),

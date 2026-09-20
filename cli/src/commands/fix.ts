@@ -57,7 +57,7 @@ import type { AgentRecord } from "../store/schemas";
 import { Store } from "../store/store";
 import { ApplyExit, runApply } from "./apply";
 import { DEFAULT_CODEX_TIMEOUT_MS, parseFlags, parseTimeoutMs } from "./parse";
-import { ReviewExit, runReview } from "./review";
+import { type ReviewDeps, ReviewExit, runReview } from "./review";
 
 const RUN_ID_PATTERN = /^ck-review-[0-9a-fA-F-]+$/;
 const PROBE_TIMEOUT_MS = 90_000;
@@ -72,6 +72,7 @@ export interface FixDeps {
   spawnImpl?: SpawnImpl;
   runCommand?: RunCommand;
   abortController?: AbortController;
+  reviewImpl?: (argv: string[], out: OutputSink, deps?: ReviewDeps) => Promise<void>;
 }
 
 export interface FixOutcome {
@@ -248,16 +249,26 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
       failure: partial.failure,
       ...partial.extra,
     };
-    persist(partial.status === "interrupted" ? "interrupted" : "completed", "done", {
-      applyStatus: applied
-        ? "success"
+    persist(
+      partial.status === "interrupted"
+        ? "interrupted"
         : partial.status === "failed"
-          ? "failure"
-          : planOnly || !planVerdict || planVerdict !== "approve"
-            ? "skipped"
-            : "failure",
-      summary: outcome.summary || partial.failure?.message || null,
-    });
+          ? "failed"
+          : "completed",
+      "done",
+      {
+        applyStatus: applied
+          ? "success"
+          : partial.status === "failed"
+            ? reReviewOnly
+              ? null
+              : "failure"
+            : planOnly || !planVerdict || planVerdict !== "approve"
+              ? "skipped"
+              : "failure",
+        summary: outcome.summary || partial.failure?.message || null,
+      },
+    );
     await out.finish(outcome, renderFixHuman);
     throw new FixExit(outcome.exitCode);
   };
@@ -287,7 +298,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
 
     if (reReviewOnly) {
       persist("running", "re-reviewing", { applyStatus: null });
-      followUpRunId = await startFollowUpReview({
+      const followUp = await startFollowUpReview({
         pr,
         sourceRunId: runId,
         planPath,
@@ -304,7 +315,20 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
           });
         },
       });
-      summary = `follow-up review ${followUpRunId}`;
+      followUpRunId = followUp.runId;
+      summary = `follow-up review ${followUp.runId}`;
+      if (followUp.exitCode !== EXIT.ok) {
+        await finish({
+          status: "failed",
+          exitCode: followUp.exitCode,
+          failure: {
+            phase: "re-review",
+            code: "REVIEW_FAILED",
+            message: "follow-up review did not complete",
+          },
+          extra: { summary, followUpRunId },
+        });
+      }
       persist("completed", "done", { followUpRunId, summary });
       await finish({
         status: "completed",
@@ -667,7 +691,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         applyStatus: "success",
         progressPhase: "re-reviewing",
       });
-      followUpRunId = await startFollowUpReview({
+      const followUp = await startFollowUpReview({
         pr,
         sourceRunId: runId,
         planPath,
@@ -684,7 +708,20 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
           });
         },
       });
-      summary = `${summary}; applied; follow-up ${followUpRunId}`;
+      followUpRunId = followUp.runId;
+      summary = `${summary}; applied; follow-up ${followUp.runId}`;
+      if (followUp.exitCode !== EXIT.ok) {
+        await finish({
+          status: "failed",
+          exitCode: followUp.exitCode,
+          failure: {
+            phase: "re-review",
+            code: "REVIEW_FAILED",
+            message: "follow-up review did not complete",
+          },
+          extra: { summary, applied: true, followUpRunId },
+        });
+      }
     } else {
       summary = `${summary}; applied; skipped re-review`;
     }
@@ -730,7 +767,7 @@ async function startFollowUpReview(input: {
   timeoutFlag?: string;
   codexTimeoutFlag?: string;
   onFollowUp?: (runId: string) => void;
-}): Promise<string> {
+}): Promise<{ runId: string; exitCode: number }> {
   let created: string | null = null;
   let planExcerpt = "";
   try {
@@ -753,8 +790,9 @@ async function startFollowUpReview(input: {
   if (source?.reviewModels) argv.push("--review-models", JSON.stringify(source.reviewModels));
   if (input.timeoutFlag) argv.push("--timeout", input.timeoutFlag);
   if (input.codexTimeoutFlag) argv.push("--codex-timeout", input.codexTimeoutFlag);
+  const review = input.deps.reviewImpl ?? runReview;
   try {
-    await runReview(argv, input.out, {
+    await review(argv, input.out, {
       spawnImpl: input.deps.spawnImpl,
       runCommand: input.deps.runCommand,
       abortController: input.controller,
@@ -769,12 +807,12 @@ async function startFollowUpReview(input: {
       if (created === null) {
         throw errors.runFailed("follow-up review did not assign a run id");
       }
-      return created;
+      return { runId: created, exitCode: error.exitCode };
     }
     throw error;
   }
   if (created === null) throw errors.runFailed("follow-up review did not assign a run id");
-  return created;
+  return { runId: created, exitCode: EXIT.ok };
 }
 
 function resolvePlanner(store: Store, ref: string | undefined): AgentRecord {

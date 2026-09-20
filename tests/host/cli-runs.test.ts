@@ -751,6 +751,31 @@ describe("POST /api/v1/cli-runs start review", () => {
     expect(launches).toHaveLength(0);
   });
 
+  it("POST /api/v1/cli-runs passes against through to launcher.start", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const against = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, against }),
+    });
+    expect(res.status).toBe(200);
+    expect(launches[0]?.against).toBe(against);
+  });
+
+  it("POST /api/v1/cli-runs rejects a non-review against id", async () => {
+    seedPrJury();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR, against: "--repo" }),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toEqual([]);
+  });
+
   it("POST /api/v1/cli-runs passes repo through to launcher.start", async () => {
     seedPrJury();
     const { launches } = await bootStartReview();

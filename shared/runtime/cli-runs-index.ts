@@ -525,25 +525,40 @@ function readReviewEvidence(dir: string, runId: string, head: string): ReviewEvi
   } catch {
     /* Missing/corrupt terminal evidence stays incomplete. */
   }
+  const coverage = readAssessmentCoverage(join(dir, ASSESSMENT_DIAGNOSTICS_FILE));
   return summarizeReviewEvidence({
     runId,
     complete,
     prUrl: started?.task?.pr ?? null,
     againstRunId: started?.task?.against ?? null,
     ledger: readFindings(join(dir, CLI_RUN_FINDINGS_FILE)),
-    evidenceComplete: readEvidenceComplete(join(dir, ASSESSMENT_DIAGNOSTICS_FILE)),
+    evidenceComplete: coverage?.complete,
+    uncoveredIds: coverage?.uncoveredIds,
   });
 }
 
-function readEvidenceComplete(path: string): boolean | undefined {
+function readAssessmentCoverage(
+  path: string,
+): { complete: boolean; uncoveredIds: string[] } | undefined {
   const stat = safeLstat(path);
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return undefined;
   try {
     const parsed = assessmentDiagnosticsFileSchema.safeParse(
       JSON.parse(readCapped(path, 256 * 1024).text),
     );
-    return parsed.success ? parsed.data.coverageComplete : false;
+    if (!parsed.success) return { complete: false, uncoveredIds: [] };
+    const uncovered = [
+      ...new Set(
+        parsed.data.items
+          .filter(
+            (item) =>
+              (item.status === "missing" || item.status === "semantic_mismatch") && item.findingId,
+          )
+          .map((item) => item.findingId as string),
+      ),
+    ];
+    return { complete: parsed.data.coverageComplete, uncoveredIds: uncovered };
   } catch {
-    return false;
+    return { complete: false, uncoveredIds: [] };
   }
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { FixExit, runFix } from "../src/commands/fix";
+import { ReviewExit } from "../src/commands/review";
 import { CliError } from "../src/errors";
 import { Store } from "../src/store/store";
 
@@ -298,5 +299,41 @@ describe("cli fix command", () => {
     const outcome = sink.finished as { failure: { code: string } | null; applied: boolean };
     expect(outcome.failure?.code).toBe("PLAN_NO_CONSENSUS");
     expect(outcome.applied).toBe(false);
+  });
+
+  it("fails when a follow-up re-review exits non-zero", async () => {
+    seedRoster();
+    seedReview();
+    const sink = makeSink();
+    const followUpId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    let code = 0;
+    try {
+      await runFix(["--run", RUN_ID, "--re-review-only"], sink, {
+        spawnImpl: fakeSpawn().impl,
+        reviewImpl: async (_argv, _out, deps) => {
+          deps?.onRunCreated?.(followUpId);
+          throw new ReviewExit(4);
+        },
+      });
+    } catch (error) {
+      if (error instanceof FixExit) code = error.exitCode;
+      else throw error;
+    }
+    expect(code).toBe(4);
+    const outcome = sink.finished as {
+      status: string;
+      exitCode: number;
+      followUpRunId: string | null;
+      failure: { phase: string; code: string } | null;
+    };
+    expect(outcome.status).toBe("failed");
+    expect(outcome.followUpRunId).toBe(followUpId);
+    expect(outcome.failure?.phase).toBe("re-review");
+    const status = JSON.parse(readFileSync(join(home, "runs", RUN_ID, "status.json"), "utf8")) as {
+      status: string;
+      pipeline: { followUpRunId: string | null; applyStatus: string | null };
+    };
+    expect(status.status).toBe("failed");
+    expect(status.pipeline.followUpRunId).toBe(followUpId);
   });
 });

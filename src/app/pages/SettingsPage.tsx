@@ -382,6 +382,14 @@ export function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ["host", "model-catalog"] });
     },
   });
+  const rediscoverMut = useMutation({
+    mutationFn: () => client.refreshInstallations(),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["host", "installations"] });
+      queryClient.invalidateQueries({ queryKey: ["host", "profile-readiness"] });
+      queryClient.invalidateQueries({ queryKey: ["host", "model-catalog"] });
+    },
+  });
 
   type InfoModal = "restart" | "requirements" | "diagnostics" | null;
   const [infoModal, setInfoModal] = useState<InfoModal>(null);
@@ -593,6 +601,8 @@ export function SettingsPage() {
           onRevalidate={(id) => revalidateMut.mutate(id)}
           onShowRequirements={() => setInfoModal("requirements")}
           onRecheckDrivers={() => void healthQuery.refetch()}
+          rediscovering={rediscoverMut.isPending}
+          onRediscover={() => rediscoverMut.mutate()}
           onShowDiagnostics={(driverId) => {
             setDiagnosticsDriverId(driverId);
             setInfoModal("diagnostics");

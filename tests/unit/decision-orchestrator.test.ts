@@ -934,6 +934,8 @@ describe("instruction templates & convergence parsing", () => {
     expect(parseConvergenceSuggestion("只有正文，没有标记")).toBe(false);
     expect(parseConvergenceSuggestion("收敛建议：是\n收敛建议：否")).toBe(false);
     expect(parseConvergenceSuggestion("  正文  \n  收敛建议：是  ")).toBe(true);
+    expect(parseConvergenceSuggestion("正文\n收敛建议:是")).toBe(true);
+    expect(parseConvergenceSuggestion("正文\n收敛建议: 否")).toBe(false);
     // A mid-text vote that is NOT the trimmed last line never triggers.
     expect(parseConvergenceSuggestion("收敛建议：是\n但又继续讨论了")).toBe(false);
     expect(parseConvergenceSuggestion("")).toBe(false);

@@ -63,6 +63,13 @@ export function installationRoutes(services: HostServices): Route[] {
     },
     {
       method: "POST",
+      pattern: "/api/v1/installations/refresh",
+      auth: "mutation",
+      responseSchema: installationsResponseSchema,
+      handler: (): InstallationsResponse => ({ installations: registry().refresh() }),
+    },
+    {
+      method: "POST",
       pattern: "/api/v1/installations/:installationId/revalidate",
       auth: "session",
       responseSchema: installationDtoSchema,

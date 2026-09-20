@@ -368,6 +368,7 @@ describe("review evidence completeness", () => {
     );
     const blocked = readCliRun(REVIEW_ID, process.env);
     expect(blocked?.reviewEvidence?.evidenceComplete).toBe(false);
+    expect(blocked?.reviewEvidence?.uncoveredIds).toEqual(["F-1"]);
     expect(canExportRepairPackage(blocked)).toBe(false);
   });
 

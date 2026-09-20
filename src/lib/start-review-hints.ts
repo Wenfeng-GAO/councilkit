@@ -23,6 +23,19 @@ export function mapStartReviewError(error: unknown, pr: string): StartReviewHint
   return { text, copyCommand: null };
 }
 
+const REVIEW_RUN_ID = /^ck-review-[0-9a-fA-F-]+$/;
+
+/** Read optional PR / against overrides from the reports page query string. */
+export function parseStartReviewQuery(search: string): { pr?: string; against?: string } {
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const pr = params.get("pr")?.trim() ?? "";
+  const against = params.get("against")?.trim() ?? "";
+  return {
+    ...(pr.length > 0 ? { pr } : {}),
+    ...(REVIEW_RUN_ID.test(against) ? { against } : {}),
+  };
+}
+
 export function mapStartIdeateError(error: unknown): StartReviewHint {
   const text =
     error instanceof RuntimeClientError

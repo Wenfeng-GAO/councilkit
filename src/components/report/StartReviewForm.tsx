@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/TextInput";
-import { mapStartReviewError } from "@/lib/start-review-hints";
+import { mapStartReviewError, parseStartReviewQuery } from "@/lib/start-review-hints";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { CliRunStartReviewRequest } from "@shared/runtime/schemas";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -17,10 +17,17 @@ export function StartReviewForm() {
     ready: false,
     summary: "正在读取默认席位",
   });
-  const [pr, setPr] = useState("");
+  const query = parseStartReviewQuery(location.search);
+  const against = query.against;
+  const [pr, setPr] = useState(query.pr ?? "");
   const [repo, setRepo] = useState("");
   const [hint, setHint] = useState<{ text: string; copyCommand: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const next = parseStartReviewQuery(location.search);
+    if (next.pr) setPr(next.pr);
+  }, [location.search]);
 
   useEffect(() => {
     if (location.hash !== "#review") return;
@@ -34,6 +41,7 @@ export function StartReviewForm() {
       const body: CliRunStartReviewRequest = { pr: pr.trim() };
       const repoPath = repo.trim();
       if (repoPath.length > 0) body.repo = repoPath;
+      if (against) body.against = against;
       return client.startCliReview(body);
     },
     onMutate: () => {
@@ -72,9 +80,11 @@ export function StartReviewForm() {
       <div className="ck-composer-heading">
         <div>
           <p className="ck-eyebrow">NEW REVIEW</p>
-          <h2 id="start-review-heading">发起 PR 审查</h2>
+          <h2 id="start-review-heading">{against ? "对照复审" : "发起 PR 审查"}</h2>
         </div>
-        <span className="ck-composer-note">独立审查 · 对比汇总</span>
+        <span className="ck-composer-note">
+          {against ? `对照 ${against}` : "独立审查 · 对比汇总"}
+        </span>
       </div>
       <fieldset disabled={start.isPending} className="ck-composer-fields">
         <TextInput
@@ -111,7 +121,7 @@ export function StartReviewForm() {
           type="submit"
           disabled={start.isPending || !juryStatus.ready}
         >
-          {start.isPending ? "正在启动…" : "开始审查"}
+          {start.isPending ? "正在启动…" : against ? "开始对照复审" : "开始审查"}
         </Button>
       </div>
       {hint ? (
