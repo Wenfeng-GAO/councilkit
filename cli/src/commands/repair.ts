@@ -1,18 +1,58 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
 import { loadFindingGroups } from "../auto/finding-groups";
+import {
+  DEFAULT_REPAIR_OUTER_MAX,
+  type RepairState,
+  bootstrapRepairRun,
+  isRepairRunId,
+  isReviewRunId,
+  readRepairPid,
+  readRepairState,
+  sourceReviewExists,
+  writeRepairLive,
+  writeRepairPid,
+  writeRepairState,
+} from "../auto/repair-persist";
+import { loadRepairProfile } from "../auto/repair-profile";
 import { errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
-import { parseFlags } from "./parse";
+import { parseFlags, parseIntFlag, parseTimeoutMs } from "./parse";
 
-/** Export only. No extraction, agent execution, landing or push side effects. */
-export async function runRepair(argv: string[], out: OutputSink): Promise<void> {
-  if (argv[0] !== "export")
-    throw errors.usage("repair requires: export --run <id> --out <file> [--cluster <id>]");
+export interface RepairCommandDeps {
+  pid?: number;
+  wait?: (signal: AbortSignal) => Promise<void>;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
+  abortController?: AbortController;
+}
+
+const SUBCOMMANDS = "export|run|status|stop|resume";
+
+/** `repair export` plus parent-run bootstrap. Unit 4 does not run the outer loop. */
+export async function runRepair(
+  argv: string[],
+  out: OutputSink,
+  deps: RepairCommandDeps = {},
+): Promise<void> {
+  const sub = argv[0];
+  if (sub === "export") return runRepairExport(argv.slice(1), out);
+  if (sub === "run") return runRepairRun(argv.slice(1), out, deps);
+  if (sub === "status") return runRepairStatus(argv.slice(1), out);
+  if (sub === "stop") return runRepairStop(argv.slice(1), out, deps);
+  if (sub === "resume") return runRepairResume(argv.slice(1), out, deps);
+  throw errors.usage(
+    sub === undefined
+      ? `repair requires a subcommand: ${SUBCOMMANDS}`
+      : `unknown repair subcommand "${sub}" (${SUBCOMMANDS})`,
+  );
+}
+
+async function runRepairExport(argv: string[], out: OutputSink): Promise<void> {
   const { values } = parseFlags(
     {
       flags: {
@@ -23,7 +63,7 @@ export async function runRepair(argv: string[], out: OutputSink): Promise<void> 
       },
       allowPositionals: 0,
     },
-    argv.slice(1),
+    argv,
   );
   const runId = typeof values.run === "string" ? values.run : "";
   const output = typeof values.out === "string" ? values.out.trim() : "";
@@ -97,4 +137,195 @@ export async function runRepair(argv: string[], out: OutputSink): Promise<void> 
     () =>
       `已导出 ${task.findings.length} 个问题：${path}\n仅包含修复范围和验收约束，不授予 push 或合并权限。`,
   );
+}
+
+async function runRepairRun(
+  argv: string[],
+  out: OutputSink,
+  deps: RepairCommandDeps,
+): Promise<void> {
+  const { values } = parseFlags(
+    {
+      flags: {
+        from: { type: "string" },
+        profile: { type: "string" },
+        "run-id": { type: "string" },
+        "max-outer-cycles": { type: "string" },
+        timeout: { type: "string" },
+        json: { type: "boolean" },
+      },
+      allowPositionals: 0,
+    },
+    argv,
+  );
+  const fromId = typeof values.from === "string" ? values.from.trim() : "";
+  const profileName = typeof values.profile === "string" ? values.profile.trim() : "";
+  if (!fromId) throw errors.usage("--from <ck-review-…> is required");
+  if (!profileName) throw errors.usage("--profile <name> is required");
+  if (!isReviewRunId(fromId)) throw errors.usage("--from must identify a review run");
+  if (!sourceReviewExists(fromId)) throw errors.usage("review run not found");
+  const profile = loadRepairProfile(profileName);
+  const assigned = typeof values["run-id"] === "string" ? values["run-id"].trim() : undefined;
+  if (assigned !== undefined && !isRepairRunId(assigned)) {
+    throw errors.usage(`--run-id must be a ck-repair-<uuid> run id, got "${assigned}"`);
+  }
+  const outerMax =
+    values["max-outer-cycles"] === undefined
+      ? DEFAULT_REPAIR_OUTER_MAX
+      : parseIntFlag(values["max-outer-cycles"] as string, "max-outer-cycles");
+  if (outerMax > DEFAULT_REPAIR_OUTER_MAX) {
+    throw errors.usage(`--max-outer-cycles must be <= ${DEFAULT_REPAIR_OUTER_MAX}`);
+  }
+  const timeoutMs =
+    values.timeout === undefined ? null : parseTimeoutMs(values.timeout as string, 1, "timeout");
+  const runId = assigned ?? `ck-repair-${randomUUID()}`;
+  const bootstrapped = bootstrapRepairRun({
+    runId,
+    sourceRunId: fromId,
+    profileName: profile.name,
+    outerMax,
+    timeoutMs,
+    pid: deps.pid ?? process.pid,
+  });
+  const parked = await parkUntilStopped(deps);
+  if (parked === "interrupted") {
+    markStopped(bootstrapped.runDir, bootstrapped.state);
+  }
+  await out.finish(
+    {
+      runId,
+      sourceRunId: fromId,
+      status: parked === "interrupted" ? "interrupted" : "running",
+      reused: bootstrapped.reused,
+      pipeline: null,
+    },
+    () => `自动修复已启动：${runId}\n来源 ${fromId}`,
+  );
+}
+
+async function runRepairStatus(argv: string[], out: OutputSink): Promise<void> {
+  const runId = parseParentRunId(argv);
+  const run = readCliRun(runId);
+  if (!run) throw errors.usage("repair run not found");
+  const state = readRepairState(resolvePaths().runDir(runId));
+  await out.finish(
+    {
+      runId,
+      status: run.status,
+      pipeline: run.pipeline,
+      progress: run.progress,
+      sourceRunId: state?.sourceRunId ?? null,
+      businessResult: state?.businessResult ?? null,
+    },
+    () => `${runId} ${run.status}${run.pipeline ? "" : " pipeline=null"}`,
+  );
+}
+
+async function runRepairStop(
+  argv: string[],
+  out: OutputSink,
+  deps: RepairCommandDeps,
+): Promise<void> {
+  const runId = parseParentRunId(argv);
+  const runDir = resolvePaths().runDir(runId);
+  const state = readRepairState(runDir);
+  if (state === null) throw errors.usage("repair run not found");
+  const pid = readRepairPid(runDir);
+  if (pid !== null) {
+    try {
+      (deps.kill ?? process.kill)(pid, "SIGTERM");
+    } catch {
+      // already gone
+    }
+  }
+  const next = markStopped(runDir, state);
+  await out.finish(
+    {
+      runId,
+      status: "interrupted",
+      businessResult: next.businessResult,
+      pipeline: null,
+    },
+    () => `已停止 ${runId}`,
+  );
+}
+
+async function runRepairResume(
+  argv: string[],
+  out: OutputSink,
+  deps: RepairCommandDeps,
+): Promise<void> {
+  const runId = parseParentRunId(argv);
+  const runDir = resolvePaths().runDir(runId);
+  const state = readRepairState(runDir);
+  if (state === null) throw errors.usage("repair run not found");
+  const resumed = {
+    ...state,
+    businessResult: null,
+    reasonCode: null,
+  };
+  writeRepairState(runDir, resumed);
+  writeRepairPid(runDir, deps.pid ?? process.pid);
+  writeRepairLive(runDir, { status: "running", phase: "repair-preparing" });
+  const parked = await parkUntilStopped(deps);
+  if (parked === "interrupted") {
+    markStopped(runDir, resumed);
+  }
+  await out.finish(
+    {
+      runId,
+      sourceRunId: resumed.sourceRunId,
+      status: parked === "interrupted" ? "interrupted" : "running",
+      pipeline: null,
+    },
+    () => `已恢复 ${runId}`,
+  );
+}
+
+function parseParentRunId(argv: string[]): string {
+  const { values } = parseFlags(
+    {
+      flags: {
+        run: { type: "string" },
+        json: { type: "boolean" },
+      },
+      allowPositionals: 0,
+    },
+    argv,
+  );
+  const runId = typeof values.run === "string" ? values.run.trim() : "";
+  if (!isRepairRunId(runId)) throw errors.usage("--run must identify a repair run");
+  return runId;
+}
+
+function markStopped(runDir: string, state: RepairState): RepairState {
+  const next: RepairState = { ...state, businessResult: "stopped" };
+  writeRepairState(runDir, next);
+  writeRepairLive(runDir, { status: "interrupted", phase: "repair-preparing" });
+  return next;
+}
+
+async function parkUntilStopped(deps: RepairCommandDeps): Promise<"running" | "interrupted"> {
+  const controller = deps.abortController ?? new AbortController();
+  if (deps.wait) {
+    await deps.wait(controller.signal);
+    return controller.signal.aborted ? "interrupted" : "running";
+  }
+  const onSignal = (): void => controller.abort();
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
+    await waitUntilAbort(controller.signal);
+    return "interrupted";
+  } finally {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+  }
+}
+
+function waitUntilAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
 }

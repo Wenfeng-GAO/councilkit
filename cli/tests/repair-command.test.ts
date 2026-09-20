@@ -1,10 +1,23 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CLI_RUN_PIPELINE_PID_FILE, CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { saveRepairProfile } from "../src/auto/repair-profile";
 import { runRepair } from "../src/commands/repair";
+import { CliError } from "../src/errors";
 import type { OutputSink } from "../src/output";
 
 const id = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
@@ -190,5 +203,195 @@ describe("repair export CLI", () => {
     await expect(
       runRepair(["export", "--run", id, "--out", join(home, "repair-bad.json")], sink),
     ).rejects.toThrow(/finding-groups/);
+  });
+});
+
+const SOURCE_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+const REPAIR_ID = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+const PR = "https://github.com/acme/repo/pull/9";
+
+function makeSink(): OutputSink & { finished: unknown } {
+  const sink: OutputSink & { finished: unknown } = {
+    json: true,
+    finished: undefined,
+    progress: () => {},
+    diag: () => {},
+    finish: async (data) => {
+      sink.finished = data;
+    },
+  };
+  return sink;
+}
+
+function snapshotDir(dir: string): string {
+  return readdirSync(dir)
+    .sort()
+    .map((name) => {
+      const path = join(dir, name);
+      const bytes = readFileSync(path);
+      return `${name}:${createHash("sha256").update(bytes).digest("hex")}`;
+    })
+    .join("|");
+}
+
+function seedSource(root: string): string {
+  const dir = join(root, "runs", SOURCE_ID);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, CLI_RUN_STATUS_FILE),
+    `${JSON.stringify({
+      version: 1,
+      status: "completed",
+      progress: { phase: "done", attempts: [], updatedAt: "2026-09-20T00:00:00.000Z" },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(join(dir, "report.md"), "# source\n");
+  return dir;
+}
+
+function saveDefaultProfile(): void {
+  saveRepairProfile({
+    name: "default",
+    prUrl: PR,
+    repo: "github.com/acme/repo",
+    sourceBranch: "feat-x",
+    base: "main",
+    capabilities: ["push-source-branch"],
+  });
+}
+
+describe("repair run CLI bootstrap", () => {
+  const noWait = { wait: async () => {} };
+
+  it("creates a parent run dir with a null pipeline and a live pid, without touching the source review", async () => {
+    const sourceDir = seedSource(home);
+    saveDefaultProfile();
+    const before = snapshotDir(sourceDir);
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      noWait,
+    );
+    const repairDir = join(home, "runs", REPAIR_ID);
+    const live = JSON.parse(readFileSync(join(repairDir, CLI_RUN_STATUS_FILE), "utf8")) as {
+      status: string;
+      pipeline: unknown;
+      progress: { phase: string };
+    };
+    expect(live.status).toBe("running");
+    expect(live.pipeline).toBeNull();
+    expect(live.progress.phase).toBe("repair-preparing");
+    expect(readFileSync(join(repairDir, CLI_RUN_PIPELINE_PID_FILE), "utf8").trim()).toBe(
+      String(process.pid),
+    );
+    expect(existsSync(join(repairDir, "journal.jsonl"))).toBe(true);
+    expect(readFileSync(join(repairDir, "journal.jsonl"), "utf8")).toBe("");
+    expect(existsSync(join(sourceDir, CLI_RUN_PIPELINE_PID_FILE))).toBe(false);
+    expect(snapshotDir(sourceDir)).toBe(before);
+    expect(out.finished).toMatchObject({
+      runId: REPAIR_ID,
+      sourceRunId: SOURCE_ID,
+      status: "running",
+    });
+    const listed = readCliRun(REPAIR_ID);
+    expect(listed?.kind).toBe("repair");
+    expect(listed?.pipeline).toBeNull();
+    expect(listed?.progress?.phase).toBe("repair-preparing");
+  });
+
+  it("reuses an existing --run-id instead of minting a second parent directory", async () => {
+    seedSource(home);
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      noWait,
+    );
+    writeFileSync(join(home, "runs", REPAIR_ID, "journal.jsonl"), "{}\n");
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      noWait,
+    );
+    expect(out.finished).toMatchObject({ runId: REPAIR_ID, reused: true });
+    expect(readFileSync(join(home, "runs", REPAIR_ID, "journal.jsonl"), "utf8")).toBe("{}\n");
+    expect(readdirSync(join(home, "runs")).filter((name) => name.startsWith("ck-repair-"))).toEqual(
+      [REPAIR_ID],
+    );
+  });
+
+  it("rejects a path-shaped --profile and missing required flags", async () => {
+    seedSource(home);
+    saveDefaultProfile();
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "../x", "--run-id", REPAIR_ID],
+        makeSink(),
+        noWait,
+      ),
+    ).rejects.toBeInstanceOf(CliError);
+    await expect(runRepair(["run", "--from", SOURCE_ID], makeSink(), noWait)).rejects.toThrow(
+      /profile/,
+    );
+    await expect(runRepair(["run", "--profile", "default"], makeSink(), noWait)).rejects.toThrow(
+      /from/,
+    );
+  });
+
+  it("leaves the source review pid and status unchanged even when the source already had a sidecar", async () => {
+    const sourceDir = seedSource(home);
+    saveDefaultProfile();
+    const statusBefore = readFileSync(join(sourceDir, CLI_RUN_STATUS_FILE), "utf8");
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      noWait,
+    );
+    expect(readFileSync(join(sourceDir, CLI_RUN_STATUS_FILE), "utf8")).toBe(statusBefore);
+    expect(existsSync(join(sourceDir, CLI_RUN_PIPELINE_PID_FILE))).toBe(false);
+  });
+
+  it("parses status, stop, and resume against the parent run", async () => {
+    seedSource(home);
+    saveDefaultProfile();
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      noWait,
+    );
+    const statusOut = makeSink();
+    await runRepair(["status", "--run", REPAIR_ID], statusOut);
+    expect(statusOut.finished).toMatchObject({
+      runId: REPAIR_ID,
+      status: "running",
+      pipeline: null,
+    });
+    const stopOut = makeSink();
+    await runRepair(["stop", "--run", REPAIR_ID], stopOut, {
+      kill: (pid, signal) => {
+        killed.push({ pid, signal });
+      },
+    });
+    expect(killed).toEqual([{ pid: process.pid, signal: "SIGTERM" }]);
+    expect(stopOut.finished).toMatchObject({
+      runId: REPAIR_ID,
+      status: "interrupted",
+      businessResult: "stopped",
+    });
+    const live = JSON.parse(
+      readFileSync(join(home, "runs", REPAIR_ID, CLI_RUN_STATUS_FILE), "utf8"),
+    );
+    expect(live.status).toBe("interrupted");
+    expect(live.pipeline).toBeNull();
+    const resumeOut = makeSink();
+    await runRepair(["resume", "--run", REPAIR_ID], resumeOut, { ...noWait, pid: 4243 });
+    expect(resumeOut.finished).toMatchObject({ runId: REPAIR_ID, status: "running" });
+    expect(
+      readFileSync(join(home, "runs", REPAIR_ID, CLI_RUN_PIPELINE_PID_FILE), "utf8").trim(),
+    ).toBe("4243");
   });
 });

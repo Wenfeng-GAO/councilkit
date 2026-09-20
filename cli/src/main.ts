@@ -52,6 +52,11 @@ Commands:
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
   repair export --run <id> --out <file> [--cluster <id>]
                                       Export a bounded repair package for an external Squad.
+  repair run --from <ck-review-id> --profile <name>
+      [--run-id <ck-repair-id>] [--max-outer-cycles 10] [--timeout 30m]
+                                      Start or reuse a parent repair run (handshake directory).
+  repair status|stop|resume --run <ck-repair-id>
+                                      Query, stop, or resume a parent repair run.
   apply --run <ck-review-id>          Apply one locked cluster (default first unlanded), grok + push.
       [--cluster <id>|--all-clusters]
   fix --run <ck-review-id>            Plan-jury a repair, apply one cluster, then re-review vs the ledger.

@@ -321,7 +321,7 @@ flowchart TB
 
 **Verification:** 契约测试不启动真实 squadctl；失败用例不把模型布尔值当准出。
 
-- [ ] **Unit 4: CLI 表面与父 Run bootstrap**
+- [x] **Unit 4: CLI 表面与父 Run bootstrap**
 
 **Goal:** `repair run/status/stop/resume` 可解析；能早建 `ck-repair-*` 目录供 Host handshake；`export` 不变。
 
