@@ -200,7 +200,7 @@ flowchart TB
   U4 --> U6
 ```
 
-- [ ] **Unit 1: 父 Run 身份与严格准出评估器**
+- [x] **Unit 1: 父 Run 身份与严格准出评估器**
 
 **Goal:** `ck-repair-*` 能被索引/读取；准出矩阵有纯函数实现，且不复用宽松 export 判断。
 
