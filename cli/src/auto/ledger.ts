@@ -6,6 +6,7 @@
  * Incremental `--against` review classifies closed / regress / new against
  * that ledger instead of rediscovering the whole PR vs master.
  */
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ReviewFinding, parseReviewReport } from "@/lib/review-report";
@@ -87,7 +88,13 @@ const SKIP_TITLES = new Set([
   "附录:各审查者交付物",
 ]);
 
-const PATH_RE = /(?:^|[^\w./-])((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][A-Za-z0-9]+)(?::\d+)?/g;
+const FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
+const PATH_RE = new RegExp(
+  String.raw`(?:^|[^\w./-])((?:[\w.-]+\/)+${FILE_EXT})(?::\d+(?:-\d+)?)?`,
+  "g",
+);
+const TICK_PATH_RE = new RegExp(`\`((?:[\\w.-]+\\/)*${FILE_EXT})\``, "g");
+const BARE_FILE_LINE_RE = new RegExp(String.raw`(?:^|[^\w./-])(${FILE_EXT}):\d+`, "g");
 
 const CLUSTER_HEADING = /^###\s*(?:集群|cluster)\s*\d+\s*[:：]\s*(.+)$/i;
 
@@ -559,7 +566,10 @@ function toLedgerFinding(
   const title = firstLine(text).slice(0, 200);
   if (title.length === 0) return null;
   const files = extractPaths(text);
-  const id = uniqueId(findingId(files[0] ?? null, title), used);
+  const id = uniqueId(
+    quotedFindingId(text) ?? findingId(files[0] ?? null, title, item.severity),
+    used,
+  );
   used.add(id);
   return {
     id,
@@ -573,15 +583,25 @@ function toLedgerFinding(
   };
 }
 
-function findingId(path: string | null, title: string): string {
-  const fileSlug = slugify(path ? path.replaceAll("/", ".") : "misc");
-  const titleSlug = slugify(title)
-    .split("-")
-    .filter((part) => part.length > 1)
-    .slice(0, 6)
-    .join("-");
-  const id = `${fileSlug}--${titleSlug || "finding"}`;
-  return id.slice(0, 96);
+function findingId(
+  path: string | null,
+  title: string,
+  severity: LedgerFinding["severity"],
+): string {
+  if (path) {
+    const fileSlug = slugify(path.replaceAll("/", "."));
+    const titleSlug = slugify(title)
+      .split("-")
+      .filter((part) => part.length > 1)
+      .slice(0, 6)
+      .join("-");
+    return `${fileSlug}--${titleSlug || "finding"}`.slice(0, 96);
+  }
+  const digest = createHash("sha256")
+    .update(`${severity}\0${title.trim().toLowerCase()}`)
+    .digest("hex")
+    .slice(0, 12);
+  return `h-${digest}`;
 }
 
 function uniqueId(base: string, used: Set<string>): string {
@@ -594,18 +614,28 @@ function uniqueId(base: string, used: Set<string>): string {
 function extractPaths(text: string): string[] {
   const files: string[] = [];
   const seen = new Set<string>();
-  PATH_RE.lastIndex = 0;
-  let match: RegExpExecArray | null = PATH_RE.exec(text);
-  while (match) {
-    const path = match[1];
-    if (path && !seen.has(path)) {
-      seen.add(path);
-      files.push(path);
+  const push = (path: string | undefined): void => {
+    if (!path || seen.has(path) || files.length >= 8) return;
+    seen.add(path);
+    files.push(path);
+  };
+  for (const re of [PATH_RE, TICK_PATH_RE, BARE_FILE_LINE_RE]) {
+    re.lastIndex = 0;
+    let match: RegExpExecArray | null = re.exec(text);
+    while (match) {
+      push(match[1]);
+      match = re.exec(text);
     }
-    if (files.length >= 8) break;
-    match = PATH_RE.exec(text);
   }
   return files;
+}
+
+function quotedFindingId(text: string): string | null {
+  return (
+    explicitFindingIds(text).find(
+      (id) => /--/.test(id) || /^F-\d+$/i.test(id) || /^h-[0-9a-f]{12}$/i.test(id),
+    ) ?? null
+  );
 }
 
 function firstLine(text: string): string {

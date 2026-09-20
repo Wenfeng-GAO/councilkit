@@ -7,6 +7,7 @@ import { runCouncilCmd } from "./commands/council";
  * owns its own strict parseArgs + zod validation; the router only selects.
  */
 import { runDoctor } from "./commands/doctor";
+import { runFindings } from "./commands/findings";
 import { runFix } from "./commands/fix";
 import { runIdeate } from "./commands/ideate";
 import { runInit } from "./commands/init";
@@ -47,6 +48,8 @@ export async function dispatch(command: string, args: string[], out: OutputSink)
       return runApply(args, out);
     case "fix":
       return runFix(args, out);
+    case "findings":
+      return runFindings(args, out);
     default:
       throw errors.usage(
         command === undefined

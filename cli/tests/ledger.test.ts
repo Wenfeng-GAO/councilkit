@@ -110,6 +110,62 @@ describe("ledger extract", () => {
     expect(file.findings[0]?.reviewer).toBe("review-security");
     expect(file.findings.some((row) => row.title.includes("Verdict"))).toBe(false);
   });
+
+  it("does not mint misc-- ids for pathless findings", () => {
+    const file = extractFindingsFromReport({
+      markdown: SAMPLE,
+      runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+      extractedAt: "2026-08-20T00:00:00.000Z",
+    });
+    const minor = file.findings.find((row) => row.severity === "minor");
+    expect(minor?.id).toMatch(/^h-[0-9a-f]{12}$/);
+    expect(file.findings.every((row) => !row.id.startsWith("misc--"))).toBe(true);
+    const again = extractFindingsFromReport({
+      markdown: SAMPLE,
+      runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+      extractedAt: "2026-08-20T00:00:00.000Z",
+    });
+    expect(again.findings.find((row) => row.severity === "minor")?.id).toBe(minor?.id);
+  });
+
+  it("extracts backtick paths and file:line without a directory", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] crash in `src/runtime.ts` after cancel",
+        "- [minor] foo.ts:12 still drops the unique copy",
+        "",
+      ].join("\n"),
+      runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+      extractedAt: "2026-08-20T00:00:00.000Z",
+    });
+    expect(file.findings.map((row) => row.files[0])).toEqual(["src/runtime.ts", "foo.ts"]);
+    expect(file.findings[0]?.id.startsWith("src.runtime.ts--")).toBe(true);
+    expect(file.findings[1]?.id.startsWith("foo.ts--")).toBe(true);
+  });
+
+  it("reuses an explicit finding id quoted in the text", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] `persist--lost` still fires after cancel",
+        "",
+      ].join("\n"),
+      runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+      extractedAt: "2026-08-20T00:00:00.000Z",
+    });
+    expect(file.findings[0]?.id).toBe("persist--lost");
+  });
 });
 
 describe("againstDiffRange", () => {

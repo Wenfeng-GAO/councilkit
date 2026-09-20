@@ -55,6 +55,8 @@ Commands:
   apply --run <ck-review-id>          Apply one locked cluster (default first unlanded), grok + push.
       [--cluster <id>|--all-clusters]
   fix --run <ck-review-id>            Plan-jury a repair, apply one cluster, then re-review vs the ledger.
+  findings accept --run <id> --id <finding-id> --reason <text>
+                                      Mark a ledger item accepted (won't fix) with a reason.
   runs list                           List CLI runs (report.md + transcript).
   runs open <run-id>                  Print the in-app URL for a run report.
 

@@ -33,6 +33,7 @@ import {
   parsePlanLockFile,
 } from "./cli-ledger";
 import {
+  CLI_RUN_PIPELINE_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunLiveStatus,
   type CliRunPipeline,
@@ -41,6 +42,7 @@ import {
   mapSquadObserveStatus,
   mergeLiveProgress,
   parseLiveStateJson,
+  reconcileRunningStatus,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
 import {
@@ -235,11 +237,28 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
   const lockStat = safeLstat(lockPath);
   const hasPlanLock = Boolean(lockStat?.isFile() && !lockStat.isSymbolicLink());
 
+  const rawStatus = live?.status ?? parsed.status;
+  const reconciled =
+    live?.status === "running"
+      ? reconcileRunningStatus({
+          status: live.status,
+          kind: parsed.kind,
+          updatedAt: live.progress?.updatedAt ?? derived?.updatedAt ?? null,
+          pid: readPipelinePid(dir),
+        })
+      : rawStatus;
   const status = mapSquadObserveStatus({
     kind: parsed.kind,
-    status: live?.status ?? parsed.status,
+    status: reconciled,
     progress: derived,
   });
+  const pipeline =
+    reconciled === "failed" &&
+    rawStatus === "running" &&
+    live?.pipeline &&
+    live.pipeline.phase !== "done"
+      ? { ...live.pipeline, phase: "done" as const }
+      : (live?.pipeline ?? null);
   return {
     runId,
     kind: parsed.kind,
@@ -253,12 +272,21 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     hasPlanLock,
     reportUrl: cliReportUrl(runId),
     progress: derived,
-    pipeline: live?.pipeline ?? null,
+    pipeline,
     handoff: live?.handoff ?? null,
     reviewEvidence:
       parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null,
     ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
   };
+}
+
+function readPipelinePid(dir: string): number | null {
+  const path = join(dir, CLI_RUN_PIPELINE_PID_FILE);
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
+  const raw = readCapped(path, 32).text.trim();
+  const pid = Number.parseInt(raw, 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
 function readFindingsText(path: string): string | null {

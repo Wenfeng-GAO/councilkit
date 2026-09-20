@@ -101,6 +101,7 @@ export interface ApplyOutcome {
   closed: string[];
   claimed: string[];
   summary: string;
+  gates?: Array<{ command: string; exitCode: number }>;
   failure: { phase: string; code: string; message: string } | null;
 }
 
@@ -252,6 +253,7 @@ export async function runApply(
     closed: [] as string[],
     claimed: [] as string[],
     summary: "",
+    gates: undefined as ApplyOutcome["gates"],
   };
 
   const finish = async (partial: {
@@ -424,6 +426,26 @@ export async function runApply(
     outcomeBase.claimed = closed;
     outcomeBase.changed = leftover || (sha !== null && sha !== shaBefore);
     outcomeBase.summary = result.output;
+
+    if (target.cluster && target.cluster.gates.length > 0) {
+      const gates: NonNullable<ApplyOutcome["gates"]> = [];
+      for (const command of target.cluster.gates) {
+        out.progress(`  gate: ${command}`);
+        const gate = await runCommand({
+          executable: "/bin/sh",
+          argv: ["-c", command],
+          cwd: workspace,
+          env,
+          timeoutMs: Math.min(timeoutMs, 10 * 60 * 1000),
+        });
+        const exitCode = gate.exitCode ?? 1;
+        gates.push({ command, exitCode });
+        if (exitCode !== 0) {
+          out.progress(`  gate failed (${exitCode}): ${command}`);
+        }
+      }
+      outcomeBase.gates = gates;
+    }
 
     if (push) {
       out.progress(`  git push ${branch}`);
@@ -712,6 +734,11 @@ function renderApplyHuman(data: unknown): string {
     `  candidate: ${o.candidateSha ?? "(none)"}`,
     `  pushed: ${o.pushed ? "yes" : "no"}`,
   ];
+  if (o.gates && o.gates.length > 0) {
+    for (const gate of o.gates) {
+      lines.push(`  gate ${gate.exitCode === 0 ? "ok" : `exit ${gate.exitCode}`}: ${gate.command}`);
+    }
+  }
   if (o.failure) {
     lines.push(`  failure: [${o.failure.phase}] ${o.failure.code} — ${o.failure.message}`);
   }

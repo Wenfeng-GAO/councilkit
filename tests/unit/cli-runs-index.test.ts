@@ -429,3 +429,64 @@ describe("review evidence completeness", () => {
     expect(canExportRepairPackage(blocked)).toBe(false);
   });
 });
+
+describe("listCliRuns stale running overlay", () => {
+  let home: string;
+  let oldHome: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ck-stale-index-"));
+    oldHome = process.env.COUNCILKIT_HOME;
+    process.env.COUNCILKIT_HOME = home;
+  });
+
+  afterEach(() => {
+    if (oldHome === undefined) process.env.COUNCILKIT_HOME = undefined;
+    else process.env.COUNCILKIT_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("maps a review with a stale running sidecar to failed and stops pipeline polling", () => {
+    const dir = join(home, "runs", REVIEW_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: REVIEW_ID,
+        startedAt: "2026-09-08T00:00:00.000Z",
+        task: { pr: "https://github.com/acme/repo/pull/1" },
+        attempts: [],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "a",
+          agentName: "A",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "attempts", attempts: [], updatedAt: "2026-09-08T10:18:20.100Z" },
+        pipeline: {
+          phase: "re-reviewing",
+          round: 0,
+          maxRounds: 2,
+          planVerdict: null,
+          applyStatus: null,
+          followUpRunId: null,
+          summary: null,
+          updatedAt: "2026-09-08T10:18:20.100Z",
+        },
+      })}\n`,
+    );
+    const runs = listCliRuns(process.env);
+    expect(runs[0]?.status).toBe("failed");
+    expect(runs[0]?.pipeline?.phase).toBe("done");
+  });
+});

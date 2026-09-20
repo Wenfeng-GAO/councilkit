@@ -114,6 +114,13 @@ describe("trusted resolution", () => {
     expect(isFindingBlocking(verified, "b".repeat(40))).toBe(true);
     expect(isFindingBlocking({ ...historical, status: "accepted" })).toBe(false);
     expect(
+      findingStatusLabel({
+        ...historical,
+        status: "accepted",
+        acceptedReason: "product contract",
+      }),
+    ).toBe("接受不修 · product contract");
+    expect(
       isFindingVerifiedClosed({
         ...verified,
         verification: { ...verified.verification, runComplete: false },

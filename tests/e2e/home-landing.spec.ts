@@ -13,17 +13,17 @@ test("首页突出两种能力与三条用法", async ({ page }) => {
 
 test("首页 CTA 能进入报告库", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "查看 CLI 报告" }).click();
+  await page.getByRole("link", { name: "查看审查案件" }).click();
   await expect(page).toHaveURL(/\/reports$/);
-  await expect(page.getByRole("heading", { name: "CLI 报告" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "审查与报告" })).toBeVisible();
 });
 
-test("首页 CTA 贴 URL 开审查落到 /reports#review 并聚焦 PR URL", async ({ page }) => {
+test("首页主 CTA 贴 URL 开审查落到 /reports#review 并聚焦 PR URL", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "开始审查" })).toHaveCount(0);
-  const companion = page.getByRole("link", { name: "贴 URL 开审查" });
-  await expect(companion).toHaveAttribute("href", "/reports#review");
-  await companion.click();
+  const primary = page.getByRole("link", { name: "贴 URL 开审查" });
+  await expect(primary).toHaveAttribute("href", "/reports#review");
+  await primary.click();
   await expect(page).toHaveURL(/\/reports#review/);
   const prUrl = page.locator("#review-pr-url");
   await expect(prUrl).toBeVisible();

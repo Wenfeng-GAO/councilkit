@@ -4,6 +4,7 @@ import {
   mapSquadObserveStatus,
   mergeLiveProgress,
   parseLiveStateJson,
+  reconcileRunningStatus,
 } from "@shared/runtime/cli-run-progress";
 import { describe, expect, it } from "vitest";
 
@@ -424,5 +425,43 @@ describe("mapSquadObserveStatus", () => {
         progress: { phase: "done", attempts: terminal, updatedAt: "t" },
       }),
     ).toBe("interrupted");
+  });
+});
+
+describe("reconcileRunningStatus", () => {
+  it("keeps a fresh heartbeat without pid as running", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "review",
+        updatedAt: "2026-09-20T00:00:00.000Z",
+        pid: null,
+        nowMs: Date.parse("2026-09-20T00:01:00.000Z"),
+      }),
+    ).toBe("running");
+  });
+
+  it("fails a running review with a stale heartbeat and no pid", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "review",
+        updatedAt: "2026-09-08T10:00:00.000Z",
+        pid: null,
+        nowMs: Date.parse("2026-09-20T00:00:00.000Z"),
+      }),
+    ).toBe("failed");
+  });
+
+  it("does not remap squad running status", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "squad",
+        updatedAt: "2026-09-08T10:00:00.000Z",
+        pid: null,
+        nowMs: Date.parse("2026-09-20T00:00:00.000Z"),
+      }),
+    ).toBe("running");
   });
 });

@@ -65,6 +65,8 @@ export const ledgerFindingSchema = z
     files: z.array(z.string().min(1).max(400)).max(32),
     repairClaim: findingRepairClaimSchema.optional(),
     verification: findingVerificationSchema.optional(),
+    acceptedReason: z.string().trim().min(1).max(2000).optional(),
+    acceptedAt: z.string().min(1).optional(),
   })
   .strict();
 export type LedgerFinding = z.infer<typeof ledgerFindingSchema>;
@@ -95,7 +97,9 @@ export function isFindingBlocking(row: LedgerFinding, sha?: string | null): bool
 }
 
 export function findingStatusLabel(row: LedgerFinding, sha?: string | null): string {
-  if (row.status === "accepted") return "接受不修";
+  if (row.status === "accepted") {
+    return row.acceptedReason ? `接受不修 · ${row.acceptedReason}` : "接受不修";
+  }
   if (isFindingVerifiedClosed(row, sha)) return "已验证解决";
   if (row.status === "closed") return row.verification ? "待验证当前提交" : "历史未验证";
   if (row.verification?.outcome === "still_open") return "验证仍成立";

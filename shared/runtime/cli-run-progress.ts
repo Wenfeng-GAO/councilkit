@@ -6,6 +6,8 @@
 import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
 
 export const CLI_RUN_STATUS_FILE = "status.json";
+export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
+export const STALE_RUNNING_MS = 5 * 60 * 1000;
 
 export const CLI_RUN_PROGRESS_PHASES = [
   "preflight",
@@ -118,6 +120,35 @@ export interface CliRunLiveState {
   progress: CliRunProgress;
   pipeline?: CliRunPipeline | null;
   handoff?: CliRunHandoffDto | null;
+}
+
+export function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Read-time overlay: a running sidecar without a live pid or fresh heartbeat is failed. */
+export function reconcileRunningStatus(input: {
+  status: CliRunLiveStatus;
+  kind: string;
+  updatedAt: string | null | undefined;
+  pid: number | null;
+  nowMs?: number;
+  staleMs?: number;
+}): CliRunLiveStatus {
+  if (input.status !== "running") return input.status;
+  if (input.kind === "squad") return input.status;
+  if (input.pid !== null) return isPidAlive(input.pid) ? "running" : "failed";
+  const updated = Date.parse(input.updatedAt ?? "");
+  const now = input.nowMs ?? Date.now();
+  const staleMs = input.staleMs ?? STALE_RUNNING_MS;
+  if (!Number.isFinite(updated) || now - updated > staleMs) return "failed";
+  return "running";
 }
 
 const LIVE_STATUS_SET = new Set<string>([

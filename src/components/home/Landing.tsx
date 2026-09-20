@@ -64,14 +64,14 @@ export function Landing() {
             Markdown，不是又一个聊天窗口。
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
-            <Link to="/rooms/new" className="ck-cta ck-cta-primary">
-              去新建房间
+            <Link to="/reports#review" className="ck-cta ck-cta-primary">
+              贴 URL 开审查
             </Link>
             <Link to="/reports" className="ck-cta ck-cta-ghost">
-              查看 CLI 报告
+              查看审查案件
             </Link>
-            <Link to="/reports#review" className="ck-cta ck-cta-ghost">
-              贴 URL 开审查
+            <Link to="/rooms/new" className="ck-cta ck-cta-ghost">
+              去新建房间
             </Link>
             <Link to="/settings" className="ck-cta ck-cta-ghost">
               检查 Host
