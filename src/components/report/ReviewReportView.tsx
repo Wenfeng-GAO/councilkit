@@ -187,10 +187,10 @@ function AttemptCard({
           type="button"
           className="mt-2 font-command text-[0.68rem] text-brass hover:text-parchment"
           aria-haspopup="dialog"
-          aria-label={`查看过程：${attempt.name}`}
+          aria-label={`查看结果：${attempt.name}`}
           onClick={() => onInspect(live.attemptId)}
         >
-          查看过程
+          查看结果
         </button>
       ) : null}
     </li>
@@ -332,10 +332,10 @@ function ProcessBody({
                 type="button"
                 className="mt-2 font-command text-[0.68rem] text-brass hover:text-parchment"
                 aria-haspopup="dialog"
-                aria-label={`查看过程：${row.name}`}
+                aria-label={`查看结果：${row.name}`}
                 onClick={() => onInspect(live.attemptId)}
               >
-                查看过程
+                查看结果
               </button>
             ) : null}
             {live && row.commands.length === 0 && row.tools ? (

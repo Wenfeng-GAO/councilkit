@@ -4,6 +4,7 @@
  * without parsing Attempt output payloads.
  */
 import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
+import { type CliRunAttemptResult, clipSeatSummary, summarizeSeatOutput } from "./seat-result";
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
@@ -80,6 +81,7 @@ export interface CliRunAttemptProgress {
   activitySpanMs?: number | null;
   requestedModelId?: string | null;
   observedModelId?: string | null;
+  result?: CliRunAttemptResult;
 }
 
 /** Mid-run overlay written on heartbeat / stream activity. */
@@ -203,8 +205,15 @@ export function liveStateFromRecords(
     flow?: "review" | "ideate";
     debateAttemptIds?: string[];
   } | null = null;
-  const finished = new Map<string, { status: "success" | "failure"; durationMs: number }>();
-  let aggregation: { status: "success" | "failure"; durationMs: number } | null = null;
+  const finished = new Map<
+    string,
+    { status: "success" | "failure"; durationMs: number; result: CliRunAttemptResult }
+  >();
+  let aggregation: {
+    status: "success" | "failure";
+    durationMs: number;
+    result: CliRunAttemptResult;
+  } | null = null;
   let runStatus: CliRunLiveState["status"] = "running";
   let sawFinished = false;
   let ideateStage: "proposing" | "debating" | "aggregating" | null = null;
@@ -264,7 +273,8 @@ export function liveStateFromRecords(
       const status = row.status === "success" || row.status === "failure" ? row.status : null;
       if (attemptId.length === 0 || status === null) continue;
       const durationMs = typeof row.durationMs === "number" ? row.durationMs : 0;
-      finished.set(attemptId, { status, durationMs });
+      const output = typeof row.output === "string" ? row.output : null;
+      finished.set(attemptId, { status, durationMs, result: summarizeSeatOutput(output) });
     } else if (kind === "review.resumed") {
       const rerun = Array.isArray(row.rerunAttemptIds) ? row.rerunAttemptIds : [];
       for (const id of rerun) {
@@ -276,9 +286,11 @@ export function liveStateFromRecords(
     } else if (kind === "aggregation.finished") {
       const status = row.status === "success" || row.status === "failure" ? row.status : null;
       if (status === null) continue;
+      const output = typeof row.output === "string" ? row.output : null;
       aggregation = {
         status,
         durationMs: typeof row.durationMs === "number" ? row.durationMs : 0,
+        result: summarizeSeatOutput(output),
       };
     } else if (kind === "review.finished") {
       sawFinished = true;
@@ -297,6 +309,7 @@ export function liveStateFromRecords(
       status: done?.status ?? "queued",
       durationMs: done?.durationMs ?? null,
       lastActivity: null,
+      ...(done?.result ? { result: done.result } : {}),
     };
   });
   const attemptTerminal = attemptRows.every(
@@ -353,6 +366,7 @@ export function liveStateFromRecords(
     status: aggregatorStatus,
     durationMs: aggregatorDuration,
     lastActivity: null,
+    ...(aggregation?.result ? { result: aggregation.result } : {}),
   });
 
   if (!sawFinished) runStatus = "running";
@@ -631,6 +645,7 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
         : typeof row.activitySpanMs === "number"
           ? row.activitySpanMs
           : undefined;
+  const result = parseAttemptResult(row.result);
   return {
     attemptId: row.attemptId,
     agentName: row.agentName,
@@ -646,7 +661,38 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
     activitySpanMs,
     requestedModelId: optionalStamp(row.requestedModelId),
     observedModelId: optionalStamp(row.observedModelId),
+    ...(result ? { result } : {}),
   };
+}
+
+function parseAttemptResult(value: unknown): CliRunAttemptResult | undefined {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const row = value as Record<string, unknown>;
+  const parseStatus = row.parseStatus;
+  if (parseStatus !== "parsed" && parseStatus !== "unparsed" && parseStatus !== "empty") {
+    return undefined;
+  }
+  const summary =
+    row.summary === null ? null : typeof row.summary === "string" ? row.summary : undefined;
+  if (summary === undefined) return undefined;
+  const findingCount =
+    row.findingCount === null
+      ? null
+      : typeof row.findingCount === "number" && Number.isInteger(row.findingCount)
+        ? row.findingCount
+        : undefined;
+  const blockingCount =
+    row.blockingCount === null
+      ? null
+      : typeof row.blockingCount === "number" && Number.isInteger(row.blockingCount)
+        ? row.blockingCount
+        : undefined;
+  if (findingCount === undefined || blockingCount === undefined) return undefined;
+  if (findingCount !== null && findingCount < 0) return undefined;
+  if (blockingCount !== null && blockingCount < 0) return undefined;
+  return { parseStatus, summary: clipSeatSummary(summary), findingCount, blockingCount };
 }
 
 function asMeta(value: unknown): {

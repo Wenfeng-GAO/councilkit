@@ -1,4 +1,3 @@
-import { cliRunPhaseHeading } from "@/lib/cli-run-status";
 import { displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import { reviewSeatIdentity, reviewSeatTabLabel, reviewSeatTitle } from "@/lib/seat-label";
@@ -12,7 +11,7 @@ const ATTEMPT_LABEL = {
   pending: "等待",
   queued: "排队",
   running: "进行中",
-  success: "完成",
+  success: "执行完成",
   failure: "失败",
   cancelled: "已取消",
 } as const;
@@ -136,14 +135,15 @@ export function LiveReviewProgress({
   const failed = seats.filter((row) => row.status === "failure").length;
   const running = seats.filter((row) => row.status === "running").length;
   const ideateGroups = run.kind === "ideate" ? groupIdeateSeats(seats) : null;
+  const compact =
+    running === 0 && seats.every((row) => isEndedAttempt(row.status) || row.status === "pending");
+  const aggregatorDone = aggregators.some((row) => row.status === "success");
   return (
     <section className="ck-review-live" aria-labelledby="review-progress-title">
       <div className="ck-review-progress-head">
         <div>
-          <p className="ck-review-eyebrow">
-            {cliRunPhaseHeading(run.kind, run.status, progress.phase)}
-          </p>
-          <h2 id="review-progress-title">席位与实时过程</h2>
+          <p className="ck-review-eyebrow">审查席位</p>
+          <h2 id="review-progress-title">本轮审查结果</h2>
         </div>
         <p className="ck-review-elapsed">{elapsed ? `总历时 ${elapsed}` : "等待启动"}</p>
       </div>
@@ -167,7 +167,7 @@ export function LiveReviewProgress({
       />
       {failed > 0 ? (
         <p className="ck-review-failure-note">
-          {failed} 个席位未成功完成，可打开过程查看记录；最终结论以汇总报告为准。
+          {failed} 个席位未成功完成，可打开结果查看记录；最终结论以汇总报告为准。
         </p>
       ) : null}
       {ideateGroups ? (
@@ -175,10 +175,16 @@ export function LiveReviewProgress({
           {ideateGroups.map((group) => (
             <div key={group.title}>
               <h3 className="mb-2 text-sm text-muted">{group.title}</h3>
-              <ul className="ck-review-seat-grid">
+              <ul className={compact ? "ck-review-seat-list" : "ck-review-seat-grid"}>
                 {group.seats.map((attempt) => (
                   <li key={attempt.attemptId}>
-                    <ReviewSeat attempt={attempt} siblings={seats} onInspect={onInspect} />
+                    <ReviewSeat
+                      attempt={attempt}
+                      siblings={seats}
+                      compact={compact}
+                      independent={!aggregatorDone}
+                      onInspect={onInspect}
+                    />
                   </li>
                 ))}
               </ul>
@@ -186,10 +192,16 @@ export function LiveReviewProgress({
           ))}
         </div>
       ) : (
-        <ul className="ck-review-seat-grid">
+        <ul className={compact ? "ck-review-seat-list" : "ck-review-seat-grid"}>
           {seats.map((attempt) => (
             <li key={attempt.attemptId}>
-              <ReviewSeat attempt={attempt} siblings={seats} onInspect={onInspect} />
+              <ReviewSeat
+                attempt={attempt}
+                siblings={seats}
+                compact={compact}
+                independent={!aggregatorDone}
+                onInspect={onInspect}
+              />
             </li>
           ))}
         </ul>
@@ -207,6 +219,8 @@ export function LiveReviewProgress({
               key={attempt.attemptId}
               attempt={attempt}
               siblings={aggregators}
+              compact={compact}
+              independent={false}
               onInspect={onInspect}
             />
           ))}
@@ -242,23 +256,29 @@ function groupIdeateSeats(seats: AttemptRow[]): Array<{ title: string; seats: At
 function ReviewSeat({
   attempt,
   siblings,
+  compact,
+  independent,
   onInspect,
 }: {
   attempt: AttemptRow;
   siblings: readonly AttemptRow[];
+  compact: boolean;
+  independent: boolean;
   onInspect: (attemptId: string) => void;
 }) {
   const running = attempt.status === "running";
   const waiting = attempt.status === "pending" || attempt.status === "queued";
+  const ended = isEndedAttempt(attempt.status);
   const activity = displayLastActivity(attempt.lastActivity);
   const title = reviewSeatTabLabel(attempt, siblings, attempt.attemptId);
+  const inspectLabel = running ? "过程进行中" : ended ? "查看结果" : "查看过程";
   return (
     <button
       type="button"
-      className="ck-review-seat"
+      className={compact ? "ck-review-seat ck-review-seat-compact" : "ck-review-seat"}
       data-status={attempt.status}
       aria-haspopup="dialog"
-      aria-label={`${running ? "过程进行中" : "查看过程"}：${title}`}
+      aria-label={`${inspectLabel}：${title}`}
       onClick={() => onInspect(attempt.attemptId)}
     >
       <span className="ck-review-seat-top">
@@ -268,15 +288,17 @@ function ReviewSeat({
           {ATTEMPT_LABEL[attempt.status]}
         </span>
       </span>
-      <span className="ck-review-seat-model">{attempt.modelId}</span>
-      <span className="ck-review-seat-identity">{reviewSeatIdentity(attempt)}</span>
+      {compact ? null : <span className="ck-review-seat-model">{attempt.modelId}</span>}
+      {compact ? null : (
+        <span className="ck-review-seat-identity">{reviewSeatIdentity(attempt)}</span>
+      )}
       <span className="ck-review-seat-activity" title={activity ?? undefined}>
         {running
           ? (activity ?? "等待新的过程记录…")
           : attempt.status === "success"
-            ? "执行已完成，查看过程与交付物"
+            ? seatResultLine(attempt, independent && attempt.role === "attempt")
             : attempt.status === "failure"
-              ? "执行失败，打开过程查看详情"
+              ? "执行失败，打开结果查看详情"
               : waiting
                 ? attempt.role === "aggregator"
                   ? "等待审查席位结束"
@@ -287,10 +309,20 @@ function ReviewSeat({
         <span>
           {attempt.durationMs !== null ? `执行 ${formatAttemptMs(attempt.durationMs)}` : "尚未启动"}
         </span>
-        <span>{running ? "查看实时过程" : "查看过程"} ↗</span>
+        <span>{running ? "查看实时过程" : ended ? "查看结果" : "查看过程"} ↗</span>
       </span>
     </button>
   );
+}
+
+function seatResultLine(attempt: AttemptRow, independent: boolean): string {
+  const prefix = independent ? "独立意见 · " : "";
+  const result = attempt.result;
+  if (result?.parseStatus === "parsed") {
+    if (result.findingCount === 0) return `${prefix}未列出发现`;
+    return `${prefix}${result.findingCount} 项发现`;
+  }
+  return `${prefix}结果待解析`;
 }
 
 function isEndedAttempt(status: AttemptRow["status"]): boolean {

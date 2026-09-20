@@ -542,6 +542,54 @@
   color: var(--color-parchment);
 }
 
+.ck-follow-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -1rem -1.25rem 0.85rem -1.4rem;
+  padding: 0.65rem 1.25rem 0.65rem 1.4rem;
+  background: #171b21;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-parchment);
+  font-size: 12px;
+}
+.ck-follow-bar button {
+  flex-shrink: 0;
+  color: var(--color-brass);
+  font: 11px var(--font-command);
+}
+.ck-follow-bar button:hover { color: var(--color-parchment); }
+.ck-seat-result {
+  margin-bottom: 1.1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.ck-seat-result-kicker {
+  color: var(--color-brass);
+  font: 10px var(--font-command);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.ck-seat-result-note,
+.ck-seat-result-status {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--color-muted);
+  line-height: 1.6;
+}
+.ck-seat-result-summary {
+  margin: 10px 0 12px;
+  font-size: 14px;
+  color: var(--color-fg);
+  line-height: 1.7;
+}
+.ck-inspector-process > summary {
+  list-style: none;
+}
 .ck-inspector-body {
   min-height: 0;
   flex: 1;

@@ -11,6 +11,7 @@ import {
   shortenActivityPath,
   showsTick,
   silentToolTally,
+  splitSeatDeliverable,
   unwrapShellSummary,
 } from "@/lib/live-transcript";
 import { describe, expect, it } from "vitest";
@@ -190,6 +191,27 @@ describe("showsTick", () => {
     const body = `## 概览\n\n${"字".repeat(320)}\n\n## 结论\n`;
     expect(showsTick({ kind: "text", text: body, at: "t" }, true)).toBe(true);
     expect(showsTick({ kind: "text", text: body, at: "t" }, false)).toBe(false);
+  });
+});
+
+describe("splitSeatDeliverable", () => {
+  it("lifts the finished report out of the process timeline", () => {
+    const body = `## 概览\n\n${"字".repeat(320)}\n\n## 结论\n\nchanges-requested\n`;
+    const timeline = [
+      { kind: "thinking" as const, text: "先读 diff", at: "t0" },
+      {
+        kind: "tool" as const,
+        name: "read_file",
+        summary: "review-context.md",
+        status: "completed" as const,
+        at: "t1",
+      },
+      { kind: "text" as const, text: body, at: "t2" },
+    ];
+    const split = splitSeatDeliverable(timeline, true);
+    expect(split.deliverable).toBe(body);
+    expect(split.process.map((block) => block.kind)).toEqual(["thinking", "tool"]);
+    expect(splitSeatDeliverable(timeline, false).deliverable).toBeNull();
   });
 });
 

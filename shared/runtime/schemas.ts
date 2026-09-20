@@ -536,6 +536,15 @@ export const cliRunHandoffSchema = z.object({
 });
 export type CliRunHandoffDto = z.infer<typeof cliRunHandoffSchema>;
 
+export const cliRunAttemptResultSchema = z
+  .object({
+    parseStatus: z.enum(["parsed", "unparsed", "empty"]),
+    summary: z.string().max(240).nullable(),
+    findingCount: z.number().int().nonnegative().nullable(),
+    blockingCount: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
 export const cliRunAttemptProgressSchema = z
   .object({
     attemptId: z.string().min(1),
@@ -552,6 +561,7 @@ export const cliRunAttemptProgressSchema = z
     activitySpanMs: z.number().int().nonnegative().nullable().optional(),
     requestedModelId: z.string().max(200).nullable().optional(),
     observedModelId: z.string().max(200).nullable().optional(),
+    result: cliRunAttemptResultSchema.optional(),
   })
   .strict();
 

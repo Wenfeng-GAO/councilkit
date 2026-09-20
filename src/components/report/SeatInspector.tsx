@@ -16,7 +16,7 @@ const ATTEMPT_LABEL = {
   pending: "等待",
   queued: "排队",
   running: "进行中",
-  success: "完成",
+  success: "执行完成",
   failure: "失败",
   cancelled: "已取消",
 } as const;
@@ -121,12 +121,22 @@ export function SeatInspector({
 
   if (!open || selected === null) return null;
 
+  const squad = runId.startsWith("ck-squad-");
+  const ended =
+    selected.status === "success" ||
+    selected.status === "failure" ||
+    selected.status === "cancelled";
+  const resultFirst = !squad && ended;
+  const aggregator = attempts.find((row) => row.role === "aggregator");
+  const independent =
+    selected.role === "attempt" && aggregator !== undefined && aggregator.status !== "success";
+
   return createPortal(
     <div className="ck-inspector">
       <button
         type="button"
         className="ck-inspector-scrim"
-        aria-label="关闭过程"
+        aria-label={resultFirst ? "关闭结果" : "关闭过程"}
         onClick={onClose}
       />
       <div
@@ -139,13 +149,13 @@ export function SeatInspector({
       >
         <header className="ck-inspector-head">
           <div className="min-w-0 flex-1">
-            <p
-              id="ck-inspector-title"
-              className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass"
-            >
-              过程
+            <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
+              {resultFirst ? "结果" : "过程"}
             </p>
-            <h2 className="mt-1 truncate font-display text-xl text-parchment">
+            <h2
+              id="ck-inspector-title"
+              className="mt-1 truncate font-display text-xl text-parchment"
+            >
               {inspectorSeatLabel(selected, attempts)}
               {selected.role === "aggregator" ? " " : null}
               {selected.role === "aggregator" ? (
@@ -203,6 +213,8 @@ export function SeatInspector({
           attemptId={selected.attemptId}
           active={selected.status === "running"}
           collapseDeliverable
+          resultFirst={resultFirst}
+          independent={independent}
           className="ck-inspector-body"
           onTimeline={setSpan}
         />

@@ -225,10 +225,18 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         const all = readLiveSidecar(runId, attemptId);
         const events = all.filter((event) => event.seq > afterSeq);
         const nextSeq = all.length === 0 ? afterSeq : Math.max(...all.map((event) => event.seq));
+        const attempt = detail.progress?.attempts.find((row) => row.attemptId === attemptId);
+        const attemptEnded =
+          attempt !== undefined &&
+          (attempt.status === "success" ||
+            attempt.status === "failure" ||
+            attempt.status === "cancelled");
         return {
           events,
           nextSeq,
-          done: detail.status !== "running",
+          done:
+            attemptEnded ||
+            (detail.status !== "running" && detail.status !== "awaiting_orchestrator"),
         };
       },
     },

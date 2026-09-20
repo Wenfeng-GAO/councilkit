@@ -117,7 +117,7 @@ test("开始审查提交 GitHub PR 后导航到 /reports/<runId>", async ({ page
 
 test("查看过程打开右侧检查器，Esc 关闭", async ({ page }) => {
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
-  const inspect = page.getByRole("button", { name: /查看过程/ }).first();
+  const inspect = page.getByRole("button", { name: /查看(过程|结果)/ }).first();
   if ((await inspect.count()) === 0) {
     test
       .info()
@@ -125,7 +125,7 @@ test("查看过程打开右侧检查器，Esc 关闭", async ({ page }) => {
     return;
   }
   await inspect.click();
-  const dialog = page.getByRole("dialog", { name: "过程" });
+  const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();

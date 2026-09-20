@@ -92,7 +92,7 @@ test("审查工作台分开统计 Aggregator，过程读取失败可恢复，手
   await expect(page.getByRole("progressbar")).toHaveAttribute("value", "1");
   await expect(page.getByText("等待审查席位结束", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "外部 Squad 修复任务" })).toHaveCount(0);
-  await page.getByRole("button", { name: "过程进行中：review-correctness", exact: true }).click();
+  await page.getByRole("button", { name: "过程进行中：正确性审查", exact: true }).click();
   await expect(page.getByText(/过程读取失败/)).toBeVisible();
   failLive = false;
   await expect(page.getByText("正在验证短帧事件。", { exact: true })).toBeVisible();
@@ -108,10 +108,11 @@ test("审查工作台分开统计 Aggregator，过程读取失败可恢复，手
   data.progress.attempts[0].status = "failure";
   await page.reload();
   await expect(
-    page.getByText("1 个席位未成功完成，可打开过程查看记录；最终结论以汇总报告为准。"),
+    page.getByText("1 个席位未成功完成，可打开结果查看记录；最终结论以汇总报告为准。"),
   ).toBeVisible();
-  await page.getByRole("button", { name: "查看过程：review-security", exact: true }).click();
+  await page.getByRole("button", { name: "查看结果：安全审查", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByText("席位结果", { exact: true })).toBeVisible();
 });
 
 test("结束的席位读取错误可手动重试，完成报告后显示导出入口", async ({ page }) => {
@@ -136,7 +137,7 @@ test("结束的席位读取错误可手动重试，完成报告后显示导出�
     ),
   );
   await page.goto(`/reports/${runId}`);
-  await page.getByRole("button", { name: "查看过程：review-security", exact: true }).click();
+  await page.getByRole("button", { name: "查看结果：安全审查", exact: true }).click();
   await expect(page.getByText(/过程读取失败/)).toBeVisible();
   failLive = false;
   await page.getByRole("button", { name: "重新读取过程" }).click();

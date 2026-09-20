@@ -99,6 +99,37 @@ export function silentToolTally(blocks: readonly TimelineBlock[]): {
 const JURY_HEADING =
   /^(?:# Autonomous Review Report\b|## (?:概览|共识发现|独有发现|分歧|结论)(?:\s|$))/m;
 
+export function splitSeatDeliverable(
+  timeline: readonly TimelineBlock[],
+  ready: boolean,
+): { deliverable: string | null; process: TimelineBlock[] } {
+  if (!ready) return { deliverable: null, process: [...timeline] };
+  let idx = -1;
+  for (let i = timeline.length - 1; i >= 0; i -= 1) {
+    const block = timeline[i];
+    if (block?.kind === "text" && isDeliverableText(block.text)) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) {
+    for (let i = timeline.length - 1; i >= 0; i -= 1) {
+      const block = timeline[i];
+      if (block?.kind === "text" && Array.from(block.text).length >= 280) {
+        idx = i;
+        break;
+      }
+    }
+  }
+  if (idx < 0) return { deliverable: null, process: [...timeline] };
+  const chosen = timeline[idx];
+  const deliverable = chosen?.kind === "text" ? chosen.text : null;
+  return {
+    deliverable,
+    process: timeline.filter((_, index) => index !== idx),
+  };
+}
+
 /** Long multi-heading markdown that restates the jury report. */
 export function isDeliverableText(text: string): boolean {
   if (JURY_HEADING.test(text) && Array.from(text).length >= 280) return true;

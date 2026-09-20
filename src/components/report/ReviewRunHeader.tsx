@@ -14,6 +14,16 @@ export function ReviewRunHeader({
     run.startedAt && run.endedAt ? Date.parse(run.endedAt) - Date.parse(run.startedAt) : null;
   const verdictLabel =
     verdict === "changes-requested" ? "需要修改" : verdict === "approve" ? "通过审查" : "审查意见";
+  const pipeline = run.pipeline;
+  const pipelineActive = pipeline !== null && pipeline.phase !== "done";
+  const endedSeats = seats.filter(
+    (row) => row.status === "success" || row.status === "failure" || row.status === "cancelled",
+  ).length;
+  const showSummary =
+    run.status !== "running" ||
+    pipelineActive ||
+    run.hasReport ||
+    (seats.length > 0 && endedSeats === seats.length);
   const prUrl = normalizeReviewPr(extractPrUrl(run.reviewEvidence?.prUrl ?? run.title));
   let title = run.title;
   if (prUrl) {
@@ -34,20 +44,31 @@ export function ReviewRunHeader({
         ) : null}
       </div>
       <p className="ck-review-run-description">
-        {run.status === "running"
-          ? "各席位独立审查，随后由 Aggregator 汇总。点击席位查看实时思考、工具调用与输出。"
-          : cliRunPhaseHeading(run.kind, run.status, run.progress?.phase ?? "done")}
+        {pipelineActive
+          ? "本轮审查结果与当前修复进展分开查看。席位结论可单独打开，不必等修复结束。"
+          : run.status === "running"
+            ? "各席位独立审查，随后由 Aggregator 汇总。任一席位结束后即可查看结果。"
+            : cliRunPhaseHeading(run.kind, run.status, run.progress?.phase ?? "done")}
       </p>
-      {run.status !== "running" ? (
+      {showSummary ? (
         <div className="ck-review-result-summary">
-          {verdict ? (
-            <strong className={verdict === "changes-requested" ? "text-warn" : "text-brass"}>
-              {verdictLabel}
-            </strong>
-          ) : null}
-          {seats.length > 0 ? (
+          <span>
+            本轮审查结果
+            {verdict ? (
+              <>
+                ：
+                <strong className={verdict === "changes-requested" ? "text-warn" : "text-brass"}>
+                  {verdictLabel}
+                </strong>
+              </>
+            ) : seats.length > 0 ? (
+              `：${endedSeats} / ${seats.length} 席执行完成`
+            ) : null}
+          </span>
+          {pipelineActive && pipeline ? (
             <span>
-              {seats.filter((row) => row.status === "success").length} / {seats.length} 席成功完成
+              当前修复进展：
+              {cliRunPhaseHeading(run.kind, "running", pipeline.phase)}
             </span>
           ) : null}
           {elapsed !== null && Number.isFinite(elapsed) && elapsed >= 0 ? (

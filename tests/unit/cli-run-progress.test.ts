@@ -85,6 +85,37 @@ describe("liveStateFromRecords", () => {
     expect(live?.progress.attempts[2]?.status).toBe("running");
   });
 
+  it("attaches a compact seat result from attempt.finished output", () => {
+    const live = liveStateFromRecords([
+      started,
+      {
+        kind: "attempt.finished",
+        attemptId: "attempt-0",
+        status: "success",
+        durationMs: 10,
+        output: "## 概览\n\n先修鉴权。\n\n## 发现\n\n- [major] cookie 未绑定 origin\n",
+      },
+      {
+        kind: "attempt.finished",
+        attemptId: "attempt-1",
+        status: "success",
+        durationMs: 20,
+        output: "still drafting the write-up",
+      },
+    ]);
+    expect(live?.progress.attempts[0]?.result).toEqual({
+      parseStatus: "parsed",
+      summary: "先修鉴权。",
+      findingCount: 1,
+      blockingCount: 1,
+    });
+    expect(live?.progress.attempts[1]?.result).toMatchObject({
+      parseStatus: "unparsed",
+      findingCount: null,
+    });
+    expect(live?.progress.attempts[2]?.result).toBeUndefined();
+  });
+
   it("review.resumed clears rerun failures and reopens the run", () => {
     const live = liveStateFromRecords([
       started,

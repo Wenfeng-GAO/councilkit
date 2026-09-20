@@ -129,14 +129,7 @@ export function ReportDetailPage() {
     query.data && reviewActions && failedSeats.length > 0 && query.data.status !== "running"
       ? buildReviewResumeCommand(query.data.runId, query.data.title, query.data.markdown)
       : null;
-  const showSeats =
-    isSquad ||
-    query.data?.status === "running" ||
-    Boolean(
-      query.data?.progress?.attempts.some(
-        (row) => row.status === "queued" || row.status === "running" || row.status === "failure",
-      ),
-    );
+  const showSeats = Boolean(query.data?.progress);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-8 sm:px-8">
@@ -221,25 +214,33 @@ export function ReportDetailPage() {
               onInspect={setInspectId}
             />
           ) : null}
-          {query.data.kind === "review" && query.data.hasReport ? (
-            <FixPipeline
-              run={query.data}
-              busy={action.isPending || pendingAction !== null}
-              pendingAction={pendingAction}
-              error={actionError}
-              followUpRun={
-                query.data.pipeline?.followUpRunId
-                  ? (listQuery.data?.runs.find(
-                      (row) => row.runId === query.data.pipeline?.followUpRunId,
-                    ) ?? null)
-                  : null
-              }
-              onFix={() => action.mutate("fix")}
-              onReReview={() => action.mutate("re-review")}
-            />
-          ) : null}
           {!isSquad && showSeats && query.data.progress ? (
             <LiveReviewProgress run={query.data} onInspect={setInspectId} />
+          ) : null}
+          {query.data.kind === "review" && query.data.hasReport ? (
+            <section aria-labelledby="ck-repair-progress-title" className="flex flex-col gap-3">
+              <h2
+                id="ck-repair-progress-title"
+                className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass"
+              >
+                当前修复进展
+              </h2>
+              <FixPipeline
+                run={query.data}
+                busy={action.isPending || pendingAction !== null}
+                pendingAction={pendingAction}
+                error={actionError}
+                followUpRun={
+                  query.data.pipeline?.followUpRunId
+                    ? (listQuery.data?.runs.find(
+                        (row) => row.runId === query.data.pipeline?.followUpRunId,
+                      ) ?? null)
+                    : null
+                }
+                onFix={() => action.mutate("fix")}
+                onReReview={() => action.mutate("re-review")}
+              />
+            </section>
           ) : null}
           <FindingLedger run={query.data} />
           {!isSquad && query.data.planMarkdown.trim().length > 0 ? (
