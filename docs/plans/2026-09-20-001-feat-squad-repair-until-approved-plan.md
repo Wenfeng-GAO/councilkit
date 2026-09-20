@@ -284,7 +284,7 @@ flowchart TB
 
 **Verification:** profile/lease/handoff 单测覆盖上述路径；`fix`/`apply` 至少各有一条互斥失败测试。
 
-- [ ] **Unit 3: Squad 执行桥契约（CouncilKit 假实现）**
+- [x] **Unit 3: Squad 执行桥契约（CouncilKit 假实现）**
 
 **Goal:** 父控制器只通过版本化桥交谈；契约测试不依赖真实 adapter。
 
