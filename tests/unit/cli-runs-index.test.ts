@@ -12,12 +12,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SQUAD_ID = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
 const REVIEW_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+const REPAIR_ID = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
 
 describe("isCliRunId", () => {
-  it("accepts review, discuss, and squad ids", () => {
+  it("accepts review, discuss, squad, and repair ids", () => {
     expect(isCliRunId("ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee0")).toBe(true);
     expect(isCliRunId(REVIEW_ID)).toBe(true);
     expect(isCliRunId(SQUAD_ID)).toBe(true);
+    expect(isCliRunId(REPAIR_ID)).toBe(true);
   });
 
   it("rejects unknown prefixes and truncated uuids", () => {
@@ -53,6 +55,10 @@ describe("parseTranscriptMeta", () => {
 
   it("falls back to kind=squad from the run id prefix", () => {
     expect(parseTranscriptMeta("", SQUAD_ID).kind).toBe("squad");
+  });
+
+  it("falls back to kind=repair from the run id prefix", () => {
+    expect(parseTranscriptMeta("", REPAIR_ID).kind).toBe("repair");
   });
 });
 
@@ -123,6 +129,30 @@ describe("listCliRuns squad", () => {
     expect(runs[0]?.progress?.phase).toBe("implementing");
     expect(runs[0]?.progress?.attempts[0]?.attemptId).toBe("coder-1");
     expect(runs[0]?.handoff).toBeNull();
+  });
+
+  it("lists a repair parent run from status.json with a null pipeline", () => {
+    const dir = join(home, "runs", REPAIR_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "transcript.jsonl"), "");
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "repair-preparing", attempts: [], updatedAt: new Date().toISOString() },
+        pipeline: null,
+      })}\n`,
+    );
+    const runs = listCliRuns(process.env);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      runId: REPAIR_ID,
+      kind: "repair",
+      status: "running",
+      pipeline: null,
+    });
+    expect(runs[0]?.progress?.phase).toBe("repair-preparing");
   });
 
   it("maps a k4p2-shaped interrupted sidecar to awaiting_orchestrator", () => {

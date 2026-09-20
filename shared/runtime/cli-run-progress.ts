@@ -29,6 +29,13 @@ export const CLI_RUN_PROGRESS_PHASES = [
   "integrating",
   "proposing",
   "debating",
+  "repair-preparing",
+  "repair-squad-repair",
+  "repair-squad-verify",
+  "repair-publishing",
+  "repair-reviewing",
+  "repair-diagnosing",
+  "repair-finalizing",
 ] as const;
 
 export type CliRunProgressPhase = (typeof CLI_RUN_PROGRESS_PHASES)[number];

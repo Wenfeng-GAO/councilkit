@@ -79,11 +79,11 @@ const SQUAD_DOCUMENT_SPECS = [
 ] as const;
 
 export const CLI_RUN_ID_RE =
-  /^ck-(?:run|review|squad|ideate)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^ck-(?:run|review|squad|ideate|repair)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const MAX_CLI_REPORT_BYTES = 2 * 1024 * 1024;
 
-export type CliRunKind = "review" | "discuss" | "squad" | "ideate" | "unknown";
+export type CliRunKind = "review" | "discuss" | "squad" | "ideate" | "repair" | "unknown";
 export type CliRunStatus = CliRunLiveStatus;
 
 export interface CliRunSummary {
@@ -103,6 +103,9 @@ export interface CliRunSummary {
   handoff: CliRunHandoffDto | null;
   reviewEvidence?: ReviewEvidence | null;
   ideateIntegrity?: IdeateIntegrityDto | null;
+  businessResult?: "approved" | "needs_attention" | "stopped" | null;
+  reasonCode?: string | null;
+  sourceRunId?: string | null;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -412,7 +415,9 @@ export function parseTranscriptMeta(
         ? "squad"
         : runId.startsWith("ck-ideate-")
           ? "ideate"
-          : "unknown";
+          : runId.startsWith("ck-repair-")
+            ? "repair"
+            : "unknown";
   let status: CliRunStatus = "unknown";
   let title = runId;
   let startedAt: string | null = null;

@@ -19,6 +19,13 @@ const PHASE_LABEL = {
   integrating: "集成中",
   proposing: "独立提案中",
   debating: "交叉辩论中",
+  "repair-preparing": "准备自动修复",
+  "repair-squad-repair": "Squad 修复中",
+  "repair-squad-verify": "Squad 验收中",
+  "repair-publishing": "正在更新 PR",
+  "repair-reviewing": "CouncilKit 复审中",
+  "repair-diagnosing": "根因诊断中",
+  "repair-finalizing": "最终核对",
 } as const;
 
 const SQUAD_PHASE_LABEL = {

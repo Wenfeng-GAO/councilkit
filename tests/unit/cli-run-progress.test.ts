@@ -243,6 +243,33 @@ describe("mergeLiveProgress", () => {
 });
 
 describe("parseLiveStateJson pipeline", () => {
+  it("keeps repair progress phases and a null pipeline object", () => {
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "repair-preparing", attempts: [], updatedAt: "t1" },
+        pipeline: null,
+      }),
+    );
+    expect(live?.status).toBe("running");
+    expect(live?.progress.phase).toBe("repair-preparing");
+    expect(live?.pipeline).toBeNull();
+  });
+
+  it("drops status.json when progress.phase is an unknown repair label", () => {
+    expect(
+      parseLiveStateJson(
+        JSON.stringify({
+          version: 1,
+          status: "running",
+          progress: { phase: "preparing", attempts: [], updatedAt: "t1" },
+          pipeline: null,
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it("reads planning phase and pipeline sidecar", () => {
     const live = parseLiveStateJson(
       JSON.stringify({
