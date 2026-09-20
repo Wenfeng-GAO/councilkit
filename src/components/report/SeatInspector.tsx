@@ -215,6 +215,7 @@ export function SeatInspector({
           collapseDeliverable
           resultFirst={resultFirst}
           independent={independent}
+          fallbackResult={selected.result}
           className="ck-inspector-body"
           onTimeline={setSpan}
         />

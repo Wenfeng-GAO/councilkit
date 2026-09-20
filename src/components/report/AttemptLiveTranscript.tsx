@@ -21,7 +21,7 @@ import {
 } from "@/lib/live-transcript";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
-import { summarizeSeatOutput } from "@shared/runtime/seat-result";
+import { type CliRunAttemptResult, summarizeSeatOutput } from "@shared/runtime/seat-result";
 import { useEffect, useRef, useState } from "react";
 
 const POLL_MS = 2000;
@@ -35,6 +35,7 @@ export function AttemptLiveTranscript({
   collapseDeliverable = false,
   resultFirst = false,
   independent = false,
+  fallbackResult,
   className = "",
   onTimeline,
 }: {
@@ -44,6 +45,7 @@ export function AttemptLiveTranscript({
   collapseDeliverable?: boolean;
   resultFirst?: boolean;
   independent?: boolean;
+  fallbackResult?: CliRunAttemptResult;
   className?: string;
   onTimeline?: (span: LiveEventSpan) => void;
 }) {
@@ -194,10 +196,20 @@ export function AttemptLiveTranscript({
     done,
     error: readError,
   });
+  const seatComplete = done || !active;
   if (!ready || events.length === 0) {
     return (
       <div ref={scrollerRef} className={className}>
-        {errorNotice ?? (empty ? <p className="text-sm text-muted">{empty}</p> : null)}
+        {errorNotice}
+        {resultFirst && seatComplete ? (
+          <SeatResultPanel
+            text={null}
+            independent={independent}
+            complete
+            fallback={fallbackResult}
+          />
+        ) : null}
+        {empty && !errorNotice ? <p className="text-sm text-muted">{empty}</p> : null}
       </div>
     );
   }
@@ -205,7 +217,6 @@ export function AttemptLiveTranscript({
   const span = liveEventSpan(events);
   const origin = originAt(events);
   const { tally, timeline } = silentToolTally(foldLiveEvents(events));
-  const seatComplete = done || !active;
   const split = resultFirst
     ? splitSeatDeliverable(timeline, seatComplete)
     : { deliverable: null, process: timeline };
@@ -240,6 +251,7 @@ export function AttemptLiveTranscript({
           text={split.deliverable}
           independent={independent}
           complete={seatComplete}
+          fallback={fallbackResult}
         />
       ) : null}
       <div className="flex flex-col gap-2.5">
@@ -282,12 +294,14 @@ function SeatResultPanel({
   text,
   independent,
   complete,
+  fallback,
 }: {
   text: string | null;
   independent: boolean;
   complete: boolean;
+  fallback?: CliRunAttemptResult;
 }) {
-  const parsed = summarizeSeatOutput(text);
+  const parsed = text ? summarizeSeatOutput(text) : (fallback ?? summarizeSeatOutput(null));
   const markdown =
     text && isJsonDeliverable(text) ? (
       <pre className="max-h-[min(28rem,55vh)] overflow-auto whitespace-pre-wrap break-words font-command text-[0.72rem] leading-5 text-fg">

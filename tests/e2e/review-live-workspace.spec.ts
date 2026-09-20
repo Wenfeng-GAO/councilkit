@@ -141,6 +141,7 @@ test("结束的席位读取错误可手动重试，完成报告后显示导出�
   await expect(page.getByText(/过程读取失败/)).toBeVisible();
   failLive = false;
   await page.getByRole("button", { name: "重新读取过程" }).click();
+  await expect(page.getByText("席位结果", { exact: true })).toBeVisible();
   await expect(page.getByText("尚无过程记录", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   data.status = "completed";
