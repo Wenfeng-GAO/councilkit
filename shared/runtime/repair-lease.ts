@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { z } from "zod";
+import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "./pr-url";
 
 export const writerLeaseSchema = z
   .object({
@@ -7,6 +10,7 @@ export const writerLeaseSchema = z
     holderKind: z.enum(["repair", "fix", "apply"]),
     holderRunId: z.string().min(1).max(80),
     pid: z.number().int().positive(),
+    writerPids: z.array(z.number().int().positive()).max(16).optional(),
     epoch: z.number().int().nonnegative(),
     grantedAt: z.string().min(1).max(40),
   })
@@ -15,6 +19,25 @@ export type WriterLease = z.infer<typeof writerLeaseSchema>;
 
 export function writerLeaseKey(input: { repo: string; sourceBranch: string }): string {
   return `${input.repo.trim().toLowerCase()}#${input.sourceBranch.trim()}`;
+}
+
+export function writerRepoFromPrUrl(prUrl: string): string | null {
+  const parsed = parseApplyPrUrl(prUrl);
+  if (parsed === null) return null;
+  if (parsed.kind === "github") {
+    const gh = parseGitHubPrUrl(parsed.url);
+    return gh ? `github.com/${gh.owner}/${gh.repo}`.toLowerCase() : null;
+  }
+  const ant = parseAntCodePrUrl(parsed.url);
+  return ant ? `code.alipay.com/${ant.project}`.toLowerCase() : null;
+}
+
+export function writerLeaseFileName(key: string): string {
+  return `writer-${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`;
+}
+
+export function writerLeasePath(home: string, key: string): string {
+  return join(home, "locks", writerLeaseFileName(key));
 }
 
 export function isRepairProfileName(name: string): boolean {

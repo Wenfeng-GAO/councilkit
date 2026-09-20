@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
+import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import {
   type RunCommand,
   checkoutPullRequest,
@@ -26,6 +27,7 @@ import {
   defaultRunCommand,
   gitHeadSha,
   gitWorkingTreeDirty,
+  inspectPullRequest,
   pushCurrentBranch,
 } from "../auto/checkout-pr";
 import {
@@ -49,6 +51,7 @@ import {
   writeFindings,
   writePlanLock,
 } from "../auto/ledger";
+import { acquireWriterLease, releaseWriterLease } from "../auto/repair-lease";
 import { type AttemptResult, type SpawnImpl, spawnOnce } from "../auto/runner";
 import {
   APPLY_PLAN_FILENAME,
@@ -233,6 +236,8 @@ export async function runApply(
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
+  let leaseKey: { repo: string; sourceBranch: string } | null = null;
+
   const outcomeBase = {
     reviewRunId: runId,
     agent: {
@@ -264,6 +269,17 @@ export async function runApply(
   }): Promise<never> => {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
+    if (leaseKey) {
+      try {
+        releaseWriterLease({
+          repo: leaseKey.repo,
+          sourceBranch: leaseKey.sourceBranch,
+          holderRunId: runId,
+        });
+      } catch {
+        // extras still alive: keep the lease rather than silently dropping it
+      }
+    }
     const outcome: ApplyOutcome = {
       ...outcomeBase,
       ...partial.extra,
@@ -290,6 +306,20 @@ export async function runApply(
     } else if (target.mode === "all") {
       out.progress("  cluster: all");
     }
+
+    const repo = writerRepoFromPrUrl(pr);
+    if (repo === null) {
+      throw errors.usage("apply cannot resolve a writer lease key from the PR URL");
+    }
+    const inspected = await inspectPullRequest(pr, runCommand, env);
+    acquireWriterLease({
+      repo,
+      sourceBranch: inspected.branch,
+      holderKind: "apply",
+      holderRunId: runId,
+      pid: process.pid,
+    });
+    leaseKey = { repo, sourceBranch: inspected.branch };
 
     const probeCwd = join(runDir, "workspaces", "probe");
     mkdirSync(probeCwd, { recursive: true, mode: 0o700 });

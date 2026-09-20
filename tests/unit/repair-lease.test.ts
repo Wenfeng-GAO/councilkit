@@ -3,6 +3,7 @@ import {
   isRepairProfileName,
   parseWriterLease,
   writerLeaseKey,
+  writerRepoFromPrUrl,
 } from "@shared/runtime/repair-lease";
 import { describe, expect, it } from "vitest";
 
@@ -20,6 +21,13 @@ describe("writerLeaseKey", () => {
   it("joins normalized repo and source branch", () => {
     expect(writerLeaseKey({ repo: "github.com/Acme/Repo", sourceBranch: "feat/x" })).toBe(
       "github.com/acme/repo#feat/x",
+    );
+  });
+
+  it("derives a host-qualified repo from GitHub and AntCode PR URLs", () => {
+    expect(writerRepoFromPrUrl("https://github.com/Acme/Repo/pull/9")).toBe("github.com/acme/repo");
+    expect(writerRepoFromPrUrl("https://code.alipay.com/paas-core/agentrun/pull_requests/126")).toBe(
+      "code.alipay.com/paas-core/agentrun",
     );
   });
 });

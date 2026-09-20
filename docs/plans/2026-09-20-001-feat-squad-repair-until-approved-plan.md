@@ -241,7 +241,7 @@ flowchart TB
 
 **Verification:** 严格评估器单测全绿；`canExportRepairPackage` 旧行为单测仍绿。
 
-- [ ] **Unit 2: Profile、grant、交接目录与 writer 租约**
+- [x] **Unit 2: Profile、grant、交接目录与 writer 租约**
 
 **Goal:** 启动授权、凭据边界和单 writer 互斥有可测试的存储契约。
 

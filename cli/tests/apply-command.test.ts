@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunCommand } from "../src/auto/checkout-pr";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
+import { acquireWriterLease } from "../src/auto/repair-lease";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { ApplyExit, runApply } from "../src/commands/apply";
 import { CliError } from "../src/errors";
@@ -405,5 +406,30 @@ describe("cli apply command", () => {
       expect(error).toBeInstanceOf(CliError);
       expect((error as CliError).message).toContain("grok-stream-json");
     }
+  });
+
+  it("refuses to apply while another writer holds the PR branch", async () => {
+    seedGrok();
+    seedReviewRun();
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "repair",
+      holderRunId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+      pid: process.pid,
+    });
+    const sink = makeSink();
+    try {
+      await runApply(["--run", RUN_ID, "--no-push"], sink, {
+        spawnImpl: fakeSpawn(),
+        runCommand: fakeGit().runCommand,
+      });
+      throw new Error("expected lease conflict");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApplyExit);
+      expect((error as ApplyExit).exitCode).toBe(4);
+    }
+    const outcome = sink.finished as { failure: { message: string } | null };
+    expect(outcome.failure?.message).toMatch(/writer already holds/i);
   });
 });

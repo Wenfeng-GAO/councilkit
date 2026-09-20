@@ -16,7 +16,8 @@ import {
   type CliRunPlanVerdict,
   type CliRunProgressPhase,
 } from "@shared/runtime/cli-run-progress";
-import { type RunCommand, defaultRunCommand } from "../auto/checkout-pr";
+import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
+import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
 import {
   type AttemptSpec,
   DRIVER_PROBE_PROMPT,
@@ -33,6 +34,7 @@ import {
   readPlanLock,
   writePlanLock,
 } from "../auto/ledger";
+import { acquireWriterLease, releaseWriterLease } from "../auto/repair-lease";
 import { reviewModelAgents } from "../auto/review-models";
 import { type SpawnImpl, runAttempts, spawnOnce } from "../auto/runner";
 import {
@@ -184,6 +186,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   process.on("SIGTERM", onSignal);
 
   const nested = progressOnlySink(out);
+  let leaseKey: { repo: string; sourceBranch: string } | null = null;
   let planVerdict: CliRunPlanVerdict | null = null;
   let planRounds = 0;
   let applied = false;
@@ -237,6 +240,17 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   }): Promise<never> => {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
+    if (leaseKey) {
+      try {
+        releaseWriterLease({
+          repo: leaseKey.repo,
+          sourceBranch: leaseKey.sourceBranch,
+          holderRunId: runId,
+        });
+      } catch {
+        // keep the lease if extra writer pids are still alive
+      }
+    }
     const outcome: FixOutcome = {
       status: partial.status,
       exitCode: partial.exitCode,
@@ -654,6 +668,19 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
 
     out.progress("  applying consensus plan");
     persist("running", "applying", { applyStatus: "running", progressPhase: "applying" });
+    const repo = writerRepoFromPrUrl(pr);
+    if (repo === null) {
+      throw errors.usage("fix cannot resolve a writer lease key from the PR URL");
+    }
+    const inspected = await inspectPullRequest(pr, deps.runCommand ?? defaultRunCommand);
+    acquireWriterLease({
+      repo,
+      sourceBranch: inspected.branch,
+      holderKind: "fix",
+      holderRunId: runId,
+      pid: process.pid,
+    });
+    leaseKey = { repo, sourceBranch: inspected.branch };
     try {
       await runApply(applyArgs, nested, {
         spawnImpl: deps.spawnImpl,

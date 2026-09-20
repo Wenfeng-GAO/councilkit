@@ -2,7 +2,9 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RunCommand } from "../src/auto/checkout-pr";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
+import { acquireWriterLease } from "../src/auto/repair-lease";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { FixExit, runFix } from "../src/commands/fix";
 import { ReviewExit } from "../src/commands/review";
@@ -335,5 +337,68 @@ describe("cli fix command", () => {
     };
     expect(status.status).toBe("failed");
     expect(status.pipeline.followUpRunId).toBe(followUpId);
+  });
+
+  it("refuses to apply when a repair writer already holds the branch", async () => {
+    seedRoster();
+    seedReview();
+    writeFileSync(
+      join(home, "runs", RUN_ID, "plan.lock.json"),
+      JSON.stringify({
+        version: 1,
+        sourceRunId: RUN_ID,
+        approvedAt: "2026-08-01T00:00:00.000Z",
+        verdict: "approve",
+        clusters: [
+          {
+            id: "log",
+            title: "log",
+            closes: [],
+            files: ["a.ts"],
+            gates: [],
+            policy: "",
+            invariants: "",
+            forbidden: "",
+            tests: "",
+            mentions: "",
+            body: "",
+          },
+        ],
+        deferred: [],
+      }),
+    );
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "repair",
+      holderRunId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+      pid: process.pid,
+    });
+    const runCommand: RunCommand = async (input) => {
+      if (input.executable === "gh" && input.argv[0] === "pr" && input.argv[1] === "view") {
+        return {
+          stdout: JSON.stringify({
+            headRefName: "feat-x",
+            baseRefName: "main",
+            headRepository: { nameWithOwner: "acme/repo", name: "repo" },
+            headRepositoryOwner: { login: "acme" },
+            url: PR_URL,
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    try {
+      await runFix(["--run", RUN_ID, "--no-re-review"], makeSink(), {
+        spawnImpl: fakeSpawn().impl,
+        runCommand,
+      });
+      throw new Error("expected lease conflict");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).message).toMatch(/writer already holds/i);
+    }
   });
 });
