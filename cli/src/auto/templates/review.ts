@@ -82,7 +82,7 @@ A single line: approve | changes-requested | comment
 候选 SHA 必须是本工作区 git rev-parse HEAD 的完整 40 位值，不能猜测或使用短 SHA。
 每项字段：findingId、candidateSha、outcome（verified_closed / still_open / not_evaluated）、
 method（regression_test / code_trace / not_evaluated）、reason、evidence。
-regression_test 另填 command（实际执行的命令）；code_trace 另填 locations（文件:行号数组）。
+regression_test 另填 command（实际执行的命令）；code_trace 另填 locations（文件:行号或行号区间，如 src/a.ts:12 或 src/a.ts:12-20）。
 verified_closed 必须独立检查原反例；regression_test 的 evidence 写实际命令、结果和反例为何不再触发；
 code_trace 的 evidence 写调用链及原反例已被消除的具体证据。没有检查就用 not_evaluated。
 验证时保持候选的已跟踪文件不变；定向反例可放在未跟踪文件。不要 checkout 其他提交。

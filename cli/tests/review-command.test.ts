@@ -979,7 +979,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     const { agentIds, aggregatorName } = seed();
     const sink = makeSink();
     // Probes succeed (P1-1): this test exercises ATTEMPT failure. A driver the
-    // probe cannot reach is a different semantic — exit 3, covered separately.
+    // probe cannot reach is a different semantic — exit 4, covered separately.
     const failing: SpawnImpl = async (input) => {
       if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
       return {
@@ -1057,7 +1057,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(outcome.attemptFailures).toHaveLength(1);
   });
 
-  it("corrects an invalid assessment once without overwriting original output", async () => {
+  it("strips unknown assessment keys locally without a correction spawn", async () => {
     const store = new Store();
     const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
     const alice = store.createAgent({
@@ -1108,23 +1108,11 @@ describe("cli review command — end-to-end (fake spawn)", () => {
         method: "code_trace",
         reason: "Failure now retains the unique copy",
         evidence: "The error branch returns without clearing retained text",
-        locations: ["source.ts:1"],
+        locations: ["source.ts:1-3"],
         verifiedAt: "2026-09-07T00:00:00.000Z",
       },
     ])}\n\`\`\``;
-    const validFence = `\`\`\`councilkit-findings\n${JSON.stringify([
-      {
-        findingId: "persist--lost",
-        candidateSha: sha,
-        outcome: "verified_closed",
-        method: "code_trace",
-        reason: "Failure now retains the unique copy",
-        evidence: "The error branch returns without clearing retained text",
-        locations: ["source.ts:1"],
-      },
-    ])}\n\`\`\``;
     let correctionSpawns = 0;
-    let correctionPrompt = "";
     const spawn: SpawnImpl = async (input) => {
       if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("ok");
       if (input.prompt.includes("对比汇总")) {
@@ -1132,8 +1120,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       }
       if (input.prompt.includes(CORRECTION_PROMPT_MARKER)) {
         correctionSpawns += 1;
-        correctionPrompt = input.prompt;
-        return claudeEnvelope(validFence);
+        return claudeEnvelope("should not run");
       }
       if (input.prompt.startsWith("你是 Alice，")) {
         return claudeEnvelope(`## 发现\n无新问题\n## 结论\napprove\n${invalidFence}`);
@@ -1164,9 +1151,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       exitCode = (error as ReviewExit).exitCode;
     }
     expect(exitCode).toBe(0);
-    expect(correctionSpawns).toBe(1);
-    expect(correctionPrompt).toContain("assessment-correction-source.md");
-    expect(correctionPrompt).toContain("verifiedAt");
+    expect(correctionSpawns).toBe(0);
     const outcome = sink.finished as { runId: string; reportPath: string };
     const runDir = paths.runDir(outcome.runId);
     const firstFindings = parseFindingsFile(readFileSync(join(runDir, "findings.json"), "utf8"));
@@ -1174,8 +1159,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(firstFindings.findings.some((row) => isFindingVerifiedClosed(row, sha))).toBe(true);
     const transcript = readFileSync(paths.transcript(outcome.runId), "utf8");
     expect(transcript).toContain("verifiedAt");
-    expect(existsSync(join(runDir, ASSESSMENT_CORRECTIONS_FILE))).toBe(true);
-    expect(existsSync(join(runDir, "corrections"))).toBe(true);
+    expect(existsSync(join(runDir, ASSESSMENT_CORRECTIONS_FILE))).toBe(false);
+    expect(existsSync(join(runDir, "corrections"))).toBe(false);
     expect(readFileSync(outcome.reportPath, "utf8")).toContain("verifiedAt");
     const originalOutputHash = sha256Of(
       JSON.parse(
@@ -1211,7 +1196,7 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       resumeCode = (error as ReviewExit).exitCode;
     }
     expect(resumeCode).toBe(0);
-    expect(correctionSpawns).toBe(1);
+    expect(correctionSpawns).toBe(0);
     const resumedTranscript = readFileSync(paths.transcript(outcome.runId), "utf8");
     const resumedOutput = JSON.parse(
       resumedTranscript
@@ -1673,7 +1658,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     };
   }
 
-  it("aggregator driver probe failing → exit 3, attempts cancelled, no workspace, no aggregation", async () => {
+  it("aggregator driver probe failing → exit 4, attempts cancelled, no workspace, no aggregation", async () => {
     const { aliceId, bobId } = seedTwo();
     const sink = makeSink();
     const calls: SpawnInput[] = [];
@@ -1689,7 +1674,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     const exitCode = await runCapturing(twoAgentArgs(aliceId, bobId, "x"), sink, {
       spawnImpl: alwaysFail,
     });
-    expect(exitCode).toBe(3);
+    expect(exitCode).toBe(4);
     // Only the deduped probe ran — attempts and aggregation never spawned.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe(DRIVER_PROBE_PROMPT);
@@ -1767,7 +1752,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       sink,
       { spawnImpl: spawn },
     );
-    expect(exitCode).toBe(3);
+    expect(exitCode).toBe(4);
     const outcome = sink.finished as {
       transcriptPath: string;
       attempts: Array<{ agentName: string; failure?: { code: string } }>;

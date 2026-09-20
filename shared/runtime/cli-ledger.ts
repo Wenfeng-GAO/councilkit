@@ -25,6 +25,8 @@ export const FINDING_SOURCES = ["consensus", "unique", "unknown"] as const;
 export type FindingSource = (typeof FINDING_SOURCES)[number];
 
 export const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/;
+/** `file:12` or `file:12-20`. Shared by assessment parse and persisted verification. */
+export const ASSESSMENT_LOCATION = /.+:\d+(?:-\d+)?$/;
 export const findingVerificationSchema = z
   .object({
     outcome: z.enum(["verified_closed", "still_open", "not_evaluated"]),
@@ -36,11 +38,7 @@ export const findingVerificationSchema = z
     reason: z.string().trim().min(1).max(2000),
     evidence: z.string().trim().min(1).max(4000),
     command: z.string().trim().min(1).max(2000).optional(),
-    locations: z
-      .array(z.string().regex(/.+:\d+$/))
-      .min(1)
-      .max(32)
-      .optional(),
+    locations: z.array(z.string().regex(ASSESSMENT_LOCATION)).min(1).max(32).optional(),
     runComplete: z.boolean(),
   })
   .strict();

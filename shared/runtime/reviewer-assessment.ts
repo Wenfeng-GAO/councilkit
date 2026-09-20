@@ -1,9 +1,10 @@
 /**
  * Shared councilkit-findings assessment schema. Templates, parsers and
- * diagnostics must use this one definition. Extra keys such as verifiedAt fail.
+ * diagnostics must use this one definition. Unknown keys such as verifiedAt
+ * are stripped before parse; they never echo into diagnostics.
  */
 import { z } from "zod";
-import { FULL_COMMIT_SHA } from "./cli-ledger";
+import { ASSESSMENT_LOCATION, FULL_COMMIT_SHA } from "./cli-ledger";
 
 export const reviewerAssessmentSchema = z
   .object({
@@ -14,11 +15,7 @@ export const reviewerAssessmentSchema = z
     reason: z.string().trim().min(1).max(2000),
     evidence: z.string().trim().min(1).max(4000),
     command: z.string().trim().min(1).max(2000).optional(),
-    locations: z
-      .array(z.string().regex(/.+:\d+$/))
-      .min(1)
-      .max(32)
-      .optional(),
+    locations: z.array(z.string().regex(ASSESSMENT_LOCATION)).min(1).max(32).optional(),
   })
   .strict();
 export type ReviewerAssessment = z.infer<typeof reviewerAssessmentSchema>;
@@ -59,8 +56,29 @@ export type DiagnosedAssessment = {
   reviewer: string;
 };
 
+const ASSESSMENT_KEYS = new Set([
+  "findingId",
+  "candidateSha",
+  "outcome",
+  "method",
+  "reason",
+  "evidence",
+  "command",
+  "locations",
+]);
+
 function pathOnly(issuePath: ReadonlyArray<PropertyKey>): string {
   return issuePath.length === 0 ? "/" : `/${issuePath.map(String).join("/")}`;
+}
+
+/** Drop unknown keys so a `verifiedAt` extra cannot veto an otherwise valid row. */
+export function stripUnknownAssessmentKeys(row: unknown): unknown {
+  if (row === null || typeof row !== "object" || Array.isArray(row)) return row;
+  const stripped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
+    if (ASSESSMENT_KEYS.has(key)) stripped[key] = value;
+  }
+  return stripped;
 }
 
 export function extractAssessmentBlocks(output: string): string[] {
@@ -115,7 +133,7 @@ export function diagnoseAttemptAssessments(input: {
       continue;
     }
     for (const [index, row] of parsed.entries()) {
-      const result = reviewerAssessmentSchema.safeParse(row);
+      const result = reviewerAssessmentSchema.safeParse(stripUnknownAssessmentKeys(row));
       if (!result.success) {
         const findingId =
           row !== null &&
@@ -211,12 +229,7 @@ export function buildAssessmentDiagnostics(input: {
       errorPath: `/correction/${extra.assessment.findingId}`,
     });
   }
-  const extraKeys = new Set(extras.map((row) => `${row.attemptId}:${row.assessment.findingId}`));
   const covered = new Set(valid.map((row) => row.assessment.findingId));
-  const successfulSeats = input.attempts.filter(
-    (attempt) =>
-      attempt.attemptId !== "aggregator" && attempt.status === "success" && attempt.exitCode === 0,
-  );
   for (const id of input.requiredFindingIds) {
     if (!covered.has(id)) {
       items.push({
@@ -243,21 +256,6 @@ export function buildAssessmentDiagnostics(input: {
   const coverageComplete = input.requiredFindingIds.every((id) => {
     const valids = valid.filter((row) => row.assessment.findingId === id);
     if (valids.length === 0) return false;
-    const remainingInvalid = items.some(
-      (item) =>
-        item.findingId === id &&
-        (item.status === "invalid" || item.status === "semantic_mismatch") &&
-        item.attemptId !== "coverage" &&
-        !extraKeys.has(`${item.attemptId}:${id}`),
-    );
-    if (remainingInvalid) return false;
-    for (const seat of successfulSeats) {
-      const seatItems = items.filter((item) => item.attemptId === seat.attemptId);
-      const seatCovers =
-        extraKeys.has(`${seat.attemptId}:${id}`) ||
-        seatItems.some((item) => item.findingId === id && item.status === "valid");
-      if (!seatCovers) return false;
-    }
     const outcomes = new Set(valids.map((row) => row.assessment.outcome));
     return outcomes.size === 1;
   });

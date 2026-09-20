@@ -1,7 +1,10 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAssessmentDiagnostics } from "@shared/runtime/reviewer-assessment";
+import {
+  type DiagnosedAssessment,
+  buildAssessmentDiagnostics,
+} from "@shared/runtime/reviewer-assessment";
 import { describe, expect, it } from "vitest";
 import {
   ASSESSMENT_CORRECTIONS_FILE,
@@ -36,7 +39,7 @@ function validRow(id: string, extras: Record<string, unknown> = {}) {
 }
 
 describe("assessment diagnostics", () => {
-  it("rejects twenty verifiedAt extras and a locations range without echoing values", () => {
+  it("strips verifiedAt extras and accepts location ranges without echoing extra values", () => {
     const rows: Array<ReturnType<typeof validRow> & { verifiedAt?: string }> = Array.from(
       { length: 20 },
       (_, index) => ({
@@ -48,7 +51,7 @@ describe("assessment diagnostics", () => {
       ...validRow("F-RANGE"),
       locations: ["src/a.ts:1-12"],
     });
-    const { diagnostics } = buildAssessmentDiagnostics({
+    const { diagnostics, valid } = buildAssessmentDiagnostics({
       runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
       sha: SHA,
       requiredFindingIds: ["F-0", "F-RANGE"],
@@ -62,18 +65,15 @@ describe("assessment diagnostics", () => {
         },
       ],
     });
-    expect(diagnostics.items.filter((item) => item.status === "valid")).toHaveLength(0);
+    expect(diagnostics.items.filter((item) => item.status === "valid")).toHaveLength(21);
+    expect(diagnostics.items.some((item) => item.errorClass === "unknown_key")).toBe(false);
+    expect(valid.some((row) => row.assessment.findingId === "F-RANGE")).toBe(true);
     expect(
-      diagnostics.items.filter((item) => item.errorClass === "unknown_key").length,
-    ).toBeGreaterThan(0);
-    expect(
-      diagnostics.items.some((item) => item.findingId === "F-RANGE" && item.status === "invalid"),
-    ).toBe(true);
+      valid.find((row) => row.assessment.findingId === "F-RANGE")?.assessment.locations,
+    ).toEqual(["src/a.ts:1-12"]);
     expect(JSON.stringify(diagnostics)).not.toContain("2026-09-07T00:00:00.000Z");
-    expect(diagnostics.coverageComplete).toBe(false);
-    expect(
-      diagnostics.items.some((item) => item.status === "missing" && item.findingId === "F-0"),
-    ).toBe(true);
+    expect(diagnostics.coverageComplete).toBe(true);
+    expect(diagnostics.items.some((item) => item.status === "missing")).toBe(false);
   });
 
   it("keeps mixed valid rows and refuses bad JSON", () => {
@@ -159,7 +159,7 @@ describe("assessment correction", () => {
     ).toThrow(/clean worktree/);
   });
 
-  it("projects only requested IDs, is replay-idempotent, and rejects substantial rejudgment", () => {
+  it("does not request correction for unknown keys; still rejects substantial rejudgment", () => {
     const original = fence([{ ...validRow("F-1"), verifiedAt: "x" }]);
     const items = buildAssessmentDiagnostics({
       runId: "run",
@@ -175,7 +175,7 @@ describe("assessment correction", () => {
         },
       ],
     }).diagnostics.items;
-    expect(invalidFindingIds(items, "attempt-0")).toEqual(["F-1"]);
+    expect(invalidFindingIds(items, "attempt-0")).toEqual([]);
     const fixed = fence([validRow("F-1")]);
     const first = projectCorrectionOutput({
       originalOutput: original,
@@ -292,13 +292,13 @@ describe("assessment correction", () => {
     );
   });
 
-  it("marks coverage incomplete for invalid peers or contradictory outcomes on the same id", () => {
+  it("marks coverage incomplete only when valid seats contradict the same id", () => {
     const closed = {
       ...validRow("F-1"),
       outcome: "verified_closed",
       method: "code_trace",
     };
-    const invalidPeer = buildAssessmentDiagnostics({
+    const extrasPeer = buildAssessmentDiagnostics({
       runId: "run",
       sha: SHA,
       requiredFindingIds: ["F-1"],
@@ -315,11 +315,11 @@ describe("assessment correction", () => {
           status: "success",
           exitCode: 0,
           agentName: "B",
-          output: fence([{ ...validRow("F-1"), verifiedAt: "x" }]),
+          output: fence([{ ...closed, verifiedAt: "x" }]),
         },
       ],
     });
-    expect(invalidPeer.diagnostics.coverageComplete).toBe(false);
+    expect(extrasPeer.diagnostics.coverageComplete).toBe(true);
 
     const conflict = buildAssessmentDiagnostics({
       runId: "run",
@@ -345,7 +345,7 @@ describe("assessment correction", () => {
     expect(conflict.diagnostics.coverageComplete).toBe(false);
   });
 
-  it("does not let one seat's valid row cover a missing or unidentifiable peer assessment", () => {
+  it("lets one seat's valid row cover a finding omitted or unreadable on a peer seat", () => {
     const closed = {
       ...validRow("F-1"),
       outcome: "verified_closed",
@@ -372,7 +372,7 @@ describe("assessment correction", () => {
         },
       ],
     });
-    expect(missingPeer.diagnostics.coverageComplete).toBe(false);
+    expect(missingPeer.diagnostics.coverageComplete).toBe(true);
 
     const badJsonPeer = buildAssessmentDiagnostics({
       runId: "run",
@@ -395,23 +395,30 @@ describe("assessment correction", () => {
         },
       ],
     });
-    expect(badJsonPeer.diagnostics.coverageComplete).toBe(false);
+    expect(badJsonPeer.diagnostics.coverageComplete).toBe(true);
+    expect(badJsonPeer.diagnostics.items.some((item) => item.errorClass === "json")).toBe(true);
   });
 
   it("treats accepted extraAssessments as the coverage projection", () => {
-    const original = fence([{ ...validRow("F-1"), verifiedAt: "x" }]);
-    const extra = projectCorrectionOutput({
-      originalOutput: original,
-      correctionOutput: fence([validRow("F-1")]),
-      candidateSha: SHA,
-      requestedFindingIds: ["F-1"],
-      sourceAttemptId: "attempt-0",
-    });
+    const original = fence([{ ...validRow("F-1"), locations: ["src/a.ts"] }]);
+    const extra: DiagnosedAssessment = {
+      assessment: {
+        findingId: "F-1",
+        candidateSha: SHA,
+        outcome: "still_open",
+        method: "code_trace",
+        reason: "still reproduces",
+        evidence: "same call path",
+        locations: ["src/a.ts:1"],
+      },
+      attemptId: "attempt-0",
+      reviewer: "R",
+    };
     const diagnosed = buildAssessmentDiagnostics({
       runId: "run",
       sha: SHA,
       requiredFindingIds: ["F-1"],
-      extraAssessments: extra.valid,
+      extraAssessments: [extra],
       attempts: [
         {
           attemptId: "attempt-0",

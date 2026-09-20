@@ -946,7 +946,7 @@ export async function runReview(
       const params = buildExecuteParams();
       outcome = await finalize(params, new Date().toISOString(), mergeOrdered(presolved), null, {
         status: "failed",
-        exitCode: EXIT.hostUnavailable,
+        exitCode: EXIT.runFailed,
         incomplete: true,
         failure: {
           phase: "probe",

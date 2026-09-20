@@ -704,9 +704,6 @@ export function applyReviewerVerifications(
         agentName: attempt.agentName,
       })),
   });
-  const extraKeys = new Set(
-    (input.extraAssessments ?? []).map((row) => `${row.attemptId}:${row.assessment.findingId}`),
-  );
   const valid = diagnosed.valid;
   const assessments = new Map<string, FindingVerification[]>();
   for (const row of valid) {
@@ -738,17 +735,7 @@ export function applyReviewerVerifications(
       if (stillOpen) return { ...row, status: "open" as const, verification: stillOpen };
       const reported = matchFinding(row, input.reportedFindings, new Set()) !== null;
       const closure = receipts.find((receipt) => receipt.outcome === "verified_closed");
-      const remainingInvalid = diagnosed.diagnostics.items.some(
-        (item) =>
-          item.findingId === row.id &&
-          (item.status === "invalid" || item.status === "semantic_mismatch") &&
-          item.attemptId !== "coverage" &&
-          !extraKeys.has(`${item.attemptId}:${row.id}`),
-      );
-      const requiredIncomplete =
-        requiredFindingIds.includes(row.id) &&
-        (remainingInvalid || diagnosed.diagnostics.coverageComplete === false);
-      if (closure && input.complete && !reported && !requiredIncomplete) {
+      if (closure && input.complete && !reported) {
         return { ...row, status: "closed" as const, verification: closure };
       }
       const unevaluated = receipts.find((receipt) => receipt.outcome === "not_evaluated");

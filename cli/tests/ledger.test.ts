@@ -325,12 +325,12 @@ describe("independent finding verification", () => {
   ])("rejects mismatched or unqualified close: %j", (overrides) => {
     expect(isFindingBlocking(verify([assessment(overrides)]), CANDIDATE_SHA)).toBe(true);
   });
-  it("does not close on verifiedAt extras or locations ranges", () => {
+  it("closes after stripping verifiedAt extras and accepting location ranges", () => {
     expect(
-      isFindingBlocking(verify([assessment({ verifiedAt: "2026-09-07T00:00:00.000Z" })])),
+      isFindingVerifiedClosed(verify([assessment({ verifiedAt: "2026-09-07T00:00:00.000Z" })])),
     ).toBe(true);
     expect(
-      isFindingBlocking(
+      isFindingVerifiedClosed(
         verify([
           assessment({
             method: "code_trace",
@@ -340,6 +340,36 @@ describe("independent finding verification", () => {
         ]),
       ),
     ).toBe(true);
+  });
+  it("closes a covered finding even when another required id is missing", () => {
+    const rows = applyReviewerVerifications(
+      [
+        finding({ id: "persist--lost", title: "Short write loses text" }),
+        finding({ id: "other--open", title: "Unrelated hole" }),
+      ],
+      {
+        sha: CANDIDATE_SHA,
+        runId: "ck-review-current",
+        complete: true,
+        attempts: [reviewer([assessment()])],
+        reportedFindings: [],
+        verifiedAttemptShas: { "attempt-0": CANDIDATE_SHA },
+        requiredFindingIds: ["persist--lost", "other--open"],
+      },
+    );
+    const closed = rows.find((row) => row.id === "persist--lost");
+    const open = rows.find((row) => row.id === "other--open");
+    expect(closed && isFindingVerifiedClosed(closed, CANDIDATE_SHA)).toBe(true);
+    expect(open?.status).toBe("open");
+    expect(open?.verification).toBeUndefined();
+  });
+  it("a successful seat that omits a finding does not veto another seat's close", () => {
+    const row = verify([assessment()], {
+      attempts: [reviewer([assessment()]), reviewer([], { attemptId: "attempt-1" })],
+      verifiedAttemptShas: { "attempt-0": CANDIDATE_SHA, "attempt-1": CANDIDATE_SHA },
+      requiredFindingIds: ["persist--lost"],
+    });
+    expect(isFindingVerifiedClosed(row, CANDIDATE_SHA)).toBe(true);
   });
   it("accepts an explicit source trace and records not_evaluated without closing", () => {
     expect(
@@ -380,27 +410,7 @@ describe("independent finding verification", () => {
       ),
     ).toBe(true);
   });
-  it("does not close when a peer seat is missing or has an illegal same-id row", () => {
-    const missingPeer = applyReviewerVerifications(
-      [finding({ id: "persist--lost", title: "Short write loses text" })],
-      {
-        sha: CANDIDATE_SHA,
-        runId: "ck-review-current",
-        complete: true,
-        requiredFindingIds: ["persist--lost"],
-        attempts: [
-          reviewer([assessment()]),
-          reviewer([], {
-            attemptId: "attempt-1",
-            output: "```councilkit-findings\n[]\n```",
-          }),
-        ],
-        reportedFindings: [],
-        verifiedAttemptShas: { "attempt-0": CANDIDATE_SHA, "attempt-1": CANDIDATE_SHA },
-      },
-    )[0];
-    expect(isFindingVerifiedClosed(missingPeer, CANDIDATE_SHA)).toBe(false);
-
+  it("a still-open peer still defeats closure after unknown keys are stripped", () => {
     const illegalPeer = applyReviewerVerifications(
       [finding({ id: "persist--lost", title: "Short write loses text" })],
       {
@@ -419,6 +429,7 @@ describe("independent finding verification", () => {
       },
     )[0];
     expect(isFindingVerifiedClosed(illegalPeer, CANDIDATE_SHA)).toBe(false);
+    expect(illegalPeer?.verification?.outcome).toBe("still_open");
   });
 });
 
