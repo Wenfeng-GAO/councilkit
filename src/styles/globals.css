@@ -1,6 +1,46 @@
+/* 固定席位工作台：本地打包的 Inter Variable 4.1（SIL OFL 1.1，见 public/fonts/LICENSE-Inter.txt） */
+@font-face {
+  font-family: InterVariable;
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* 固定席位工作台（review-workbench）设计 Token，权威数值见
+   docs/design/2026-09-20-review-workspace/v3-detail/design-tokens.css */
+:root {
+  color-scheme: dark;
+  --ck-nav: #101113;
+  --ck-seats: #16171a;
+  --ck-content: #1b1d21;
+  --ck-raised: #23262c;
+  --ck-selected: #2c2924;
+  --ck-divider: #2c3037;
+  --ck-controlBorder: #707783;
+  --ck-text: #e7e9ee;
+  --ck-secondary: #b2b7c2;
+  --ck-tertiary: #929aa7;
+  --ck-disabled: #68707d;
+  --ck-accent: #c9b18a;
+  --ck-running: #8cb4e8;
+  --ck-success: #8aae9b;
+  --ck-error: #ed969b;
+  --ck-warning: #d6b27a;
+  --ck-focus: #acc9f3;
+  --ck-ui-font: InterVariable, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui,
+    sans-serif;
+  --ck-mono-font: "SF Mono", Menlo, Consolas, ui-monospace, monospace;
+  --ck-nav-width: 184px;
+  --ck-seat-width: 248px;
+  --ck-context-height: 48px;
+  --ck-view-height: 48px;
+  --ck-report-width: 760px;
+}
 
 :root {
   color-scheme: dark;
@@ -46,5 +86,23 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
+  }
+}
+
+/* 固定席位工作台命名空间：禁伪加粗与 reduced-motion 规则只作用于 .ck-wb 内部，
+   不影响现有页面。对应 design-tokens.css 的 .ck-ui / 末行规则。 */
+.ck-wb,
+.ck-wb * {
+  font-synthesis: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ck-wb,
+  .ck-wb *,
+  .ck-wb *::before,
+  .ck-wb *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

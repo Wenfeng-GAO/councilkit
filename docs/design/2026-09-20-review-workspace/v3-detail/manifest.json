@@ -1,0 +1,63 @@
+{
+  "product": "CouncilKit",
+  "selected": "exploration-v3/01-workbench",
+  "revision": "v3-detail",
+  "status": "design-handoff-not-product-implementation",
+  "viewportsVerified": [
+    {
+      "width": 1440,
+      "height": 1024
+    },
+    {
+      "width": 390,
+      "height": 844
+    }
+  ],
+  "screens": [
+    {
+      "file": "screens/01-workbench-rendered.jpg",
+      "width": 1440,
+      "height": 1024,
+      "source": "real-browser-screenshot",
+      "sha256": "4f4951494f7805c52583db9db1bd29808bbd4235997baca90402db6cc85159d6",
+      "mimeType": "image/jpeg"
+    },
+    {
+      "file": "screens/02-typography-real.jpg",
+      "width": 1280,
+      "height": 720,
+      "source": "real-browser-screenshot",
+      "sha256": "57304e0e7fc5e58d01337ca46693172b7da7d2a3d3ba21911d6df4215f0ec837",
+      "mimeType": "image/jpeg"
+    },
+    {
+      "file": "screens/03-interaction-real.jpg",
+      "width": 822,
+      "height": 863,
+      "source": "real-browser-screenshot",
+      "sha256": "73fe42d5e6eb2d579006a1117a6c3aa66e6fb153f9e140bf08be23af6ed16959",
+      "mimeType": "image/jpeg"
+    },
+    {
+      "file": "screens/04-workbench-mobile.jpg",
+      "width": 390,
+      "height": 844,
+      "source": "real-browser-screenshot",
+      "sha256": "fa687642e01b455b652938ef37daadd2342a2dd75b6ccea3ddef00fec8733df7",
+      "mimeType": "image/jpeg"
+    },
+    {
+      "file": "screens/reference-generated.png",
+      "width": 1487,
+      "height": 1058,
+      "source": "image_gen",
+      "sha256": "7dce4f1b5e4d7d22f7807a39044251e032d94ddacc7093d83868e58f0303fb33",
+      "mimeType": "image/png"
+    }
+  ],
+  "assets": {
+    "font": "Inter 4.1",
+    "icons": "Lucide 1.47.0",
+    "cjk": "OS fallback, not bundled"
+  }
+}

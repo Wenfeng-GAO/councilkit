@@ -1,0 +1,8 @@
+{
+  "family": "InterVariable",
+  "version": "4.1",
+  "source": "https://rsms.me/inter/",
+  "fontURL": "https://rsms.me/inter/font-files/InterVariable.woff2?v=4.1",
+  "licenseURL": "https://raw.githubusercontent.com/rsms/inter/v4.1/LICENSE.txt",
+  "cjk": "OS font fallback only; no PingFang redistribution"
+}

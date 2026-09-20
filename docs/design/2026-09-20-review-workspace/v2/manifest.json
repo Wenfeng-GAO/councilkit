@@ -1,0 +1,61 @@
+{
+  "product": "CouncilKit",
+  "revision": "v2",
+  "date": "2026-09-20",
+  "status": "design-proposal",
+  "designViewport": {
+    "width": 1440,
+    "height": 1024
+  },
+  "generator": "built-in image_gen",
+  "screens": [
+    {
+      "file": "screens/01-review-overview.png",
+      "title": "审查总览",
+      "delivery": "A 布局 · B 席位全文",
+      "width": 1487,
+      "height": 1058,
+      "sha256": "72746a624a81d58231a68da062e686b40be331a7c6330a033700733630c121f5"
+    },
+    {
+      "file": "screens/02-seat-readable.png",
+      "title": "原文可读，暂无结构化摘要",
+      "delivery": "B 核心结果",
+      "width": 1487,
+      "height": 1058,
+      "sha256": "3385e2b3933fad0540831807c5174912f867cfff2e2fa89ada2502cbf1d2ff3f"
+    },
+    {
+      "file": "screens/03-review-running.png",
+      "title": "运行中，暂停回看历史",
+      "delivery": "A 跟随控制 · B 结果入口",
+      "width": 1487,
+      "height": 1058,
+      "sha256": "bb582150c3b44fd8cfa8e18be5c0ef0799530e4af6835cd780dc15ab7b36c387"
+    },
+    {
+      "file": "screens/04-seat-failed.png",
+      "title": "执行失败，保留过程",
+      "delivery": "B 核心结果",
+      "width": 1487,
+      "height": 1058,
+      "sha256": "1a5e6b8c6251b822571fa5d6549085b738b52129ca923ca4a5cbcf4edeed7f27"
+    },
+    {
+      "file": "screens/05-process-history.png",
+      "title": "历史过程检索",
+      "delivery": "C 后续增强",
+      "width": 1487,
+      "height": 1058,
+      "sha256": "6c3643dacf6f40138ccb0342141a266624311691e003d1fd7e44318932134de7"
+    },
+    {
+      "file": "screens/06-fix-progress.png",
+      "title": "修复中，只有阶段信息",
+      "delivery": "A 独立交付",
+      "width": 1486,
+      "height": 1058,
+      "sha256": "31e4ff7a0cd446ba37465742e9eb2c0f79550c97f94002883dff55d2e59ad518"
+    }
+  ]
+}

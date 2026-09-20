@@ -926,5 +926,38 @@ export const cliRunAttemptLiveResponseSchema = z
   .strict();
 export type CliRunAttemptLiveResponse = z.infer<typeof cliRunAttemptLiveResponseSchema>;
 
+/** B1 durable per-execution result (INTERACTION-SPEC §5). `markdown` is the
+ * FULL durable `attempt.finished.output` / `aggregation.finished.output` of
+ * the current execution only — never the live sidecar, never a previous
+ * execution's success, no size cap (the 2 MiB cap belongs to the live
+ * sidecar, not the durable transcript). */
+export const cliRunAttemptResultResponseSchema = z
+  .object({
+    runId: z.string().min(1),
+    attemptId: z.string().min(1),
+    /** Stable opaque identity `<attemptId>#<generation>.<ordinal>` derived
+     *  from durable transcript order (see shared/runtime/execution-ref.ts). */
+    executionRef: z.string().min(1),
+    executionStatus: z.enum(["pending", "queued", "running", "success", "failure", "cancelled"]),
+    availability: z.enum(["pending", "available", "empty", "unavailable"]),
+    markdown: z.string().nullable(),
+    /** The durable output is returned whole; the CLI's 8 MiB stream cap is a
+     *  write-side property this read cannot detect per-record, so this stays
+     *  false for any successfully read record. */
+    truncated: z.boolean(),
+    failure: z
+      .object({ code: z.string().min(1), message: z.string() })
+      .strict()
+      .nullable(),
+    /** Present only for an explicit reuse proven by `reusedAttemptIds`; the
+     *  source execution always lives in the same run transcript. */
+    reusedFrom: z
+      .object({ runId: z.string().min(1), executionRef: z.string().min(1) })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type CliRunAttemptResultResponse = z.infer<typeof cliRunAttemptResultResponseSchema>;
+
 // Re-export for handler convenience.
 export { LIMITS, usageSchema };

@@ -1,0 +1,123 @@
+{
+  "meta": {
+    "product": "CouncilKit",
+    "scope": "review-workspace",
+    "date": "2026-09-20",
+    "status": "proposed-design-v2",
+    "unit": "CSS px",
+    "designViewport": {
+      "width": 1440,
+      "height": 1024
+    },
+    "revision": "v2"
+  },
+  "color": {
+    "bg": "#0b0d10",
+    "surface": "#15181d",
+    "surface2": "#1e2128",
+    "border": "#232830",
+    "fg": "#e6e8ec",
+    "muted": "#a0a6b0",
+    "parchment": "#efe4cf",
+    "brass": "#c4a574",
+    "success": "#22c55e",
+    "warn": "#d29922",
+    "error": "#f85149",
+    "info": "#58a6ff",
+    "focus": "#6366f1"
+  },
+  "typography": {
+    "body": {
+      "size": 15,
+      "lineHeight": 25,
+      "weight": 400
+    },
+    "secondary": {
+      "size": 13,
+      "lineHeight": 20
+    },
+    "pageTitle": {
+      "size": 28,
+      "lineHeight": 36,
+      "weight": 600
+    },
+    "sectionTitle": {
+      "size": 20,
+      "lineHeight": 28,
+      "weight": 600
+    },
+    "verdict": {
+      "size": 32,
+      "lineHeight": 40,
+      "weight": 600
+    },
+    "mono": {
+      "size": 13,
+      "lineHeight": 20
+    },
+    "nav": {
+      "size": 14,
+      "lineHeight": 20
+    }
+  },
+  "layout": {
+    "sidebar": 208,
+    "contentPaddingDesktop": 40,
+    "contentPaddingTablet": 24,
+    "contentPaddingMobile": 16,
+    "contentMax": 1440,
+    "columnGap": 32,
+    "rail": 260,
+    "seatList": 248,
+    "documentMax": 800,
+    "timeGutter": 64,
+    "buttonHeight": 40,
+    "inputHeight": 40,
+    "seatRowMin": 64,
+    "headerGap": 24,
+    "sectionGap": 32
+  },
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64
+  ],
+  "radius": {
+    "control": 6,
+    "surface": 6,
+    "badge": 4
+  },
+  "breakpoints": {
+    "wide": 1280,
+    "compact": 1024,
+    "mobile": 768
+  },
+  "motion": {
+    "transitionMs": 150,
+    "followScroll": "auto",
+    "reducedMotion": "disable-nonessential"
+  },
+  "accessibility": {
+    "minTarget": 40,
+    "focusWidth": 2,
+    "normalTextContrastTarget": 4.5,
+    "nonTextContrastTarget": 3,
+    "doNotUseColorAlone": true
+  },
+  "semanticColor": {
+    "executionComplete": "success",
+    "executionFailure": "error",
+    "running": "info",
+    "unstructuredReport": "muted",
+    "count": "fg",
+    "selected": "brass",
+    "reviewChangesRequested": "error"
+  }
+}

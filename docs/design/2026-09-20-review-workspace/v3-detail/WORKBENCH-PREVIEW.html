@@ -1,0 +1,216 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CouncilKit · 固定席位工作台样张</title><link rel="stylesheet" href="design-tokens.css"><style>*{box-sizing:border-box}body{margin:0;background:var(--ck-content);color:var(--ck-text);font-family:var(--ck-ui-font);font-optical-sizing:auto;font-synthesis:none}button{font:inherit;cursor:pointer}button:disabled{cursor:default}a{color:inherit;text-decoration:none}button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--ck-focus);outline-offset:2px}button{color:inherit}.app{display:grid;grid-template-columns:184px 248px minmax(0,1fr);grid-template-rows:48px minmax(0,1fr) 28px;height:100dvh;min-height:500px}.global{grid-column:1;grid-row:1/4;background:var(--ck-nav);padding:22px 12px 12px;border-right:1px solid var(--ck-divider);display:flex;flex-direction:column}.brand{font-size:18px;line-height:24px;font-weight:600;letter-spacing:-.02em;padding:0 12px;margin-bottom:30px}.nav-item{font-weight:500;display:flex;align-items:center;gap:12px;height:38px;padding:0 12px;border-radius:5px;font-size:14px;line-height:20px;color:var(--ck-tertiary);margin:3px 0}.nav-item.current{background:var(--ck-raised);color:var(--ck-text)}.nav-bottom{margin-top:auto}.host{display:flex;gap:10px;align-items:center;font-size:13px;color:var(--ck-tertiary);padding:14px 12px 0}.host-dot{width:6px;height:6px;border-radius:50%;background:var(--ck-success)}.context{grid-column:2/4;grid-row:1;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 24px;border-bottom:1px solid var(--ck-divider);background:var(--ck-seats);font-size:13px;line-height:20px;min-width:0}.crumb{display:flex;gap:12px;align-items:center;min-width:0;white-space:nowrap}.crumb span{color:var(--ck-tertiary)}.crumb b{font-weight:500}.context-right{display:flex;align-items:center;gap:18px;font-size:13px;white-space:nowrap}.context-right span{color:var(--ck-secondary)}.context-right .running{color:var(--ck-running)}.context-right code{font:13px var(--ck-mono-font);color:var(--ck-tertiary)}.ghost{display:inline-flex;align-items:center;gap:7px;padding:8px;min-height:36px;border:0;background:transparent;color:var(--ck-secondary);border-radius:5px;font-size:14px;line-height:20px}.ghost:hover{background:var(--ck-raised);color:var(--ck-text)}.ghost:disabled{color:var(--ck-tertiary)}.seats{grid-column:2;grid-row:2;display:flex;flex-direction:column;padding:12px 12px 16px;background:var(--ck-seats);border-right:1px solid var(--ck-divider);overflow:auto}.overview{font-weight:500;border:0;background:none;display:flex;align-items:center;gap:12px;padding:10px 12px;color:var(--ck-secondary);font-size:14px;text-align:left;min-height:44px;border-radius:5px}.overview:hover{background:var(--ck-raised)}.section-label{font-size:13px;line-height:20px;color:var(--ck-tertiary);margin:24px 12px 8px}.seat-row{display:flex;align-items:center;gap:12px;width:100%;height:64px;padding:10px 12px;border:0;background:none;border-radius:5px;color:var(--ck-secondary);text-align:left;position:relative;margin:2px 0;flex-shrink:0}.seat-row:hover{background:var(--ck-raised)}.seat-row[aria-current=true]{background:var(--ck-selected)}.seat-row[aria-current=true]:before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:2px;background:var(--ck-accent);border-radius:2px}.seat-row[aria-current=true]>.ck-icon{color:var(--ck-accent)}.seat-copy{min-width:0;flex:1}.seat-copy b{display:block;font-size:14px;line-height:20px;font-weight:500;color:var(--ck-text);white-space:nowrap}.seat-copy small{display:flex;align-items:center;gap:6px;font-size:13px;line-height:20px;margin-top:4px;color:var(--ck-secondary)}.seat-copy .time{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ck-tertiary)}.seat-copy .running-icon{color:var(--ck-running)}.aggregate{margin-top:22px;padding-top:16px;border-top:1px solid var(--ck-divider)}.aggregate .section-label{margin-top:0}.source-meta{margin-top:auto;padding:30px 12px 0;font:13px/20px var(--ck-mono-font);color:var(--ck-tertiary)}.main{grid-column:3;grid-row:2;display:flex;flex-direction:column;min-width:0;min-height:0}.viewbar{display:flex;align-items:center;justify-content:space-between;height:48px;min-height:48px;padding:0 28px;border-bottom:1px solid var(--ck-divider);gap:22px}.view-left{display:flex;align-items:center;gap:28px;min-width:0}.view-name{font-size:14px;font-weight:500;white-space:nowrap}.tabs{display:flex;gap:24px;height:48px}.tabs button{font-weight:500;border:0;border-bottom:2px solid transparent;background:none;padding:0 4px;font-size:14px;color:var(--ck-tertiary)}.tabs button[aria-selected=true]{color:var(--ck-text);border-color:var(--ck-accent)}.reader{overflow:auto;flex:1;padding:32px 48px 40px;scrollbar-color:var(--ck-controlBorder) transparent;scrollbar-width:thin}.document{max-width:760px}.document h1{font-size:26px;line-height:34px;font-weight:600;margin:0 0 12px}.report-meta{display:flex;gap:16px;align-items:center;flex-wrap:wrap;color:var(--ck-secondary);font-size:13px;line-height:20px;margin:0}.report-meta>span+span:before{content:"·";margin-right:16px;color:var(--ck-tertiary)}.done-label{display:inline-flex;align-items:center;gap:6px}.source{font-size:13px;line-height:20px;color:var(--ck-tertiary);margin:10px 0 32px}.document section{margin-top:32px}.document h2{font-size:18px;line-height:28px;font-weight:600;margin:0 0 12px}.document section p,.document li{font-size:16px;line-height:28px;font-weight:400;margin:0 0 16px}.document pre{font:13px/22px var(--ck-mono-font);font-variant-ligatures:none;padding:16px 20px;background:var(--ck-raised);border-radius:6px;margin:18px 0 0;white-space:pre-wrap}.document ol{padding-left:24px;margin:0}.document li{padding-left:2px;margin:0}.history{margin-top:30px;border-top:1px solid var(--ck-divider);padding:18px 0}.history summary{display:flex;align-items:center;gap:12px;list-style:none;cursor:pointer;font-size:13px;color:var(--ck-secondary);min-height:36px}.history summary::-webkit-details-marker{display:none}.history summary strong{font-size:14px;font-weight:500;color:var(--ck-text)}.history summary>.ck-icon:last-child{width:14px;color:var(--ck-tertiary)}.history p{font-size:13px;line-height:22px;color:var(--ck-secondary);margin:14px 0}.statusbar{grid-column:2/4;grid-row:3;display:flex;justify-content:space-between;align-items:center;background:var(--ck-seats);border-top:1px solid var(--ck-divider);padding:0 20px;color:var(--ck-tertiary);font-size:13px;line-height:18px}.statusbar a:hover{text-decoration:underline}.design-tag{font-size:11px;border:1px solid var(--ck-controlBorder);border-radius:4px;padding:1px 5px;color:var(--ck-tertiary)}.process-head{border-left:2px solid var(--ck-running);padding-left:16px;margin:20px 0 28px}.process-head p{font-size:13px;line-height:22px;color:var(--ck-secondary);margin:6px 0}.event{display:grid;grid-template-columns:56px 1fr;gap:16px;padding:10px 0;border-bottom:1px solid var(--ck-divider);font-size:14px;line-height:22px}.event time{font:12px/22px var(--ck-mono-font);color:var(--ck-tertiary)}.event code{font:13px/22px var(--ck-mono-font);overflow-wrap:anywhere}.mobile-seat{display:none}.running-text{color:var(--ck-running)}@media(max-width:1120px){.app{grid-template-columns:64px 248px minmax(0,1fr)}.global{padding:18px 8px 12px}.brand{font-size:14px;padding:0;overflow:hidden;width:36px;white-space:nowrap}.nav-item{padding:0 14px}.nav-item span,.host span,.nav-bottom .nav-item span{display:none}.host{justify-content:center;padding:14px 0}.reader{padding:28px 32px}.context{padding:0 20px}.context-right code{display:none}}@media(max-width:900px){.app{grid-template-columns:64px minmax(0,1fr);grid-template-rows:48px minmax(0,1fr) 28px}.context{grid-column:2}.seats{display:none}.main{grid-column:2}.statusbar{grid-column:2}.view-name{display:none}.mobile-seat{display:block;max-width:180px;background:var(--ck-raised);color:var(--ck-text);border:1px solid var(--ck-controlBorder);border-radius:5px;font:13px var(--ck-ui-font);padding:6px}.viewbar{padding:0 20px}.view-left{gap:20px}.reader{padding:26px}.context-right{gap:10px}.context-right>span:not(.running):not(.design-tag){display:none}}@media(max-width:640px){.app{grid-template-columns:1fr}.global{display:none}.context,.main,.statusbar{grid-column:1}.context{padding:0 16px}.context-right>code,.context-right>.ghost{display:none}.context-right{font-size:12px}.context .crumb>span{display:none}.viewbar{padding:0 16px;gap:10px}.view-left{gap:16px}.reader{padding:24px 20px}.document h1{font-size:24px;line-height:32px}.document section p,.document li{font-size:16px;line-height:28px}.copy-label{display:none}.mobile-seat{min-height:44px}.viewbar .ghost{min-width:44px;min-height:44px}.tabs{gap:18px}.statusbar{padding:0 16px}.statusbar>span{max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.report-meta{gap:10px}.report-meta>span+span:before{margin-right:10px}}@media(prefers-reduced-motion:no-preference){.seat-row,.ghost{transition:background 120ms,color 120ms}}
+.mobile-menu{display:none}.mobile-nav-dialog{position:fixed;left:12px;top:54px;margin:0;width:240px;max-width:calc(100vw - 24px);padding:12px;background:var(--ck-seats);color:var(--ck-text);border:1px solid var(--ck-controlBorder);border-radius:8px}.mobile-nav-dialog::backdrop{background:#0008}.menu-title{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:500}.mobile-nav-dialog button.nav-item{width:100%;height:44px;background:none;border:0;color:var(--ck-text);text-align:left}.mobile-nav-dialog button.nav-item:hover{background:var(--ck-raised)}.mobile-nav-dialog p{font-size:12px;line-height:20px;color:var(--ck-tertiary);margin:12px}.overview[aria-current=true]{background:var(--ck-selected);color:var(--ck-accent)}@media(max-width:640px){.mobile-menu{display:inline-flex;min-width:40px;min-height:40px;padding:8px}.context .crumb{gap:8px}.context .crumb>span{display:none}}</style></head><body class="ck-ui"><div class="app"><nav class="global" aria-label="全局导航样式"><div class="brand">CouncilKit</div><div class="nav-item "><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+  <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+</svg><span>首页</span></div><div class="nav-item "><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
+  <path d="M12 8v6" />
+  <path d="M9 11h6" />
+</svg><span>新建讨论</span></div><div class="nav-item "><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+  <path d="M9 18h6" />
+  <path d="M10 22h4" />
+</svg><span>产品创意</span></div><div class="nav-item current"><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8" />
+  <path d="M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z" />
+  <path d="M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1" />
+</svg><span>报告</span></div><div class="nav-bottom"><a class="nav-item" href="DETAIL-LAB.html"><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M14 17H5" />
+  <path d="M19 7h-9" />
+  <circle cx="17" cy="17" r="3" />
+  <circle cx="7" cy="7" r="3" />
+</svg><span>细节规范</span></a><div class="host"><i class="host-dot"></i><span>Host 在线</span></div></div></nav><header class="context"><div class="crumb"><button type="button" class="mobile-menu ghost" id="open-nav" aria-label="打开导航菜单"><svg aria-hidden="true"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect width="7" height="7" x="3" y="3" rx="1" />
+  <rect width="7" height="7" x="3" y="14" rx="1" />
+  <path d="M14 4h7" />
+  <path d="M14 9h7" />
+  <path d="M14 15h7" />
+  <path d="M14 20h7" />
+</svg></button><span>报告</span><span>/</span><b>piston #413</b></div><div class="context-right"><span class="running">审查中</span><span>3/5 席位已完成</span><code>SHA 6424bc1</code><span class="design-tag">设计样张</span><button class="ghost" type="button" disabled title="此静态样张不连接真实 PR">打开 PR<svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M15 3h6v6" />
+  <path d="M10 14 21 3" />
+  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+</svg></button></div></header><aside class="seats" aria-label="审查席位"><button class="overview" type="button" id="overview"><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect width="7" height="7" x="3" y="3" rx="1" />
+  <rect width="7" height="7" x="3" y="14" rx="1" />
+  <path d="M14 4h7" />
+  <path d="M14 9h7" />
+  <path d="M14 15h7" />
+  <path d="M14 20h7" />
+</svg>本轮总览</button><div class="section-label">审查席位</div><div id="seat-list"></div><div class="aggregate"><div class="section-label">汇总</div><button class="seat-row" id="aggregator" type="button"><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M13 13.74a2 2 0 0 1-2 0L2.5 8.87a1 1 0 0 1 0-1.74L11 2.26a2 2 0 0 1 2 0l8.5 4.87a1 1 0 0 1 0 1.74z" />
+  <path d="m20 14.285 1.5.845a1 1 0 0 1 0 1.74L13 21.74a2 2 0 0 1-2 0l-8.5-4.87a1 1 0 0 1 0-1.74l1.5-.845" />
+</svg><span class="seat-copy"><b>结果汇总</b><small><svg aria-hidden="true" focusable="false"
+  class="ck-icon ck-icon-state"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <circle cx="12" cy="12" r="10" />
+  <path d="M12 6v6h4" />
+</svg>等待席位交付</small></span></button></div><div class="source-meta">SHA 6424bc1<br>演示数据 · 2026/09/20</div></aside><main class="main"><div class="viewbar"><div class="view-left"><span class="view-name" id="seat-name">对抗审查</span><select class="mobile-seat" aria-label="选择审查席位" id="mobile-seat"></select><div class="tabs" role="tablist" aria-label="席位视图"><button role="tab" id="report-tab" aria-selected="true" data-mode="report">报告</button><button role="tab" id="process-tab" aria-selected="false" data-mode="process" tabindex="-1">过程</button></div></div><button class="ghost" id="copy-report" type="button"><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+</svg><span class="copy-label">复制</span></button></div><div class="reader" id="reader"><article class="document" id="document"><h1>重连与消息重放审查</h1><p class="report-meta"><span class="done-label"><svg aria-hidden="true" focusable="false"
+  class="ck-icon ck-icon-state"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M20 6 9 17l-5-5" />
+</svg>执行完成</span><span class="ck-numeric">15m47s</span><span>grok-4.6</span></p><p class="source">本次执行的报告原文 · 暂无结构化摘要</p><section><h2>审查范围</h2><p>本次检查覆盖事件重放、断线恢复与消息合并，重点关注重连前后的内容一致性。</p></section><section><h2>观察与分析</h2><p>连接恢复后，历史片段会重新进入消息合并逻辑。需要结合事件序号与当前消息状态，判断已完成正文是否被再次追加。</p><p>现有测试覆盖了顺序到达的事件，但混合历史重放与空文本完成帧仍值得补充验证。</p><pre>首次接收 → 完成消息
+断线重连 → 重放历史 → 检查正文一致性</pre></section><section><h2>建议验证</h2><ol><li>重放相同历史，确认正文不会重复。</li><li>接收空文本完成帧后重连，确认内容仍保留。</li><li>模拟连续断线，观察重连请求是否收敛。</li></ol></section><details class="history"><summary><svg aria-hidden="true" focusable="false"
+  class="ck-icon ck-icon-state"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <circle cx="12" cy="12" r="10" />
+  <path d="M12 6v6h4" />
+</svg><strong>历史过程</strong><span>57 次调用</span><svg aria-hidden="true" focusable="false"
+  class="ck-icon"
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="m6 9 6 6 6-6" />
+</svg></summary><p>示例记录：读取审查上下文、核对消息合并、执行验证命令。仅展示已保存过程。</p></details></article></div></main><footer class="statusbar"><span id="status-note" role="status">其他 2 席仍在运行</span><a href="DETAIL-LAB.html">字体、图标与状态规范 ↗</a></footer></div><dialog id="nav-dialog" class="mobile-nav-dialog" aria-labelledby="nav-title"><div class="menu-title"><span id="nav-title">CouncilKit</span><button id="close-nav" class="ghost" aria-label="关闭导航菜单">关闭</button></div><button class="nav-item" data-nav="首页" type="button">首页</button><button class="nav-item" data-nav="新建讨论" type="button">新建讨论</button><button class="nav-item" data-nav="产品创意" type="button">产品创意</button><button class="nav-item" data-nav="报告" type="button">报告</button><p>全局导航样式预览；本样张仅连接报告与过程交互。</p></dialog><script>
+const icons={"shield": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\" />\n</svg>", "scan-line": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M3 7V5a2 2 0 0 1 2-2h2\" />\n  <path d=\"M17 3h2a2 2 0 0 1 2 2v2\" />\n  <path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" />\n  <path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />\n  <path d=\"M7 12h10\" />\n</svg>", "swords": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"m13 19 6-6\" />\n  <path d=\"M14.5 17.5 3.586 6.586A2 2 0 013 5.172V3h2.172a2 2 0 011.414.586L17.5 14.5\" />\n  <path d=\"m14.828 6.172 2.586-2.586A2 2 0 0118.828 3H21v2.172a2 2 0 01-.586 1.414l-2.586 2.586\" />\n  <path d=\"m16 16 4 4\" />\n  <path d=\"m19 21 2-2\" />\n  <path d=\"m5 14 4 4\" />\n  <path d=\"m5 21-2-2\" />\n  <path d=\"M7.5 16.5 4 20\" />\n</svg>", "wrench": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z\" />\n</svg>", "boxes": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z\" />\n  <path d=\"m7 16.5-4.74-2.85\" />\n  <path d=\"m7 16.5 5-3\" />\n  <path d=\"M7 16.5v5.17\" />\n  <path d=\"M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z\" />\n  <path d=\"m17 16.5-5-3\" />\n  <path d=\"m17 16.5 4.74-2.85\" />\n  <path d=\"M17 16.5v5.17\" />\n  <path d=\"M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z\" />\n  <path d=\"M12 8 7.26 5.15\" />\n  <path d=\"m12 8 4.74-2.85\" />\n  <path d=\"M12 13.5V8\" />\n</svg>", "layers-2": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M13 13.74a2 2 0 0 1-2 0L2.5 8.87a1 1 0 0 1 0-1.74L11 2.26a2 2 0 0 1 2 0l8.5 4.87a1 1 0 0 1 0 1.74z\" />\n  <path d=\"m20 14.285 1.5.845a1 1 0 0 1 0 1.74L13 21.74a2 2 0 0 1-2 0l-8.5-4.87a1 1 0 0 1 0-1.74l1.5-.845\" />\n</svg>", "copy": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\" />\n  <path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\" />\n</svg>", "external-link": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M15 3h6v6\" />\n  <path d=\"M10 14 21 3\" />\n  <path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\" />\n</svg>", "layout-list": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\" />\n  <rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\" />\n  <path d=\"M14 4h7\" />\n  <path d=\"M14 9h7\" />\n  <path d=\"M14 15h7\" />\n  <path d=\"M14 20h7\" />\n</svg>", "chevron-down": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"m6 9 6 6 6-6\" />\n</svg>"},states={"check": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon ck-icon-state\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M20 6 9 17l-5-5\" />\n</svg>", "activity": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon ck-icon-state\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\" />\n</svg>", "clock-3": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon ck-icon-state\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <circle cx=\"12\" cy=\"12\" r=\"10\" />\n  <path d=\"M12 6v6h4\" />\n</svg>", "circle-x": "<svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon ck-icon-state\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <circle cx=\"12\" cy=\"12\" r=\"10\" />\n  <path d=\"m15 9-6 6\" />\n  <path d=\"m9 9 6 6\" />\n</svg>"};const seats=[{id:'security',name:'安全审查',icon:'shield',done:true,time:'8m29s'},{id:'correctness',name:'正确性审查',icon:'scan-line',done:true,time:'5m56s'},{id:'adversarial',name:'对抗审查',icon:'swords',done:true,time:'15m47s'},{id:'maintenance',name:'可维护性审查',icon:'wrench',done:false,time:''},{id:'compatibility',name:'兼容性审查',icon:'boxes',done:false,time:''}];let selected='adversarial',mode='report';const report="<h1>重连与消息重放审查</h1><p class=\"report-meta\"><span class=\"done-label\"><svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon ck-icon-state\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"M20 6 9 17l-5-5\" />\n</svg>执行完成</span><span class=\"ck-numeric\">15m47s</span><span>grok-4.6</span></p><p class=\"source\">本次执行的报告原文 · 暂无结构化摘要</p><section><h2>审查范围</h2><p>本次检查覆盖事件重放、断线恢复与消息合并，重点关注重连前后的内容一致性。</p></section><section><h2>观察与分析</h2><p>连接恢复后，历史片段会重新进入消息合并逻辑。需要结合事件序号与当前消息状态，判断已完成正文是否被再次追加。</p><p>现有测试覆盖了顺序到达的事件，但混合历史重放与空文本完成帧仍值得补充验证。</p><pre>首次接收 → 完成消息\n断线重连 → 重放历史 → 检查正文一致性</pre></section><section><h2>建议验证</h2><ol><li>重放相同历史，确认正文不会重复。</li><li>接收空文本完成帧后重连，确认内容仍保留。</li><li>模拟连续断线，观察重连请求是否收敛。</li></ol></section><details class=\"history\"><summary><svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon ck-icon-state\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <circle cx=\"12\" cy=\"12\" r=\"10\" />\n  <path d=\"M12 6v6h4\" />\n</svg><strong>历史过程</strong><span>57 次调用</span><svg aria-hidden=\"true\" focusable=\"false\"\n  class=\"ck-icon\"\n  xmlns=\"http://www.w3.org/2000/svg\"\n  width=\"24\"\n  height=\"24\"\n  viewBox=\"0 0 24 24\"\n  fill=\"none\"\n  stroke=\"currentColor\"\n  stroke-width=\"2\"\n  stroke-linecap=\"round\"\n  stroke-linejoin=\"round\"\n>\n  <path d=\"m6 9 6 6 6-6\" />\n</svg></summary><p>示例记录：读取审查上下文、核对消息合并、执行验证命令。仅展示已保存过程。</p></details>";const doc=document.querySelector('#document');const remembered={};function renderNav(){document.querySelector('#seat-list').innerHTML=seats.map(s=>`<button class="seat-row" aria-current="${s.id===selected}" data-seat="${s.id}">${icons[s.icon]}<span class="seat-copy"><b>${s.name}</b><small><span class="${s.done?'':'running-icon'}">${states[s.done?'check':'activity']}</span>${s.done?'执行完成':'执行中'}<span class="time">${s.time}</span></small></span></button>`).join('');document.querySelectorAll('[data-seat]').forEach(b=>b.addEventListener('click',()=>pick(b.dataset.seat)));const sel=document.querySelector('#mobile-seat');sel.innerHTML=`<option value="overview" ${selected==='overview'?'selected':''}>本轮总览</option><optgroup label="审查席位">`+seats.map(s=>`<option value="${s.id}" ${s.id===selected?'selected':''}>${s.name}</option>`).join('')+`</optgroup><optgroup label="汇总"><option value="aggregator" ${selected==='aggregator'?'selected':''}>结果汇总</option></optgroup>`;document.querySelector('#overview').setAttribute('aria-current',String(selected==='overview'));document.querySelector('#aggregator').setAttribute('aria-current',String(selected==='aggregator'));}
+function render(){if(selected==='overview'||selected==='aggregator'){document.querySelector('.tabs').style.display='none';document.querySelector('#seat-name').textContent=selected==='overview'?'本轮总览':'结果汇总';document.querySelector('#copy-report').disabled=selected==='aggregator';doc.innerHTML=selected==='overview'?'<h1>本轮审查仍在进行中</h1><p class="source">3/5 席位执行完成 · 汇总报告尚未生成</p><section><h2>已完成席位可以先读</h2><p>选择席位查看独立原文或已保存过程。此页面是固定布局与视觉细节样张，不连接真实审查数据。</p></section>':'<h1>等待席位交付</h1><p class="source">Aggregator 尚未生成汇总报告。</p><section><h2>独立报告仍可阅读</h2><p>已完成席位的原文可直接打开，不必等待汇总。</p></section>';return;}document.querySelector('.tabs').style.display='flex';const s=seats.find(x=>x.id===selected);document.querySelector('#seat-name').textContent=s.name;document.querySelectorAll('[data-mode]').forEach(b=>{b.setAttribute('aria-selected',String(b.dataset.mode===mode));b.tabIndex=b.dataset.mode===mode?0:-1;});if(mode==='report'){doc.innerHTML=s.done?report.replace('15m47s',s.time):`<h1>本次报告尚未生成</h1><p class="source">${s.name}仍在执行。可以切换到过程查看已保存记录。</p>`;}else{doc.innerHTML=`<h1>${s.name} · 已保存过程</h1><p class="source">设计样张 · 过程记录不构成最终报告</p><div class="process-head"><p>${s.done?'执行已结束':'当前动作：运行验证命令'}</p><p>${s.done?'可返回报告阅读本次原文。':'正在查看演示记录，不连接实际 Run。'}</p></div><div class="event"><time>00:07</time><span>读取审查上下文与变更。</span></div><div class="event"><time>02:18</time><code>读取 sessionEventTimeline.ts</code></div><div class="event"><time>05:30</time><code>pnpm test -- sessionEventTimeline</code></div><div class="event"><time>05:31</time><span>调用结束；未在此记录中提供验证结论。</span></div>`;}document.querySelector('#copy-report').disabled=mode==='report'&&!s.done;}
+function pick(id){remembered[selected]={mode,scroll:document.querySelector('#reader').scrollTop};selected=id;const s=seats.find(x=>x.id===selected);mode=remembered[id]?.mode||((id==='overview'||id==='aggregator'||s?.done)?'report':'process');renderNav();render();document.querySelector('#reader').scrollTop=remembered[id]?.scroll||0;}
+document.querySelector('#mobile-seat').addEventListener('change',e=>pick(e.target.value));const tabs=[...document.querySelectorAll('[data-mode]')];tabs.forEach((b,i)=>{b.addEventListener('click',()=>{mode=b.dataset.mode;render();document.querySelector('#reader').scrollTop=0;});b.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();const target=tabs[1-i];mode=target.dataset.mode;render();target.focus();}});});document.querySelector('#overview').addEventListener('click',()=>pick('overview'));document.querySelector('#aggregator').addEventListener('click',()=>pick('aggregator'));document.querySelector('#copy-report').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(doc.innerText);document.querySelector('#status-note').textContent='样张文本已复制';}catch{document.querySelector('#status-note').textContent='浏览器未允许复制，请手动选择文本';}});renderNav();const menu=document.querySelector('#nav-dialog');document.querySelector('#open-nav').addEventListener('click',()=>menu.showModal());document.querySelector('#close-nav').addEventListener('click',()=>menu.close());menu.addEventListener('close',()=>document.querySelector('#open-nav').focus());document.querySelectorAll('[data-nav]').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.nav==='报告'){pick('adversarial');}else{document.querySelector('#status-note').textContent='静态样张仅演示报告工作台';}menu.close();}));
+</script></body></html>

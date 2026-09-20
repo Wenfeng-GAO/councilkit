@@ -629,6 +629,349 @@ async function bootStartReview(start?: (input: CliRunLaunchRequest) => { pid: nu
   return { launches };
 }
 
+describe("GET /api/v1/cli-runs/:runId/attempts/:attemptId/result", () => {
+  const SEAT_A = {
+    attemptId: "attempt-0",
+    agentId: "a",
+    agentName: "review-security",
+    driverId: "claude-stream-json",
+    modelId: "m",
+  };
+  const SEAT_B = {
+    attemptId: "attempt-1",
+    agentId: "b",
+    agentName: "review-correctness",
+    driverId: "kimi-stream-json",
+    modelId: "k",
+  };
+  const AGGREGATOR = {
+    attemptId: "aggregator",
+    agentId: "b",
+    agentName: "review-correctness",
+    driverId: "kimi-stream-json",
+    modelId: "k",
+  };
+
+  function seedTranscript(records: unknown[]): void {
+    const dir = join(home, "runs", RUN_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "report.md"), MARKDOWN);
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
+    );
+  }
+
+  function startedRecord(): unknown {
+    return {
+      kind: "review.started",
+      version: 1,
+      runId: RUN_ID,
+      startedAt: "2026-09-20T00:00:00.000Z",
+      task: { task: "result-fixture" },
+      attempts: [SEAT_A, SEAT_B],
+      aggregator: AGGREGATOR,
+    };
+  }
+
+  function finishedRecord(
+    attemptId: string,
+    status: "success" | "failure",
+    extra: Record<string, unknown> = {},
+  ): unknown {
+    return {
+      kind: "attempt.finished",
+      version: 1,
+      attemptId,
+      agentName: "review-security",
+      driverId: "claude-stream-json",
+      status,
+      output: status === "success" ? "output" : null,
+      exitCode: status === "success" ? 0 : 1,
+      durationMs: 10,
+      ...extra,
+    };
+  }
+
+  function aggregationRecord(output: string): unknown {
+    return {
+      kind: "aggregation.finished",
+      version: 1,
+      attemptId: "aggregator",
+      agentName: "review-correctness",
+      driverId: "kimi-stream-json",
+      status: "success",
+      output,
+      exitCode: 0,
+      durationMs: 5,
+    };
+  }
+
+  async function getResult(
+    attemptId: string,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const res = await fetch(
+      `${host?.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/${attemptId}/result`,
+      { headers: authedHeaders(host as TestHost) },
+    );
+    const body = (await res.json()) as { ok: boolean; data?: Record<string, unknown> };
+    return { status: res.status, body: body.data ?? (body as unknown as Record<string, unknown>) };
+  }
+
+  it("returns the full durable output far beyond the detail API's 256KB scan cap", async () => {
+    const big = "x".repeat(300 * 1024);
+    seedTranscript([startedRecord(), finishedRecord("attempt-0", "success", { output: big })]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#1.1");
+    expect(body.executionStatus).toBe("success");
+    expect(body.availability).toBe("available");
+    expect(body.markdown).toBe(big);
+    expect(body.truncated).toBe(false);
+    expect(body.failure).toBeNull();
+    expect(body.reusedFrom).toBeNull();
+  });
+
+  it("serves the retried success, never the earlier failure, for the same attemptId", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "failure", {
+        attemptNumber: 1,
+        exitCode: 1,
+        durationMs: 5_000,
+        failure: { code: "EXIT", message: "non-zero exit 1" },
+      }),
+      finishedRecord("attempt-0", "success", {
+        output: "retry-success-body",
+        attemptNumber: 2,
+        retryOf: 1,
+      }),
+    ]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#1.2");
+    expect(body.executionStatus).toBe("success");
+    expect(body.markdown).toBe("retry-success-body");
+    expect(body.failure).toBeNull();
+  });
+
+  it("returns failure details for a terminal failure and maps CANCELLED to cancelled", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "failure", {
+        attemptNumber: 1,
+        failure: { code: "NO_OUTPUT", message: "no final output extracted" },
+      }),
+      finishedRecord("attempt-1", "failure", {
+        attemptNumber: 1,
+        failure: { code: "CANCELLED", message: "run aborted before this attempt started" },
+      }),
+    ]);
+    host = await boot();
+    const failed = await getResult("attempt-0");
+    expect(failed.status).toBe(200);
+    expect(failed.body.executionRef).toBe("attempt-0#1.1");
+    expect(failed.body.executionStatus).toBe("failure");
+    expect(failed.body.availability).toBe("unavailable");
+    expect(failed.body.markdown).toBeNull();
+    expect(failed.body.failure).toEqual({
+      code: "NO_OUTPUT",
+      message: "no final output extracted",
+    });
+
+    const cancelled = await getResult("attempt-1");
+    expect(cancelled.body.executionStatus).toBe("cancelled");
+    expect(cancelled.body.availability).toBe("unavailable");
+  });
+
+  it("returns reusedFrom for seats explicitly reused via reusedAttemptIds", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "success", { output: "reusable-body", attemptNumber: 1 }),
+      {
+        kind: "review.resumed",
+        version: 1,
+        runId: RUN_ID,
+        resumedAt: "2026-09-20T01:00:00.000Z",
+        reusedAttemptIds: ["attempt-0"],
+        rerunAttemptIds: ["attempt-1"],
+        probe: [],
+      },
+      finishedRecord("attempt-1", "success", { output: "fresh-body", attemptNumber: 1 }),
+    ]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#1.1");
+    expect(body.availability).toBe("available");
+    expect(body.markdown).toBe("reusable-body");
+    expect(body.reusedFrom).toEqual({ runId: RUN_ID, executionRef: "attempt-0#1.1" });
+
+    const fresh = await getResult("attempt-1");
+    expect(fresh.body.executionRef).toBe("attempt-1#2.1");
+    expect(fresh.body.reusedFrom).toBeNull();
+    expect(fresh.body.markdown).toBe("fresh-body");
+  });
+
+  it("reports pending with the prospective ref while a resumed rerun is in flight", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "failure", {
+        attemptNumber: 1,
+        failure: { code: "NO_OUTPUT", message: "nothing" },
+      }),
+      {
+        kind: "review.resumed",
+        version: 1,
+        runId: RUN_ID,
+        resumedAt: "2026-09-20T01:00:00.000Z",
+        reusedAttemptIds: ["attempt-1"],
+        rerunAttemptIds: ["attempt-0"],
+        probe: [],
+      },
+    ]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#2.1");
+    expect(body.executionStatus).toBe("queued");
+    expect(body.availability).toBe("pending");
+    expect(body.markdown).toBeNull();
+    expect(body.reusedFrom).toBeNull();
+  });
+
+  it("distinguishes the pending aggregator from seats and reads its durable summary", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "success", { output: "seat-body" }),
+    ]);
+    host = await boot();
+    const pending = await getResult("aggregator");
+    expect(pending.status).toBe(200);
+    expect(pending.body.executionRef).toBe("aggregator#1.1");
+    expect(pending.body.executionStatus).toBe("pending");
+    expect(pending.body.availability).toBe("pending");
+
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "success", { output: "seat-body" }),
+      aggregationRecord("aggregated-markdown"),
+    ]);
+    const done = await getResult("aggregator");
+    expect(done.body.executionRef).toBe("aggregator#1.1");
+    expect(done.body.executionStatus).toBe("success");
+    expect(done.body.availability).toBe("available");
+    expect(done.body.markdown).toBe("aggregated-markdown");
+  });
+
+  it("reports empty for a terminal success with an empty persisted output", async () => {
+    seedTranscript([startedRecord(), finishedRecord("attempt-0", "success", { output: "" })]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionStatus).toBe("success");
+    expect(body.availability).toBe("empty");
+    expect(body.markdown).toBeNull();
+  });
+
+  it("keeps the seat pending before any terminal record exists", async () => {
+    seedTranscript([startedRecord()]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#1.1");
+    expect(body.executionStatus).toBe("queued");
+    expect(body.availability).toBe("pending");
+    expect(body.markdown).toBeNull();
+  });
+
+  it("returns unavailable (not pending forever) when the run ended without a seat record", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "success", { output: "seat-body" }),
+      finishedRecord("attempt-1", "failure", {
+        attemptNumber: 1,
+        failure: { code: "NO_OUTPUT", message: "nothing" },
+      }),
+      {
+        kind: "review.finished",
+        version: 1,
+        status: "failed",
+        endedAt: "2026-09-20T02:00:00.000Z",
+        incomplete: true,
+      },
+    ]);
+    host = await boot();
+    const { status, body } = await getResult("aggregator");
+    expect(status).toBe(200);
+    expect(body.executionStatus).toBe("failure");
+    expect(body.availability).toBe("unavailable");
+    expect(body.markdown).toBeNull();
+  });
+
+  it("returns unavailable with a sentinel ref for a corrupt transcript line", async () => {
+    const dir = join(home, "runs", RUN_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "transcript.jsonl"), `${JSON.stringify(startedRecord())}\n{not-json\n`);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#0.0");
+    expect(body.availability).toBe("unavailable");
+    expect(body.markdown).toBeNull();
+  });
+
+  it("rejects unknown attempts with 404 and bad attempt ids with 400", async () => {
+    seedTranscript([startedRecord()]);
+    host = await boot();
+    const unknown = await getResult("attempt-9");
+    expect(unknown.status).toBe(404);
+    const bad = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt.0/result`, {
+      headers: authedHeaders(host),
+    });
+    expect(bad.status).toBe(400);
+    const badRun = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/not-a-run/attempts/attempt-0/result`,
+      { headers: authedHeaders(host) },
+    );
+    expect(badRun.status).toBe(400);
+  });
+
+  it("requires session auth and refuses a missing transcript", async () => {
+    seedTranscript([startedRecord()]);
+    host = await boot();
+    const unauth = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/result`,
+      { headers: { Host: CANONICAL_HOST_HEADER } },
+    );
+    expect(unauth.status).toBe(401);
+
+    const missing = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    mkdirSync(join(home, "runs", missing), { recursive: true });
+    const res = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${missing}/attempts/attempt-0/result`,
+      { headers: authedHeaders(host) },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("404s a symlinked run dir instead of reading through it", async () => {
+    seedTranscript([startedRecord()]);
+    const outside = join(home, "outside-result");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "transcript.jsonl"), `${JSON.stringify(startedRecord())}\n`);
+    symlinkSync(outside, join(home, "runs", "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2"));
+    host = await boot();
+    const res = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2/attempts/attempt-0/result`,
+      { headers: authedHeaders(host) },
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("POST /api/v1/cli-runs start review", () => {
   it("POST /api/v1/cli-runs without session cookie returns 401 UNAUTHENTICATED", async () => {
     const { launches } = await bootStartReview();

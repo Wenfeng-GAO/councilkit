@@ -48,7 +48,25 @@ const makeRun = () => ({
   },
 });
 
-test("审查工作台分开统计 Aggregator，过程读取失败可恢复，手机无横向溢出", async ({ page }) => {
+const resultEnvelope = (
+  attemptId: string,
+  data: Record<string, unknown>,
+): { ok: true; data: unknown } => ({
+  ok: true,
+  data: {
+    runId,
+    attemptId,
+    executionRef: `${attemptId}#1.1`,
+    truncated: false,
+    failure: null,
+    reusedFrom: null,
+    ...data,
+  },
+});
+
+test("固定席位工作台：过程读取失败可恢复，完成席位直读 durable 原文，手机无横向溢出", async ({
+  page,
+}) => {
   const data = makeRun();
   let failLive = true;
   await page.route(`**/api/v1/cli-runs/${runId}`, (route) =>
@@ -83,43 +101,74 @@ test("审查工作台分开统计 Aggregator，过程读取失败可恢复，手
           },
     ),
   );
+  await page.route(`**/api/v1/cli-runs/${runId}/attempts/*/result*`, (route) => {
+    const attemptId = /attempts\/([^/]+)\/result/.exec(route.request().url())?.[1] ?? "";
+    if (attemptId === "attempt-0") {
+      return route.fulfill({
+        json: resultEnvelope(attemptId, {
+          executionStatus: "success",
+          availability: "available",
+          markdown: "# 安全审查报告\n\n无结构化摘要正文",
+        }),
+      });
+    }
+    if (attemptId === "aggregator") {
+      return route.fulfill({
+        json: resultEnvelope(attemptId, {
+          executionStatus: "pending",
+          availability: "pending",
+          markdown: null,
+        }),
+      });
+    }
+    return route.fulfill({
+      json: resultEnvelope(attemptId, {
+        executionStatus: "running",
+        availability: "pending",
+        markdown: null,
+      }),
+    });
+  });
   await page.goto(`/reports/${runId}`);
-  await expect(page.getByRole("heading", { name: "paas-core / piston-sdk #7" })).toBeVisible();
-  await expect(page.getByRole("progressbar", { name: "审查席位完成进度" })).toHaveAttribute(
-    "max",
-    "2",
-  );
-  await expect(page.getByRole("progressbar")).toHaveAttribute("value", "1");
-  await expect(page.getByText("等待审查席位结束", { exact: true })).toBeVisible();
+  // 上下文栏席位计数 + 单一席位列（无重复列表/下拉）。
+  await expect(page.getByText("1/2 席位已完成").first()).toBeVisible();
+  await expect(page.locator(".ck-wb-seat-row")).toHaveCount(3);
   await expect(page.getByRole("region", { name: "外部 Squad 修复任务" })).toHaveCount(0);
-  await page.getByRole("button", { name: "过程进行中：正确性审查", exact: true }).click();
-  await expect(page.getByText(/过程读取失败/)).toBeVisible();
+
+  // 运行中席位：默认过程 Tab；live 失败给诚实空态 + 手动重读，恢复后读到事件。
+  await page
+    .getByRole("button", { name: /正确性审查/ })
+    .first()
+    .click();
+  await expect(page.getByRole("tab", { name: "过程" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("过程暂时无法读取")).toBeVisible();
   failLive = false;
+  await page.getByRole("button", { name: "重新读取" }).click();
   await expect(page.getByText("正在验证短帧事件。", { exact: true })).toBeVisible();
-  await expect(page.getByText(/过程读取失败/)).toHaveCount(0);
-  await expect(page.locator("main .ck-inspector")).toHaveCount(0);
-  await expect(page.locator("body > .ck-inspector")).toHaveCount(1);
-  await page.keyboard.press("Escape");
+  await expect(page.getByText("过程暂时无法读取")).toHaveCount(0);
+  // 已结束的过程标注保守版本说明（sidecar 按 attemptId 存放，无法对应当前执行）。
+  await expect(page.getByText("该席位已保存过程 · 版本未单独记录")).toBeVisible();
+
+  // 已完成席位：默认报告 Tab；正文只来自 result 端点，中性说明无假徽标。
+  await page
+    .getByRole("button", { name: /安全审查/ })
+    .first()
+    .click();
+  await expect(page.getByRole("tab", { name: "报告" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("本次执行的报告原文 · 暂无结构化摘要")).toBeVisible();
+  await expect(page.getByText("无结构化摘要正文")).toBeVisible();
+
+  // review kind 不再有模态检查器；页面全程无 dialog。
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "paas-core / piston-sdk #7" })).toHaveCount(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-
-  data.progress.attempts[0].status = "failure";
-  await page.reload();
-  await expect(
-    page.getByText("1 个席位未成功完成，可打开结果查看记录；最终结论以汇总报告为准。"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "查看结果：安全审查", exact: true }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByText("席位结果", { exact: true })).toBeVisible();
 });
 
-test("结束的席位读取错误可手动重试，完成报告后显示导出入口", async ({ page }) => {
+test("席位失败显示已记录原因、过程空态保守标注；汇总完成后总览显示结论", async ({ page }) => {
   const data = makeRun();
   data.status = "failed";
   data.progress.attempts[0].status = "failure";
-  let failLive = true;
+  let failResult = true;
   await page.route(`**/api/v1/cli-runs/${runId}`, (route) =>
     route.fulfill({ json: { ok: true, data } }),
   );
@@ -127,34 +176,63 @@ test("结束的席位读取错误可手动重试，完成报告后显示导出�
     route.fulfill({ json: { ok: true, data: { runs: [] } } }),
   );
   await page.route(`**/api/v1/cli-runs/${runId}/attempts/*/live*`, (route) =>
-    route.fulfill(
-      failLive
-        ? {
-            status: 503,
-            json: { ok: false, error: { code: "UNAVAILABLE", message: "Test failure" } },
-          }
-        : { json: { ok: true, data: { events: [], nextSeq: 0, done: true } } },
-    ),
+    route.fulfill({ json: { ok: true, data: { events: [], nextSeq: 0, done: true } } }),
   );
+  await page.route(`**/api/v1/cli-runs/${runId}/attempts/*/result*`, (route) => {
+    if (failResult) {
+      return route.fulfill({
+        status: 503,
+        json: { ok: false, error: { code: "UNAVAILABLE", message: "Test failure" } },
+      });
+    }
+    const attemptId = /attempts\/([^/]+)\/result/.exec(route.request().url())?.[1] ?? "";
+    if (attemptId === "attempt-0") {
+      return route.fulfill({
+        json: resultEnvelope(attemptId, {
+          executionStatus: "failure",
+          availability: "unavailable",
+          markdown: null,
+          failure: { code: "EXIT", message: "exit 1" },
+        }),
+      });
+    }
+    return route.fulfill({
+      json: resultEnvelope(attemptId, {
+        executionStatus: "pending",
+        availability: "pending",
+        markdown: null,
+      }),
+    });
+  });
   await page.goto(`/reports/${runId}`);
-  await page.getByRole("button", { name: "查看结果：安全审查", exact: true }).click();
-  await expect(page.getByText(/过程读取失败/)).toBeVisible();
-  failLive = false;
-  await page.getByRole("button", { name: "重新读取过程" }).click();
-  await expect(page.getByText("席位结果", { exact: true })).toBeVisible();
-  await expect(page.getByText("尚无过程记录", { exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page
+    .getByRole("button", { name: /安全审查/ })
+    .first()
+    .click();
+  // 读取错误：不清空其他轴，手动重读后显示执行失败与已记录原因。
+  await expect(page.getByText("报告暂时无法读取")).toBeVisible();
+  failResult = false;
+  await page.getByRole("button", { name: "重新读取" }).click();
+  await expect(page.getByText("已记录原因：exit 1")).toBeVisible();
+
+  // 过程 Tab：已结束空响应（不声称确定未保存）。
+  await page.getByRole("tab", { name: "过程" }).click();
+  await expect(page.getByText("暂无可读取的过程记录")).toBeVisible();
+
+  // run 完成、汇总生成：总览直接显示结论，Aggregator 走同一 result 端点。
   data.status = "completed";
   data.hasReport = true;
   data.markdown = "# Autonomous Review Report\n\n---\n\n## 结论\n\nchanges-requested";
   data.progress.phase = "done";
   for (const row of data.progress.attempts) row.status = "success";
   await page.reload();
-  await expect(page.getByRole("region", { name: "外部 Squad 修复任务" })).toBeVisible();
-  await expect(page.getByText("需要修改", { exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "阅读报告正文 ↓" }).click();
-  await expect(page.locator("#review-report-body")).toBeInViewport();
-  await expect(page.getByRole("heading", { name: "paas-core / piston-sdk #7" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "已完成" })).toBeVisible();
+  await expect(page.getByText("Changes requested", { exact: true }).first()).toBeVisible();
+  await page
+    .getByRole("button", { name: /结果汇总/ })
+    .first()
+    .click();
+  await expect(page.getByRole("tab", { name: "报告" })).toHaveAttribute("aria-selected", "true");
 });
 
 const squadRunId = "ck-squad-00000000-0000-4000-8000-0000000000e4";

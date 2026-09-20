@@ -1,0 +1,119 @@
+{
+  "package": "lucide-static",
+  "version": "1.47.0",
+  "source": "https://www.npmjs.com/package/lucide-static/v/1.47.0",
+  "icons": [
+    {
+      "name": "house",
+      "status": "ok"
+    },
+    {
+      "name": "message-square-plus",
+      "status": "ok"
+    },
+    {
+      "name": "lightbulb",
+      "status": "ok"
+    },
+    {
+      "name": "files",
+      "status": "ok"
+    },
+    {
+      "name": "settings-2",
+      "status": "ok"
+    },
+    {
+      "name": "panel-left-close",
+      "status": "ok"
+    },
+    {
+      "name": "layout-list",
+      "status": "ok"
+    },
+    {
+      "name": "shield",
+      "status": "ok"
+    },
+    {
+      "name": "scan-line",
+      "status": "ok"
+    },
+    {
+      "name": "swords",
+      "status": "ok"
+    },
+    {
+      "name": "wrench",
+      "status": "ok"
+    },
+    {
+      "name": "boxes",
+      "status": "ok"
+    },
+    {
+      "name": "layers-2",
+      "status": "ok"
+    },
+    {
+      "name": "check",
+      "status": "ok"
+    },
+    {
+      "name": "activity",
+      "status": "ok"
+    },
+    {
+      "name": "circle-x",
+      "status": "ok"
+    },
+    {
+      "name": "clock-3",
+      "status": "ok"
+    },
+    {
+      "name": "copy",
+      "status": "ok"
+    },
+    {
+      "name": "external-link",
+      "status": "ok"
+    },
+    {
+      "name": "chevron-down",
+      "status": "ok"
+    },
+    {
+      "name": "chevron-right",
+      "status": "ok"
+    },
+    {
+      "name": "ellipsis",
+      "status": "ok"
+    },
+    {
+      "name": "arrow-down",
+      "status": "ok"
+    },
+    {
+      "name": "search",
+      "status": "ok"
+    },
+    {
+      "name": "x",
+      "status": "ok"
+    },
+    {
+      "name": "info",
+      "status": "ok"
+    },
+    {
+      "name": "circle-help",
+      "status": "ok"
+    },
+    {
+      "name": "loader-circle",
+      "status": "ok"
+    }
+  ]
+}

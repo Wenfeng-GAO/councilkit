@@ -267,6 +267,7 @@ describe("repair mutation handlers", () => {
       profiles: Array<{ name: string }>;
       sourceBranchHint: string | null;
       baseHint: string | null;
+      hintSource: "pr" | "review" | "worktree" | null;
     };
     expect(listed.profiles.map((row) => row.name)).toEqual(["default"]);
     expect(listed.sourceBranchHint).toBe("feat-x");

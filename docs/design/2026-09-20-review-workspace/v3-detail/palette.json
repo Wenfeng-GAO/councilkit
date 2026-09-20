@@ -1,0 +1,19 @@
+{
+  "nav": "#101113",
+  "seats": "#16171A",
+  "content": "#1B1D21",
+  "raised": "#23262C",
+  "selected": "#2C2924",
+  "divider": "#2C3037",
+  "controlBorder": "#707783",
+  "text": "#E7E9EE",
+  "secondary": "#B2B7C2",
+  "tertiary": "#929AA7",
+  "disabled": "#68707D",
+  "accent": "#C9B18A",
+  "running": "#8CB4E8",
+  "success": "#8AAE9B",
+  "error": "#ED969B",
+  "warning": "#D6B27A",
+  "focus": "#ACC9F3"
+}

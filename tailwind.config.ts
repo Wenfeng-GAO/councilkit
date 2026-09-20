@@ -23,6 +23,15 @@ export default {
       fontFamily: {
         display: ["var(--font-display)", "Georgia", "serif"],
         command: ["var(--font-command)", "ui-monospace", "monospace"],
+        // 固定席位工作台 UI 字体（本地 Inter Variable，见 public/fonts/）；只作为 token，不改变 body 现有字体
+        sans: [
+          "InterVariable",
+          "PingFang SC",
+          "Microsoft YaHei",
+          "Noto Sans CJK SC",
+          "system-ui",
+          "sans-serif",
+        ],
       },
     },
   },

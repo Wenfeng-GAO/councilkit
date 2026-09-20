@@ -1,0 +1,35 @@
+@font-face{font-family:InterVariable;src:url("assets/fonts/InterVariable.woff2") format("woff2");font-style:normal;font-weight:100 900;font-display:swap;}
+:root{color-scheme:dark;
+  --ck-nav: #101113;
+  --ck-seats: #16171A;
+  --ck-content: #1B1D21;
+  --ck-raised: #23262C;
+  --ck-selected: #2C2924;
+  --ck-divider: #2C3037;
+  --ck-controlBorder: #707783;
+  --ck-text: #E7E9EE;
+  --ck-secondary: #B2B7C2;
+  --ck-tertiary: #929AA7;
+  --ck-disabled: #68707D;
+  --ck-accent: #C9B18A;
+  --ck-running: #8CB4E8;
+  --ck-success: #8AAE9B;
+  --ck-error: #ED969B;
+  --ck-warning: #D6B27A;
+  --ck-focus: #ACC9F3;
+  --ck-ui-font: InterVariable, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  --ck-mono-font: "SF Mono", Menlo, Consolas, ui-monospace, monospace;
+  --ck-nav-width:184px; --ck-seat-width:248px; --ck-context-height:48px; --ck-view-height:48px; --ck-report-width:760px;
+}
+.ck-ui{font-family:var(--ck-ui-font);font-optical-sizing:auto;font-synthesis:none;letter-spacing:normal;}
+.ck-title{font:600 26px/34px var(--ck-ui-font);}
+.ck-section-title{font:600 18px/28px var(--ck-ui-font);}
+.ck-body{font:400 16px/28px var(--ck-ui-font);}
+.ck-label{font:500 14px/20px var(--ck-ui-font);}
+.ck-meta{font:400 13px/20px var(--ck-ui-font);color:var(--ck-secondary);}
+.ck-mono{font:400 13px/22px var(--ck-mono-font);font-variant-ligatures:none;}
+.ck-numeric{font-variant-numeric:tabular-nums;}
+.ck-icon{width:18px;height:18px;stroke-width:1.75;flex-shrink:0;vertical-align:-.125em;}
+.ck-icon-state{width:14px;height:14px;stroke-width:1.75;}
+.ck-focus:focus-visible{outline:2px solid var(--ck-focus);outline-offset:2px;}
+@media(prefers-reduced-motion:reduce){.ck-ui *{transition:none!important;animation:none!important;scroll-behavior:auto!important;}}

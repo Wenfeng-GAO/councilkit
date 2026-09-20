@@ -24,19 +24,18 @@ test("有 fixture 时能点进报告并看到标题；脚本标签保持为文�
   await fixture.click();
   await expect(page).toHaveURL(new RegExp(`/reports/${E2E_CLI_RUN_ID}`));
   await expect(page.getByRole("heading", { name: "Autonomous Review Report" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "复制 apply 命令" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "复制修复 Prompt" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制当前内容" })).toBeVisible();
   await expect(page.locator("script", { hasText: "alert(1)" })).toHaveCount(0);
   await expect(page.getByText("<script>alert(1)</script>")).toBeVisible();
 });
 
-test("已有 CLI 报告时详情页能复制 apply 命令", async ({ page }) => {
+test("已有 CLI 报告时详情页能复制报告内容", async ({ page }) => {
   await page.goto("/reports");
   await page.getByRole("button", { name: /全部案件/ }).click();
   const reportLink = page.locator('a[href^="/reports/ck-review-"]').first();
   if ((await reportLink.count()) === 0) return;
   await reportLink.click();
-  await expect(page.getByRole("button", { name: "复制 apply 命令" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制当前内容" })).toBeVisible();
 });
 
 test("深链 /reports/:runId 能直接打开 fixture", async ({ page }) => {
@@ -115,18 +114,18 @@ test("开始审查提交 GitHub PR 后导航到 /reports/<runId>", async ({ page
   await expect(page).toHaveURL(/\/reports\/ck-review-[0-9a-fA-F-]+/);
 });
 
-test("查看过程打开右侧检查器，Esc 关闭", async ({ page }) => {
+test("review fixture 的席位详情在页内打开（无模态检查器）", async ({ page }) => {
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
-  const inspect = page.getByRole("button", { name: /查看(过程|结果)/ }).first();
-  if ((await inspect.count()) === 0) {
+  const seat = page.locator(".ck-wb-seat-row").first();
+  if ((await seat.count()) === 0) {
     test
       .info()
       .annotations.push({ type: "skip-reason", description: "fixture has no live attempts" });
     return;
   }
-  await inspect.click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toBeHidden();
+  await seat.click();
+  // 页内详情：报告/过程 Tab 可用，全程无 dialog（review kind 已移除 SeatInspector 入口）。
+  await expect(page.getByRole("tab", { name: "报告" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "过程" })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });

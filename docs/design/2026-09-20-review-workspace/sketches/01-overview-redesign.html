@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CouncilKit · 审查总览（redesign sketch）</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --surface: #15181d;
+    --surface2: #1e2128;
+    --border: #232830;
+    --fg: #e6e8ec;
+    --muted: #a0a6b0;
+    --parchment: #efe4cf;
+    --brass: #c4a574;
+    --success: #22c55e;
+    --warn: #d29922;
+    --error: #f85149;
+    --info: #58a6ff;
+    --focus: #6366f1;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 24px; }
+  body { display: flex; min-height: 100vh; }
+  button { font-family: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+  /* ---------- demo state switcher (not production UI) ---------- */
+  .demo-switcher {
+    position: fixed; top: 12px; right: 12px; z-index: 50;
+    display: flex; gap: 4px; padding: 4px;
+    background: var(--surface); border: 1px dashed var(--brass); border-radius: 8px;
+    font-size: 12px; line-height: 18px;
+  }
+  .demo-switcher span { color: var(--brass); padding: 6px 8px; user-select: none; }
+  .demo-switcher button {
+    border: 0; background: transparent; color: var(--muted);
+    padding: 6px 10px; border-radius: 6px; font-size: 12px; line-height: 18px;
+  }
+  .demo-switcher button[aria-pressed="true"] { background: var(--surface2); color: var(--fg); }
+
+  /* ---------- sidebar ---------- */
+  .sidebar {
+    width: 208px; flex: none; background: var(--surface);
+    display: flex; flex-direction: column; padding: 24px 12px;
+    border-right: 1px solid var(--border);
+  }
+  .logo { font-size: 18px; font-weight: 600; color: var(--parchment); padding: 4px 12px 24px; letter-spacing: .02em; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; height: 40px;
+    padding: 0 12px; border-radius: 6px; color: var(--muted);
+    font-size: 14px; line-height: 20px; text-decoration: none; margin-bottom: 4px;
+  }
+  .nav-item svg { flex: none; }
+  .nav-item.active { background: var(--surface2); color: var(--brass); }
+  .nav-item:hover:not(.active) { background: var(--surface2); color: var(--fg); }
+  .sidebar .spacer { flex: 1; }
+  .host-dot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--muted); font-size: 13px; }
+  .host-dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex: none; }
+
+  /* ---------- main ---------- */
+  .main { flex: 1; min-width: 0; padding: 32px 40px 64px; }
+  .crumb { font-size: 13px; color: var(--muted); margin-bottom: 12px; display: flex; gap: 8px; align-items: center; }
+  .crumb a { color: var(--muted); text-decoration: none; }
+  .crumb a:hover { color: var(--fg); }
+
+  .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+  .page-head h1 { font-size: 28px; line-height: 36px; font-weight: 600; color: var(--parchment); }
+  .meta-row { display: flex; gap: 16px; margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 20px; flex-wrap: wrap; }
+  .meta-row .mono { font-family: var(--mono); }
+  .head-actions { display: flex; gap: 8px; flex: none; }
+
+  .btn {
+    height: 40px; padding: 0 16px; border-radius: 6px; font-size: 14px;
+    display: inline-flex; align-items: center; gap: 8px; border: 1px solid transparent;
+    transition: background 150ms;
+  }
+  .btn-quiet { background: transparent; border-color: var(--border); color: var(--fg); }
+  .btn-quiet:hover { background: var(--surface2); }
+  .btn-primary { background: var(--brass); color: #14110a; font-weight: 600; }
+  .btn-primary:hover { background: #d3b78a; }
+
+  /* ---------- conclusion band ---------- */
+  .conclusion {
+    margin-top: 24px; padding: 20px 24px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    display: flex; justify-content: space-between; gap: 32px; align-items: flex-start;
+  }
+  .eyebrow { font-size: 13px; line-height: 20px; color: var(--muted); margin-bottom: 8px; }
+  .verdict-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .verdict-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 20px; line-height: 28px; font-weight: 600; color: var(--error);
+  }
+  .verdict-pill::before {
+    content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--error); flex: none;
+  }
+  .verdict-pill.neutral { color: var(--muted); }
+  .verdict-pill.neutral::before { background: var(--muted); }
+  .verdict-sub { margin-top: 6px; color: var(--muted); font-size: 14px; }
+  .verdict-sub strong { color: var(--fg); font-weight: 600; }
+  .incomplete-note {
+    margin-top: 10px; display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; line-height: 20px; color: var(--warn);
+  }
+  .conclusion-side { text-align: right; flex: none; color: var(--muted); font-size: 13px; line-height: 20px; }
+  .conclusion-side .mono { font-family: var(--mono); }
+  .fix-hint { margin-top: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .fix-hint small { color: var(--muted); font-size: 12px; line-height: 18px; }
+
+  /* ---------- content columns ---------- */
+  .columns { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 32px; margin-top: 32px; align-items: start; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+  .tabs button {
+    background: none; border: 0; color: var(--muted); font-size: 14px;
+    padding: 10px 12px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--brass); font-weight: 600; }
+  .tabs .count { color: var(--muted); font-weight: 400; margin-left: 4px; }
+
+  .findings-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .findings-header h2 { font-size: 15px; font-weight: 600; color: var(--fg); }
+  .findings-header span { font-size: 13px; color: var(--muted); }
+
+  .finding {
+    display: grid; grid-template-columns: 64px minmax(0,1fr) 20px; gap: 16px; align-items: center;
+    min-height: 64px; padding: 12px 8px; border-bottom: 1px solid var(--border);
+    border-radius: 4px; width: 100%; background: none; border-top: 0; border-left: 0; border-right: 0;
+    text-align: left; color: inherit; transition: background 150ms;
+  }
+  .finding:hover { background: var(--surface2); }
+  .sev {
+    justify-self: start; font-size: 12px; line-height: 18px; font-weight: 600;
+    padding: 2px 8px; border-radius: 4px; border: 1px solid;
+  }
+  .sev-fatal  { color: var(--error); border-color: var(--error); }
+  .sev-major  { color: var(--warn); border-color: var(--warn); }
+  .sev-minor  { color: var(--muted); border-color: var(--border); }
+  .sev-advice { color: var(--muted); border-color: transparent; padding-left: 0; }
+  .finding-title { font-size: 15px; line-height: 24px; font-weight: 600; color: var(--fg); }
+  .finding-meta { display: block; font-size: 13px; line-height: 20px; color: var(--muted); margin-top: 2px; }
+  .finding-meta .mono { font-family: var(--mono); font-size: 12px; }
+  .finding > svg { justify-self: end; color: var(--muted); flex: none; }
+  .findings-more { margin-top: 12px; }
+  .findings-more button {
+    background: none; border: 0; color: var(--info); font-size: 14px; padding: 8px 8px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+
+  /* empty / waiting states */
+  .panel-note {
+    padding: 32px 24px; text-align: center; color: var(--muted);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .panel-note p { margin-bottom: 16px; }
+  .panel-note .btn { margin: 0 4px; }
+
+  /* ---------- seat rail ---------- */
+  .rail { position: sticky; top: 24px; }
+  .rail h3 { font-size: 13px; line-height: 20px; color: var(--muted); font-weight: 400; margin-bottom: 4px; }
+  .rail-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .rail-head strong { font-size: 15px; font-weight: 600; color: var(--parchment); }
+  .seat {
+    display: grid; grid-template-columns: 18px minmax(0,1fr) auto 16px; gap: 10px; align-items: center;
+    min-height: 64px; padding: 10px 8px; border-radius: 6px;
+    background: none; border: 0; color: inherit; text-align: left; width: 100%;
+    transition: background 150ms;
+  }
+  .seat:hover { background: var(--surface2); }
+  .seat-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
+  .dot-ok { background: var(--success); }
+  .dot-run { background: var(--info); }
+  .dot-fail { background: var(--error); display: none; }
+  .seat-id { display: flex; flex-direction: column; min-width: 0; }
+  .seat-name { font-size: 14px; line-height: 20px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seat-status { font-size: 12px; line-height: 18px; color: var(--muted); display: flex; align-items: center; gap: 5px; margin-top: 2px; white-space: nowrap; }
+  .seat-status i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .st-ok i { background: var(--success); }
+  .st-run i { background: var(--info); }
+  .st-fail { color: var(--error); }
+  .st-fail i { background: var(--error); }
+  .seat-count { font-size: 14px; color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .seat-count small { color: var(--muted); font-size: 12px; margin-left: 2px; }
+  .seat > svg { color: var(--muted); }
+  .rail-divider { border-top: 1px solid var(--border); margin: 8px 0; }
+  .seat.aggregator .seat-name { color: var(--brass); }
+  .rail-note { margin-top: 12px; font-size: 12px; line-height: 18px; color: var(--muted); padding: 0 8px; }
+
+  /* ---------- state visibility rules ---------- */
+  body[data-state="done"] .only-aggregating,
+  body[data-state="done"] .only-unparsed,
+  body[data-state="done"] .only-failed { display: none !important; }
+  body[data-state="aggregating"] .only-done,
+  body[data-state="aggregating"] .only-unparsed,
+  body[data-state="aggregating"] .only-failed { display: none !important; }
+  body[data-state="unparsed"] .only-done,
+  body[data-state="unparsed"] .only-aggregating,
+  body[data-state="unparsed"] .only-failed { display: none !important; }
+  body[data-state="failed"] .only-done,
+  body[data-state="failed"] .only-aggregating,
+  body[data-state="failed"] .only-unparsed { display: none !important; }
+  body[data-state="failed"] .seat[data-seat="correctness"] .seat-id .st-ok { display: none; }
+  body[data-state="failed"] .seat[data-seat="correctness"] .dot-ok { display: none; }
+  body[data-state="failed"] .seat[data-seat="correctness"] .dot-fail { display: block; }
+  body:not([data-state="failed"]) .seat[data-seat="correctness"] .st-fail { display: none; }
+  body[data-state="done"] .pending-list,
+  body[data-state="failed"] .pending-list { display: none !important; }
+  body[data-state="aggregating"] .tabs .count,
+  body[data-state="unparsed"] .tabs .count { display: none !important; }
+  body[data-state="failed"] .not-failed { display: none !important; }
+  body[data-state="aggregating"] .agg-done { display: none !important; }
+  body:not([data-state="aggregating"]) .only-agg-running { display: none !important; }
+</style>
+</head>
+<body data-state="done">
+
+<div class="demo-switcher" role="group" aria-label="演示状态切换">
+  <span>演示状态</span>
+  <button aria-pressed="true" data-set="done">汇总已解析</button>
+  <button aria-pressed="false" data-set="aggregating">正在汇总</button>
+  <button aria-pressed="false" data-set="unparsed">结果未解析</button>
+  <button aria-pressed="false" data-set="failed">1 席失败</button>
+</div>
+
+<nav class="sidebar" aria-label="全局导航">
+  <div class="logo">CouncilKit</div>
+  <a class="nav-item" href="#"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 7l6-5 6 5v7a1 1 0 01-1 1H3a1 1 0 01-1-1z"/></svg>首页</a>
+  <a class="nav-item" href="#"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>新建讨论</a>
+  <a class="nav-item" href="#"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1L3 9h4l-1 6 6-8H8z"/></svg>产品创意</a>
+  <a class="nav-item active" href="#"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2h8a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1zM6 5h4M6 8h4M6 11h2"/></svg>报告</a>
+  <div class="spacer"></div>
+  <a class="nav-item" href="#"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.5"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3"/></svg>设置</a>
+  <div class="host-dot"><i></i>Host 在线</div>
+</nav>
+
+<main class="main">
+  <div class="crumb"><a href="#">报告</a><span>/</span><span>PR 审查</span></div>
+
+  <div class="page-head">
+    <div>
+      <h1>piston #413</h1>
+      <div class="meta-row">
+        <span>演示数据</span><span>2026/09/20</span>
+        <span>审查 SHA <span class="mono">644bc1</span></span>
+      </div>
+    </div>
+    <div class="head-actions">
+      <button class="btn btn-quiet">打开 PR
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9L9 3M4 3h5v5"/></svg>
+      </button>
+      <button class="btn btn-quiet">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="8" height="8" rx="1"/><path d="M10 4V2a1 1 0 00-1-1H2a1 1 0 00-1 1v7a1 1 0 001 1h2"/></svg>
+        复制报告
+      </button>
+    </div>
+  </div>
+
+  <section class="conclusion" aria-label="本轮审查结论">
+    <div>
+      <!-- 状态 1：汇总已解析 -->
+      <div class="only-done">
+        <p class="eyebrow">本轮汇总结论 · 5 / 5 席位已交付</p>
+        <div class="verdict-line">
+          <span class="verdict-pill">需要修改</span>
+        </div>
+        <p class="verdict-sub">发现 <strong>7 项问题</strong>，其中 <strong>3 项需要优先处理</strong>。结论基于审查时的代码版本。</p>
+        <div class="fix-hint">
+          <button class="btn btn-primary">开始修复</button>
+          <button class="btn btn-quiet">查看优先问题</button>
+          <small>开始修复将修改代码并推送，随后自动复审</small>
+        </div>
+      </div>
+      <!-- 状态 2：正在汇总 -->
+      <div class="only-aggregating">
+        <p class="eyebrow">本轮审查 · 5 / 5 席位已结束</p>
+        <div class="verdict-line"><span class="verdict-pill neutral">正在汇总</span></div>
+        <p class="verdict-sub">各席位结果已可查看，汇总结论生成后会显示在这里。</p>
+      </div>
+      <!-- 状态 3：结果未解析 -->
+      <div class="only-unparsed">
+        <p class="eyebrow">本轮审查 · 5 / 5 席位已交付</p>
+        <div class="verdict-line"><span class="verdict-pill neutral">执行完成 · 汇总报告待解析</span></div>
+        <p class="verdict-sub">结构化结论暂不可用，完整报告正文可直接阅读。</p>
+        <div class="fix-hint">
+          <button class="btn btn-quiet">阅读完整报告</button>
+        </div>
+      </div>
+      <!-- 状态 4：1 席失败 -->
+      <div class="only-failed">
+        <p class="eyebrow">本轮汇总结论 · 4 / 5 席位已交付</p>
+        <div class="verdict-line">
+          <span class="verdict-pill">需要修改</span>
+        </div>
+        <p class="verdict-sub">发现 <strong>6 项问题</strong>，其中 <strong>3 项需要优先处理</strong>。结论基于审查时的代码版本。</p>
+        <p class="incomplete-note">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="5.5"/><path d="M7 4v3.5M7 10h.01"/></svg>
+          结果不完整 · 正确性审查执行失败，其覆盖范围缺失
+        </p>
+        <div class="fix-hint">
+          <button class="btn btn-primary">开始修复</button>
+          <button class="btn btn-quiet">查看优先问题</button>
+          <small>开始修复将修改代码并推送，随后自动复审</small>
+        </div>
+      </div>
+    </div>
+    <div class="conclusion-side">
+      <p>审查 SHA <span class="mono">644bc1</span></p>
+      <p>总耗时 22m09s</p>
+    </div>
+  </section>
+
+  <div class="columns">
+    <section aria-label="发现与汇总报告">
+      <div class="tabs" role="tablist">
+        <button role="tab" aria-selected="true">发现<span class="count not-failed">7</span><span class="count only-failed">6</span></button>
+        <button role="tab" aria-selected="false">汇总报告</button>
+      </div>
+
+      <!-- 状态 1：完整发现列表 -->
+      <div class="only-done" role="tabpanel">
+        <div class="findings-header">
+          <h2>优先处理</h2><span>按严重性排序</span>
+        </div>
+        <div>
+          <button class="finding">
+            <span class="sev sev-fatal">致命</span>
+            <span>
+              <span class="finding-title">重放可能重复拼接已完成正文</span>
+              <span class="finding-meta"><span class="mono">sessionEventTimeline.ts:269</span> · 重连后历史片段再次追加，导致正文重复 · 对抗审查提出</span>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3l5 5-5 5"/></svg>
+          </button>
+          <button class="finding">
+            <span class="sev sev-major">重大</span>
+            <span>
+              <span class="finding-title">自动重连缺少退避</span>
+              <span class="finding-meta"><span class="mono">index.tsx:921</span> · 网络异常时自动重连未使用退避策略 · 安全审查、对抗审查提出</span>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3l5 5-5 5"/></svg>
+          </button>
+          <button class="finding">
+            <span class="sev sev-major">重大</span>
+            <span>
+              <span class="finding-title">空文本完成帧可能清空正文</span>
+              <span class="finding-meta"><span class="mono">sessionEventTimeline.ts:49</span> · 当完成帧内容为空时，可能将现有正文清空 · 可维护性审查提出</span>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3l5 5-5 5"/></svg>
+          </button>
+        </div>
+        <div class="findings-more">
+          <button>查看其余 4 项问题
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5L6 7.5l3-3"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 状态 2/3：等待或不可用的发现区 -->
+      <div class="pending-list" role="tabpanel">
+        <div class="panel-note">
+          <p>结构化发现将在汇总结论生成后显示。<br>席位独立结果可立即查看，右侧席位列表进入。</p>
+        </div>
+      </div>
+
+      <!-- 状态 4：有汇总但有席位失败 -->
+      <div class="only-failed" role="tabpanel">
+        <div class="findings-header">
+          <h2>优先处理</h2><span>按严重性排序 · 正确性审查范围缺失</span>
+        </div>
+        <div>
+          <button class="finding">
+            <span class="sev sev-fatal">致命</span>
+            <span>
+              <span class="finding-title">重放可能重复拼接已完成正文</span>
+              <span class="finding-meta"><span class="mono">sessionEventTimeline.ts:269</span> · 对抗审查提出</span>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3l5 5-5 5"/></svg>
+          </button>
+          <button class="finding">
+            <span class="sev sev-major">重大</span>
+            <span>
+              <span class="finding-title">自动重连缺少退避</span>
+              <span class="finding-meta"><span class="mono">index.tsx:921</span> · 安全审查、对抗审查提出</span>
+            </span>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3l5 5-5 5"/></svg>
+          </button>
+        </div>
+        <div class="findings-more">
+          <button>查看其余 4 项问题
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5L6 7.5l3-3"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="rail" aria-label="席位结果">
+      <div class="rail-head"><h3>席位结果</h3><strong><span class="not-failed">5 / 5 已交付</span><span class="only-failed">4 / 5 已交付</span></strong></div>
+      <button class="seat" data-seat="security">
+        <span class="seat-dot dot-ok"></span>
+        <span class="seat-id"><span class="seat-name">安全审查</span><span class="seat-status st-ok"><i></i>已完成</span></span>
+        <span class="seat-count">2<small> 项</small></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3l4 4-4 4"/></svg>
+      </button>
+      <button class="seat" data-seat="correctness">
+        <span class="seat-dot dot-ok"></span><span class="seat-dot dot-fail"></span>
+        <span class="seat-id">
+          <span class="seat-name">正确性审查</span>
+          <span class="seat-status st-ok"><i></i>已完成</span>
+          <span class="seat-status st-fail"><i></i>执行失败</span>
+        </span>
+        <span class="seat-count">1<small> 项</small></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3l4 4-4 4"/></svg>
+      </button>
+      <button class="seat" data-seat="maintainability">
+        <span class="seat-dot dot-ok"></span>
+        <span class="seat-id"><span class="seat-name">可维护性审查</span><span class="seat-status st-ok"><i></i>已完成</span></span>
+        <span class="seat-count">3<small> 项</small></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3l4 4-4 4"/></svg>
+      </button>
+      <button class="seat" data-seat="adversarial">
+        <span class="seat-dot dot-ok"></span>
+        <span class="seat-id"><span class="seat-name">对抗审查</span><span class="seat-status st-ok"><i></i>已完成</span></span>
+        <span class="seat-count">3<small> 项</small></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3l4 4-4 4"/></svg>
+      </button>
+      <button class="seat" data-seat="compat">
+        <span class="seat-dot dot-ok"></span>
+        <span class="seat-id"><span class="seat-name">兼容性审查</span><span class="seat-status st-ok"><i></i>已完成</span></span>
+        <span class="seat-count">2<small> 项</small></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3l4 4-4 4"/></svg>
+      </button>
+      <div class="rail-divider"></div>
+      <button class="seat aggregator">
+        <span class="seat-dot dot-ok"></span>
+        <span class="seat-id"><span class="seat-name">Aggregator 汇总</span><span class="seat-status st-ok agg-done"><i></i>已完成 · 去重合并</span><span class="seat-status only-agg-running">等待席位结果</span></span>
+        <span class="seat-count">7<small> 项</small></span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 3l4 4-4 4"/></svg>
+      </button>
+      <p class="rail-note">席位为独立计数，去重与合并以 Aggregator 汇总为准。</p>
+    </aside>
+  </div>
+</main>
+
+<script>
+  const switcher = document.querySelector('.demo-switcher');
+  switcher.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-set]');
+    if (!btn) return;
+    document.body.dataset.state = btn.dataset.set;
+    switcher.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+  });
+</script>
+</body>
+</html>

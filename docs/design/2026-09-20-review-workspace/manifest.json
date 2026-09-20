@@ -1,0 +1,43 @@
+{
+  "product": "CouncilKit",
+  "date": "2026-09-20",
+  "type": "high-fidelity-design-suite",
+  "status": "proposed",
+  "generationTool": "built-in image_gen",
+  "designViewport": {
+    "width": 1440,
+    "height": 1024
+  },
+  "screens": [
+    {
+      "file": "screens/01-review-overview.png",
+      "width": 1487,
+      "height": 1058,
+      "bytes": 1300089
+    },
+    {
+      "file": "screens/02-seat-result.png",
+      "width": 1487,
+      "height": 1058,
+      "bytes": 1287812
+    },
+    {
+      "file": "screens/03-review-running.png",
+      "width": 1487,
+      "height": 1058,
+      "bytes": 1255763
+    },
+    {
+      "file": "screens/04-process-history.png",
+      "width": 1487,
+      "height": 1058,
+      "bytes": 1266053
+    },
+    {
+      "file": "screens/05-fix-progress.png",
+      "width": 1487,
+      "height": 1058,
+      "bytes": 1229794
+    }
+  ]
+}

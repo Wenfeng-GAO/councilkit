@@ -1,19 +1,16 @@
+import { AppShell } from "@/components/layout/AppShell";
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { FindingLedger } from "@/components/report/FindingLedger";
-import {
-  FixPipeline,
-  FixPlanDocument,
-  formatCliActionError,
-} from "@/components/report/FixPipeline";
+import { FixPlanDocument, formatCliActionError } from "@/components/report/FixPipeline";
 import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
 import { RepairExportCard } from "@/components/report/RepairExportCard";
 import { RepairRunPanel } from "@/components/report/RepairRunPanel";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
-import { ReviewRunHeader } from "@/components/report/ReviewRunHeader";
 import { SeatInspector } from "@/components/report/SeatInspector";
 import { SquadWorkspace } from "@/components/report/SquadWorkspace";
+import { ReviewWorkbench } from "@/components/report/workbench/ReviewWorkbench";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { cliRunNeedsPoll } from "@/lib/cli-run-status";
@@ -24,7 +21,7 @@ import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { writerRepoFromPrUrl } from "@shared/runtime/pr-url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import "@/styles/report.css";
 import "@/styles/review-live.css";
@@ -40,12 +37,28 @@ export function ReportDetailPage() {
   const [pendingAction, setPendingAction] = useState<"fix" | "re-review" | null>(null);
   const [watchUntil, setWatchUntil] = useState(0);
   const [inspectId, setInspectId] = useState<string | null>(null);
+  // 轮询纪律（DELIVERY-PLAN §3.1）：隐藏页面时停轮询，恢复可见时立即续读一次。
+  const pageVisibleRef = useRef(typeof document === "undefined" ? true : !document.hidden);
+  const [resumeToken, setResumeToken] = useState(0);
+  useEffect(() => {
+    const sync = () => {
+      pageVisibleRef.current = !document.hidden;
+      if (!document.hidden) setResumeToken((token) => token + 1);
+    };
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+  useEffect(() => {
+    if (resumeToken === 0 || runId.length === 0) return;
+    void queryClient.invalidateQueries({ queryKey: ["cli-runs", runId] });
+  }, [resumeToken, runId, queryClient]);
   const query = useQuery({
     queryKey: ["cli-runs", runId],
     queryFn: () => client.getCliRun(runId),
     enabled: runId.length > 0,
     retry: false,
     refetchInterval: (current) => {
+      if (!pageVisibleRef.current) return false;
       const live = current.state.data;
       if (live && cliRunNeedsPoll(live.status, live.pipeline, live.kind)) return 2000;
       if (Date.now() < watchUntil) return 2000;
@@ -188,179 +201,199 @@ export function ReportDetailPage() {
       : null;
   const showSeats = Boolean(query.data?.progress);
 
+  // kind=review 走固定席位工作台：整页三栏布局，自带全局导航，因此路由不再包 AppShell，
+  // 由本页在非 review kind 时自行包壳（见文件底部 return）。
+  if (query.data?.kind === "review") {
+    const run = query.data;
+    return (
+      <ReviewWorkbench
+        key={`workbench:${run.runId}`}
+        run={run}
+        parsed={parsed}
+        stale={query.isError}
+        onRefetch={() => void query.refetch()}
+        backTo={{ to: "/reports", label: "返回报告列表" }}
+        repair={{
+          profiles: profilesQuery.data?.profiles ?? [],
+          activeRepair,
+          sourceBranchDefault: profilesQuery.data?.sourceBranchHint ?? "",
+          baseDefault: profilesQuery.data?.baseHint ?? "",
+          hintSource: profilesQuery.data?.hintSource ?? null,
+          error:
+            actionError ??
+            (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null),
+          pending: repairMutation.isPending,
+          onStart: (profile) => repairMutation.mutate({ kind: "start", profile }),
+          onStop: () => repairMutation.mutate({ kind: "stop" }),
+          onResume: () => repairMutation.mutate({ kind: "resume" }),
+          onSaveProfile: (launch) => repairMutation.mutate({ kind: "save", launch }),
+        }}
+        pipeline={{
+          busy: action.isPending || pendingAction !== null,
+          pendingAction,
+          error: actionError,
+          followUpRun: run.pipeline?.followUpRunId
+            ? (listQuery.data?.runs.find((row) => row.runId === run.pipeline?.followUpRunId) ??
+              null)
+            : null,
+          onFix: () => action.mutate("fix"),
+          onReReview: () => action.mutate("re-review"),
+        }}
+      />
+    );
+  }
+
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-8 sm:px-8">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-muted">
-          <Link to={isIdeate ? "/ideate" : "/reports"} className="text-accent hover:underline">
-            {isIdeate ? "← 产品创意" : "← CLI 报告"}
-          </Link>
-        </p>
-        {query.data?.markdown ? (
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" onClick={copyMarkdown}>
-              {copied === "markdown" ? "已复制" : "复制 Markdown"}
-            </Button>
-            {reviewActions ? (
-              <>
-                <Button variant="ghost" onClick={copyComment} disabled={!parsed}>
-                  {copied === "comment" ? "已复制评论" : "复制 PR 评论"}
-                </Button>
-                {resumeCommand ? (
-                  <Button variant="ghost" onClick={() => void copyText("resume", resumeCommand)}>
-                    {copied === "resume" ? "已复制重跑" : "复制重跑失败席"}
+    <AppShell>
+      <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-8 sm:px-8">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-muted">
+            <Link to={isIdeate ? "/ideate" : "/reports"} className="text-accent hover:underline">
+              {isIdeate ? "← 产品创意" : "← CLI 报告"}
+            </Link>
+          </p>
+          {query.data?.markdown ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="ghost" onClick={copyMarkdown}>
+                {copied === "markdown" ? "已复制" : "复制 Markdown"}
+              </Button>
+              {reviewActions ? (
+                <>
+                  <Button variant="ghost" onClick={copyComment} disabled={!parsed}>
+                    {copied === "comment" ? "已复制评论" : "复制 PR 评论"}
                   </Button>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    void copyText("apply", `councilkit apply --run ${query.data.runId}`)
-                  }
-                >
-                  {copied === "apply" ? "已复制 apply" : "复制 apply 命令"}
-                </Button>
-                <Button onClick={copyFixPrompt}>
-                  {copied === "prompt" ? "已复制 Prompt" : "复制修复 Prompt"}
-                </Button>
-              </>
-            ) : null}
-          </div>
+                  {resumeCommand ? (
+                    <Button variant="ghost" onClick={() => void copyText("resume", resumeCommand)}>
+                      {copied === "resume" ? "已复制重跑" : "复制重跑失败席"}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      void copyText("apply", `councilkit apply --run ${query.data.runId}`)
+                    }
+                  >
+                    {copied === "apply" ? "已复制 apply" : "复制 apply 命令"}
+                  </Button>
+                  <Button onClick={copyFixPrompt}>
+                    {copied === "prompt" ? "已复制 Prompt" : "复制修复 Prompt"}
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+        {query.isPending ? <p className="text-sm text-muted">正在打开报告…</p> : null}
+        {query.isError && !query.data ? (
+          <EmptyState
+            title={isHostUnreachableError(query.error) ? HOST_DOWN_TITLE : "找不到这份报告"}
+            hint={
+              isHostUnreachableError(query.error)
+                ? HOST_DOWN_HINT
+                : "run id 无效，或 report.md 尚未写入。"
+            }
+          />
         ) : null}
-      </div>
-      {query.isPending ? <p className="text-sm text-muted">正在打开报告…</p> : null}
-      {query.isError && !query.data ? (
-        <EmptyState
-          title={isHostUnreachableError(query.error) ? HOST_DOWN_TITLE : "找不到这份报告"}
-          hint={
-            isHostUnreachableError(query.error)
-              ? HOST_DOWN_HINT
-              : "run id 无效，或 report.md 尚未写入。"
-          }
-        />
-      ) : null}
-      {query.data ? (
-        <>
-          {query.isError ? (
-            <output className="text-sm text-warn">
-              更新失败，当前显示上次成功读取的记录。
-              <button type="button" className="ml-2 underline" onClick={() => void query.refetch()}>
-                重新读取
-              </button>
-            </output>
-          ) : null}
-          {query.data.truncated ? (
-            <p className="text-sm text-warn">报告超过 2MB，已截断显示。</p>
-          ) : null}
-          {query.data.kind === "review" ? (
-            <ReviewRunHeader run={query.data} verdict={parsed?.verdict ?? null} />
-          ) : null}
-          {query.data.kind === "ideate" && query.data.ideateIntegrity ? (
-            <IdeateIntegrityCard integrity={query.data.ideateIntegrity} />
-          ) : null}
-          <PrCaseSummary runs={caseRuns} />
-          {resumeCommand ? (
-            <p className="text-sm text-warn">
-              {failedSeats.length} 个席位失败。复制「重跑失败席」只重跑失败的
-              Attempt，成功席会复用。
-            </p>
-          ) : null}
-          {isSquad ? (
-            <SquadWorkspace
-              key={`workspace:${query.data.runId}`}
-              run={query.data}
-              onInspect={setInspectId}
-            />
-          ) : null}
-          {query.data.kind === "review" || query.data.kind === "repair" ? (
-            <RepairRunPanel
-              run={query.data}
-              profiles={profilesQuery.data?.profiles ?? []}
-              sourceBranchDefault={profilesQuery.data?.sourceBranchHint ?? ""}
-              baseDefault={profilesQuery.data?.baseHint ?? ""}
-              hintSource={profilesQuery.data?.hintSource ?? null}
-              activeRepair={activeRepair}
-              error={
-                actionError ??
-                (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null)
-              }
-              pending={repairMutation.isPending}
-              onStart={(profile) => repairMutation.mutate({ kind: "start", profile })}
-              onStop={() => repairMutation.mutate({ kind: "stop" })}
-              onResume={() => repairMutation.mutate({ kind: "resume" })}
-              onSaveProfile={(launch) => repairMutation.mutate({ kind: "save", launch })}
-            />
-          ) : null}
-          {!isSquad && showSeats && query.data.progress ? (
-            <LiveReviewProgress run={query.data} onInspect={setInspectId} />
-          ) : null}
-          {query.data.kind === "review" && query.data.hasReport ? (
-            <section aria-labelledby="ck-repair-progress-title" className="flex flex-col gap-3">
-              <h2
-                id="ck-repair-progress-title"
-                className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass"
-              >
-                当前修复进展
-              </h2>
-              <FixPipeline
+        {query.data ? (
+          <>
+            {query.isError ? (
+              <output className="text-sm text-warn">
+                更新失败，当前显示上次成功读取的记录。
+                <button
+                  type="button"
+                  className="ml-2 underline"
+                  onClick={() => void query.refetch()}
+                >
+                  重新读取
+                </button>
+              </output>
+            ) : null}
+            {query.data.truncated ? (
+              <p className="text-sm text-warn">报告超过 2MB，已截断显示。</p>
+            ) : null}
+            {query.data.kind === "ideate" && query.data.ideateIntegrity ? (
+              <IdeateIntegrityCard integrity={query.data.ideateIntegrity} />
+            ) : null}
+            <PrCaseSummary runs={caseRuns} />
+            {resumeCommand ? (
+              <p className="text-sm text-warn">
+                {failedSeats.length} 个席位失败。复制「重跑失败席」只重跑失败的
+                Attempt，成功席会复用。
+              </p>
+            ) : null}
+            {isSquad ? (
+              <SquadWorkspace
+                key={`workspace:${query.data.runId}`}
                 run={query.data}
-                busy={action.isPending || pendingAction !== null}
-                pendingAction={pendingAction}
-                error={actionError}
-                followUpRun={
-                  query.data.pipeline?.followUpRunId
-                    ? (listQuery.data?.runs.find(
-                        (row) => row.runId === query.data.pipeline?.followUpRunId,
-                      ) ?? null)
-                    : null
-                }
-                onFix={() => action.mutate("fix")}
-                onReReview={() => action.mutate("re-review")}
-              />
-            </section>
-          ) : null}
-          <FindingLedger run={query.data} />
-          {!isSquad && query.data.planMarkdown.trim().length > 0 ? (
-            <FixPlanDocument
-              markdown={query.data.planMarkdown}
-              truncated={query.data.planTruncated}
-            />
-          ) : null}
-          {isSquad ? null : !query.data.hasReport || query.data.markdown.trim().length === 0 ? (
-            query.data.status === "running" ||
-            query.data.status === "awaiting_orchestrator" ? null : (
-              <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />
-            )
-          ) : parsed ? (
-            <div id="review-report-body" className="scroll-mt-6">
-              <ReviewReportView
-                report={parsed}
-                liveAttempts={query.data.progress?.attempts ?? []}
                 onInspect={setInspectId}
               />
-            </div>
-          ) : (
-            <article
-              id="review-report-body"
-              className="border border-edge bg-surface px-5 py-5 sm:px-7 sm:py-6"
-            >
-              <SafeMarkdown variant="document" content={query.data.markdown} />
-            </article>
-          )}
-          {reviewActions && query.data.status !== "running" ? (
-            <RepairExportCard key={`repair:${query.data.runId}`} run={query.data} />
-          ) : null}
-          {query.data.progress ? (
-            <SeatInspector
-              open={inspectId !== null}
-              onClose={() => setInspectId(null)}
-              runId={query.data.runId}
-              attempts={query.data.progress.attempts}
-              selectedId={inspectId}
-              onSelect={setInspectId}
-            />
-          ) : null}
-        </>
-      ) : null}
-    </div>
+            ) : null}
+            {query.data.kind === "repair" ? (
+              <RepairRunPanel
+                run={query.data}
+                profiles={profilesQuery.data?.profiles ?? []}
+                sourceBranchDefault={profilesQuery.data?.sourceBranchHint ?? ""}
+                baseDefault={profilesQuery.data?.baseHint ?? ""}
+                hintSource={profilesQuery.data?.hintSource ?? null}
+                activeRepair={activeRepair}
+                error={
+                  actionError ??
+                  (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null)
+                }
+                pending={repairMutation.isPending}
+                onStart={(profile) => repairMutation.mutate({ kind: "start", profile })}
+                onStop={() => repairMutation.mutate({ kind: "stop" })}
+                onResume={() => repairMutation.mutate({ kind: "resume" })}
+                onSaveProfile={(launch) => repairMutation.mutate({ kind: "save", launch })}
+              />
+            ) : null}
+            {!isSquad && showSeats && query.data.progress ? (
+              <LiveReviewProgress run={query.data} onInspect={setInspectId} />
+            ) : null}
+            <FindingLedger run={query.data} />
+            {!isSquad && query.data.planMarkdown.trim().length > 0 ? (
+              <FixPlanDocument
+                markdown={query.data.planMarkdown}
+                truncated={query.data.planTruncated}
+              />
+            ) : null}
+            {isSquad ? null : !query.data.hasReport || query.data.markdown.trim().length === 0 ? (
+              query.data.status === "running" ||
+              query.data.status === "awaiting_orchestrator" ? null : (
+                <EmptyState title="还没有 report.md" hint="这次 run 可能失败在写报告之前。" />
+              )
+            ) : parsed ? (
+              <div id="review-report-body" className="scroll-mt-6">
+                <ReviewReportView
+                  report={parsed}
+                  liveAttempts={query.data.progress?.attempts ?? []}
+                  onInspect={setInspectId}
+                />
+              </div>
+            ) : (
+              <article
+                id="review-report-body"
+                className="border border-edge bg-surface px-5 py-5 sm:px-7 sm:py-6"
+              >
+                <SafeMarkdown variant="document" content={query.data.markdown} />
+              </article>
+            )}
+            {reviewActions && query.data.status !== "running" ? (
+              <RepairExportCard key={`repair:${query.data.runId}`} run={query.data} />
+            ) : null}
+            {query.data.progress ? (
+              <SeatInspector
+                open={inspectId !== null}
+                onClose={() => setInspectId(null)}
+                runId={query.data.runId}
+                attempts={query.data.progress.attempts}
+                selectedId={inspectId}
+                onSelect={setInspectId}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </div>
+    </AppShell>
   );
 }

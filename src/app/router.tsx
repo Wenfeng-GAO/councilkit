@@ -23,5 +23,7 @@ export const router = createBrowserRouter([
   { path: "/ideate", element: withShell(<IdeatePage />) },
   { path: "/reports", element: withShell(<ReportsPage />) },
   { path: "/reports/compare/:leftId/:rightId", element: withShell(<CompareReportsPage />) },
-  { path: "/reports/:runId", element: withShell(<ReportDetailPage />) },
+  // 报告详情页自行按 kind 拆壳：kind=review 渲染固定席位工作台（自带 184px 全局导航），
+  // 其余 kind 在页面内包 AppShell（见 ReportDetailPage）。
+  { path: "/reports/:runId", element: <ReportDetailPage /> },
 ]);

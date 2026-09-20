@@ -1,0 +1,135 @@
+{
+  "meta": {
+    "revision": "v3-detail",
+    "selectedDirection": "exploration-v3 option 1",
+    "viewport": {
+      "width": 1440,
+      "height": 1024
+    },
+    "status": "selected-layout-detail-proposal"
+  },
+  "color": {
+    "nav": "#101113",
+    "seats": "#16171A",
+    "content": "#1B1D21",
+    "raised": "#23262C",
+    "selected": "#2C2924",
+    "divider": "#2C3037",
+    "controlBorder": "#707783",
+    "text": "#E7E9EE",
+    "secondary": "#B2B7C2",
+    "tertiary": "#929AA7",
+    "disabled": "#68707D",
+    "accent": "#C9B18A",
+    "running": "#8CB4E8",
+    "success": "#8AAE9B",
+    "error": "#ED969B",
+    "warning": "#D6B27A",
+    "focus": "#ACC9F3"
+  },
+  "font": {
+    "ui": "InterVariable, \"PingFang SC\", \"Microsoft YaHei\", \"Noto Sans CJK SC\", system-ui, sans-serif",
+    "mono": "\"SF Mono\", Menlo, Consolas, ui-monospace, monospace",
+    "weights": [
+      400,
+      500,
+      600
+    ],
+    "cjkLetterSpacing": "normal",
+    "opticalSizing": "auto",
+    "numeric": "tabular-nums",
+    "codeLigatures": false
+  },
+  "type": {
+    "title": {
+      "size": 26,
+      "lineHeight": 34,
+      "weight": 600
+    },
+    "section": {
+      "size": 18,
+      "lineHeight": 28,
+      "weight": 600
+    },
+    "body": {
+      "size": 16,
+      "lineHeight": 28,
+      "weight": 400
+    },
+    "ui": {
+      "size": 14,
+      "lineHeight": 20,
+      "weight": 500
+    },
+    "meta": {
+      "size": 13,
+      "lineHeight": 20,
+      "weight": 400
+    },
+    "mono": {
+      "size": 13,
+      "lineHeight": 22,
+      "weight": 400
+    }
+  },
+  "icon": {
+    "family": "Lucide",
+    "pinnedVersion": "1.47.0",
+    "standardSize": 18,
+    "stateSize": 14,
+    "strokeWidth": 1.75,
+    "hitTarget": 36,
+    "touchTarget": 44
+  },
+  "layout": {
+    "globalNav": 184,
+    "collapsedNav": 64,
+    "seats": 248,
+    "contextBar": 48,
+    "viewBar": 48,
+    "seatRow": 64,
+    "globalRow": 38,
+    "contentPadding": 48,
+    "compactPadding": 32,
+    "reportMax": 760,
+    "selectionRule": 2,
+    "focusRing": 2,
+    "focusOffset": 2,
+    "radius": 6,
+    "rowRadius": 5,
+    "breakpoints": {
+      "collapseGlobal": 1120,
+      "collapseSeats": 900,
+      "mobile": 640
+    }
+  },
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64
+  ],
+  "semantic": {
+    "globalSelected": "neutral raised background",
+    "seatSelected": "selected + 2px accent rule",
+    "tabSelected": "2px accent underline",
+    "executionComplete": "neutral check + neutral label",
+    "running": "blue activity + execution text",
+    "failed": "rose circle-x + failure text",
+    "hostOnline": "green dot + Host 在线",
+    "keyboardFocus": "blue focus outline, not selection"
+  },
+  "motion": {
+    "hoverMs": 120,
+    "panelMs": 160,
+    "follow": "instant",
+    "quietState": "no perpetual spinner",
+    "reduceMotion": true
+  }
+}

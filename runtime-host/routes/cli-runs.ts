@@ -25,6 +25,7 @@ import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-h
 import { CLI_RUN_STATUS_FILE, type CliRunProgressPhase } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { makeError } from "@shared/runtime/errors";
+import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
   type RepairProfileRecord,
@@ -46,6 +47,7 @@ import { normalizeReviewPr } from "@shared/runtime/review-case";
 import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
+  type CliRunAttemptResultResponse,
   type CliRunDetailResponse,
   type CliRunListRepairProfilesResponse,
   type CliRunRepairStopResponse,
@@ -59,6 +61,7 @@ import {
   cliRunActionRequestSchema,
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
+  cliRunAttemptResultResponseSchema,
   cliRunDetailResponseSchema,
   cliRunListRepairProfilesResponseSchema,
   cliRunRepairControlRequestSchema,
@@ -73,7 +76,7 @@ import {
 } from "@shared/runtime/schemas";
 import { type CliRunLauncher, defaultCliRunLauncher, isPidAlive } from "../cli-launcher";
 import { resolveRepairBranchHints } from "../repair-branch-hints";
-import { type HostServices, type Route, httpError } from "../server";
+import { type HostServices, type Route, HttpError, httpError } from "../server";
 
 const PIPELINE_PID_FILE = "pipeline.pid";
 
@@ -334,6 +337,129 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
           );
         }
         return detail;
+      },
+    },
+    {
+      method: "GET",
+      pattern: "/api/v1/cli-runs/:runId/attempts/:attemptId/result",
+      auth: "session",
+      responseSchema: cliRunAttemptResultResponseSchema,
+      handler: (ctx): CliRunAttemptResultResponse => {
+        const runId = ctx.params.runId ?? "";
+        if (!isCliRunId(runId)) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "Invalid CLI run id.", { retryable: false }),
+          );
+        }
+        const attemptId = ctx.params.attemptId ?? "";
+        if (!CLI_RUN_ATTEMPT_ID_RE.test(attemptId)) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "Invalid attempt id.", { retryable: false }),
+          );
+        }
+        const detail = readCliRun(runId, process.env);
+        if (detail === null) {
+          throw httpError(
+            404,
+            makeError("NOT_FOUND", "discovery", "CLI run not found.", { retryable: false }),
+          );
+        }
+        const transcript = readRunTranscript(runId);
+        if (transcript.kind === "missing") {
+          throw httpError(
+            404,
+            makeError("NOT_FOUND", "discovery", "CLI run transcript not found.", {
+              retryable: false,
+            }),
+          );
+        }
+        const row = detail.progress?.attempts.find((item) => item.attemptId === attemptId) ?? null;
+        const runActive = detail.status === "running" || detail.status === "awaiting_orchestrator";
+        if (transcript.kind === "unreadable") {
+          // Boundary violation or a corrupt line: finite semantics, never echo
+          // the offending content (it can carry model output / secrets).
+          return {
+            runId,
+            attemptId,
+            executionRef: `${attemptId}#0.0`,
+            executionStatus: runActive
+              ? "pending"
+              : row?.status === "success"
+                ? "success"
+                : "failure",
+            availability: "unavailable",
+            markdown: null,
+            truncated: false,
+            failure: null,
+            reusedFrom: null,
+          };
+        }
+        const resolution = resolveAttemptExecution({
+          records: transcript.records,
+          attemptId,
+          liveStatus: row?.status ?? null,
+          runActive,
+        });
+        if (resolution.kind === "unknown-attempt") {
+          throw httpError(
+            404,
+            makeError("NOT_FOUND", "discovery", "CLI attempt not found in this run.", {
+              retryable: false,
+            }),
+          );
+        }
+        if (resolution.kind === "unavailable") {
+          return {
+            runId,
+            attemptId,
+            executionRef: resolution.executionRef,
+            executionStatus: runActive
+              ? "pending"
+              : row !== null && row.status !== "pending" && row.status !== "queued"
+                ? row.status
+                : "failure",
+            availability: "unavailable",
+            markdown: null,
+            truncated: false,
+            failure: null,
+            reusedFrom: null,
+          };
+        }
+        if (resolution.kind === "inflight") {
+          return {
+            runId,
+            attemptId,
+            executionRef: resolution.executionRef,
+            executionStatus: resolution.executionStatus,
+            availability: "pending",
+            markdown: null,
+            truncated: false,
+            failure: null,
+            reusedFrom: null,
+          };
+        }
+        const output = resolution.executionStatus === "success" ? resolution.output : null;
+        const available = output !== null && output.trim().length > 0;
+        return {
+          runId,
+          attemptId,
+          executionRef: resolution.executionRef,
+          executionStatus: resolution.executionStatus,
+          availability: available
+            ? "available"
+            : resolution.executionStatus === "success"
+              ? "empty"
+              : "unavailable",
+          markdown: available ? output : null,
+          truncated: false,
+          failure: resolution.failure,
+          reusedFrom:
+            resolution.reusedExecutionRef !== null
+              ? { runId, executionRef: resolution.reusedExecutionRef }
+              : null,
+        };
       },
     },
     {
@@ -1060,6 +1186,44 @@ function parseAfterSeq(raw: string | null): number {
     );
   }
   return Number.parseInt(raw, 10);
+}
+
+function readRunTranscript(
+  runId: string,
+): { kind: "records"; records: unknown[] } | { kind: "missing" } | { kind: "unreadable" } {
+  const root = resolveCliRunsRoot(process.env);
+  const runDir = join(root, runId);
+  if (resolve(runDir) !== resolve(root, runId)) return { kind: "unreadable" };
+  const dirStat = safeLstat(runDir);
+  if (dirStat === null || !dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    return { kind: "unreadable" };
+  }
+  const filePath = join(runDir, "transcript.jsonl");
+  const fileStat = safeLstat(filePath);
+  if (fileStat === null) return { kind: "missing" };
+  if (!fileStat.isFile() || fileStat.isSymbolicLink()) return { kind: "unreadable" };
+  // Full read, uncapped: the B1 contract requires the whole durable output of
+  // the matching execution — the detail API's 256KB+64KB truncation and the
+  // index scan cap do not apply here.
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch {
+    return { kind: "unreadable" };
+  }
+  const records: unknown[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      records.push(JSON.parse(trimmed));
+    } catch {
+      // One corrupt line poisons ordering-based identity: refuse the whole
+      // read (finite unavailable semantics) without echoing the line.
+      return { kind: "unreadable" };
+    }
+  }
+  return { kind: "records", records };
 }
 
 function readLiveSidecar(runId: string, attemptId: string): AttemptLiveEvent[] {

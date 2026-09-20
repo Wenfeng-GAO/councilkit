@@ -22,7 +22,29 @@ const PATH_TOOL_NAMES = new Set(["read", "readfile", "glob", "listdir", "searchf
 
 /** Fold deltas and pair tool.started with the matching tool.completed. */
 export function foldLiveEvents(events: readonly AttemptLiveEvent[]): TimelineBlock[] {
-  const blocks: TimelineBlock[] = [];
+  return foldIntoBlocks([], events);
+}
+
+/**
+ * Incremental fold: append new events onto an already-folded block list.
+ * Equivalent to `foldLiveEvents([...previousEvents, ...events])` — the workbench
+ * process poller uses this so appends never re-fold the whole history
+ * (DELIVERY-PLAN §3.1: 追加/去重只处理新数据).
+ */
+export function foldLiveEventsAppend(
+  blocks: readonly TimelineBlock[],
+  events: readonly AttemptLiveEvent[],
+): TimelineBlock[] {
+  return foldIntoBlocks(
+    blocks.map((block) => ({ ...block })),
+    events,
+  );
+}
+
+function foldIntoBlocks(
+  blocks: TimelineBlock[],
+  events: readonly AttemptLiveEvent[],
+): TimelineBlock[] {
   for (const event of events) {
     const last = blocks[blocks.length - 1];
     if (event.type === "text.delta") {

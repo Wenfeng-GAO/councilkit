@@ -1,0 +1,300 @@
+{
+  "method": "WCAG sRGB relative luminance, opaque CSS colors only",
+  "scope": "Token pairs only; decorative dividers excluded; not complete WCAG compliance",
+  "pairs": [
+    {
+      "foreground": "text",
+      "background": "nav",
+      "ratio": 15.55,
+      "target": 4.5
+    },
+    {
+      "foreground": "text",
+      "background": "seats",
+      "ratio": 14.76,
+      "target": 4.5
+    },
+    {
+      "foreground": "text",
+      "background": "content",
+      "ratio": 13.89,
+      "target": 4.5
+    },
+    {
+      "foreground": "text",
+      "background": "raised",
+      "ratio": 12.48,
+      "target": 4.5
+    },
+    {
+      "foreground": "text",
+      "background": "selected",
+      "ratio": 11.92,
+      "target": 4.5
+    },
+    {
+      "foreground": "secondary",
+      "background": "nav",
+      "ratio": 9.4,
+      "target": 4.5
+    },
+    {
+      "foreground": "secondary",
+      "background": "seats",
+      "ratio": 8.92,
+      "target": 4.5
+    },
+    {
+      "foreground": "secondary",
+      "background": "content",
+      "ratio": 8.39,
+      "target": 4.5
+    },
+    {
+      "foreground": "secondary",
+      "background": "raised",
+      "ratio": 7.54,
+      "target": 4.5
+    },
+    {
+      "foreground": "secondary",
+      "background": "selected",
+      "ratio": 7.2,
+      "target": 4.5
+    },
+    {
+      "foreground": "tertiary",
+      "background": "nav",
+      "ratio": 6.66,
+      "target": 4.5
+    },
+    {
+      "foreground": "tertiary",
+      "background": "seats",
+      "ratio": 6.32,
+      "target": 4.5
+    },
+    {
+      "foreground": "tertiary",
+      "background": "content",
+      "ratio": 5.95,
+      "target": 4.5
+    },
+    {
+      "foreground": "tertiary",
+      "background": "raised",
+      "ratio": 5.34,
+      "target": 4.5
+    },
+    {
+      "foreground": "tertiary",
+      "background": "selected",
+      "ratio": 5.11,
+      "target": 4.5
+    },
+    {
+      "foreground": "accent",
+      "background": "nav",
+      "ratio": 9.12,
+      "target": 4.5
+    },
+    {
+      "foreground": "accent",
+      "background": "seats",
+      "ratio": 8.65,
+      "target": 4.5
+    },
+    {
+      "foreground": "accent",
+      "background": "content",
+      "ratio": 8.15,
+      "target": 4.5
+    },
+    {
+      "foreground": "accent",
+      "background": "raised",
+      "ratio": 7.32,
+      "target": 4.5
+    },
+    {
+      "foreground": "accent",
+      "background": "selected",
+      "ratio": 6.99,
+      "target": 4.5
+    },
+    {
+      "foreground": "running",
+      "background": "nav",
+      "ratio": 8.82,
+      "target": 4.5
+    },
+    {
+      "foreground": "running",
+      "background": "seats",
+      "ratio": 8.37,
+      "target": 4.5
+    },
+    {
+      "foreground": "running",
+      "background": "content",
+      "ratio": 7.88,
+      "target": 4.5
+    },
+    {
+      "foreground": "running",
+      "background": "raised",
+      "ratio": 7.08,
+      "target": 4.5
+    },
+    {
+      "foreground": "running",
+      "background": "selected",
+      "ratio": 6.77,
+      "target": 4.5
+    },
+    {
+      "foreground": "success",
+      "background": "nav",
+      "ratio": 7.74,
+      "target": 4.5
+    },
+    {
+      "foreground": "success",
+      "background": "seats",
+      "ratio": 7.35,
+      "target": 4.5
+    },
+    {
+      "foreground": "success",
+      "background": "content",
+      "ratio": 6.92,
+      "target": 4.5
+    },
+    {
+      "foreground": "success",
+      "background": "raised",
+      "ratio": 6.22,
+      "target": 4.5
+    },
+    {
+      "foreground": "success",
+      "background": "selected",
+      "ratio": 5.94,
+      "target": 4.5
+    },
+    {
+      "foreground": "error",
+      "background": "nav",
+      "ratio": 8.49,
+      "target": 4.5
+    },
+    {
+      "foreground": "error",
+      "background": "seats",
+      "ratio": 8.05,
+      "target": 4.5
+    },
+    {
+      "foreground": "error",
+      "background": "content",
+      "ratio": 7.58,
+      "target": 4.5
+    },
+    {
+      "foreground": "error",
+      "background": "raised",
+      "ratio": 6.81,
+      "target": 4.5
+    },
+    {
+      "foreground": "error",
+      "background": "selected",
+      "ratio": 6.51,
+      "target": 4.5
+    },
+    {
+      "foreground": "warning",
+      "background": "nav",
+      "ratio": 9.45,
+      "target": 4.5
+    },
+    {
+      "foreground": "warning",
+      "background": "seats",
+      "ratio": 8.97,
+      "target": 4.5
+    },
+    {
+      "foreground": "warning",
+      "background": "content",
+      "ratio": 8.45,
+      "target": 4.5
+    },
+    {
+      "foreground": "warning",
+      "background": "raised",
+      "ratio": 7.59,
+      "target": 4.5
+    },
+    {
+      "foreground": "warning",
+      "background": "selected",
+      "ratio": 7.25,
+      "target": 4.5
+    },
+    {
+      "foreground": "focus",
+      "background": "nav",
+      "ratio": 11.16,
+      "target": 4.5
+    },
+    {
+      "foreground": "focus",
+      "background": "seats",
+      "ratio": 10.59,
+      "target": 4.5
+    },
+    {
+      "foreground": "focus",
+      "background": "content",
+      "ratio": 9.97,
+      "target": 4.5
+    },
+    {
+      "foreground": "focus",
+      "background": "raised",
+      "ratio": 8.95,
+      "target": 4.5
+    },
+    {
+      "foreground": "focus",
+      "background": "selected",
+      "ratio": 8.56,
+      "target": 4.5
+    },
+    {
+      "foreground": "controlBorder",
+      "background": "content",
+      "ratio": 3.74,
+      "target": 3
+    },
+    {
+      "foreground": "controlBorder",
+      "background": "raised",
+      "ratio": 3.36,
+      "target": 3
+    },
+    {
+      "foreground": "focus",
+      "background": "content",
+      "ratio": 9.97,
+      "target": 3
+    },
+    {
+      "foreground": "focus",
+      "background": "selected",
+      "ratio": 8.56,
+      "target": 3
+    }
+  ]
+}
