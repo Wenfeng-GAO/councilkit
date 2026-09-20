@@ -370,8 +370,8 @@ export class LiveEventWriter {
   private writePayload(attemptId: string, payload: AttemptLiveEventPayload): void {
     const state = this.state(attemptId);
     const isDelta = payload.type === "text.delta" || payload.type === "thinking.delta";
-    if (isDelta && (state.truncatedWritten || state.bytes >= this.maxBytes)) {
-      state.dropped++;
+    if (state.truncatedWritten || state.bytes >= this.maxBytes) {
+      if (isDelta) state.dropped++;
       this.writeTruncated(attemptId);
       return;
     }

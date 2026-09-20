@@ -71,6 +71,14 @@ export const DEFAULT_AUTONOMOUS_TIMEOUT_MS = 45 * 60 * 1000;
 /** Codex review seats are slower (clone + long exec); keep a separate default. */
 export const DEFAULT_CODEX_TIMEOUT_MS = 90 * 60 * 1000;
 
+export function timeoutForDriver(
+  driverId: string,
+  timeoutMs: number,
+  codexTimeoutMs: number,
+): number {
+  return driverId === "codex-app-server" ? codexTimeoutMs : timeoutMs;
+}
+
 /** Node's setTimeout 32-bit signed ceiling (2^31 - 1 ms ≈ 24.8 days). */
 export const MAX_TIMEOUT_MS = 2_147_483_647;
 

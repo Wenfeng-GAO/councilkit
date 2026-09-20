@@ -75,9 +75,9 @@ List every issue you found, one per line:
 The commands you actually ran and their results. If you did not verify, write "未验证".
 
 ## 结论
-A single line: approve | changes-requested | comment
+A single line: approve | changes-requested | comment`;
 
-## 逐项验证
+const ATTEMPT_LEDGER_CONTRACT = `## 逐项验证
 有 Finding 账本时，针对你检查的原 finding ID 追加一个 councilkit-findings fenced JSON 数组。
 候选 SHA 必须是本工作区 git rev-parse HEAD 的完整 40 位值，不能猜测或使用短 SHA。
 每项字段：findingId、candidateSha、outcome（verified_closed / still_open / not_evaluated）、
@@ -111,7 +111,10 @@ const ANTCODE_HOST = "code.alipay.com";
  * is unknown / the value is not a URL / the URL is unsafe to echo as a shell
  * command. Injected into the Attempt prompt only — the Aggregator synthesizes
  * deliverables and never fetches. */
-export function buildAccessHint(pr: string | undefined): string | null {
+export function buildAccessHint(
+  pr: string | undefined,
+  opts: { frozen?: boolean } = {},
+): string | null {
   if (pr === undefined) return null;
   let url: URL;
   try {
@@ -122,6 +125,15 @@ export function buildAccessHint(pr: string | undefined): string | null {
   // A single quote in the URL would break the quoted shell commands below.
   if (pr.includes("'")) return null;
   if (url.host === GITHUB_HOST) {
+    if (opts.frozen) {
+      return [
+        "## 访问提示",
+        "",
+        `描述与评论可用 \`gh pr view '${pr}'\`。diff 已冻结为 review-context.diff，不要再 gh pr diff。`,
+        "",
+        PROXY_RULE,
+      ].join("\n");
+    }
     return [
       "## 访问提示",
       "",
@@ -134,6 +146,15 @@ export function buildAccessHint(pr: string | undefined): string | null {
   if (url.host === ANTCODE_HOST) {
     const parsed = parseAntCodePrUrl(url);
     if (parsed === null) return null;
+    if (opts.frozen) {
+      return [
+        "## 访问提示",
+        "",
+        "diff 已冻结为 review-context.diff，不要再 antcode pr diff。",
+        "",
+        PROXY_RULE,
+      ].join("\n");
+    }
     return [
       "## 访问提示",
       "",
@@ -154,7 +175,7 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
     lines.push("", input.personaPrompt.trim());
   }
   lines.push("", "## 任务", "", taskStatement(input.task));
-  const accessHint = buildAccessHint(input.task.pr);
+  const accessHint = buildAccessHint(input.task.pr, { frozen: Boolean(input.frozenContext) });
   if (accessHint !== null) {
     lines.push("", accessHint);
   }
@@ -196,6 +217,9 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
     lines.push("先用 gh pr diff / antcode pr diff 落盘到文件再分段读取，避免盲目目录探索。");
   }
   lines.push("", "## 输出契约（最终消息即交付物，过程输出不算）", "", ATTEMPT_CONTRACT);
+  if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
+    lines.push("", ATTEMPT_LEDGER_CONTRACT);
+  }
   lines.push("", "只输出上面的 Markdown，不要输出多余寒暄或过程日志。");
   return lines.join("\n");
 }
@@ -373,7 +397,9 @@ export function truncateForPrompt(text: string): string {
 export function truncateBytes(text: string, cap: number): string {
   const buf = Buffer.from(text, "utf8");
   if (buf.length <= cap) return text;
-  return `${buf.subarray(0, cap).toString("utf8")}\n[truncated at ${cap} bytes]`;
+  let end = cap;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+  return `${buf.subarray(0, end).toString("utf8")}\n[truncated at ${cap} bytes]`;
 }
 
 function byteLength(text: string): number {

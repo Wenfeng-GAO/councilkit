@@ -2880,7 +2880,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
     expect(exitCode).toBe(130);
     expect(maxConcurrent).toBeGreaterThanOrEqual(2);
-    expect(started.length).toBeLessThan(3);
+    expect(maxConcurrent).toBeLessThanOrEqual(8);
     expect(new Set(started).size).toBe(started.length);
   });
 });

@@ -136,6 +136,9 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   const applyArgs: string[] = ["--run", runId];
   if (values["no-push"] === true) applyArgs.push("--no-push");
   if (values.timeout !== undefined) applyArgs.push("--timeout", values.timeout as string);
+  if (values["codex-timeout"] !== undefined) {
+    applyArgs.push("--codex-timeout", values["codex-timeout"] as string);
+  }
   if (values.agent !== undefined) applyArgs.push("--agent", values.agent as string);
 
   const store = new Store();
@@ -323,14 +326,57 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
       const probeCwd = join(runDir, "probe");
       mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
       const probeTargets = uniqueAgents([planner, planAggregator, ...jury]);
+      const probeOk = new Map<string, boolean>();
       await Promise.all(
-        probeTargets.map((agent) => probeAgent(agent, controller.signal, spawnImpl, probeCwd)),
+        probeTargets.map(async (agent) => {
+          const ok = await probeAgent(agent, controller.signal, spawnImpl, probeCwd);
+          probeOk.set(agent.id, ok);
+        }),
       );
       if (controller.signal.aborted) {
         await finish({
           status: "interrupted",
           exitCode: EXIT.interrupted,
           failure: { phase: "probe", code: "ABORTED", message: "run aborted by signal" },
+        });
+      }
+      if (probeOk.get(planner.id) !== true) {
+        await finish({
+          status: "failed",
+          exitCode: EXIT.runFailed,
+          failure: {
+            phase: "probe",
+            code: "DRIVER_UNREACHABLE",
+            message: `fix planner probe failed for ${planner.name}`,
+          },
+        });
+      }
+      if (probeOk.get(planAggregator.id) !== true) {
+        await finish({
+          status: "failed",
+          exitCode: EXIT.runFailed,
+          failure: {
+            phase: "probe",
+            code: "DRIVER_UNREACHABLE",
+            message: `fix plan aggregator probe failed for ${planAggregator.name}`,
+          },
+        });
+      }
+      const activeJury = jury.filter((agent) => probeOk.get(agent.id) === true);
+      for (const agent of jury) {
+        if (probeOk.get(agent.id) !== true) {
+          out.progress(`  plan jury ${agent.name} unreachable; continuing without this seat`);
+        }
+      }
+      if (activeJury.length === 0) {
+        await finish({
+          status: "failed",
+          exitCode: EXIT.runFailed,
+          failure: {
+            phase: "probe",
+            code: "DRIVER_UNREACHABLE",
+            message: "no plan jury seats passed the health probe",
+          },
         });
       }
 
@@ -402,7 +448,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         mkdirSync(reviewWorkspaceRoot, { recursive: true, mode: 0o700 });
         const attemptSpecs: AttemptSpec[] = [];
         const attemptRows: CliRunAttemptProgress[] = [];
-        for (const [index, agent] of jury.entries()) {
+        for (const [index, agent] of activeJury.entries()) {
           const cwd = join(reviewWorkspaceRoot, `attempt-${index}`);
           mkdirSync(cwd, { recursive: true, mode: 0o700 });
           writeFileSync(join(cwd, PLAN_REVIEW_FILE), report, { encoding: "utf8", mode: 0o600 });
@@ -796,7 +842,7 @@ async function probeAgent(
   signal: AbortSignal,
   spawnImpl: SpawnImpl | undefined,
   probeCwd: string,
-): Promise<void> {
+): Promise<boolean> {
   const probe = await spawnOnce(
     buildProbeSpec(agent, {
       probeId: `probe-${agent.driverSelection.driverId}`,
@@ -809,11 +855,7 @@ async function probeAgent(
       spawnImpl,
     },
   );
-  if (probe.status !== "success") {
-    throw errors.runFailed(
-      `fix agent probe failed for ${agent.name}: ${probe.failure?.message ?? "unreachable"}`,
-    );
-  }
+  return probe.status === "success";
 }
 
 function writePlan(path: string, body: string): void {

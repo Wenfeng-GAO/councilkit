@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { parseFlags, parseIntFlag, parseJsonFlag } from "../src/commands/parse";
+import { parseFlags, parseIntFlag, parseJsonFlag, timeoutForDriver } from "../src/commands/parse";
 import { CliError } from "../src/errors";
 
 function capture(fn: () => unknown): CliError {
@@ -18,6 +18,11 @@ function capture(fn: () => unknown): CliError {
 }
 
 describe("cli parse", () => {
+  it("uses the Codex timeout only for the Codex driver", () => {
+    expect(timeoutForDriver("grok-stream-json", 45_000, 90_000)).toBe(45_000);
+    expect(timeoutForDriver("codex-app-server", 45_000, 90_000)).toBe(90_000);
+  });
+
   it("parses declared string + boolean flags", () => {
     const { values, positionals } = parseFlags(
       {

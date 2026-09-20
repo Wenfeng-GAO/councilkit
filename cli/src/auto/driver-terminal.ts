@@ -14,7 +14,8 @@ const QUOTA = /usage[_\s-]?limit|quota[_\s-]?exceeded|insufficient[_\s-]?quota/i
 const AUTH = /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key|401\b/i;
 const MODEL = /unsupported model|unknown model|model[_ ]not[_ ]found|invalid model/i;
 const RATE = /rate[_ ]limit|too many requests|429\b/i;
-const TRANSPORT = /econnreset|etimedout|socket hang up|network error|502\b|503\b/i;
+const TRANSPORT =
+  /econnreset|etimedout|socket hang up|network error|bad gateway|service unavailable|\b(?:http(?:s)?[^\n]{0,48}|\bstatus[:\s]+|\berror[:\s]+)(?:502|503)\b/i;
 
 const SK_TOKEN = /sk-[A-Za-z0-9_-]{8,}/g;
 const COOKIE_HEADER = /Cookie:\s*[^\r\n]+/gi;

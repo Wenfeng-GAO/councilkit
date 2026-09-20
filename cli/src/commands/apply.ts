@@ -8,9 +8,11 @@ import { randomUUID } from "node:crypto";
 import {
   type Stats,
   appendFileSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -67,7 +69,7 @@ import { atomicWriteFile } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import type { AgentRecord } from "../store/schemas";
 import { Store } from "../store/store";
-import { parseFlags, parseTimeoutMs } from "./parse";
+import { DEFAULT_CODEX_TIMEOUT_MS, parseFlags, parseTimeoutMs, timeoutForDriver } from "./parse";
 
 const RUN_ID_PATTERN = /^ck-review-[0-9a-fA-F-]+$/;
 const DEFAULT_AGENT_NAME = "review-adversarial";
@@ -114,6 +116,7 @@ export async function runApply(
         run: { type: "string" },
         agent: { type: "string" },
         timeout: { type: "string" },
+        "codex-timeout": { type: "string" },
         "no-push": { type: "boolean" },
         cluster: { type: "string" },
         "all-clusters": { type: "boolean" },
@@ -143,6 +146,11 @@ export async function runApply(
     throw errors.usage("--cluster and --all-clusters are mutually exclusive");
   }
   const timeoutMs = parseTimeoutMs(values.timeout as string | undefined);
+  const codexTimeoutMs = parseTimeoutMs(
+    values["codex-timeout"] as string | undefined,
+    DEFAULT_CODEX_TIMEOUT_MS,
+    "codex-timeout",
+  );
   const runCommand = deps.runCommand ?? defaultRunCommand;
   const env = process.env;
   const store = new Store();
@@ -365,7 +373,7 @@ export async function runApply(
     });
     out.progress(`  spawning ${agent.name} in ${workspace}`);
     const result: AttemptResult = await spawnOnce(spec, {
-      timeoutMs,
+      timeoutMs: timeoutForDriver(agent.driverSelection.driverId, timeoutMs, codexTimeoutMs),
       signal: controller.signal,
       spawnImpl: deps.spawnImpl,
     });
@@ -419,8 +427,46 @@ export async function runApply(
 
     if (push) {
       out.progress(`  git push ${branch}`);
-      await pushCurrentBranch(workspace, runCommand, env);
-      outcomeBase.pushed = true;
+      try {
+        await pushCurrentBranch(workspace, runCommand, env);
+        outcomeBase.pushed = true;
+      } catch (error) {
+        appendLanding(runDir, {
+          at: new Date().toISOString(),
+          clusterId: target.clusterId ?? "unscoped",
+          parentSha: shaBefore,
+          candidateSha: sha,
+          closed: [],
+          claimed: closed,
+          runId,
+          pushed: false,
+        });
+        if (closed.length > 0) {
+          const latest = readFindings(runDir) ?? findings;
+          writeFindings(
+            runDir,
+            markFindingsRepairClaimed(latest, closed, {
+              candidateSha: sha,
+              runId,
+              at: new Date().toISOString(),
+            }),
+          );
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        await finish({
+          status: "failed",
+          exitCode: error instanceof CliError ? error.exitCode : EXIT.runFailed,
+          extra: {
+            branch,
+            commit: sha,
+            candidateSha: sha,
+            claimed: closed,
+            pushed: false,
+            summary: `commit ${sha} was not pushed; left in ${workspace} for recovery`,
+          },
+          failure: { phase: "push", code: "PUSH_FAILED", message },
+        });
+      }
     } else {
       out.progress("  skipping git push (--no-push)");
     }
@@ -522,6 +568,27 @@ function resolveApplyAgent(store: Store, ref: string | undefined): AgentRecord {
   );
 }
 
+function preserveUnpushedApplyWorkspace(runDir: string, workspace: string): void {
+  let previous: { pushed?: unknown; commit?: unknown } | null = null;
+  try {
+    previous = JSON.parse(readFileSync(join(runDir, "apply.json"), "utf8")) as {
+      pushed?: unknown;
+      commit?: unknown;
+    };
+  } catch {
+    return;
+  }
+  if (previous?.pushed !== false || typeof previous.commit !== "string") return;
+  if (!/^[0-9a-f]{40}$/i.test(previous.commit)) return;
+  let dest = join(dirname(workspace), `apply-unpushed-${previous.commit.slice(0, 12)}`);
+  if (existsSync(dest)) dest = `${dest}-${Date.now()}`;
+  try {
+    renameSync(workspace, dest);
+  } catch {
+    /* next apply still deletes; SHA remains in apply.json / landings */
+  }
+}
+
 function prepareApplyWorkspace(runDir: string, root: TrustedRoot): string {
   revalidateTrustedRoot(root);
   const workspace = join(runDir, "workspaces", "apply");
@@ -551,12 +618,15 @@ function prepareApplyWorkspace(runDir: string, root: TrustedRoot): string {
     if (!wsStat.isDirectory() || wsStat.isSymbolicLink()) {
       throw errors.io("the apply workspace path is not a real directory (refusing to remove it)");
     }
-    try {
-      rmSync(workspace, { recursive: true, force: true });
-    } catch (cause) {
-      throw errors.io("failed to clear apply workspace", {
-        cause: cause instanceof Error ? cause.name : "IO",
-      });
+    preserveUnpushedApplyWorkspace(runDir, workspace);
+    if (existsSync(workspace)) {
+      try {
+        rmSync(workspace, { recursive: true, force: true });
+      } catch (cause) {
+        throw errors.io("failed to clear apply workspace", {
+          cause: cause instanceof Error ? cause.name : "IO",
+        });
+      }
     }
   }
   try {

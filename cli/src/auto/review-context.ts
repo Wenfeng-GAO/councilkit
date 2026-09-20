@@ -3,7 +3,7 @@
  * each re-fetch or guess CLI flags; the snapshot is hashed once.
  */
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { errors } from "../errors";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
@@ -176,6 +176,19 @@ export function persistFrozenContext(runDir: string, ctx: FrozenReviewContext): 
 export function copyFrozenContextIntoWorkspace(runDir: string, workspace: string): void {
   mkdirSync(workspace, { recursive: true, mode: 0o700 });
   for (const name of [REVIEW_CONTEXT_MD, REVIEW_CONTEXT_DIFF]) {
-    copyFileSync(join(runDir, name), join(workspace, name));
+    const src = join(runDir, name);
+    const dest = join(workspace, name);
+    if (existsSync(dest)) {
+      try {
+        unlinkSync(dest);
+      } catch {
+        /* replace below */
+      }
+    }
+    try {
+      linkSync(src, dest);
+    } catch {
+      copyFileSync(src, dest);
+    }
   }
 }

@@ -747,7 +747,10 @@ describe("ledger persist", () => {
     const poisoned = JSON.parse(
       readFileSync(join(currentDir, "finding-groups.v1.json"), "utf8"),
     ) as { source: { findingsSha256: string }; groups: unknown[] };
-    expect(poisoned.source.findingsSha256).toBe("0".repeat(64));
+    expect(poisoned.source.findingsSha256).not.toBe("0".repeat(64));
+    expect(poisoned.source.findingsSha256).toBe(
+      hashFindingsBytes(readFileSync(join(currentDir, "findings.json"), "utf8")),
+    );
     expect(poisoned.groups).toEqual([]);
 
     writeFileSync(
@@ -789,6 +792,9 @@ describe("ledger persist", () => {
       source: { findingsSha256: string };
     };
     expect(hashed.groups.map((row) => row.rootCauseId)).not.toContain("RC-STABLE");
-    expect(hashed.source.findingsSha256).toBe("0".repeat(64));
+    expect(hashed.source.findingsSha256).not.toBe("0".repeat(64));
+    expect(hashed.source.findingsSha256).toBe(
+      hashFindingsBytes(readFileSync(join(hashedDir, "findings.json"), "utf8")),
+    );
   });
 });

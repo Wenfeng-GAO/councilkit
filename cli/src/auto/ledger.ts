@@ -34,6 +34,7 @@ import {
 } from "@shared/runtime/cli-ledger";
 import {
   ASSESSMENT_DIAGNOSTICS_FILE,
+  type AssessmentDiagnosticsFile,
   type DiagnosedAssessment,
   buildAssessmentDiagnostics,
 } from "@shared/runtime/reviewer-assessment";
@@ -426,7 +427,10 @@ export function persistFindingsFromReport(input: {
           return { ...extracted, findings: classified.findings };
         })()
       : extracted;
-  file.findings = applyReviewerVerifications(file.findings, {
+  const requiredFindingIds = (input.prior?.findings ?? [])
+    .filter((row) => row.status !== "accepted")
+    .map((row) => row.id);
+  const projected = projectReviewerVerifications(file.findings, {
     sha: input.sha,
     runId: input.runId,
     complete: input.reviewComplete === true,
@@ -434,30 +438,11 @@ export function persistFindingsFromReport(input: {
     verifiedAttemptShas: input.verifiedAttemptShas ?? {},
     reportedFindings: extracted.findings,
     extraAssessments: input.extraAssessments,
-    requiredFindingIds: (input.prior?.findings ?? [])
-      .filter((row) => row.status !== "accepted")
-      .map((row) => row.id),
-  });
-  writeFindings(input.runDir, file);
-  const requiredFindingIds = (input.prior?.findings ?? [])
-    .filter((row) => row.status !== "accepted")
-    .map((row) => row.id);
-  const { diagnostics } = buildAssessmentDiagnostics({
-    runId: input.runId,
-    sha: input.sha ?? null,
     requiredFindingIds,
-    extraAssessments: input.extraAssessments,
-    attempts: (input.attempts ?? [])
-      .filter((attempt) => Boolean(attempt.workspace) && attempt.attemptId !== "aggregator")
-      .map((attempt) => ({
-        attemptId: attempt.attemptId,
-        status: attempt.status,
-        exitCode: typeof attempt.exitCode === "number" ? attempt.exitCode : null,
-        output: attempt.output,
-        agentName: attempt.agentName,
-      })),
   });
-  atomicWriteJson(join(input.runDir, ASSESSMENT_DIAGNOSTICS_FILE), diagnostics);
+  file.findings = projected.findings;
+  writeFindings(input.runDir, file);
+  atomicWriteJson(join(input.runDir, ASSESSMENT_DIAGNOSTICS_FILE), projected.diagnostics);
   let priorGroups = null;
   let priorGroupsInvalid = false;
   if (input.againstRunId && input.prior) {
@@ -481,13 +466,14 @@ export function persistFindingsFromReport(input: {
     }
   }
   if (priorGroupsInvalid && input.sha && FULL_COMMIT_SHA.test(input.sha)) {
+    const bytes = `${JSON.stringify(file, null, 2)}\n`;
     writeFindingGroups(input.runDir, {
       version: 1,
       kind: FINDING_GROUPS_KIND,
       source: {
         runId: input.runId,
         sha: input.sha.toLowerCase(),
-        findingsSha256: "0".repeat(64),
+        findingsSha256: hashFindingsBytes(bytes),
         againstRunId: input.againstRunId ?? null,
       },
       groups: [],
@@ -687,7 +673,34 @@ export function applyReviewerVerifications(
     requiredFindingIds?: readonly string[];
   },
 ): LedgerFinding[] {
-  if (!input.sha || !FULL_COMMIT_SHA.test(input.sha)) return [...findings];
+  return projectReviewerVerifications(findings, input).findings;
+}
+
+function projectReviewerVerifications(
+  findings: readonly LedgerFinding[],
+  input: {
+    sha?: string | null;
+    runId: string;
+    complete: boolean;
+    attempts: readonly AttemptResult[];
+    reportedFindings: readonly LedgerFinding[];
+    verifiedAttemptShas: Readonly<Record<string, string>>;
+    extraAssessments?: readonly DiagnosedAssessment[];
+    requiredFindingIds?: readonly string[];
+  },
+): { findings: LedgerFinding[]; diagnostics: AssessmentDiagnosticsFile } {
+  if (!input.sha || !FULL_COMMIT_SHA.test(input.sha)) {
+    return {
+      findings: [...findings],
+      diagnostics: {
+        version: 1,
+        kind: "councilkit-assessment-diagnostics",
+        source: { runId: input.runId, sha: null, requiredFindingIds: [] },
+        coverageComplete: !input.requiredFindingIds?.length,
+        items: [],
+      },
+    };
+  }
   const requiredFindingIds = input.requiredFindingIds ?? [];
   const diagnosed = buildAssessmentDiagnostics({
     runId: input.runId,
@@ -727,21 +740,24 @@ export function applyReviewerVerifications(
     });
     assessments.set(findingId, list);
   }
-  return sortLedgerFindings(
-    findings.map((row) => {
-      if (row.status === "accepted") return row;
-      const receipts = assessments.get(row.id) ?? [];
-      const stillOpen = receipts.find((receipt) => receipt.outcome === "still_open");
-      if (stillOpen) return { ...row, status: "open" as const, verification: stillOpen };
-      const reported = matchFinding(row, input.reportedFindings, new Set()) !== null;
-      const closure = receipts.find((receipt) => receipt.outcome === "verified_closed");
-      if (closure && input.complete && !reported) {
-        return { ...row, status: "closed" as const, verification: closure };
-      }
-      const unevaluated = receipts.find((receipt) => receipt.outcome === "not_evaluated");
-      return unevaluated ? { ...row, verification: unevaluated } : row;
-    }),
-  );
+  return {
+    findings: sortLedgerFindings(
+      findings.map((row) => {
+        if (row.status === "accepted") return row;
+        const receipts = assessments.get(row.id) ?? [];
+        const stillOpen = receipts.find((receipt) => receipt.outcome === "still_open");
+        if (stillOpen) return { ...row, status: "open" as const, verification: stillOpen };
+        const reported = matchFinding(row, input.reportedFindings, new Set()) !== null;
+        const closure = receipts.find((receipt) => receipt.outcome === "verified_closed");
+        if (closure && input.complete && !reported) {
+          return { ...row, status: "closed" as const, verification: closure };
+        }
+        const unevaluated = receipts.find((receipt) => receipt.outcome === "not_evaluated");
+        return unevaluated ? { ...row, verification: unevaluated } : row;
+      }),
+    ),
+    diagnostics: diagnosed.diagnostics,
+  };
 }
 
 function tokens(text: string): Set<string> {

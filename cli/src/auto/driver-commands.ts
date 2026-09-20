@@ -27,6 +27,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
   statSync,
   writeSync,
 } from "node:fs";
@@ -219,6 +220,19 @@ export function spawnEnvForDriver(
     return withLocalHttpProxy(next, opts?.localProxyPort ?? detectListeningLocalProxy);
   }
   return { ...base, PWD: cwd };
+}
+
+/** Best-effort removal of the per-cwd credential copy. Never follows a symlink. */
+export function disposeIsolatedGrokHome(cwd: string | null | undefined): void {
+  if (!cwd) return;
+  const isolated = join(cwd, GROK_ISOLATED_HOME_DIR);
+  try {
+    const st = lstatSync(isolated);
+    if (!st.isDirectory() || st.isSymbolicLink()) return;
+    rmSync(isolated, { recursive: true, force: true });
+  } catch {
+    // missing or unreadable — nothing to dispose
+  }
 }
 
 function isolateGrokHome(cwd: string, origHome: string | undefined): string | null {

@@ -26,6 +26,7 @@ import {
   ISOLATED_GROK_CONFIG,
   buildProbeSpec,
   buildSpawnSpec,
+  disposeIsolatedGrokHome,
   extractFinalOutput,
   probeTimeoutMs,
   resolveExecutable,
@@ -518,6 +519,8 @@ describe("cli auto driver-commands", () => {
       );
       expect(existsSync(join(env.GROK_HOME ?? "", "skills"))).toBe(false);
       expect(existsSync(join(env.GROK_HOME ?? "", "bundled"))).toBe(false);
+      disposeIsolatedGrokHome(cwd);
+      expect(existsSync(join(cwd, GROK_ISOLATED_HOME_DIR))).toBe(false);
     });
 
     it("grok isolated config replaces a stale skills=true file", () => {

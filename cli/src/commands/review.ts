@@ -103,6 +103,7 @@ import {
   spawnOnce,
 } from "../auto/runner";
 import {
+  type FrozenAttemptContext,
   type ReviewTask,
   buildAggregatePrompt,
   buildAttemptPrompt,
@@ -133,7 +134,13 @@ import { atomicWriteFile } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
 import { Store } from "../store/store";
-import { DEFAULT_CODEX_TIMEOUT_MS, parseFlags, parseJsonFlag, parseTimeoutMs } from "./parse";
+import {
+  DEFAULT_CODEX_TIMEOUT_MS,
+  parseFlags,
+  parseJsonFlag,
+  parseTimeoutMs,
+  timeoutForDriver,
+} from "./parse";
 
 const agentRefsSchema = z.array(z.string().min(1).max(128)).min(1);
 
@@ -729,7 +736,7 @@ export async function runReview(
     }));
   await preflightWriter.write(probeSeats());
 
-  const PROBE_CONCURRENCY = 2;
+  const PROBE_CONCURRENCY = 8;
   let probeCursor = 0;
   const probeWorker = async (): Promise<void> => {
     for (;;) {
@@ -771,6 +778,11 @@ export async function runReview(
   const probeResults: DriverProbeRecord[] = probeSlots.filter(
     (row): row is DriverProbeRecord => row !== undefined,
   );
+  try {
+    rmSync(join(runDir, "probe"), { recursive: true, force: true });
+  } catch {
+    /* probe leftovers must never fail the review */
+  }
 
   const transcript: ReviewTranscriptRecord[] = [...priorRecords];
   if (resumeRaw === undefined) {
@@ -1034,26 +1046,7 @@ export async function runReview(
               diffHash: frozen.diffHash,
               verifiedCli: frozen.verifiedCli,
             };
-            for (let i = 0; i < rerunSpecs.length; i++) {
-              const agent = rerunAgents[i];
-              const spec = rerunSpecs[i];
-              if (!agent || !spec) continue;
-              const prompt = buildAttemptPrompt({
-                agentName: agent.name,
-                personaPrompt: agent.personaPrompt,
-                task,
-                workspaceMode: "worktree",
-                frozenContext: frozenPrompt,
-              });
-              const rebuilt = buildSpawnSpec(agent, {
-                attemptId: spec.attemptId,
-                workspace: spec.cwd,
-                prompt,
-              });
-              spec.prompt = rebuilt.prompt;
-              spec.argv = rebuilt.argv;
-              spec.promptStdin = rebuilt.promptStdin;
-            }
+            rebuildAttemptSpecs(rerunAgents, rerunSpecs, task, frozenPrompt);
             if (againstFindings?.sha) {
               const widened = againstDiffRange({
                 findingsSha: againstFindings.sha,
@@ -1063,26 +1056,7 @@ export async function runReview(
               if (widened && widened !== task.againstRange) {
                 task.againstRange = widened;
                 task.againstLedger = formatLedgerForPrompt(againstFindings, widened);
-                for (let i = 0; i < rerunSpecs.length; i++) {
-                  const agent = rerunAgents[i];
-                  const spec = rerunSpecs[i];
-                  if (!agent || !spec) continue;
-                  const prompt = buildAttemptPrompt({
-                    agentName: agent.name,
-                    personaPrompt: agent.personaPrompt,
-                    task,
-                    workspaceMode: "worktree",
-                    frozenContext: frozenPrompt,
-                  });
-                  const rebuilt = buildSpawnSpec(agent, {
-                    attemptId: spec.attemptId,
-                    workspace: spec.cwd,
-                    prompt,
-                  });
-                  spec.prompt = rebuilt.prompt;
-                  spec.argv = rebuilt.argv;
-                  spec.promptStdin = rebuilt.promptStdin;
-                }
+                rebuildAttemptSpecs(rerunAgents, rerunSpecs, task, frozenPrompt);
                 out.progress(`  against range: ${widened}`);
               }
             }
@@ -1100,9 +1074,13 @@ export async function runReview(
               runCommand,
               env,
             });
-            if (existsSync(join(runDir, "review-context.md"))) {
-              copyFrozenContextIntoWorkspace(runDir, spec.cwd);
-            }
+          }
+          if (existsSync(join(runDir, "review-context.md"))) {
+            await Promise.all(
+              runnableSpecs.map(async (spec) => {
+                copyFrozenContextIntoWorkspace(runDir, spec.cwd);
+              }),
+            );
           }
         } else {
           for (const spec of runnableSpecs) recreateWorkspace(spec.cwd, runDir, trustedRoot);
@@ -1187,6 +1165,8 @@ export async function runReview(
         candidateSha: reviewedSha ?? "",
         attempts: reusedByAttemptId.values(),
       }),
+      checkoutProofs: new Map(),
+      liveStatusWrittenAt: 0,
       // Heartbeat always writes status.json (including --json). Human mode
       // also prints a 仍在运行 line; JSON mode stays silent on stderr.
       heartbeat: { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
@@ -1248,6 +1228,8 @@ interface ExecuteParams {
   frozenTools: readonly ToolFingerprint[];
   executionRevision: ExecutionRevision | null;
   extraAssessments: DiagnosedAssessment[];
+  checkoutProofs: Map<string, { head: string; clean: boolean }>;
+  liveStatusWrittenAt: number;
 }
 
 async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<ReviewOutcome> {
@@ -1281,7 +1263,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       }
     },
     onActivity: (attemptId: string, lastActivity: string) => {
-      noteLiveBeat(p, attemptId, undefined, lastActivity, true);
+      noteLiveBeat(p, attemptId, undefined, lastActivity, true, "throttle");
     },
     onLiveEvent,
     frozenTools: p.frozenTools,
@@ -1406,7 +1388,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     });
   }
 
-  await runAssessmentCorrections(p, results);
+  await runAssessmentCorrections(p, results, liveWriter, onLiveEvent);
 
   // --- aggregation --------------------------------------------------------
   const aggregatePrompt = buildAggregatePrompt({
@@ -1669,31 +1651,40 @@ async function finalize(
   // a claimed SHA or a modified tracked tree cannot certify this candidate.
   const verifiedAttemptShas: Record<string, string> = {};
   if (p.reviewedSha && outcomeFields.status === "completed" && !outcomeFields.incomplete) {
-    for (const attempt of results) {
-      if (attempt.status !== "success" || !attempt.output.includes("```councilkit-findings"))
-        continue;
-      try {
-        const head = await p.runCommand({
-          executable: "git",
-          argv: ["rev-parse", "HEAD"],
-          cwd: attempt.workspace,
-          env: process.env,
-          timeoutMs: 10_000,
-        });
-        const clean = await p.runCommand({
-          executable: "git",
-          argv: ["diff", "--quiet", "HEAD", "--"],
-          cwd: attempt.workspace,
-          env: process.env,
-          timeoutMs: 10_000,
-        });
-        if (head.exitCode === 0 && head.stdout.trim() === p.reviewedSha && clean.exitCode === 0) {
-          verifiedAttemptShas[attempt.attemptId] = p.reviewedSha;
+    await Promise.all(
+      results.map(async (attempt) => {
+        if (attempt.status !== "success" || !attempt.output.includes("```councilkit-findings"))
+          return;
+        const cached = p.checkoutProofs.get(attempt.attemptId);
+        if (cached) {
+          if (cached.head === p.reviewedSha && cached.clean) {
+            verifiedAttemptShas[attempt.attemptId] = p.reviewedSha;
+          }
+          return;
         }
-      } catch {
-        /* Missing checkout or unavailable Git leaves the finding unverified. */
-      }
-    }
+        try {
+          const head = await p.runCommand({
+            executable: "git",
+            argv: ["rev-parse", "HEAD"],
+            cwd: attempt.workspace,
+            env: process.env,
+            timeoutMs: 10_000,
+          });
+          const clean = await p.runCommand({
+            executable: "git",
+            argv: ["diff", "--quiet", "HEAD", "--"],
+            cwd: attempt.workspace,
+            env: process.env,
+            timeoutMs: 10_000,
+          });
+          if (head.exitCode === 0 && head.stdout.trim() === p.reviewedSha && clean.exitCode === 0) {
+            verifiedAttemptShas[attempt.attemptId] = p.reviewedSha;
+          }
+        } catch {
+          /* Missing checkout or unavailable Git leaves the finding unverified. */
+        }
+      }),
+    );
   }
   try {
     persistFindingsFromReport({
@@ -1894,9 +1885,24 @@ function createPreflightWriter(
   };
 }
 
-async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult[]): Promise<void> {
+async function runAssessmentCorrections(
+  p: ExecuteParams,
+  results: AttemptResult[],
+  liveWriter: LiveEventWriter,
+  onLiveEvent: (attemptId: string, events: readonly RawLiveEvent[]) => void,
+): Promise<void> {
   const sha = p.reviewedSha;
   if (!sha || !FULL_COMMIT_SHA.test(sha)) return;
+  const artifactName = "assessment-correction-source.md";
+  type Pending = {
+    result: AttemptResult;
+    agent: AgentRecord;
+    findingIds: string[];
+    errorPaths: string[];
+    correctionId: string;
+    originalAssessment: string;
+  };
+  const pending: Pending[] = [];
   let records = loadAssessmentCorrections(p.runDir);
   for (const result of results) {
     if (result.attemptId === "aggregator" || result.status !== "success") continue;
@@ -1928,6 +1934,7 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
       env: process.env,
     });
     const trackedClean = diff.exitCode === 0;
+    p.checkoutProofs.set(result.attemptId, { head: head ?? "", clean: trackedClean });
     const tool = p.frozenTools.find((row) => row.name === result.driverId);
     try {
       assertCorrectionAllowed({
@@ -1971,57 +1978,88 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
       originalBlocks.length > 0
         ? originalBlocks.map((block) => `\`\`\`councilkit-findings\n${block}\n\`\`\``).join("\n\n")
         : result.output;
-    const artifactName = "assessment-correction-source.md";
     writeFileSync(join(result.workspace, artifactName), `${originalAssessment}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });
-    const spec = buildSpawnSpec(agent, {
-      attemptId: `corr-${result.attemptId}`,
-      workspace: result.workspace,
-      prompt: buildCorrectionPrompt({
-        agentName: result.agentName,
-        requestedFindingIds: findingIds,
-        errorPaths,
-        candidateSha: sha,
-        originalAssessment,
-        originalArtifactPath: artifactName,
-      }),
-    });
-    p.out.progress(
-      `  correction ${result.agentName} re-emitting ${findingIds.length} assessment(s)`,
+    pending.push({ result, agent, findingIds, errorPaths, correctionId, originalAssessment });
+  }
+  const spawnedRows = await Promise.all(
+    pending.map(async (item) => {
+      const spec = buildSpawnSpec(item.agent, {
+        attemptId: `corr-${item.result.attemptId}`,
+        workspace: item.result.workspace,
+        prompt: buildCorrectionPrompt({
+          agentName: item.result.agentName,
+          requestedFindingIds: item.findingIds,
+          errorPaths: item.errorPaths,
+          candidateSha: sha,
+          originalAssessment: item.originalAssessment,
+          originalArtifactPath: artifactName,
+        }),
+      });
+      p.out.progress(
+        `  correction ${item.result.agentName} re-emitting ${item.findingIds.length} assessment(s)`,
+      );
+      noteLiveBeat(p, spec.attemptId, 0, null, true);
+      const spawned = await spawnOnce(spec, {
+        timeoutMs: timeoutForDriver(
+          item.agent.driverSelection.driverId,
+          p.timeoutMs,
+          p.codexTimeoutMs,
+        ),
+        signal: p.signal,
+        spawnImpl: p.spawnImpl,
+        frozenTools: p.frozenTools,
+        executionRevision: p.executionRevision,
+        heartbeatIntervalMs: p.heartbeat?.intervalMs,
+        timers: p.heartbeat?.timers,
+        onHeartbeat: (attemptId, agentName, elapsedMs, snapshot) => {
+          noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null, true);
+          if (p.humanHeartbeat === true) {
+            p.out.progress(`  correction ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
+          }
+        },
+        onActivity: (attemptId, lastActivity) => {
+          noteLiveBeat(p, attemptId, undefined, lastActivity, true, "throttle");
+        },
+        onLiveEvent,
+      });
+      liveWriter.flush(spec.attemptId);
+      const afterDiff = await p.runCommand({
+        executable: "git",
+        argv: ["diff", "--quiet", "HEAD"],
+        cwd: item.result.workspace,
+        env: process.env,
+      });
+      return { item, spawned, afterClean: afterDiff.exitCode === 0 };
+    }),
+  );
+  if (spawnedRows.length === 0) return;
+  mkdirSync(join(p.runDir, "corrections"), { recursive: true, mode: 0o700 });
+  for (const row of spawnedRows) {
+    const correctionBytes = `${row.spawned.output}\n`;
+    atomicWriteFile(
+      join(p.runDir, "corrections", `${row.item.result.attemptId}.md`),
+      correctionBytes,
     );
-    const spawned = await spawnOnce(spec, {
-      timeoutMs: timeoutForDriver(agent.driverSelection.driverId, p.timeoutMs, p.codexTimeoutMs),
-      signal: p.signal,
-      spawnImpl: p.spawnImpl,
-      frozenTools: p.frozenTools,
-      executionRevision: p.executionRevision,
-    });
-    mkdirSync(join(p.runDir, "corrections"), { recursive: true, mode: 0o700 });
-    const correctionBytes = `${spawned.output}\n`;
-    atomicWriteFile(join(p.runDir, "corrections", `${result.attemptId}.md`), correctionBytes);
-    const afterDiff = await p.runCommand({
-      executable: "git",
-      argv: ["diff", "--quiet", "HEAD"],
-      cwd: result.workspace,
-      env: process.env,
-    });
     const projected = projectCorrectionOutput({
-      originalOutput: result.output,
-      correctionOutput: spawned.output,
+      originalOutput: row.item.result.output,
+      correctionOutput: row.spawned.output,
       candidateSha: sha,
-      requestedFindingIds: findingIds,
-      sourceAttemptId: result.attemptId,
+      requestedFindingIds: row.item.findingIds,
+      sourceAttemptId: row.item.result.attemptId,
     });
     const accepted =
-      spawned.status === "success" && !projected.substantialChange && projected.valid.length > 0;
+      row.spawned.status === "success" &&
+      !projected.substantialChange &&
+      projected.valid.length > 0;
     records = completeCorrectionRecord(records, {
-      correctionId,
+      correctionId: row.item.correctionId,
       endedAt: new Date().toISOString(),
       correctionOutputSha256: sha256Text(correctionBytes),
       accepted,
-      trackedCleanAfter: afterDiff.exitCode === 0,
+      trackedCleanAfter: row.afterClean,
       reason: projected.substantialChange
         ? "substantial_rejudgment"
         : accepted
@@ -2030,6 +2068,11 @@ async function runAssessmentCorrections(p: ExecuteParams, results: AttemptResult
     });
     writeAssessmentCorrections(p.runDir, records);
     if (accepted) p.extraAssessments.push(...projected.valid);
+    try {
+      rmSync(join(row.item.result.workspace, artifactName), { force: true });
+    } catch {
+      /* leftover source must not fail the review */
+    }
   }
 }
 
@@ -2068,8 +2111,32 @@ function persistPreflightStatus(
   atomicWriteFile(join(runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(live)}\n`);
 }
 
-function timeoutForDriver(driverId: string, timeoutMs: number, codexTimeoutMs: number): number {
-  return driverId === "codex-app-server" ? codexTimeoutMs : timeoutMs;
+function rebuildAttemptSpecs(
+  rerunAgents: AgentRecord[],
+  rerunSpecs: AttemptSpec[],
+  task: ReviewTask,
+  frozenPrompt: FrozenAttemptContext,
+): void {
+  for (let i = 0; i < rerunSpecs.length; i++) {
+    const agent = rerunAgents[i];
+    const spec = rerunSpecs[i];
+    if (!agent || !spec) continue;
+    const prompt = buildAttemptPrompt({
+      agentName: agent.name,
+      personaPrompt: agent.personaPrompt,
+      task,
+      workspaceMode: "worktree",
+      frozenContext: frozenPrompt,
+    });
+    const rebuilt = buildSpawnSpec(agent, {
+      attemptId: spec.attemptId,
+      workspace: spec.cwd,
+      prompt,
+    });
+    spec.prompt = rebuilt.prompt;
+    spec.argv = rebuilt.argv;
+    spec.promptStdin = rebuilt.promptStdin;
+  }
 }
 
 function buildResumeCommand(runId: string, task: ReviewTask, runDir?: string): string {
@@ -2092,12 +2159,17 @@ function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+const LIVE_STATUS_MIN_INTERVAL_MS = 2000;
+
 function noteLiveBeat(
-  p: Pick<ExecuteParams, "runDir" | "transcript" | "liveBeats">,
+  p: Pick<ExecuteParams, "runDir" | "transcript" | "liveBeats" | "liveStatusWrittenAt"> & {
+    liveStatusWrittenAt: number;
+  },
   attemptId: string,
   elapsedMs: number | undefined,
   lastActivity: string | null,
   started = false,
+  persist: "always" | "throttle" = "always",
 ): void {
   const prev = p.liveBeats.get(attemptId);
   p.liveBeats.set(attemptId, {
@@ -2106,8 +2178,13 @@ function noteLiveBeat(
     lastActivity: lastActivity ?? prev?.lastActivity ?? null,
     started: started || prev?.started === true,
   });
+  const now = Date.now();
+  if (persist === "throttle" && now - p.liveStatusWrittenAt < LIVE_STATUS_MIN_INTERVAL_MS) {
+    return;
+  }
   try {
     persistLiveStatus(p.runDir, p.transcript, p.liveBeats);
+    p.liveStatusWrittenAt = now;
   } catch {
     // Live status is a sidecar; never fail the review because of it.
   }

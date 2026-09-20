@@ -48,6 +48,15 @@ describe("classifyDriverTerminal", () => {
     expect(terminal).toBeNull();
   });
 
+  it("does not treat a port number 502 as a transport error", () => {
+    const terminal = classifyDriverTerminal({
+      stdout: "",
+      stderr: "listening on 127.0.0.1:502",
+      exitCode: 1,
+    });
+    expect(terminal?.errorClass).not.toBe("transport");
+  });
+
   it("still flags a later turn.failed network error", () => {
     const terminal = classifyDriverTerminal({
       stdout: [

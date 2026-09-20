@@ -23,6 +23,7 @@ import {
   buildAttemptPrompt,
   buildCorrectionPrompt,
   parseAntCodePrUrl,
+  truncateBytes,
   truncateForPrompt,
 } from "../src/auto/templates/review";
 
@@ -152,6 +153,27 @@ describe("cli auto templates — attempt prompt", () => {
     expect(prompt).toContain("review-context.diff");
     expect(prompt).toContain("不要再自行 gh pr diff / antcode pr diff");
     expect(prompt).not.toContain("先用 gh pr diff / antcode pr diff 落盘到文件");
+    expect(prompt).not.toContain("建议先用 `gh pr diff`");
+    expect(prompt).not.toContain("## 逐项验证");
+  });
+
+  it("injects per-finding assessment contract only when a ledger is present", () => {
+    const fresh = buildAttemptPrompt({
+      agentName: "A",
+      personaPrompt: "",
+      task: { pr: "https://github.com/acme/repo/pull/1" },
+    });
+    expect(fresh).not.toContain("## 逐项验证");
+    const against = buildAttemptPrompt({
+      agentName: "A",
+      personaPrompt: "",
+      task: {
+        pr: "https://github.com/acme/repo/pull/1",
+        againstLedger: "open (1)\n- foo--bar [major] still open",
+      },
+    });
+    expect(against).toContain("## 逐项验证");
+    expect(against).toContain("councilkit-findings");
   });
 });
 
@@ -191,6 +213,15 @@ describe("cli auto templates — aggregate prompt", () => {
     expect(prompt).toMatch(/不可作为共识来源/);
     // The failed attempt's empty output must not be embedded as a deliverable.
     expect(prompt).not.toContain("### Broken\n");
+  });
+
+  it("does not split a multibyte character when truncating by bytes", () => {
+    const text = "é".repeat(20);
+    const cap = Buffer.byteLength("é") + 1;
+    const truncated = truncateBytes(text, cap);
+    expect(truncated).toContain("[truncated at");
+    expect(() => Buffer.from(truncated, "utf8").toString("utf8")).not.toThrow();
+    expect(truncated).not.toContain("\uFFFD");
   });
 
   it("never embeds a workspace path", () => {
@@ -303,6 +334,13 @@ describe("cli auto templates — access hint (P1-2)", () => {
     expect(buildAccessHint("1443")).toBeNull();
     expect(buildAccessHint("not a url at all")).toBeNull();
     expect(buildAccessHint(undefined)).toBeNull();
+  });
+
+  it("frozen github access hint does not tell the seat to fetch the diff again", () => {
+    const hint = buildAccessHint("https://github.com/acme/repo/pull/1", { frozen: true });
+    expect(hint).toContain("review-context.diff");
+    expect(hint).not.toContain("建议先用 `gh pr diff`");
+    expect(hint).toContain("NO_PROXY=");
   });
 
   it("a URL containing a single quote → no hint (never an injectable shell command)", () => {

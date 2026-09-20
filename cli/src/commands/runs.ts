@@ -11,7 +11,8 @@
  * `--all` ignores age (and is mutually exclusive with an explicit `--keep`).
  * A single-item IO failure is an exit-5 error, never a silent skip.
  */
-import { type Stats, lstatSync, readdirSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { type Stats, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { errors } from "../errors";
@@ -105,6 +106,7 @@ export async function runRuns(argv: string[], out: OutputSink, deps: RunsDeps = 
       // before the recursive delete (reviewer finding).
       assertDeletable(c.workspacePath, bound);
       try {
+        unregisterGitWorktrees(c.workspacePath);
         rmSync(c.workspacePath, { recursive: true, force: true });
       } catch (cause) {
         throw errors.io(`runs gc: failed to remove a workspaces dir: ${ioName(cause)}`, {
@@ -274,6 +276,38 @@ function renderHuman(o: RunsGcOutcome): string {
     lines.push("  (report.md and transcript.jsonl are always kept)");
   }
   return lines.join("\n");
+}
+
+function unregisterGitWorktrees(workspacesDir: string): void {
+  let names: string[] = [];
+  try {
+    names = readdirSync(workspacesDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const dest = join(workspacesDir, name);
+    try {
+      const gitfile = join(dest, ".git");
+      const st = lstatSync(gitfile);
+      if (!st.isFile() || st.isSymbolicLink()) continue;
+      const text = readFileSync(gitfile, "utf8");
+      const match = /^gitdir:\s*(.+)\s*$/m.exec(text);
+      if (!match?.[1]) continue;
+      const gitdir = match[1].trim();
+      const common = gitdir.replace(/[/\\]worktrees[/\\][^/\\]+[/\\]?$/, "");
+      spawnSync("git", ["--git-dir", common, "worktree", "remove", "--force", dest], {
+        timeout: 30_000,
+        stdio: "ignore",
+      });
+      spawnSync("git", ["--git-dir", common, "worktree", "prune"], {
+        timeout: 15_000,
+        stdio: "ignore",
+      });
+    } catch {
+      /* parent rmSync still runs */
+    }
+  }
 }
 
 function ioName(cause: unknown): string {

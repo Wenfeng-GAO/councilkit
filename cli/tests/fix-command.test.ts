@@ -254,6 +254,34 @@ describe("cli fix command", () => {
     expect(status.pipeline.phase).toBe("done");
   });
 
+  it("continues plan jury when a non-planner seat probe fails", async () => {
+    seedRoster();
+    seedReview();
+    const fake = fakeSpawn();
+    const impl: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT && input.driverId === "kimi-stream-json") {
+        return { stdout: "", exitCode: 1, timedOut: false, aborted: false };
+      }
+      return fake.impl(input);
+    };
+    const sink = makeSink();
+    let code = 0;
+    try {
+      await runFix(["--run", RUN_ID, "--plan-only"], sink, { spawnImpl: impl });
+    } catch (error) {
+      if (error instanceof FixExit) code = error.exitCode;
+      else throw error;
+    }
+    expect(code).toBe(0);
+    expect(sink.lines.some((line) => /unreachable; continuing without this seat/.test(line))).toBe(
+      true,
+    );
+    const lock = JSON.parse(readFileSync(join(home, "runs", RUN_ID, "plan.lock.json"), "utf8")) as {
+      clusters: Array<{ id: string }>;
+    };
+    expect(lock.clusters[0]?.id).toBe("eventlog-short-write");
+  });
+
   it("does not apply when the plan jury never approves", async () => {
     seedRoster();
     seedReview();

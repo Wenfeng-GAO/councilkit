@@ -318,7 +318,7 @@ describe("LiveEventWriter", () => {
     expect(readEvents("attempt-0")[0]).toMatchObject({ text: "abcdefghijklmnop" });
   });
 
-  it("drops later deltas after the byte cap, keeps tools, and writes truncated", () => {
+  it("drops later deltas and tools after the byte cap, and writes truncated", () => {
     const writer = new LiveEventWriter(dir, { maxBytes: 200, mergeWindowMs: 60_000 });
     writer.append("attempt-0", [{ type: "text.delta", text: "hello" }]);
     writer.flush("attempt-0");
@@ -329,7 +329,7 @@ describe("LiveEventWriter", () => {
     const types = readEvents("attempt-0").map((e) => e?.type);
     expect(types[0]).toBe("text.delta");
     expect(types).toContain("truncated");
-    expect(types[types.length - 1]).toBe("tool.completed");
+    expect(types).not.toContain("tool.completed");
     expect(types.filter((t) => t === "text.delta")).toHaveLength(1);
   });
 

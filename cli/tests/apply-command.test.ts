@@ -326,6 +326,30 @@ describe("cli apply command", () => {
     expect(applyJson.pushed).toBe(true);
   });
 
+  it("records the unpushed commit when git push fails instead of dropping it", async () => {
+    seedGrok();
+    seedReviewRun();
+    const git = fakeGit({ failPush: true });
+    const sink = makeSink();
+    const code = await runCapturing(["--run", RUN_ID], sink, { runCommand: git.runCommand });
+    expect(code).toBe(4);
+    const outcome = sink.finished as {
+      status: string;
+      pushed: boolean;
+      commit: string | null;
+      summary: string;
+    };
+    expect(outcome.status).toBe("failed");
+    expect(outcome.pushed).toBe(false);
+    expect(outcome.commit).toBe("a".repeat(40));
+    expect(outcome.summary).toContain("not pushed");
+    const landing = JSON.parse(
+      readFileSync(join(home, "runs", RUN_ID, "landings.jsonl"), "utf8").trim(),
+    ) as { pushed: boolean; candidateSha: string };
+    expect(landing.pushed).toBe(false);
+    expect(landing.candidateSha).toBe("a".repeat(40));
+  });
+
   it("refuses a second default apply after the only cluster landed", async () => {
     seedGrok();
     seedReviewRun();

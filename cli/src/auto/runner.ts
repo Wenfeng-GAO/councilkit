@@ -17,6 +17,7 @@ import {
   type AttemptSpec,
   DriverActivityCollector,
   FinalEventLineCollector,
+  disposeIsolatedGrokHome,
   extractFinalOutput,
   spawnEnvForDriver,
 } from "./driver-commands";
@@ -378,8 +379,6 @@ async function runOne(
 ): Promise<AttemptResult> {
   const timers = opts.timers ?? defaultTimers;
   const started = timers.now();
-  const spawnFn = opts.spawnImpl ?? defaultSpawn;
-  let lastActivity: string | null = null;
 
   if (opts.frozenTools && opts.frozenTools.length > 0) {
     const verdict = verifySpawnFingerprint(spec, opts.frozenTools, opts.executionRevision);
@@ -404,6 +403,33 @@ async function runOne(
       };
     }
   }
+
+  try {
+    return await runOneSpawn(spec, opts, timers, started);
+  } finally {
+    disposeIsolatedGrokHome(spec.cwd);
+  }
+}
+
+async function runOneSpawn(
+  spec: AttemptSpec,
+  opts: {
+    timeoutMs: number;
+    signal: AbortSignal;
+    spawnImpl?: SpawnImpl;
+    heartbeatIntervalMs?: number;
+    onHeartbeat?: RunnerOptions["onHeartbeat"];
+    onActivity?: RunnerOptions["onActivity"];
+    onLiveEvent?: RunnerOptions["onLiveEvent"];
+    timers?: RunnerTimers;
+    frozenTools?: readonly ToolFingerprint[];
+    executionRevision?: ExecutionRevision | null;
+  },
+  timers: RunnerTimers,
+  started: number,
+): Promise<AttemptResult> {
+  const spawnFn = opts.spawnImpl ?? defaultSpawn;
+  let lastActivity: string | null = null;
 
   // Heartbeat (P2-1): every heartbeatIntervalMs while the Attempt runs.
   // Always cleared in finally so a finished Attempt never heartbeats again
