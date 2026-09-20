@@ -34,13 +34,15 @@ export interface CheckedOutPr {
   baseBranch: string;
   headSha?: string;
   baseSha?: string;
+  /** False when the platform reports the PR closed/merged; omitted if unknown. */
+  prOpen?: boolean;
 }
 
 const DEFAULT_CMD_TIMEOUT_MS = 5 * 60 * 1000;
 const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const GH_JSON_FIELDS =
-  "headRefName,baseRefName,headRefOid,baseRefOid,headRepository,headRepositoryOwner,isCrossRepository,url";
+  "headRefName,baseRefName,headRefOid,baseRefOid,headRepository,headRepositoryOwner,isCrossRepository,url,state";
 
 /** Env for internal CLIs (antcode): strip proxies on that one command only. */
 export function internalToolEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -138,6 +140,7 @@ export async function inspectPullRequest(
   prUrl: string,
   runCommand: RunCommand = defaultRunCommand,
   env: NodeJS.ProcessEnv = process.env,
+  cwd = process.cwd(),
 ): Promise<CheckedOutPr> {
   const parsed = parseApplyPrUrl(prUrl);
   if (parsed === null) {
@@ -150,7 +153,7 @@ export async function inspectPullRequest(
     const view = await runCommand({
       executable: "gh",
       argv: ["pr", "view", parsed.url.toString(), "--json", GH_JSON_FIELDS],
-      cwd: process.cwd(),
+      cwd,
       env,
     });
     assertOk(view, "gh pr view");
@@ -163,6 +166,7 @@ export async function inspectPullRequest(
       baseBranch: meta.baseBranch,
       ...(meta.headSha ? { headSha: meta.headSha } : {}),
       ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
+      ...(meta.prOpen === undefined ? {} : { prOpen: meta.prOpen }),
     };
   }
   if (findExecutable("antcode", env) === null) {
@@ -175,17 +179,29 @@ export async function inspectPullRequest(
   const shown = await runCommand({
     executable: "antcode",
     argv: ["pr", "show", ant.iid, "-P", ant.project, "--json", "--raw", "--no-pager"],
-    cwd: process.cwd(),
+    cwd,
     env: internalToolEnv(env),
   });
   assertOk(shown, "antcode pr show");
   const meta = parseAntCodePrShow(shown.stdout, shown.stderr);
+  const headSha =
+    meta.headSha ??
+    (await resolveRemoteBranchSha({
+      cloneUrl: meta.cloneUrl,
+      branch: meta.branch,
+      runCommand,
+      env,
+      cwd,
+    }));
   return {
     prUrl: parsed.url.toString(),
     host: "antcode",
     branch: meta.branch,
     cloneUrl: meta.cloneUrl,
     baseBranch: meta.baseBranch,
+    ...(headSha ? { headSha } : {}),
+    ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
+    ...(meta.prOpen === undefined ? {} : { prOpen: meta.prOpen }),
   };
 }
 
@@ -245,6 +261,7 @@ async function checkoutGitHub(
     baseBranch: meta.baseBranch,
     ...(meta.headSha ? { headSha: meta.headSha } : {}),
     ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
+    ...(meta.prOpen === undefined ? {} : { prOpen: meta.prOpen }),
   };
 }
 
@@ -277,12 +294,24 @@ async function checkoutAntCode(
   });
   assertOk(cloned, "git clone");
   const branch = await currentBranch(cwd, runCommand, env, meta.branch);
+  const headSha =
+    meta.headSha ??
+    (await resolveRemoteBranchSha({
+      cloneUrl: meta.cloneUrl,
+      branch: meta.branch,
+      runCommand,
+      env,
+      cwd,
+    }));
   return {
     prUrl: url.toString(),
     host: "antcode",
     branch,
     cloneUrl: meta.cloneUrl,
     baseBranch: meta.baseBranch,
+    ...(headSha ? { headSha } : {}),
+    ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
+    ...(meta.prOpen === undefined ? {} : { prOpen: meta.prOpen }),
   };
 }
 
@@ -426,12 +455,33 @@ export async function pushCurrentBranch(
   }
 }
 
+export async function resolveRemoteBranchSha(input: {
+  cloneUrl: string;
+  branch: string;
+  runCommand: RunCommand;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+}): Promise<string | undefined> {
+  if (!BRANCH_RE.test(input.branch) || input.cloneUrl.length === 0) return undefined;
+  const result = await input.runCommand({
+    executable: "git",
+    argv: ["ls-remote", input.cloneUrl, `refs/heads/${input.branch}`],
+    cwd: input.cwd ?? process.cwd(),
+    env: input.env ?? process.env,
+  });
+  if (result.exitCode !== 0 || result.error !== undefined) return undefined;
+  const line = result.stdout.trim().split("\n")[0] ?? "";
+  const sha = line.split(/[\s\t]/)[0] ?? "";
+  return FULL_SHA.test(sha) ? sha.toLowerCase() : undefined;
+}
+
 function parseGhPrView(stdout: string): {
   branch: string;
   nameWithOwner: string;
   baseBranch: string;
   headSha?: string;
   baseSha?: string;
+  prOpen?: boolean;
 } {
   let rec: unknown;
   try {
@@ -473,7 +523,14 @@ function parseGhPrView(stdout: string): {
   if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(nameWithOwner)) {
     throw errors.runFailed("gh pr view did not include a usable head repository");
   }
-  return { branch, nameWithOwner, baseBranch: baseRaw, headSha, baseSha };
+  return {
+    branch,
+    nameWithOwner,
+    baseBranch: baseRaw,
+    headSha,
+    baseSha,
+    ...(parsePrOpen(row.state) === undefined ? {} : { prOpen: parsePrOpen(row.state) }),
+  };
 }
 
 function parseAntCodePrShow(
@@ -483,6 +540,9 @@ function parseAntCodePrShow(
   branch: string;
   cloneUrl: string;
   baseBranch: string;
+  headSha?: string;
+  baseSha?: string;
+  prOpen?: boolean;
 } {
   let rec: unknown;
   try {
@@ -515,7 +575,44 @@ function parseAntCodePrShow(
   if (cloneUrl.length === 0 || /[\n\r]/.test(cloneUrl)) {
     throw errors.runFailed("antcode pr show did not include a usable clone URL");
   }
-  return { branch, cloneUrl, baseBranch: targetRaw };
+  const nested =
+    source !== null && typeof source === "object" ? (source as Record<string, unknown>) : {};
+  const headSha =
+    readFullSha(row, [
+      "head_sha",
+      "source_sha",
+      "sha",
+      "last_commit_id",
+      "commit_id",
+      "diff_head_sha",
+    ]) ?? readFullSha(nested, ["sha", "commit_id", "id"]);
+  const baseSha = readFullSha(row, ["base_sha", "target_sha", "target_commit_id"]);
+  const prOpen = parsePrOpen(row.state ?? row.merge_status ?? row.merged);
+  return {
+    branch,
+    cloneUrl,
+    baseBranch: targetRaw,
+    ...(headSha ? { headSha } : {}),
+    ...(baseSha ? { baseSha } : {}),
+    ...(prOpen === undefined ? {} : { prOpen }),
+  };
+}
+
+function readFullSha(row: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && FULL_SHA.test(value)) return value.toLowerCase();
+  }
+  return undefined;
+}
+
+function parsePrOpen(value: unknown): boolean | undefined {
+  if (value === true) return false;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["open", "opened", "reopened"].includes(normalized)) return true;
+  if (["closed", "merged", "declined"].includes(normalized)) return false;
+  return undefined;
 }
 
 function assertOk(result: RunCommandResult, label: string): void {

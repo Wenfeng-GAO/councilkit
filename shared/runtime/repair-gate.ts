@@ -76,6 +76,17 @@ export interface RepairGateResult {
   reasons: RepairGateReason[];
 }
 
+export function extractAggregatorVerdict(
+  markdown: string | null | undefined,
+): RepairGateReview["aggregatorVerdict"] {
+  if (!markdown) return null;
+  const match = /\b(approve|changes-requested|comment)\b/.exec(markdown);
+  if (match?.[1] === "approve" || match?.[1] === "changes-requested" || match?.[1] === "comment") {
+    return match[1];
+  }
+  return null;
+}
+
 function sha40(value: string | null | undefined): boolean {
   return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
 }

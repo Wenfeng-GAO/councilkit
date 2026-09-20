@@ -44,7 +44,10 @@ function seedProfile() {
   });
 }
 
-function routesWithLauncher(start?: (input: CliRunLaunchRequest) => { pid: number }) {
+function routesWithLauncher(
+  start?: (input: CliRunLaunchRequest) => { pid: number },
+  bridgeAvailable = true,
+) {
   const launches: CliRunLaunchRequest[] = [];
   const routes = cliRunsRoutes({
     cliRunLauncher: {
@@ -53,6 +56,11 @@ function routesWithLauncher(start?: (input: CliRunLaunchRequest) => { pid: numbe
         return start ? start(input) : { pid: process.pid };
       },
     },
+    squadBridgeProbe: () => ({
+      available: bridgeAvailable,
+      version: bridgeAvailable ? "squad-bridge.v1" : null,
+      reason: bridgeAvailable ? null : "squadctl not on PATH",
+    }),
   } as unknown as HostServices);
   return { routes, launches };
 }
@@ -338,6 +346,60 @@ describe("repair mutation handlers", () => {
           }),
         ))(),
     ).rejects.toMatchObject({ status: 400 } satisfies Partial<HttpError>);
+  });
+
+  it("refuses to start repair when the squad bridge is unavailable", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher(undefined, false);
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    await expect(start.handler(ctx({ from: RUN_ID, profile: "default" }))).rejects.toMatchObject({
+      status: 400,
+    } satisfies Partial<HttpError>);
+    expect(launches).toHaveLength(0);
+  });
+
+  it("lists bridgeAvailable on the profile endpoint", async () => {
+    const { routes } = routesWithLauncher(undefined, false);
+    const get = routes.find(
+      (route) => route.method === "GET" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+    );
+    if (get === undefined) throw new Error("missing list route");
+    const listed = (await get.handler(ctx({}))) as { bridgeAvailable?: boolean };
+    expect(listed.bridgeAvailable).toBe(false);
+  });
+
+  it("resumes a preflight-failed parent without a grant when outerUsed is 0", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    const resume = routes.find(
+      (route) => route.pattern === "/api/v1/cli-runs/:runId/repair/resume",
+    );
+    if (start === undefined || resume === undefined) throw new Error("missing routes");
+    const created = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    writeFileSync(
+      join(home, "runs", created.runId, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: RUN_ID,
+        profileName: "default",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: "needs_attention",
+        reasonCode: "identity_mismatch",
+        lastError: "AntCode PR did not include headSha; repair cannot freeze identity",
+      })}\n`,
+    );
+    const result = (await resume.handler(ctx({}, { runId: created.runId }))) as {
+      started: boolean;
+    };
+    expect(result.started).toBe(true);
+    expect(launches.at(-1)?.action).toBe("repair-resume");
   });
 
   it("rejects an empty source branch on the save body schema", () => {

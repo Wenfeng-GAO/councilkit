@@ -132,6 +132,70 @@ describe("checkoutPullRequest command sequence", () => {
     expect(clone).toContain("feat/live");
   });
 
+  it("AntCode inspect resolves headSha from git ls-remote of the source branch", async () => {
+    const remoteSha = "e75ee6755ea846f2772aca2d13d6ec1ac9b87bed";
+    const calls: string[][] = [];
+    const runCommand: RunCommand = async (input) => {
+      calls.push([input.executable, ...input.argv]);
+      if (input.executable === "antcode") {
+        return {
+          stdout: JSON.stringify({
+            source_branch: "feat/live",
+            target_branch: "master",
+            state: "opened",
+            source: { ssh_url: "git@code.alipay.com:acme/repo.git" },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (input.executable === "git" && input.argv[0] === "ls-remote") {
+        expect(input.argv).toEqual([
+          "ls-remote",
+          "git@code.alipay.com:acme/repo.git",
+          "refs/heads/feat/live",
+        ]);
+        return { stdout: `${remoteSha}\trefs/heads/feat/live\n`, stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const result = await inspectPullRequest(
+      "https://code.alipay.com/acme/repo/pull_requests/1",
+      runCommand,
+      { PATH: process.env.PATH },
+    );
+    expect(result.headSha).toBe(remoteSha);
+    expect(result.prOpen).toBe(true);
+    expect(calls.some((row) => row[0] === "git" && row[1] === "ls-remote")).toBe(true);
+  });
+
+  it("AntCode inspect does not invent headSha when ls-remote has no full SHA", async () => {
+    const runCommand: RunCommand = async (input) => {
+      if (input.executable === "antcode") {
+        return {
+          stdout: JSON.stringify({
+            source_branch: "feat/live",
+            target_branch: "master",
+            source: { ssh_url: "git@code.alipay.com:acme/repo.git" },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (input.executable === "git" && input.argv[0] === "ls-remote") {
+        return { stdout: "not-a-sha\trefs/heads/feat/live\n", stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const result = await inspectPullRequest(
+      "https://code.alipay.com/acme/repo/pull_requests/1",
+      runCommand,
+      { PATH: process.env.PATH },
+    );
+    expect(result.headSha).toBeUndefined();
+    expect(() => requirePrHeadIdentity(result)).toThrow(/did not include headSha/);
+  });
+
   it("AntCode: empty stdout plus old-CLI stderr is a JSON error that names the flag", async () => {
     const runCommand: RunCommand = async () => ({
       stdout: "",

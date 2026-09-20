@@ -18,10 +18,12 @@ export interface SquadBridgeStartRequest {
   packageFields: { ancestorDir?: string };
   bridgeAncestorDir?: string | null;
   history?: unknown;
+  handoffPath?: string;
+  baseSha?: string;
 }
 
 export type SquadBridgeStartResult =
-  | { ok: true; taskId: string }
+  | { ok: true; taskId: string; taskDir?: string }
   | { ok: false; code: SquadBridgeFailureCode };
 
 export interface SquadBridgeStatus {
@@ -55,6 +57,11 @@ export interface SquadBridge {
     taskId: string;
     identity: FrozenIntegrateIdentity;
   }): SquadBridgePublishResult;
+  prepare?(input: {
+    taskId: string;
+    baseSha: string;
+    packagePath: string;
+  }): Promise<void>;
 }
 
 export interface FakeSquadBridgeOptions {

@@ -39,7 +39,7 @@ export function RepairRunPanel({
   run,
   profiles = [],
   activeRepair = null,
-  bridgeAvailable = true,
+  bridgeAvailable = false,
   error = null,
   pending = false,
   outerUsed = 0,
@@ -54,7 +54,15 @@ export function RepairRunPanel({
 }: {
   run: Pick<
     CliRunDetailResponse,
-    "runId" | "kind" | "status" | "progress" | "businessResult" | "reasonCode" | "sourceRunId"
+    | "runId"
+    | "kind"
+    | "status"
+    | "progress"
+    | "businessResult"
+    | "reasonCode"
+    | "sourceRunId"
+    | "lastError"
+    | "resumeEligible"
   >;
   profiles?: RepairProfileSummary[];
   activeRepair?: Pick<
@@ -98,12 +106,18 @@ export function RepairRunPanel({
             停止
           </Button>
         ) : null}
-        {run.businessResult === "needs_attention" && run.reasonCode && !budgetOut ? (
+        {run.businessResult === "needs_attention" &&
+        run.reasonCode &&
+        !budgetOut &&
+        run.resumeEligible !== false ? (
           <Button className="mt-3" onClick={() => onResume?.()} disabled={pending}>
             从 {run.reasonCode} 恢复
           </Button>
         ) : null}
         {budgetOut ? <p className="mt-3 text-sm text-muted">预算已用尽，不能再修一次。</p> : null}
+        {error || run.lastError ? (
+          <p className="mt-2 text-sm text-error">{error ?? run.lastError}</p>
+        ) : null}
       </section>
     );
   }

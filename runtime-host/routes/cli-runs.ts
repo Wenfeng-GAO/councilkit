@@ -76,12 +76,14 @@ import {
 } from "@shared/runtime/schemas";
 import { type CliRunLauncher, defaultCliRunLauncher, isPidAlive } from "../cli-launcher";
 import { resolveRepairBranchHints } from "../repair-branch-hints";
-import { type HostServices, type Route, HttpError, httpError } from "../server";
+import { type HostServices, HttpError, type Route, httpError } from "../server";
+import { probeSquadBridge } from "../squad-bridge-probe";
 
 const PIPELINE_PID_FILE = "pipeline.pid";
 
 export function cliRunsRoutes(services?: HostServices): Route[] {
   const launcher = resolveLauncher(services);
+  const bridgeProbe = resolveBridgeProbe(services);
   return [
     {
       method: "GET",
@@ -219,7 +221,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       responseSchema: cliRunStartReviewResponseSchema,
       handler: async (ctx): Promise<CliRunStartReviewResponse> => {
         const body = ctx.body as CliRunStartRepairRequest;
-        return startRepairRun(launcher, body);
+        return startRepairRun(launcher, body, bridgeProbe);
       },
     },
     {
@@ -228,7 +230,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       auth: "session",
       responseSchema: cliRunListRepairProfilesResponseSchema,
       handler: (ctx): Promise<CliRunListRepairProfilesResponse> =>
-        listRepairProfiles(ctx.query.get("from")),
+        listRepairProfiles(ctx.query.get("from"), bridgeProbe),
     },
     {
       method: "POST",
@@ -287,18 +289,24 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
           );
         }
         const grant = readHostRepairGrant(runId);
+        const state = readRepairJson(runId);
         if (grant === null) {
-          throw httpError(
-            400,
-            makeError("BAD_REQUEST", "discovery", "repair grant is missing.", { retryable: false }),
-          );
-        }
-        const verified = verifyRepairGrantRecord(grant, profile, new Date().toISOString());
-        if (!verified.ok) {
-          throw httpError(
-            400,
-            makeError("BAD_REQUEST", "discovery", verified.reason, { retryable: false }),
-          );
+          if ((state?.outerUsed ?? 0) > 0) {
+            throw httpError(
+              400,
+              makeError("BAD_REQUEST", "discovery", "repair grant is missing.", {
+                retryable: false,
+              }),
+            );
+          }
+        } else {
+          const verified = verifyRepairGrantRecord(grant, profile, new Date().toISOString());
+          if (!verified.ok) {
+            throw httpError(
+              400,
+              makeError("BAD_REQUEST", "discovery", verified.reason, { retryable: false }),
+            );
+          }
         }
         const logPath = join(tmpdir(), `councilkit-host-repair-resume-${runId}.log`);
         let started: { pid: number };
@@ -597,7 +605,17 @@ function withRepairLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 async function startRepairRun(
   launcher: CliRunLauncher,
   body: CliRunStartRepairRequest,
+  bridgeProbe: () => { available: boolean; reason: string | null },
 ): Promise<CliRunStartReviewResponse> {
+  const probe = bridgeProbe();
+  if (!probe.available) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", probe.reason ?? "Squad 桥不可用，无法启动自动修复。", {
+        retryable: false,
+      }),
+    );
+  }
   const sourceDir = join(resolveCliRunsRoot(), body.from);
   if (!isRealDir(sourceDir)) {
     throw httpError(
@@ -774,13 +792,18 @@ function readHostRepairProfile(name: string): ReturnType<typeof parseRepairProfi
   }
 }
 
-async function listRepairProfiles(from: string | null): Promise<CliRunListRepairProfilesResponse> {
+async function listRepairProfiles(
+  from: string | null,
+  bridgeProbe: () => { available: boolean },
+): Promise<CliRunListRepairProfilesResponse> {
+  const bridgeAvailable = bridgeProbe().available;
   if (!from || !isCliRunId(from)) {
     return {
       profiles: listHostRepairProfiles().map(toProfileSummary),
       sourceBranchHint: null,
       baseHint: null,
       hintSource: null,
+      bridgeAvailable,
     };
   }
   const wantedPr = readCliRun(from, process.env)?.reviewEvidence?.prUrl ?? null;
@@ -793,6 +816,7 @@ async function listRepairProfiles(from: string | null): Promise<CliRunListRepair
     sourceBranchHint: hints.sourceBranch,
     baseHint: hints.base,
     hintSource: hints.hintSource,
+    bridgeAvailable,
   };
 }
 
@@ -920,6 +944,7 @@ function readRepairJson(runId: string): {
   sourceRunId?: string;
   profileName?: string;
   businessResult?: "approved" | "needs_attention" | "stopped" | null;
+  outerUsed?: number;
 } | null {
   try {
     const rec = JSON.parse(
@@ -928,10 +953,12 @@ function readRepairJson(runId: string): {
       sourceRunId?: unknown;
       profileName?: unknown;
       businessResult?: unknown;
+      outerUsed?: unknown;
     };
     return {
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : undefined,
       profileName: typeof rec.profileName === "string" ? rec.profileName : undefined,
+      outerUsed: typeof rec.outerUsed === "number" ? rec.outerUsed : undefined,
       businessResult:
         rec.businessResult === "approved" ||
         rec.businessResult === "needs_attention" ||
@@ -1134,6 +1161,16 @@ function resolveLauncher(services?: HostServices): CliRunLauncher {
     return extra as CliRunLauncher;
   }
   return defaultCliRunLauncher();
+}
+
+function resolveBridgeProbe(
+  services?: HostServices,
+): () => { available: boolean; version: string | null; reason: string | null } {
+  const extra = services?.squadBridgeProbe;
+  if (typeof extra === "function") {
+    return extra as () => { available: boolean; version: string | null; reason: string | null };
+  }
+  return probeSquadBridge;
 }
 
 function writeStartingStatus(runDir: string, action: "fix" | "re-review"): void {

@@ -673,6 +673,10 @@ export const cliRunSummarySchema = z
     businessResult: z.enum(["approved", "needs_attention", "stopped"]).nullable().optional(),
     reasonCode: z.string().min(1).max(80).nullable().optional(),
     sourceRunId: z.string().min(1).max(80).nullable().optional(),
+    lastError: z.string().min(1).max(2000).nullable().optional(),
+    outerUsed: z.number().int().nonnegative().optional(),
+    outerMax: z.number().int().positive().optional(),
+    resumeEligible: z.boolean().optional(),
   })
   .strict();
 export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;
@@ -864,6 +868,7 @@ export const cliRunListRepairProfilesResponseSchema = z
     sourceBranchHint: z.string().max(200).nullable(),
     baseHint: z.string().max(200).nullable(),
     hintSource: z.enum(["pr", "review", "worktree"]).nullable(),
+    bridgeAvailable: z.boolean().optional(),
   })
   .strict();
 export type CliRunListRepairProfilesResponse = z.infer<

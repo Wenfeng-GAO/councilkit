@@ -31,6 +31,7 @@ describe("RepairRunPanel", () => {
             base: "main",
           },
         ],
+        bridgeAvailable: true,
       }),
     );
     expect(html).toContain("Squad 自动修复");
@@ -39,7 +40,9 @@ describe("RepairRunPanel", () => {
   });
 
   it("shows the launch summary form when no profile exists", () => {
-    const html = render(createElement(RepairRunPanel, { run: review, profiles: [] }));
+    const html = render(
+      createElement(RepairRunPanel, { run: review, profiles: [], bridgeAvailable: true }),
+    );
     expect(html).toContain("还没有保存的修复授权");
     expect(html).toContain("保存授权并启动");
     expect(html).toContain("profile 名");
@@ -56,6 +59,7 @@ describe("RepairRunPanel", () => {
         sourceBranchDefault: "hengzhuo/fix/session-replay-performance",
         baseDefault: "sprint_independent-pre_S090011901586_20260911",
         hintSource: "review",
+        bridgeAvailable: true,
       }),
     );
     expect(html).toContain("已从本次审查冻结上下文识别");
@@ -65,7 +69,9 @@ describe("RepairRunPanel", () => {
   });
 
   it("does not default the target branch to main", () => {
-    const html = render(createElement(RepairRunPanel, { run: review, profiles: [] }));
+    const html = render(
+      createElement(RepairRunPanel, { run: review, profiles: [], bridgeAvailable: true }),
+    );
     expect(html).not.toContain('value="main"');
     expect(html).toContain("本 PR 的 base 分支");
   });
@@ -116,6 +122,7 @@ describe("RepairRunPanel", () => {
         run: review,
         profiles: [{ name: "default", prUrl: "p", sourceBranch: "f", base: "m" }],
         error: "mutation failed",
+        bridgeAvailable: true,
       }),
     );
     expect(html).toContain("mutation failed");
@@ -139,6 +146,45 @@ describe("RepairRunPanel", () => {
     );
     expect(html).toContain("第 10 / 10 次外循环");
     expect(html).toContain("不能再修一次");
+    expect(html).not.toContain("恢复");
+  });
+
+  it("shows lastError on a repair parent run", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: {
+          runId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+          kind: "repair",
+          status: "completed",
+          progress: { phase: "repair-finalizing", attempts: [], updatedAt: "t" },
+          businessResult: "needs_attention",
+          reasonCode: "identity_mismatch",
+          sourceRunId: review.runId,
+          lastError: "AntCode PR did not include headSha; repair cannot freeze identity",
+          resumeEligible: true,
+        },
+        error: "resume failed",
+      }),
+    );
+    expect(html).toContain("resume failed");
+    expect(html).toContain("从 identity_mismatch 恢复");
+  });
+
+  it("hides resume when the parent is not eligible", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: {
+          runId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+          kind: "repair",
+          status: "completed",
+          progress: { phase: "repair-finalizing", attempts: [], updatedAt: "t" },
+          businessResult: "needs_attention",
+          reasonCode: "identity_mismatch",
+          sourceRunId: review.runId,
+          resumeEligible: false,
+        },
+      }),
+    );
     expect(html).not.toContain("恢复");
   });
 });

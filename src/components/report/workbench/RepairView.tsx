@@ -20,6 +20,9 @@ export interface WorkbenchRepairProps {
   sourceBranchDefault: string;
   baseDefault: string;
   hintSource: "pr" | "review" | "worktree" | null;
+  bridgeAvailable?: boolean;
+  outerUsed?: number;
+  outerMax?: number;
   error: string | null;
   pending: boolean;
   onStart: (profile: string) => void;
@@ -62,6 +65,9 @@ export function RepairView({
         run={run}
         profiles={repair.profiles}
         activeRepair={repair.activeRepair}
+        bridgeAvailable={repair.bridgeAvailable ?? false}
+        outerUsed={repair.outerUsed ?? 0}
+        outerMax={repair.outerMax ?? 10}
         error={repair.error}
         pending={repair.pending}
         sourceBranchDefault={repair.sourceBranchDefault}

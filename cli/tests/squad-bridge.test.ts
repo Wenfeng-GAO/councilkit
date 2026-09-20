@@ -11,6 +11,7 @@ import {
 } from "@shared/runtime/squad-bridge-contract";
 import { describe, expect, it } from "vitest";
 import { FakeSquadBridge } from "../src/auto/squad-bridge";
+import { probeSquadBridge } from "../src/auto/squadctl-bridge";
 
 const SHA = "a".repeat(40);
 const POLICY = "gate-policy-1";
@@ -217,6 +218,13 @@ describe("squad bridge contract", () => {
     expect(live.status({ taskId }).event.kind).toBe("stopped");
     const published = live.requestPublish({ taskId, identity: IDENTITY });
     expect(published.ok).toBe(false);
+  });
+
+  it("probes unavailable when squadctl is not on PATH", () => {
+    const probe = probeSquadBridge({ PATH: "/tmp/does-not-have-squadctl" });
+    expect(probe.available).toBe(false);
+    expect(probe.version).toBeNull();
+    expect(probe.reason).toMatch(/squadctl/);
   });
 
   it("strips push tokens from agent seats and freezes integrate argv from parent identity", () => {

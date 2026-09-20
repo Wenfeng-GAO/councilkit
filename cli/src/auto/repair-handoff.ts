@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { errors } from "../errors";
@@ -40,6 +47,36 @@ export function createRepairHandoff(input: {
     sha256: createHash("sha256").update(payload).digest("hex"),
     generation: input.cycle,
   };
+}
+
+export function readRepairHandoff(input: {
+  runId: string;
+  cycle: number;
+  directory?: string;
+}): RepairHandoffRef | null {
+  if (!isCliRunId(input.runId) || !input.runId.startsWith("ck-repair-")) return null;
+  if (!Number.isInteger(input.cycle) || input.cycle < 1) return null;
+  const home = ensureHome();
+  const dir = input.directory ?? join(home, "handoff");
+  const file = join(dir, `${input.runId}-c${input.cycle}.json`);
+  if (!existsSync(file)) return null;
+  const payload = readFileSync(file, "utf8");
+  return {
+    path: file,
+    sha256: createHash("sha256").update(payload).digest("hex"),
+    generation: input.cycle,
+  };
+}
+
+export function ensureRepairHandoff(input: {
+  runId: string;
+  cycle: number;
+  body: unknown;
+  directory?: string;
+}): RepairHandoffRef {
+  const existing = readRepairHandoff(input);
+  if (existing) return existing;
+  return createRepairHandoff(input);
 }
 
 function assertSafeHandoffDir(dir: string, runsRoot: string): string {

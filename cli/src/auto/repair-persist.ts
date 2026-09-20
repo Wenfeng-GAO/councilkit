@@ -51,6 +51,11 @@ const repairStateSchema = z
     historyCount: z.number().int().nonnegative().nullable().optional(),
     writerPids: z.array(z.number().int().positive()).max(16).optional(),
     cycles: z.array(repairCycleSchema).optional(),
+    lastError: z.string().min(1).max(2000).nullable().optional(),
+    workspaceCwd: z.string().min(1).max(4096).nullable().optional(),
+    packageSourceRunId: z.string().min(1).max(80).nullable().optional(),
+    frozenBaseSha: z.string().min(1).max(64).nullable().optional(),
+    supplementReviewId: z.string().min(1).max(80).nullable().optional(),
   })
   .strict();
 export type RepairState = z.infer<typeof repairStateSchema>;

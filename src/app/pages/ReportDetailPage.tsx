@@ -219,8 +219,12 @@ export function ReportDetailPage() {
           sourceBranchDefault: profilesQuery.data?.sourceBranchHint ?? "",
           baseDefault: profilesQuery.data?.baseHint ?? "",
           hintSource: profilesQuery.data?.hintSource ?? null,
+          bridgeAvailable: profilesQuery.data?.bridgeAvailable ?? false,
+          outerUsed: run.outerUsed ?? 0,
+          outerMax: run.outerMax ?? 10,
           error:
             actionError ??
+            run.lastError ??
             (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null),
           pending: repairMutation.isPending,
           onStart: (profile) => repairMutation.mutate({ kind: "start", profile }),
@@ -336,8 +340,12 @@ export function ReportDetailPage() {
                 baseDefault={profilesQuery.data?.baseHint ?? ""}
                 hintSource={profilesQuery.data?.hintSource ?? null}
                 activeRepair={activeRepair}
+                bridgeAvailable={profilesQuery.data?.bridgeAvailable ?? false}
+                outerUsed={query.data.outerUsed ?? 0}
+                outerMax={query.data.outerMax ?? 10}
                 error={
                   actionError ??
+                  query.data.lastError ??
                   (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null)
                 }
                 pending={repairMutation.isPending}

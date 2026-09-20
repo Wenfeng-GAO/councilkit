@@ -106,6 +106,10 @@ export interface CliRunSummary {
   businessResult?: "approved" | "needs_attention" | "stopped" | null;
   reasonCode?: string | null;
   sourceRunId?: string | null;
+  lastError?: string | null;
+  outerUsed?: number;
+  outerMax?: number;
+  resumeEligible?: boolean;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -287,7 +291,16 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
 function readRepairProjection(
   dir: string,
   kind: CliRunKind,
-): Pick<CliRunSummary, "businessResult" | "reasonCode" | "sourceRunId"> {
+): Pick<
+  CliRunSummary,
+  | "businessResult"
+  | "reasonCode"
+  | "sourceRunId"
+  | "lastError"
+  | "outerUsed"
+  | "outerMax"
+  | "resumeEligible"
+> {
   if (kind !== "repair") return {};
   try {
     const rec = JSON.parse(readCapped(join(dir, "repair.json"), 64 * 1024).text) as Record<
@@ -300,13 +313,29 @@ function readRepairProjection(
       rec.businessResult === "stopped"
         ? rec.businessResult
         : null;
+    const outerUsed = typeof rec.outerUsed === "number" ? rec.outerUsed : 0;
+    const outerMax = typeof rec.outerMax === "number" ? rec.outerMax : 10;
+    const grantId = typeof rec.grantId === "string" ? rec.grantId : null;
     return {
       businessResult: business,
       reasonCode: typeof rec.reasonCode === "string" ? rec.reasonCode : null,
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : null,
+      lastError: typeof rec.lastError === "string" ? rec.lastError : null,
+      outerUsed,
+      outerMax,
+      resumeEligible:
+        business === "needs_attention" &&
+        outerUsed < outerMax &&
+        (Boolean(grantId) || outerUsed === 0),
     };
   } catch {
-    return { businessResult: null, reasonCode: null, sourceRunId: null };
+    return {
+      businessResult: null,
+      reasonCode: null,
+      sourceRunId: null,
+      lastError: null,
+      resumeEligible: false,
+    };
   }
 }
 
