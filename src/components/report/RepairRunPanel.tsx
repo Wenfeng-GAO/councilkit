@@ -1,5 +1,7 @@
 import { Button } from "@/components/ui/Button";
+import { isRepairProfileName } from "@shared/runtime/repair-lease";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 export interface RepairProfileSummary {
@@ -7,6 +9,24 @@ export interface RepairProfileSummary {
   prUrl: string;
   sourceBranch: string;
   base: string;
+}
+
+export function readRepairLaunchSummary(
+  data: FormData,
+): { ok: true; name: string; sourceBranch: string; base: string } | { ok: false; error: string } {
+  const name = String(data.get("name") ?? "default").trim() || "default";
+  const sourceBranch = String(data.get("sourceBranch") ?? "").trim();
+  const base = String(data.get("base") ?? "main").trim() || "main";
+  if (!isRepairProfileName(name)) {
+    return { ok: false, error: "profile 名必须是不含路径的短名" };
+  }
+  if (!sourceBranch) {
+    return { ok: false, error: "请填写源分支（本 PR 的 head 分支）" };
+  }
+  if (!base) {
+    return { ok: false, error: "请填写目标分支（本 PR 的 base 分支）" };
+  }
+  return { ok: true, name, sourceBranch, base };
 }
 
 export function RepairRunPanel({
@@ -18,6 +38,8 @@ export function RepairRunPanel({
   pending = false,
   outerUsed = 0,
   outerMax = 10,
+  sourceBranchDefault = "",
+  baseDefault = "main",
   onStart,
   onStop,
   onResume,
@@ -37,11 +59,14 @@ export function RepairRunPanel({
   pending?: boolean;
   outerUsed?: number;
   outerMax?: number;
+  sourceBranchDefault?: string;
+  baseDefault?: string;
   onStart?: (profile: string) => void;
   onStop?: () => void;
   onResume?: () => void;
   onSaveProfile?: (input: { name: string; sourceBranch: string; base: string }) => void;
 }) {
+  const [formError, setFormError] = useState<string | null>(null);
   if (run.kind === "repair") {
     const used = `第 ${outerUsed} / ${outerMax} 次外循环`;
     const budgetOut = run.businessResult === "needs_attention" && outerUsed >= outerMax;
@@ -103,36 +128,58 @@ export function RepairRunPanel({
       ) : null}
       {bridgeAvailable && profiles.length === 0 ? (
         <form
+          key={`${sourceBranchDefault}|${baseDefault}`}
           className="mt-3 flex flex-col gap-2"
           onSubmit={(event) => {
             event.preventDefault();
-            const data = new FormData(event.currentTarget);
-            onSaveProfile?.({
-              name: String(data.get("name") ?? "default"),
-              sourceBranch: String(data.get("sourceBranch") ?? ""),
-              base: String(data.get("base") ?? "main"),
-            });
+            const parsed = readRepairLaunchSummary(new FormData(event.currentTarget));
+            if (!parsed.ok) {
+              setFormError(parsed.error);
+              return;
+            }
+            setFormError(null);
+            onSaveProfile?.(parsed);
           }}
         >
-          <p className="text-sm text-muted">还没有保存的修复授权，先填启动摘要。</p>
-          <input
-            name="name"
-            defaultValue="default"
-            aria-label="profile 名"
-            className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
-          />
-          <input
-            name="sourceBranch"
-            placeholder="源分支"
-            aria-label="源分支"
-            className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
-          />
-          <input
-            name="base"
-            defaultValue="main"
-            aria-label="base"
-            className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
-          />
+          <p className="text-sm text-muted">
+            还没有保存的修复授权，先填启动摘要。这三框冻结本 PR 的快进推送授权，不是 PR 地址。
+          </p>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-muted">profile 名</span>
+            <input
+              name="name"
+              defaultValue="default"
+              aria-label="profile 名"
+              autoComplete="off"
+              className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
+            />
+            <span className="text-xs text-muted">本机授权短名，一般保持 default。</span>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-muted">源分支</span>
+            <input
+              name="sourceBranch"
+              defaultValue={sourceBranchDefault}
+              placeholder="例如 feat/foo"
+              aria-label="源分支"
+              required
+              autoComplete="off"
+              className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
+            />
+            <span className="text-xs text-muted">本 PR 的 head 分支，修复只允许快进推到这里。</span>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm text-muted">目标分支</span>
+            <input
+              name="base"
+              defaultValue={baseDefault || "main"}
+              aria-label="目标分支"
+              autoComplete="off"
+              className="rounded border border-edge bg-canvas px-2 py-1 text-sm"
+            />
+            <span className="text-xs text-muted">本 PR 的 base 分支，须与远端一致。</span>
+          </label>
+          {formError ? <p className="text-sm text-error">{formError}</p> : null}
           <Button type="submit" disabled={pending}>
             保存授权并启动
           </Button>

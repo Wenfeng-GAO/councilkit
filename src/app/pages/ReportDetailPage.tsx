@@ -22,6 +22,7 @@ import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/h
 import { buildPrComment } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -126,8 +127,36 @@ export function ReportDetailPage() {
   const isSquad = query.data?.kind === "squad";
   const isIdeate = query.data?.kind === "ideate";
   const reviewActions = !isSquad && !isIdeate && query.data?.kind !== "repair";
+  const profilesQuery = useQuery({
+    queryKey: ["cli-repair-profiles", runId],
+    queryFn: () => client.listCliRepairProfiles(runId),
+    enabled: query.data?.kind === "review",
+    retry: false,
+  });
   const repairMutation = useMutation({
-    mutationFn: async (input: { kind: "start" | "stop" | "resume"; profile?: string }) => {
+    mutationFn: async (input: {
+      kind: "start" | "stop" | "resume" | "save";
+      profile?: string;
+      launch?: { name: string; sourceBranch: string; base: string };
+    }) => {
+      if (input.kind === "save") {
+        const prUrl = query.data?.reviewEvidence?.prUrl ?? "";
+        const repo = writerRepoFromPrUrl(prUrl);
+        if (!prUrl || !repo) {
+          throw new Error("这份审查没有可用的 PR 身份，无法保存修复授权。");
+        }
+        const launch = input.launch;
+        if (!launch) throw new Error("缺少启动摘要。");
+        const saved = await client.saveCliRepairProfile({
+          name: launch.name,
+          prUrl,
+          repo,
+          sourceBranch: launch.sourceBranch,
+          base: launch.base,
+          capabilities: ["push-source-branch"],
+        });
+        return client.startCliRepair({ from: runId, profile: saved.name });
+      }
       if (input.kind === "start") {
         return client.startCliRepair({ from: runId, profile: input.profile ?? "default" });
       }
@@ -136,6 +165,7 @@ export function ReportDetailPage() {
     },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["cli-runs"] });
+      await queryClient.invalidateQueries({ queryKey: ["cli-repair-profiles"] });
       if ("runId" in result && result.runId !== runId && query.data?.kind === "review") {
         window.location.assign(`/reports/${result.runId}`);
       }
@@ -244,12 +274,19 @@ export function ReportDetailPage() {
           {query.data.kind === "review" || query.data.kind === "repair" ? (
             <RepairRunPanel
               run={query.data}
+              profiles={profilesQuery.data?.profiles ?? []}
+              sourceBranchDefault={profilesQuery.data?.sourceBranchHint ?? ""}
+              baseDefault={profilesQuery.data?.baseHint ?? "main"}
               activeRepair={activeRepair}
-              error={actionError}
+              error={
+                actionError ??
+                (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null)
+              }
               pending={repairMutation.isPending}
               onStart={(profile) => repairMutation.mutate({ kind: "start", profile })}
               onStop={() => repairMutation.mutate({ kind: "stop" })}
               onResume={() => repairMutation.mutate({ kind: "resume" })}
+              onSaveProfile={(launch) => repairMutation.mutate({ kind: "save", launch })}
             />
           ) : null}
           {!isSquad && showSeats && query.data.progress ? (

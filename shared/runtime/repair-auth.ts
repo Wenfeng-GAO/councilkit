@@ -113,6 +113,25 @@ export function verifyRepairGrantRecord(
   return { ok: true };
 }
 
+const FROZEN_BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]{1,200}$/;
+
+export function repairBranchHintsFromFrozenContext(markdown: string): {
+  sourceBranch: string | null;
+  base: string | null;
+} {
+  const source = markdown.match(/^- source: `([^`]+)`/m)?.[1] ?? "";
+  const target = markdown.match(/^- target: `([^`]+)`/m)?.[1] ?? "";
+  return { sourceBranch: usableFrozenBranch(source), base: usableFrozenBranch(target) };
+}
+
+function usableFrozenBranch(value: string): string | null {
+  const branch = value.trim();
+  if (!FROZEN_BRANCH_RE.test(branch) || branch.includes("..")) return null;
+  if (branch === "HEAD" || branch === "unknown" || branch.startsWith("HEAD~")) return null;
+  if (branch.startsWith("origin/")) return null;
+  return branch;
+}
+
 function isExpired(expiresAt: string | null, now: string): boolean {
   if (expiresAt === null) return false;
   return Date.parse(expiresAt) <= Date.parse(now);

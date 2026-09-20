@@ -846,6 +846,31 @@ export const cliRunSaveRepairProfileRequestSchema = z
   .strict();
 export type CliRunSaveRepairProfileRequest = z.infer<typeof cliRunSaveRepairProfileRequestSchema>;
 
+export const repairProfileSummarySchema = z
+  .object({
+    name: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, "profile must be a closed token, not a path"),
+    prUrl: z.string().min(1).max(500),
+    sourceBranch: z.string().min(1).max(200),
+    base: z.string().min(1).max(200),
+  })
+  .strict();
+export type RepairProfileSummaryDto = z.infer<typeof repairProfileSummarySchema>;
+
+export const cliRunListRepairProfilesResponseSchema = z
+  .object({
+    profiles: z.array(repairProfileSummarySchema).max(64),
+    sourceBranchHint: z.string().max(200).nullable(),
+    baseHint: z.string().max(200).nullable(),
+  })
+  .strict();
+export type CliRunListRepairProfilesResponse = z.infer<
+  typeof cliRunListRepairProfilesResponseSchema
+>;
+export const cliRunSaveRepairProfileResponseSchema = repairProfileSummarySchema;
+export type CliRunSaveRepairProfileResponse = RepairProfileSummaryDto;
+
 const attemptLiveEventSchema = z.discriminatedUnion("type", [
   z
     .object({

@@ -1,4 +1,4 @@
-import { RepairRunPanel } from "@/components/report/RepairRunPanel";
+import { RepairRunPanel, readRepairLaunchSummary } from "@/components/report/RepairRunPanel";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
@@ -42,6 +42,34 @@ describe("RepairRunPanel", () => {
     const html = render(createElement(RepairRunPanel, { run: review, profiles: [] }));
     expect(html).toContain("还没有保存的修复授权");
     expect(html).toContain("保存授权并启动");
+    expect(html).toContain("profile 名");
+    expect(html).toContain("源分支");
+    expect(html).toContain("目标分支");
+    expect(html).toContain("不是 PR 地址");
+  });
+
+  it("prefills source and base from the current review when Host can inspect them", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: review,
+        profiles: [],
+        sourceBranchDefault: "feat/piston-413",
+        baseDefault: "master",
+      }),
+    );
+    expect(html).toContain('value="feat/piston-413"');
+    expect(html).toContain('value="master"');
+  });
+
+  it("rejects an empty source branch before save", () => {
+    const data = new FormData();
+    data.set("name", "default");
+    data.set("sourceBranch", "   ");
+    data.set("base", "main");
+    expect(readRepairLaunchSummary(data)).toEqual({
+      ok: false,
+      error: "请填写源分支（本 PR 的 head 分支）",
+    });
   });
 
   it("disables the CTA when the squad bridge is missing", () => {

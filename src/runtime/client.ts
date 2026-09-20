@@ -7,7 +7,10 @@ import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunListRepairProfilesResponse,
   type CliRunRepairStopResponse,
+  type CliRunSaveRepairProfileRequest,
+  type CliRunSaveRepairProfileResponse,
   type CliRunStartIdeateRequest,
   type CliRunStartRepairRequest,
   type CliRunStartReviewRequest,
@@ -34,7 +37,9 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunListRepairProfilesResponseSchema,
   cliRunRepairStopResponseSchema,
+  cliRunSaveRepairProfileResponseSchema,
   cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
   closeScopeResponseSchema,
@@ -214,6 +219,24 @@ export class RuntimeClient {
     return this.call("POST", `/api/v1/cli-runs/${encodeURIComponent(runId)}/repair/resume`, {
       body: {},
       schema: cliRunStartReviewResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  listCliRepairProfiles(from?: string): Promise<CliRunListRepairProfilesResponse> {
+    const query = from ? `?from=${encodeURIComponent(from)}` : "";
+    return this.call("GET", `/api/v1/cli-runs/repair/profiles${query}`, {
+      schema: cliRunListRepairProfilesResponseSchema,
+      auth: "session",
+    });
+  }
+
+  saveCliRepairProfile(
+    body: CliRunSaveRepairProfileRequest,
+  ): Promise<CliRunSaveRepairProfileResponse> {
+    return this.call("POST", "/api/v1/cli-runs/repair/profiles", {
+      body,
+      schema: cliRunSaveRepairProfileResponseSchema,
       auth: "mutation",
     });
   }

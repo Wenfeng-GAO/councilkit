@@ -8,6 +8,7 @@ import type { HostServices, HttpError, RouteContext } from "@host/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createRepairGrant,
+  loadRepairProfile,
   revokeRepairProfile,
   saveRepairProfile,
 } from "../../cli/src/auto/repair-profile";
@@ -223,5 +224,90 @@ describe("repair mutation handlers", () => {
       start?.bodySchema?.safeParse({ from: RUN_ID, profile: "default", authorized: true }).success,
     ).toBe(false);
     expect(start?.bodySchema?.safeParse({ from: RUN_ID, profile: "default" }).success).toBe(true);
+  });
+
+  it("saves a repair profile the CLI can load and lists it for the source review", async () => {
+    writeFileSync(
+      join(home, "runs", RUN_ID, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        runId: RUN_ID,
+        startedAt: "2026-09-20",
+        task: { pr: GH_PR },
+      })}\n`,
+    );
+    writeFileSync(
+      join(home, "runs", RUN_ID, "review-context.md"),
+      "# Frozen review context\n\n- source: `feat-x`\n- target: `main`\n",
+    );
+    const { routes } = routesWithLauncher();
+    const post = routes.find(
+      (route) => route.method === "POST" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+    );
+    const get = routes.find(
+      (route) => route.method === "GET" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+    );
+    if (post === undefined || get === undefined) throw new Error("missing profile routes");
+    const saved = (await post.handler(
+      ctx({
+        name: "default",
+        prUrl: GH_PR,
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        base: "main",
+        capabilities: ["push-source-branch"],
+      }),
+    )) as { name: string; sourceBranch: string };
+    expect(saved.name).toBe("default");
+    expect(loadRepairProfile("default").sourceBranch).toBe("feat-x");
+    const listed = (await get.handler({
+      ...ctx({}),
+      query: new URLSearchParams({ from: RUN_ID }),
+    })) as {
+      profiles: Array<{ name: string }>;
+      sourceBranchHint: string | null;
+      baseHint: string | null;
+    };
+    expect(listed.profiles.map((row) => row.name)).toEqual(["default"]);
+    expect(listed.sourceBranchHint).toBe("feat-x");
+    expect(listed.baseHint).toBe("main");
+  });
+
+  it("refuses to save a profile whose repo does not match the PR", async () => {
+    const { routes } = routesWithLauncher();
+    const post = routes.find(
+      (route) => route.method === "POST" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+    );
+    if (post === undefined) throw new Error("missing save route");
+    await expect(
+      (async () =>
+        post.handler(
+          ctx({
+            name: "default",
+            prUrl: GH_PR,
+            repo: "github.com/other/repo",
+            sourceBranch: "feat-x",
+            base: "main",
+            capabilities: ["push-source-branch"],
+          }),
+        ))(),
+    ).rejects.toMatchObject({ status: 400 } satisfies Partial<HttpError>);
+  });
+
+  it("rejects an empty source branch on the save body schema", () => {
+    const { routes } = routesWithLauncher();
+    const post = routes.find(
+      (route) => route.method === "POST" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+    );
+    expect(
+      post?.bodySchema?.safeParse({
+        name: "default",
+        prUrl: GH_PR,
+        repo: "github.com/acme/repo",
+        sourceBranch: "",
+        base: "main",
+        capabilities: ["push-source-branch"],
+      }).success,
+    ).toBe(false);
   });
 });

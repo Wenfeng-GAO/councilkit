@@ -5,7 +5,15 @@
  * runs review agents itself.
  */
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  type Stats,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -19,22 +27,31 @@ import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-in
 import { makeError } from "@shared/runtime/errors";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
+  type RepairProfileRecord,
   parseRepairGrantRecord,
   parseRepairProfileRecord,
+  profileIntegrityHash,
+  repairBranchHintsFromFrozenContext,
   verifyRepairGrantRecord,
 } from "@shared/runtime/repair-auth";
 import {
   type WriterLease,
   isActiveRepairHolder,
+  isRepairProfileName,
   parseWriterLease,
   writerLeaseKey,
   writerLeasePath,
+  writerRepoFromPrUrl,
 } from "@shared/runtime/repair-lease";
+import { normalizeReviewPr } from "@shared/runtime/review-case";
 import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunListRepairProfilesResponse,
   type CliRunRepairStopResponse,
+  type CliRunSaveRepairProfileRequest,
+  type CliRunSaveRepairProfileResponse,
   type CliRunStartIdeateRequest,
   type CliRunStartRepairRequest,
   type CliRunStartReviewRequest,
@@ -44,8 +61,11 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunListRepairProfilesResponseSchema,
   cliRunRepairControlRequestSchema,
   cliRunRepairStopResponseSchema,
+  cliRunSaveRepairProfileRequestSchema,
+  cliRunSaveRepairProfileResponseSchema,
   cliRunStartIdeateRequestSchema,
   cliRunStartRepairRequestSchema,
   cliRunStartReviewRequestSchema,
@@ -197,6 +217,24 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       handler: async (ctx): Promise<CliRunStartReviewResponse> => {
         const body = ctx.body as CliRunStartRepairRequest;
         return startRepairRun(launcher, body);
+      },
+    },
+    {
+      method: "GET",
+      pattern: "/api/v1/cli-runs/repair/profiles",
+      auth: "session",
+      responseSchema: cliRunListRepairProfilesResponseSchema,
+      handler: (ctx): CliRunListRepairProfilesResponse => listRepairProfiles(ctx.query.get("from")),
+    },
+    {
+      method: "POST",
+      pattern: "/api/v1/cli-runs/repair/profiles",
+      auth: "mutation",
+      bodySchema: cliRunSaveRepairProfileRequestSchema,
+      responseSchema: cliRunSaveRepairProfileResponseSchema,
+      handler: (ctx): CliRunSaveRepairProfileResponse => {
+        const body = ctx.body as CliRunSaveRepairProfileRequest;
+        return toProfileSummary(writeHostRepairProfile(body));
       },
     },
     {
@@ -601,10 +639,158 @@ function readLeaseFile(path: string): WriterLease | null {
 function readHostRepairProfile(name: string): ReturnType<typeof parseRepairProfileRecord> {
   const path = join(resolveCouncilkitHome(process.env), "profiles", `${name}.json`);
   try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
     return parseRepairProfileRecord(readFileSync(path, "utf8"));
   } catch {
     return null;
   }
+}
+
+function listRepairProfiles(from: string | null): CliRunListRepairProfilesResponse {
+  if (!from || !isCliRunId(from)) {
+    return {
+      profiles: listHostRepairProfiles().map(toProfileSummary),
+      sourceBranchHint: null,
+      baseHint: null,
+    };
+  }
+  const hints = readBranchHints(from);
+  const wantedPr = readCliRun(from, process.env)?.reviewEvidence?.prUrl ?? null;
+  const profiles = listHostRepairProfiles()
+    .filter((row) => wantedPr !== null && row.prUrl === wantedPr)
+    .map(toProfileSummary);
+  return {
+    profiles,
+    sourceBranchHint: hints.sourceBranch,
+    baseHint: hints.base,
+  };
+}
+
+function listHostRepairProfiles(): RepairProfileRecord[] {
+  const dir = join(resolveCouncilkitHome(process.env), "profiles");
+  if (!isRealDir(dir)) return [];
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const rows: RepairProfileRecord[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    const name = file.slice(0, -".json".length);
+    if (!isRepairProfileName(name)) continue;
+    const rec = readHostRepairProfile(name);
+    if (rec === null || rec.name !== name || rec.revokedAt) continue;
+    rows.push(rec);
+  }
+  return rows.sort((a, b) => {
+    if (a.name === "default") return -1;
+    if (b.name === "default") return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function writeHostRepairProfile(input: CliRunSaveRepairProfileRequest): RepairProfileRecord {
+  const prUrl = normalizeReviewPr(input.prUrl);
+  if (prUrl === null) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "repair profile requires a GitHub or AntCode PR URL", {
+        retryable: false,
+      }),
+    );
+  }
+  const repo = writerRepoFromPrUrl(prUrl);
+  if (repo === null || repo !== input.repo.trim().toLowerCase()) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "repair profile repo does not match the PR URL.", {
+        retryable: false,
+      }),
+    );
+  }
+  const sourceBranch = input.sourceBranch.trim();
+  const base = input.base.trim();
+  if (!sourceBranch || !base) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "repair profile requires source and base branches.", {
+        retryable: false,
+      }),
+    );
+  }
+  const capabilities = [...new Set(input.capabilities)];
+  const createdAt = new Date().toISOString();
+  const record: RepairProfileRecord = {
+    version: 1,
+    name: input.name,
+    prUrl,
+    repo,
+    sourceBranch,
+    base,
+    capabilities,
+    integrityHash: "",
+    expiresAt: null,
+    revokedAt: null,
+    createdAt,
+  };
+  record.integrityHash = profileIntegrityHash(record);
+  const dir = join(resolveCouncilkitHome(process.env), "profiles");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, `${record.name}.json`);
+  try {
+    const existing = lstatSync(path);
+    if (existing.isSymbolicLink() || existing.isDirectory()) {
+      throw httpError(
+        400,
+        makeError("BAD_REQUEST", "discovery", "repair profile path is not a regular file.", {
+          retryable: false,
+        }),
+      );
+    }
+  } catch (error) {
+    if (!isEnoent(error)) {
+      if (error instanceof HttpError) throw error;
+      throw httpError(
+        500,
+        makeError("INTERNAL", "dispatch", "cannot inspect repair profile path", {
+          retryable: true,
+        }),
+      );
+    }
+  }
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  return record;
+}
+
+function toProfileSummary(row: RepairProfileRecord): CliRunSaveRepairProfileResponse {
+  return {
+    name: row.name,
+    prUrl: row.prUrl,
+    sourceBranch: row.sourceBranch,
+    base: row.base,
+  };
+}
+
+function readBranchHints(runId: string): { sourceBranch: string | null; base: string | null } {
+  const path = join(resolveCliRunsRoot(), runId, "review-context.md");
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return emptyBranchHints();
+    return repairBranchHintsFromFrozenContext(readFileSync(path, "utf8"));
+  } catch {
+    return emptyBranchHints();
+  }
+}
+
+function emptyBranchHints(): { sourceBranch: string | null; base: string | null } {
+  return { sourceBranch: null, base: null };
+}
+
+function isEnoent(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 function readHostRepairGrant(runId: string): ReturnType<typeof parseRepairGrantRecord> {

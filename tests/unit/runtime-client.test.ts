@@ -86,6 +86,66 @@ describe("RuntimeClient CLI run attempt live", () => {
   });
 });
 
+describe("RuntimeClient repair profiles", () => {
+  it("listCliRepairProfiles: GET session call with from query", async () => {
+    const { fetchFn, calls } = stubFetch(
+      okResponse({
+        profiles: [
+          {
+            name: "default",
+            prUrl: "https://github.com/acme/repo/pull/1",
+            sourceBranch: "feat-x",
+            base: "main",
+          },
+        ],
+        sourceBranchHint: "feat-x",
+        baseHint: "main",
+      }),
+    );
+    const client = makeClient(fetchFn);
+    const result = await client.listCliRepairProfiles("ck-review-1");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toBe("/api/v1/cli-runs/repair/profiles?from=ck-review-1");
+    expect(calls[0]?.headers[CSRF_HEADER_NAME]).toBeUndefined();
+    expect(result.profiles).toHaveLength(1);
+    expect(result.sourceBranchHint).toBe("feat-x");
+  });
+
+  it("saveCliRepairProfile: POST mutation with closed-set body", async () => {
+    const { fetchFn, calls } = stubFetch(
+      okResponse({
+        name: "default",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        sourceBranch: "feat-x",
+        base: "main",
+      }),
+    );
+    const client = makeClient(fetchFn);
+    const result = await client.saveCliRepairProfile({
+      name: "default",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      base: "main",
+      capabilities: ["push-source-branch"],
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("/api/v1/cli-runs/repair/profiles");
+    expect(calls[0]?.headers[CSRF_HEADER_NAME]).toBe("csrf-token");
+    expect(calls[0]?.body).toEqual({
+      name: "default",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      base: "main",
+      capabilities: ["push-source-branch"],
+    });
+    expect(result.name).toBe("default");
+  });
+});
+
 describe("RuntimeClient installations / profile readiness (U6)", () => {
   it("listInstallations: GET session call, parses the installations envelope data", async () => {
     const { fetchFn, calls } = stubFetch(okResponse({ installations: [INSTALLATION] }));
