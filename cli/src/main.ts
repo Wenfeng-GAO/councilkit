@@ -2,6 +2,7 @@ import { dispatch } from "./cli";
 import { ApplyExit } from "./commands/apply";
 import { FixExit } from "./commands/fix";
 import { IdeateExit } from "./commands/ideate";
+import { RepairExit } from "./commands/repair";
 import { ReviewExit } from "./commands/review";
 import { RunExit } from "./commands/run";
 /**
@@ -138,6 +139,9 @@ function main(argv: string[]): void {
         process.exit(error.exitCode);
       }
       if (error instanceof FixExit) {
+        process.exit(error.exitCode);
+      }
+      if (error instanceof RepairExit) {
         process.exit(error.exitCode);
       }
       if (error instanceof CliError) {

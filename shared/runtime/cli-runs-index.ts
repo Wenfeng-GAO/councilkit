@@ -280,7 +280,34 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     reviewEvidence:
       parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null,
     ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
+    ...readRepairProjection(dir, parsed.kind),
   };
+}
+
+function readRepairProjection(
+  dir: string,
+  kind: CliRunKind,
+): Pick<CliRunSummary, "businessResult" | "reasonCode" | "sourceRunId"> {
+  if (kind !== "repair") return {};
+  try {
+    const rec = JSON.parse(readCapped(join(dir, "repair.json"), 64 * 1024).text) as Record<
+      string,
+      unknown
+    >;
+    const business =
+      rec.businessResult === "approved" ||
+      rec.businessResult === "needs_attention" ||
+      rec.businessResult === "stopped"
+        ? rec.businessResult
+        : null;
+    return {
+      businessResult: business,
+      reasonCode: typeof rec.reasonCode === "string" ? rec.reasonCode : null,
+      sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : null,
+    };
+  } catch {
+    return { businessResult: null, reasonCode: null, sourceRunId: null };
+  }
 }
 
 function readPipelinePid(dir: string): number | null {

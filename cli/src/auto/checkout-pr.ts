@@ -124,6 +124,16 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
 }
 
 /** Read PR metadata without cloning. Used by review worktrees. */
+export function requirePrHeadIdentity(pr: CheckedOutPr): void {
+  if (!pr.headSha || !FULL_SHA.test(pr.headSha)) {
+    throw errors.usage(
+      pr.host === "antcode"
+        ? "AntCode PR did not include headSha; repair cannot freeze identity"
+        : "PR did not include headSha; repair cannot freeze identity",
+    );
+  }
+}
+
 export async function inspectPullRequest(
   prUrl: string,
   runCommand: RunCommand = defaultRunCommand,

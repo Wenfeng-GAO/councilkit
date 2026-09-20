@@ -99,7 +99,7 @@ export function FindingLedger({ run }: { run: CliRunDetailResponse }) {
       ) : null}
       {nextCluster ? (
         <p className="mt-3 text-xs text-muted">
-          立即修复默认只落地 <code className="font-command">{nextCluster.id}</code>
+          内置修复默认只落地 <code className="font-command">{nextCluster.id}</code>
           ，一刀一个 SHA。也可{" "}
           <code className="font-command">
             councilkit apply --run {run.runId} --cluster {nextCluster.id}

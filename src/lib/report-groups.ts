@@ -20,7 +20,7 @@ type RunLike = Pick<CliRunSummaryDto, "kind" | "title" | "status" | "pipeline"> 
 };
 
 export function isWorkspaceRun(run: Pick<CliRunSummaryDto, "kind">): boolean {
-  return run.kind === "review" || run.kind === "squad";
+  return run.kind === "review" || run.kind === "squad" || run.kind === "repair";
 }
 
 export function explicitPrKey(

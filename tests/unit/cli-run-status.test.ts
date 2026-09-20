@@ -81,5 +81,7 @@ describe("cliRunNeedsPoll", () => {
     expect(cliRunNeedsPoll("awaiting_orchestrator", null)).toBe(true);
     expect(cliRunNeedsPoll("closed", null)).toBe(false);
     expect(cliRunNeedsPoll("completed", { phase: "done" })).toBe(false);
+    expect(cliRunNeedsPoll("running", null, "repair")).toBe(true);
+    expect(cliRunNeedsPoll("completed", { phase: "planning" }, "repair")).toBe(false);
   });
 });

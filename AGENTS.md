@@ -1,6 +1,6 @@
 # AGENTS.md — CouncilKit for coding agents
 
-CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `ideate` / `apply` / `fix` 命令）不经 Runtime Host 跑 agent，直接 spawn agent 子进程。`review`/`apply`/`fix` 是全能力路径，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md`；`ideate` 是受限只读讨论，不修改用户项目。浏览器「立即修复」只是 Host spawn 同 checkout 的 `councilkit fix`。
+CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `ideate` / `apply` / `fix` / `repair` 命令）不经 Runtime Host 跑 agent，直接 spawn agent 子进程。`review`/`apply`/`fix`/`repair` 是全能力路径，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md` 与 `docs/brainstorms/2026-09-20-squad-repair-until-approved-requirements.md`；`ideate` 是受限只读讨论，不修改用户项目。浏览器「Squad 自动修复」是 Host spawn 同 checkout 的 `councilkit repair run`；次级「内置修复」仍是 `councilkit fix`。Host 不 spawn `squadctl`、不读 `.squad/`。
 
 ## 前置
 
@@ -18,6 +18,7 @@ pnpm exec councilkit init --json
 # 之后审查不再手写 --agents JSON：
 pnpm exec councilkit review <url> --json
 # Host 运行时浏览器打开 http://127.0.0.1:43127/reports/<runId>
+pnpm exec councilkit repair run --from <ck-review-id> --profile <name> --json
 pnpm exec councilkit fix --run <ck-review-id> --json     # 方案陪审 → 一集群 apply → 对照账本复审
 pnpm exec councilkit apply --run <ck-review-id> --json   # 默认第一个未落地集群；grok + push
 pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪审

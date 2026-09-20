@@ -37,7 +37,9 @@ const SQUAD_PHASE_LABEL = {
 export function cliRunNeedsPoll(
   status: CliRunStatusDto,
   pipeline: { phase: string } | null | undefined,
+  kind?: CliRunSummaryDto["kind"],
 ): boolean {
+  if (kind === "repair") return status === "running";
   if (status === "running" || status === "awaiting_orchestrator") return true;
   return pipeline != null && pipeline.phase !== "done";
 }

@@ -65,13 +65,22 @@ export interface FakeSquadBridgeOptions {
   receiptOverride?: unknown;
   history?: unknown;
   bridgeAncestorDir?: string | null;
+  innerFails?: number;
+  writerPids?: number[];
+  refusePublish?: boolean;
 }
 
 export class FakeSquadBridge implements SquadBridge {
   private readonly tasks = new Map<string, SquadJournalRefs>();
   private readonly stopped = new Set<string>();
+  private readonly statusCounts = new Map<string, number>();
+  publishCalls = 0;
 
   constructor(private readonly options: FakeSquadBridgeOptions) {}
+
+  writerPids(): number[] {
+    return this.options.writerPids ?? [];
+  }
 
   start(request: SquadBridgeStartRequest): SquadBridgeStartResult {
     const version = assertSquadBridgeVersion({
@@ -125,12 +134,19 @@ export class FakeSquadBridge implements SquadBridge {
   status(request: { taskId: string }): SquadBridgeStatus {
     const journal = this.tasks.get(request.taskId);
     if (!journal) throw new Error(`unknown fake squad task ${request.taskId}`);
+    const seen = (this.statusCounts.get(request.taskId) ?? 0) + 1;
+    this.statusCounts.set(request.taskId, seen);
+    const innerFails = this.options.innerFails ?? 0;
+    const gated =
+      seen <= innerFails
+        ? { ...journal, independentVerify: false, requiredGatesPassed: false }
+        : journal;
     const kind: SquadBridgeEventKind = this.stopped.has(request.taskId)
       ? "stopped"
       : (this.options.eventKind ?? "candidate_ready");
     return {
       taskId: request.taskId,
-      event: { kind, journal },
+      event: { kind, journal: gated },
     };
   }
 
@@ -138,6 +154,10 @@ export class FakeSquadBridge implements SquadBridge {
     taskId: string;
     identity: FrozenIntegrateIdentity;
   }): SquadBridgePublishResult {
+    this.publishCalls += 1;
+    if (this.options.refusePublish) {
+      return { ok: false, code: "JOURNAL_GATES_INCOMPLETE" };
+    }
     const snapshot = this.status(request);
     if (
       !canRequestPublish(snapshot.event) ||

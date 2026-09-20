@@ -394,7 +394,7 @@ flowchart TB
 
 **Verification:** 不 spawn squadctl、不读 `.squad/`、不改来源 `status.json`。
 
-- [ ] **Unit 6: Preflight、外循环与 resume 矩阵**
+- [x] **Unit 6: Preflight、外循环与 resume 矩阵**
 
 **Goal:** 前台 CLI 在 fake 桥上跑完外循环链，崩溃可幂等恢复。
 
@@ -440,7 +440,7 @@ flowchart TB
 
 **Verification:** 验收表中不接真实 PR 的行由本单元覆盖。
 
-- [ ] **Unit 7: 报告页主 CTA 与父 Run 详情**
+- [x] **Unit 7: 报告页主 CTA 与父 Run 详情**
 
 **Goal:** 用户从审查报告点一次「Squad 自动修复」，在父 Run 页看到外循环、阶段、原因码恢复入口。
 

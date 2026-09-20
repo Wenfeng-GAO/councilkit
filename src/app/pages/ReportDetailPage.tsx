@@ -9,6 +9,7 @@ import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
 import { RepairExportCard } from "@/components/report/RepairExportCard";
+import { RepairRunPanel } from "@/components/report/RepairRunPanel";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { ReviewRunHeader } from "@/components/report/ReviewRunHeader";
 import { SeatInspector } from "@/components/report/SeatInspector";
@@ -45,7 +46,7 @@ export function ReportDetailPage() {
     retry: false,
     refetchInterval: (current) => {
       const live = current.state.data;
-      if (live && cliRunNeedsPoll(live.status, live.pipeline)) return 2000;
+      if (live && cliRunNeedsPoll(live.status, live.pipeline, live.kind)) return 2000;
       if (Date.now() < watchUntil) return 2000;
       return false;
     },
@@ -71,7 +72,7 @@ export function ReportDetailPage() {
   const listQuery = useQuery({
     queryKey: ["cli-runs"],
     queryFn: () => client.listCliRuns(),
-    enabled: query.data?.kind === "review",
+    enabled: query.data?.kind === "review" || query.data?.kind === "repair",
     retry: false,
   });
   const parsed = useMemo(
@@ -124,7 +125,33 @@ export function ReportDetailPage() {
     ) ?? [];
   const isSquad = query.data?.kind === "squad";
   const isIdeate = query.data?.kind === "ideate";
-  const reviewActions = !isSquad && !isIdeate;
+  const reviewActions = !isSquad && !isIdeate && query.data?.kind !== "repair";
+  const repairMutation = useMutation({
+    mutationFn: async (input: { kind: "start" | "stop" | "resume"; profile?: string }) => {
+      if (input.kind === "start") {
+        return client.startCliRepair({ from: runId, profile: input.profile ?? "default" });
+      }
+      if (input.kind === "stop") return client.stopCliRepair(runId);
+      return client.resumeCliRepair(runId);
+    },
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["cli-runs"] });
+      if ("runId" in result && result.runId !== runId && query.data?.kind === "review") {
+        window.location.assign(`/reports/${result.runId}`);
+      }
+    },
+    onError: (error) => {
+      setActionError(formatCliActionError(error));
+    },
+  });
+  const reviewId = query.data?.kind === "review" ? query.data.runId : null;
+  const activeRepair = reviewId
+    ? (listQuery.data?.runs.find(
+        (row) => row.kind === "repair" && row.sourceRunId === reviewId && row.status === "running",
+      ) ??
+      listQuery.data?.runs.find((row) => row.kind === "repair" && row.sourceRunId === reviewId) ??
+      null)
+    : null;
   const resumeCommand =
     query.data && reviewActions && failedSeats.length > 0 && query.data.status !== "running"
       ? buildReviewResumeCommand(query.data.runId, query.data.title, query.data.markdown)
@@ -212,6 +239,17 @@ export function ReportDetailPage() {
               key={`workspace:${query.data.runId}`}
               run={query.data}
               onInspect={setInspectId}
+            />
+          ) : null}
+          {query.data.kind === "review" || query.data.kind === "repair" ? (
+            <RepairRunPanel
+              run={query.data}
+              activeRepair={activeRepair}
+              error={actionError}
+              pending={repairMutation.isPending}
+              onStart={(profile) => repairMutation.mutate({ kind: "start", profile })}
+              onStop={() => repairMutation.mutate({ kind: "stop" })}
+              onResume={() => repairMutation.mutate({ kind: "resume" })}
             />
           ) : null}
           {!isSquad && showSeats && query.data.progress ? (

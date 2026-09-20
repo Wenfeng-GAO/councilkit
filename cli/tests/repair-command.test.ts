@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -16,7 +16,7 @@ import { readCliRun } from "@shared/runtime/cli-runs-index";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { saveRepairProfile } from "../src/auto/repair-profile";
-import { runRepair } from "../src/commands/repair";
+import { RepairExit, runRepair } from "../src/commands/repair";
 import { CliError } from "../src/errors";
 import type { OutputSink } from "../src/output";
 
@@ -262,7 +262,7 @@ function saveDefaultProfile(): void {
 }
 
 describe("repair run CLI bootstrap", () => {
-  const noWait = { wait: async () => {} };
+  const noWait = { wait: async () => {}, loop: false as const };
 
   it("creates a parent run dir with a null pipeline and a live pid, without touching the source review", async () => {
     const sourceDir = seedSource(home);
@@ -371,11 +371,13 @@ describe("repair run CLI bootstrap", () => {
       pipeline: null,
     });
     const stopOut = makeSink();
-    await runRepair(["stop", "--run", REPAIR_ID], stopOut, {
-      kill: (pid, signal) => {
-        killed.push({ pid, signal });
-      },
-    });
+    await expect(
+      runRepair(["stop", "--run", REPAIR_ID], stopOut, {
+        kill: (pid, signal) => {
+          killed.push({ pid, signal });
+        },
+      }),
+    ).rejects.toBeInstanceOf(RepairExit);
     expect(killed).toEqual([{ pid: process.pid, signal: "SIGTERM" }]);
     expect(stopOut.finished).toMatchObject({
       runId: REPAIR_ID,
@@ -393,5 +395,408 @@ describe("repair run CLI bootstrap", () => {
     expect(
       readFileSync(join(home, "runs", REPAIR_ID, CLI_RUN_PIPELINE_PID_FILE), "utf8").trim(),
     ).toBe("4243");
+  });
+});
+
+const SHA = "a".repeat(40);
+const PR_URL = "https://github.com/acme/repo/pull/9";
+
+function verification(runId: string) {
+  return {
+    outcome: "verified_closed" as const,
+    candidateSha: SHA,
+    runId,
+    attemptId: "a1",
+    reviewer: "R",
+    method: "code_trace" as const,
+    reason: "fixed",
+    evidence: "trace",
+    locations: ["src/file.ts:1"],
+    runComplete: true,
+  };
+}
+
+function seedCompleteReview(
+  runId: string,
+  options: { open?: boolean; against?: string | null } = {},
+) {
+  const dir = join(home, "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      runId,
+      startedAt: "2026-09-20T00:00:00.000Z",
+      task: { pr: PR_URL, against: options.against ?? undefined },
+    })}\n${JSON.stringify({
+      kind: "review.finished",
+      status: "completed",
+      incomplete: false,
+      endedAt: "2026-09-20T00:01:00.000Z",
+    })}\n`,
+  );
+  writeFileSync(join(dir, "report.md"), "# review\n");
+  writeFileSync(
+    join(dir, "findings.json"),
+    JSON.stringify({
+      version: 1,
+      runId,
+      extractedAt: "2026-09-20T00:00:00.000Z",
+      sha: SHA,
+      againstRunId: options.against ?? null,
+      againstRange: null,
+      findings: [
+        {
+          id: "F-1",
+          title: "bug",
+          severity: "major",
+          status: options.open === false ? "closed" : "open",
+          text: "bug",
+          source: "consensus",
+          reviewer: "R",
+          files: ["src/file.ts"],
+          ...(options.open === false ? { verification: verification(runId) } : {}),
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(dir, "assessment-diagnostics.v1.json"),
+    JSON.stringify({
+      version: 1,
+      kind: "councilkit-assessment-diagnostics",
+      source: { runId, sha: SHA, requiredFindingIds: ["F-1"] },
+      coverageComplete: true,
+      items: [],
+    }),
+  );
+  return dir;
+}
+
+function inspectPr() {
+  return {
+    prUrl: PR_URL,
+    host: "github" as const,
+    branch: "feat-x",
+    cloneUrl: "github.com/acme/repo",
+    baseBranch: "main",
+    headSha: SHA,
+  };
+}
+
+describe("repair outer loop", () => {
+  it("approves after one outer cycle without writing the source review pid", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const sourceDir = join(home, "runs", SOURCE_ID);
+    const before = snapshotDir(sourceDir);
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const argvLog: string[][] = [];
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        reviewImpl: async (argv) => {
+          argvLog.push(argv);
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      },
+    );
+    expect(out.finished).toMatchObject({
+      runId: REPAIR_ID,
+      businessResult: "approved",
+      outerUsed: 1,
+    });
+    expect(argvLog[0]?.includes("--focus")).toBe(false);
+    expect(argvLog[0]?.includes("--against")).toBe(true);
+    expect(existsSync(join(sourceDir, CLI_RUN_PIPELINE_PID_FILE))).toBe(false);
+    expect(snapshotDir(sourceDir)).toBe(before);
+  });
+
+  it("opens a second outer cycle when in-scope findings remain", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    let round = 0;
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        reviewImpl: async () => {
+          round += 1;
+          const childId = `ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee${round}`;
+          seedCompleteReview(childId, {
+            open: round === 1,
+            against: round === 1 ? SOURCE_ID : childId,
+          });
+          if (round === 1) seedCompleteReview(childId, { open: true, against: SOURCE_ID });
+          else seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      },
+    );
+    expect(out.finished).toMatchObject({ businessResult: "approved", outerUsed: 2 });
+  });
+
+  it("does not consume parent budget for inner candidate.fix retries", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const { FakeSquadBridge } = await import("../src/auto/squad-bridge");
+    const { SQUAD_BRIDGE_CONTRACT_VERSION } = await import("@shared/runtime/squad-bridge-contract");
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        bridge: new FakeSquadBridge({
+          version: SQUAD_BRIDGE_CONTRACT_VERSION,
+          innerFails: 2,
+          journal: {
+            candidateSha: SHA,
+            invalidated: false,
+            independentReview: true,
+            independentVerify: true,
+            requiredGatesPassed: true,
+            gatePolicyHash: "gate-policy-1",
+          },
+        }),
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      },
+    );
+    expect(out.finished).toMatchObject({ businessResult: "approved", outerUsed: 1 });
+  });
+
+  it("runs the 10th cycle and refuses an 11th writable subtask", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const out = makeSink();
+    await expect(
+      runRepair(
+        [
+          "run",
+          "--from",
+          SOURCE_ID,
+          "--profile",
+          "default",
+          "--run-id",
+          REPAIR_ID,
+          "--max-outer-cycles",
+          "10",
+        ],
+        out,
+        {
+          workspaceCwd: home,
+          inspectPr: async () => inspectPr(),
+          reviewImpl: async () => {
+            const childId = `ck-review-${randomUUID()}`;
+            seedCompleteReview(childId, { open: true, against: SOURCE_ID });
+            return { runId: childId };
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({ businessResult: "needs_attention", outerUsed: 10 });
+  });
+
+  it("does not approve when the follow-up review is incomplete", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const out = makeSink();
+    await expect(
+      runRepair(["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID], out, {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        reviewImpl: async () => ({
+          runId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+          incomplete: true,
+        }),
+      }),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "councilkit_incomplete",
+    });
+  });
+
+  it("resumes a CAS+1 reserved slot without minting a new outer cycle", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const { readRepairState, writeRepairState } = await import("../src/auto/repair-persist");
+    const dir = join(home, "runs", REPAIR_ID);
+    const state = readRepairState(dir);
+    if (!state) throw new Error("missing state");
+    writeRepairState(dir, {
+      ...state,
+      outerUsed: 1,
+      cycles: [{ n: 1, phase: "reserved" }],
+      businessResult: null,
+      reasonCode: null,
+    });
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await runRepair(["resume", "--run", REPAIR_ID], out, {
+      workspaceCwd: home,
+      inspectPr: async () => inspectPr(),
+      reviewImpl: async () => {
+        seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+        return { runId: childId };
+      },
+    });
+    expect(out.finished).toMatchObject({ businessResult: "approved", outerUsed: 1 });
+  });
+
+  it("records published without a second push after a crash mid-ladder", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const { FakeSquadBridge } = await import("../src/auto/squad-bridge");
+    const { SQUAD_BRIDGE_CONTRACT_VERSION } = await import("@shared/runtime/squad-bridge-contract");
+    const bridge = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const { readRepairState, writeRepairState } = await import("../src/auto/repair-persist");
+    const dir = join(home, "runs", REPAIR_ID);
+    const state = readRepairState(dir);
+    if (!state) throw new Error("missing state");
+    writeRepairState(dir, {
+      ...state,
+      outerUsed: 1,
+      publishLadder: "receipt",
+      candidateSha: SHA,
+      publishedSha: SHA,
+      cycles: [{ n: 1, phase: "active" }],
+      businessResult: null,
+    });
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await runRepair(["resume", "--run", REPAIR_ID], out, {
+      bridge,
+      workspaceCwd: home,
+      inspectPr: async () => inspectPr(),
+      reviewImpl: async () => {
+        seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+        return { runId: childId };
+      },
+    });
+    expect(bridge.publishCalls).toBe(0);
+    expect(out.finished).toMatchObject({ businessResult: "approved" });
+  });
+
+  it("associates an already complete child review instead of reviewing again", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+    saveDefaultProfile();
+    let reviews = 0;
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        reviewImpl: async () => {
+          reviews += 1;
+          throw new Error("should not review");
+        },
+      },
+    );
+    expect(reviews).toBe(0);
+    expect(out.finished).toMatchObject({
+      businessResult: "approved",
+      latestReviewId: childId,
+    });
+  });
+
+  it("needs attention when repair history disagrees with parent outerUsed", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const { readRepairState, writeRepairState } = await import("../src/auto/repair-persist");
+    const dir = join(home, "runs", REPAIR_ID);
+    const state = readRepairState(dir);
+    if (!state) throw new Error("missing state");
+    writeRepairState(dir, { ...state, outerUsed: 2, historyCount: 3 });
+    const out = makeSink();
+    await expect(
+      runRepair(["resume", "--run", REPAIR_ID], out, { inspectPr: async () => inspectPr() }),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({ businessResult: "needs_attention" });
+  });
+
+  it("does not release the writer lease when stop still sees a live extra pid", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const out = makeSink();
+    await expect(
+      runRepair(["stop", "--run", REPAIR_ID], out, {
+        kill: () => {},
+        writerPids: [4242],
+        isPidAlive: () => true,
+      }),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({ leaseReleased: false, businessResult: "stopped" });
+  });
+
+  it("does not promote an incomplete follow-up to priorComplete", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await expect(
+      runRepair(["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID], out, {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: true, against: SOURCE_ID });
+          writeFileSync(
+            join(home, "runs", childId, "transcript.jsonl"),
+            `${JSON.stringify({
+              kind: "review.started",
+              runId: childId,
+              startedAt: "2026-09-20T00:00:00.000Z",
+              task: { pr: PR_URL, against: SOURCE_ID },
+            })}\n${JSON.stringify({
+              kind: "review.finished",
+              status: "failed",
+              incomplete: true,
+              endedAt: "2026-09-20T00:01:00.000Z",
+            })}\n`,
+          );
+          return { runId: childId };
+        },
+      }),
+    ).rejects.toBeInstanceOf(RepairExit);
+    const { readRepairState } = await import("../src/auto/repair-persist");
+    expect(readRepairState(join(home, "runs", REPAIR_ID))?.priorCompleteReviewId).not.toBe(childId);
   });
 });

@@ -43,6 +43,7 @@ export function FixPipeline({
   onFix: () => void;
   onReReview: () => void;
 }) {
+  if (run.kind === "repair") return null;
   const pipeline = run.pipeline;
   const inFlight =
     busy || run.status === "running" || (pipeline !== null && pipeline.phase !== "done");
@@ -71,11 +72,12 @@ export function FixPipeline({
       <dl className="mt-3 grid gap-3 text-sm leading-6 text-muted sm:grid-cols-2">
         <div>
           <dt className="font-command text-[0.62rem] uppercase tracking-[0.12em] text-brass">
-            立即修复
+            内置修复
           </dt>
           <dd className="mt-1">
             按这份报告起草方案 → 陪审团审方案 → 达成一致后只落地第一个未落地集群（一刀一 SHA）并
-            push → 对照账本增量复审。全程可能要几十分钟，请留在此页。
+            push → 对照账本增量复审。全程可能要几十分钟，请留在此页。这是次级内置路径，主路径是
+            Squad 自动修复。
           </dd>
         </div>
         <div>
@@ -84,7 +86,7 @@ export function FixPipeline({
           </dt>
           <dd className="mt-1">
             不再改代码，对照这份报告的 Finding 账本重新审查当前 PR（closed / 回归 /
-            新洞）。用来确认上次落地是否真把洞堵住了。「立即修复」成功后会自动做这一步。
+            新洞）。用来确认上次落地是否真把洞堵住了。「内置修复」成功后会自动做这一步。
           </dd>
         </div>
       </dl>
@@ -104,12 +106,12 @@ export function FixPipeline({
       ) : null}
       {pipeline?.planVerdict === "changes-requested" && pipeline.phase === "done" ? (
         <p className="mt-2 text-sm text-warn">
-          方案未达成一致，没有改代码。可以改完方案后再点「立即修复」。
+          方案未达成一致，没有改代码。可以改完方案后再点「内置修复」。
         </p>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button onClick={onFix} disabled={!canAct}>
-          {inFlight && pendingAction !== "re-review" ? "修复进行中…" : "立即修复"}
+        <Button variant="ghost" onClick={onFix} disabled={!canAct}>
+          {inFlight && pendingAction !== "re-review" ? "修复进行中…" : "内置修复"}
         </Button>
         <Button variant="ghost" onClick={onReReview} disabled={!canAct}>
           {inFlight && pendingAction === "re-review" ? "复审启动中…" : "只再审一遍（不改代码）"}
@@ -182,7 +184,7 @@ export function fixPipelineLiveStatus(input: {
       tone: "error",
       text: pipeline?.summary
         ? `${prefix}：${pipeline.summary}`
-        : `${prefix}。可以再点一次「立即修复」。`,
+        : `${prefix}。可以再点一次「内置修复」。`,
     };
   }
   if (pipeline?.applyStatus === "success") {
@@ -251,7 +253,7 @@ export function formatCliActionError(error: unknown): string {
   if (error instanceof RuntimeClientError) {
     if (error.status === 409) return "这条 run 已有进行中的修复或审查。";
     if (error.status === 404 || error.status === 405) {
-      return "Host 还没有加载修复接口。请重启 `pnpm dev` / `pnpm start` 后再点立即修复。";
+      return "Host 还没有加载修复接口。请重启 `pnpm dev` / `pnpm start` 后再点内置修复。";
     }
     if (error.status === 403) return `没有权限启动修复（${error.message}）。`;
     if (error.status === 500) {

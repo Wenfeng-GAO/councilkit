@@ -17,6 +17,15 @@ export const REPAIR_STATE_FILE = "repair.json";
 export const REPAIR_JOURNAL_FILE = "journal.jsonl";
 export const DEFAULT_REPAIR_OUTER_MAX = 10;
 
+const repairCycleSchema = z
+  .object({
+    n: z.number().int().positive(),
+    phase: z.enum(["reserved", "active", "published", "reviewed", "gated", "closed"]),
+    childReviewId: z.string().min(1).max(80).nullable().optional(),
+    squadTaskId: z.string().min(1).max(80).nullable().optional(),
+  })
+  .strict();
+
 const repairStateSchema = z
   .object({
     version: z.literal(1),
@@ -28,9 +37,24 @@ const repairStateSchema = z
     timeoutMs: z.number().int().positive().nullable(),
     businessResult: z.enum(["approved", "needs_attention", "stopped"]).nullable(),
     reasonCode: z.string().min(1).max(80).nullable(),
+    prUrl: z.string().min(1).max(500).nullable().optional(),
+    priorCompleteReviewId: z.string().min(1).max(80).nullable().optional(),
+    latestReviewId: z.string().min(1).max(80).nullable().optional(),
+    currentSquadTaskId: z.string().min(1).max(80).nullable().optional(),
+    candidateSha: z.string().min(1).max(64).nullable().optional(),
+    publishedSha: z.string().min(1).max(64).nullable().optional(),
+    lastRemoteHead: z.string().min(1).max(64).nullable().optional(),
+    grantId: z.string().min(1).max(80).nullable().optional(),
+    grantHash: z.string().min(1).max(80).nullable().optional(),
+    profileHash: z.string().min(1).max(80).nullable().optional(),
+    publishLadder: z.enum(["none", "intent", "receipt", "head", "published"]).optional(),
+    historyCount: z.number().int().nonnegative().nullable().optional(),
+    writerPids: z.array(z.number().int().positive()).max(16).optional(),
+    cycles: z.array(repairCycleSchema).optional(),
   })
   .strict();
 export type RepairState = z.infer<typeof repairStateSchema>;
+export type RepairCycle = z.infer<typeof repairCycleSchema>;
 
 export function isRepairRunId(runId: string): boolean {
   return isCliRunId(runId) && runId.startsWith("ck-repair-");
@@ -143,6 +167,27 @@ function ensureEmptyJournal(runDir: string): void {
     if (error instanceof Error && (error as NodeJS.ErrnoException).code === "EEXIST") return;
     throw errors.io("cannot create repair journal");
   }
+}
+
+export function appendRepairJournal(runDir: string, record: Record<string, unknown>): void {
+  const path = join(runDir, REPAIR_JOURNAL_FILE);
+  ensureEmptyJournal(runDir);
+  writeFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
+}
+
+export function readRepairJournal(runDir: string): Array<Record<string, unknown>> {
+  const text = readFileText(join(runDir, REPAIR_JOURNAL_FILE));
+  if (text === null || text.trim().length === 0) return [];
+  const rows: Array<Record<string, unknown>> = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    const parsed = jsonParse(trimmed);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      rows.push(parsed as Record<string, unknown>);
+    }
+  }
+  return rows;
 }
 
 function jsonParse(text: string): unknown {

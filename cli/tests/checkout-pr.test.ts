@@ -8,7 +8,9 @@ import {
   inspectPullRequest,
   parseApplyPrUrl,
   parseGitHubPrUrl,
+  requirePrHeadIdentity,
 } from "../src/auto/checkout-pr";
+import { CliError } from "../src/errors";
 
 describe("checkout-pr URL parsing", () => {
   it("parses GitHub PR URLs", () => {
@@ -25,6 +27,18 @@ describe("checkout-pr URL parsing", () => {
 
   it("rejects unknown hosts", () => {
     expect(parseApplyPrUrl("https://example.com/pr/1")).toBeNull();
+  });
+
+  it("fails closed when an AntCode PR has no headSha", () => {
+    expect(() =>
+      requirePrHeadIdentity({
+        prUrl: "https://code.alipay.com/acme/repo/pull_requests/1",
+        host: "antcode",
+        branch: "feat",
+        cloneUrl: "git@code.alipay.com:acme/repo.git",
+        baseBranch: "master",
+      }),
+    ).toThrow(CliError);
   });
 });
 

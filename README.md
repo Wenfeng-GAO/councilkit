@@ -165,7 +165,16 @@ pnpm exec councilkit ideate "一句话创意" --background "用户、约束、�
 - **Finding 账本**：每次 review 产生 `findings.json`，`--against <prior-run>` 优先保留原问题 ID，并保留独立审查者报告的发现。失败、未覆盖、聚合报告未再提及都不会关闭旧问题。`fix` 的复审默认带 `--against`。
 - **关闭证据**：`apply` 只记录 `repairClaim`。关闭需要成功的独立审查者提交结构化验证，绑定本次完整候选 SHA，并提供测试命令或代码位置；控制器核对审查 worktree 的 HEAD 与受跟踪文件没有变化。聚合器不能代写关闭凭据，仍成立的发现优先于关闭声明。旧 `closed` 没有验证凭据时显示“历史未验证”，重大项仍待处理。证据来自独立模型审查，不能理解为控制器已经重跑并认证了其所有测试。
 
-#### 把修复交给 Squad
+#### `councilkit repair` — Squad 自动修复直到机器准出
+
+```bash
+pnpm exec councilkit repair run --from <ck-review-id> --profile <name> --json
+pnpm exec councilkit repair status --run <ck-repair-id> --json
+pnpm exec councilkit repair stop --run <ck-repair-id> --json
+pnpm exec councilkit repair resume --run <ck-repair-id> --json
+```
+
+父 Run 是 `ck-repair-<uuid>`。成功只认机器准出（`businessResult=approved`，exit 0）；`needs_attention` 非零；用户停止 130。Host 只 spawn 同 checkout 的 `councilkit repair …`，不 spawn `squadctl`、不读 `.squad/`。手工导出仍可用：
 
 ```bash
 pnpm exec councilkit repair export --run <ck-review-id> --out /tmp/repair.json
@@ -187,7 +196,7 @@ pnpm exec councilkit repair export --run <ck-review-id> --out /tmp/repair.json
 
 #### `councilkit fix` — 方案陪审 → 一集群落地 → 对照账本复审
 
-审查找出问题之后，不要直接「按报告全改」。`fix` 先让 planner（默认 Grok）起草修复方案，同一套 pr-jury **审方案本身**（方案 Aggregator 默认是 correctness，避免自己批自己），最多两轮修订；**只有 approve 才 apply**。共识方案写入 `plan.lock.json`（每个集群有 `closes/files/gates`）。落地默认只做第一个未落地集群（一刀一 SHA，记入 `landings.jsonl`）；若 lock 里还有未落地集群，再次 `fix` 会跳过方案陪审直接下一刀。落地后默认再开一轮 jury，对照账本标 closed / 回归 / 新洞。浏览器报告页的「立即修复 / 只再审一遍」会让 **Host spawn 同 checkout 的 CLI**（Host 不跑 agent）。`--plan-only` 只出方案；`--no-re-review` 落地后不复审；`--re-review-only` 只开复审。
+审查找出问题之后，不要直接「按报告全改」。`fix` 先让 planner（默认 Grok）起草修复方案，同一套 pr-jury **审方案本身**（方案 Aggregator 默认是 correctness，避免自己批自己），最多两轮修订；**只有 approve 才 apply**。共识方案写入 `plan.lock.json`（每个集群有 `closes/files/gates`）。落地默认只做第一个未落地集群（一刀一 SHA，记入 `landings.jsonl`）；若 lock 里还有未落地集群，再次 `fix` 会跳过方案陪审直接下一刀。落地后默认再开一轮 jury，对照账本标 closed / 回归 / 新洞。浏览器报告页的「Squad 自动修复」会让 Host spawn `councilkit repair run`；次级「内置修复 / 只再审一遍」仍 spawn `councilkit fix`（Host 不跑 agent）。`--plan-only` 只出方案；`--no-re-review` 落地后不复审；`--re-review-only` 只开复审。
 
 #### `councilkit apply` — 把锁定的一刀落到同一条 PR（不经 Host）
 

@@ -43,11 +43,11 @@ export function RepairExportCard({ run }: { run: CliRunDetailResponse }) {
   return (
     <section
       className="rounded border border-edge bg-surface px-4 py-3"
-      aria-label="外部 Squad 修复任务"
+      aria-label="高级：手工导出 Squad 任务包"
     >
-      <h2 className="text-sm font-semibold text-fg">交给外部 Squad 修复</h2>
+      <h2 className="text-sm font-semibold text-fg">高级：手工导出任务包</h2>
       <p className="mt-1 text-xs text-muted">
-        任务包保留问题身份、原始证据、范围和验收。执行导出命令后，将 JSON 文件交给 Squad。
+        自动修复走主 CTA。这条命令只用于手工把 JSON 交给 Squad，cluster 选择不影响自动修复范围。
       </p>
       {run.planLock?.clusters.length ? (
         <label className="mt-3 flex items-center gap-2 text-sm text-muted">

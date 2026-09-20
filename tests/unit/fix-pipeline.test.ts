@@ -1,5 +1,7 @@
-import { fixPipelineLiveStatus } from "@/components/report/FixPipeline";
+import { FixPipeline, fixPipelineLiveStatus } from "@/components/report/FixPipeline";
 import type { CliRunPipelineDto } from "@shared/runtime/schemas";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 function pipeline(input: {
@@ -82,5 +84,19 @@ describe("fixPipelineLiveStatus", () => {
       tone: "error",
       text: "修复没有完成：apply did not complete",
     });
+  });
+
+  it("does not render built-in fix stages for a repair parent run", () => {
+    const html = renderToStaticMarkup(
+      createElement(FixPipeline, {
+        run: { kind: "repair", pipeline: null, hasReport: true, status: "running" } as never,
+        busy: false,
+        pendingAction: null,
+        error: null,
+        onFix: () => {},
+        onReReview: () => {},
+      }),
+    );
+    expect(html).toBe("");
   });
 });

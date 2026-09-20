@@ -132,7 +132,7 @@ export function Landing() {
             <p className="mt-4 text-xs text-muted">
               <code className="font-command">councilkit review</code>
               ，不经 Host，浏览器可关。默认陪审团是 <code className="font-command">pr-jury</code>
-              。报告落地后，在报告页点「立即修复」：先让陪审团锁定修复方案，再按方案落地，然后自动复审。CLI
+              。报告落地后，在报告页点「Squad 自动修复」；次级「内置修复」仍是单轮方案陪审。CLI
               等价于 <code className="font-command">councilkit fix --run &lt;id&gt;</code>
               。仍可用 <code className="font-command">apply</code> 跳过方案陪审。
             </p>

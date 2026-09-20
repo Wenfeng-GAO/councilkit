@@ -19,16 +19,24 @@ import {
   writeRepairState,
 } from "../auto/repair-persist";
 import { loadRepairProfile } from "../auto/repair-profile";
-import { errors } from "../errors";
+import { type RepairLoopDeps, executeRepairLoop } from "../auto/repair-run";
+import { EXIT, errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
 import { parseFlags, parseIntFlag, parseTimeoutMs } from "./parse";
 
-export interface RepairCommandDeps {
+export class RepairExit {
+  constructor(readonly exitCode: number) {}
+}
+
+export interface RepairCommandDeps extends RepairLoopDeps {
   pid?: number;
   wait?: (signal: AbortSignal) => Promise<void>;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   abortController?: AbortController;
+  loop?: boolean;
+  writerPids?: number[];
+  isPidAlive?: (pid: number) => boolean;
 }
 
 const SUBCOMMANDS = "export|run|status|stop|resume";
@@ -187,20 +195,33 @@ async function runRepairRun(
     timeoutMs,
     pid: deps.pid ?? process.pid,
   });
-  const parked = await parkUntilStopped(deps);
-  if (parked === "interrupted") {
-    markStopped(bootstrapped.runDir, bootstrapped.state);
+  if (deps.loop === false) {
+    const parked = await parkUntilStopped(deps);
+    if (parked === "interrupted") {
+      markStopped(bootstrapped.runDir, bootstrapped.state);
+    }
+    await out.finish(
+      {
+        runId,
+        sourceRunId: fromId,
+        status: parked === "interrupted" ? "interrupted" : "running",
+        reused: bootstrapped.reused,
+        pipeline: null,
+      },
+      () => `自动修复已启动：${runId}\n来源 ${fromId}`,
+    );
+    return;
   }
-  await out.finish(
-    {
-      runId,
-      sourceRunId: fromId,
-      status: parked === "interrupted" ? "interrupted" : "running",
-      reused: bootstrapped.reused,
-      pipeline: null,
-    },
-    () => `自动修复已启动：${runId}\n来源 ${fromId}`,
-  );
+  const outcome = await executeRepairLoop({
+    runId,
+    runDir: bootstrapped.runDir,
+    sourceRunId: fromId,
+    profileName: profile.name,
+    out,
+    deps,
+  });
+  await out.finish(outcome, () => `自动修复${outcome.businessResult}：${runId}`);
+  if (outcome.exitCode !== EXIT.ok) throw new RepairExit(outcome.exitCode);
 }
 
 async function runRepairStatus(argv: string[], out: OutputSink): Promise<void> {
@@ -238,16 +259,33 @@ async function runRepairStop(
       // already gone
     }
   }
+  const extras = deps.writerPids ?? state.writerPids ?? [];
+  const alive = extras.find((writer) => (deps.isPidAlive ?? (() => false))(writer));
+  if (alive !== undefined) {
+    await out.finish(
+      {
+        runId,
+        status: "interrupted",
+        businessResult: "stopped",
+        leaseReleased: false,
+        pipeline: null,
+      },
+      () => `已停止 ${runId}，写入锁仍阻塞`,
+    );
+    throw new RepairExit(EXIT.interrupted);
+  }
   const next = markStopped(runDir, state);
   await out.finish(
     {
       runId,
       status: "interrupted",
       businessResult: next.businessResult,
+      leaseReleased: true,
       pipeline: null,
     },
     () => `已停止 ${runId}`,
   );
+  throw new RepairExit(EXIT.interrupted);
 }
 
 async function runRepairResume(
@@ -267,19 +305,32 @@ async function runRepairResume(
   writeRepairState(runDir, resumed);
   writeRepairPid(runDir, deps.pid ?? process.pid);
   writeRepairLive(runDir, { status: "running", phase: "repair-preparing" });
-  const parked = await parkUntilStopped(deps);
-  if (parked === "interrupted") {
-    markStopped(runDir, resumed);
+  if (deps.loop === false) {
+    const parked = await parkUntilStopped(deps);
+    if (parked === "interrupted") {
+      markStopped(runDir, resumed);
+    }
+    await out.finish(
+      {
+        runId,
+        sourceRunId: resumed.sourceRunId,
+        status: parked === "interrupted" ? "interrupted" : "running",
+        pipeline: null,
+      },
+      () => `已恢复 ${runId}`,
+    );
+    return;
   }
-  await out.finish(
-    {
-      runId,
-      sourceRunId: resumed.sourceRunId,
-      status: parked === "interrupted" ? "interrupted" : "running",
-      pipeline: null,
-    },
-    () => `已恢复 ${runId}`,
-  );
+  const outcome = await executeRepairLoop({
+    runId,
+    runDir,
+    sourceRunId: resumed.sourceRunId,
+    profileName: resumed.profileName,
+    out,
+    deps,
+  });
+  await out.finish(outcome, () => `已恢复 ${runId} → ${outcome.businessResult}`);
+  if (outcome.exitCode !== EXIT.ok) throw new RepairExit(outcome.exitCode);
 }
 
 function parseParentRunId(argv: string[]): string {
