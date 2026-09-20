@@ -811,6 +811,41 @@ export const cliRunStartReviewResponseSchema = z
   .strict();
 export type CliRunStartReviewResponse = z.infer<typeof cliRunStartReviewResponseSchema>;
 
+export const cliRunStartRepairRequestSchema = z
+  .object({
+    from: z.string().regex(/^ck-review-[0-9a-fA-F-]+$/, "from must be a ck-review run id"),
+    profile: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, "profile must be a closed token, not a path"),
+  })
+  .strict();
+export type CliRunStartRepairRequest = z.infer<typeof cliRunStartRepairRequestSchema>;
+
+export const cliRunRepairControlRequestSchema = z.object({}).strict();
+export type CliRunRepairControlRequest = z.infer<typeof cliRunRepairControlRequestSchema>;
+
+export const cliRunRepairStopResponseSchema = z
+  .object({
+    runId: z.string().min(1),
+    stopped: z.literal(true),
+  })
+  .strict();
+export type CliRunRepairStopResponse = z.infer<typeof cliRunRepairStopResponseSchema>;
+
+export const cliRunSaveRepairProfileRequestSchema = z
+  .object({
+    name: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, "profile must be a closed token, not a path"),
+    prUrl: z.string().min(1).max(500),
+    repo: z.string().min(1).max(400),
+    sourceBranch: z.string().min(1).max(200),
+    base: z.string().min(1).max(200),
+    capabilities: z.array(z.literal("push-source-branch")).min(1).max(8),
+  })
+  .strict();
+export type CliRunSaveRepairProfileRequest = z.infer<typeof cliRunSaveRepairProfileRequestSchema>;
+
 const attemptLiveEventSchema = z.discriminatedUnion("type", [
   z
     .object({

@@ -354,7 +354,7 @@ flowchart TB
 
 **Verification:** Host 可以用该表面做 handshake，不必等外循环。
 
-- [ ] **Unit 5: Host 启动/停止/恢复 mutation**
+- [x] **Unit 5: Host 启动/停止/恢复 mutation**
 
 **Goal:** 报告页能异步拿到父 Run id；Host 仍不碰 squadctl。
 

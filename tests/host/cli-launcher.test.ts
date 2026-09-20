@@ -94,6 +94,38 @@ describe("launchArgs", () => {
       }),
     ).toEqual(["review", "https://github.com/acme/repo/pull/126", "--run-id", RUN_ID]);
   });
+  it("builds repair run argv from frozen identity, not fix --run", () => {
+    const repairId = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    const args = launchArgs({
+      action: "repair",
+      runId: repairId,
+      logPath: "/tmp/x.log",
+      from: RUN_ID,
+      profile: "default",
+    });
+    expect(args[0]).toBe("repair");
+    expect(args).toEqual([
+      "repair",
+      "run",
+      "--from",
+      RUN_ID,
+      "--profile",
+      "default",
+      "--run-id",
+      repairId,
+    ]);
+    expect(args.join(" ")).not.toMatch(/fix --run/);
+    expect(launchArgs({ action: "repair-stop", runId: repairId, logPath: "/tmp/x.log" })).toEqual([
+      "repair",
+      "stop",
+      "--run",
+      repairId,
+    ]);
+    expect(launchArgs({ action: "repair-resume", runId: repairId, logPath: "/tmp/x.log" })).toEqual(
+      ["repair", "resume", "--run", repairId],
+    );
+  });
+
   it("passes --against through to the spawned review", () => {
     expect(
       launchArgs({

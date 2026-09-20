@@ -18,7 +18,14 @@ export function cliRunSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   return withDriverWellKnownPath(env);
 }
 
-export type CliRunAction = "fix" | "re-review" | "review" | "ideate";
+export type CliRunAction =
+  | "fix"
+  | "re-review"
+  | "review"
+  | "ideate"
+  | "repair"
+  | "repair-stop"
+  | "repair-resume";
 
 export interface CliRunLaunchRequest {
   action: CliRunAction;
@@ -32,6 +39,8 @@ export interface CliRunLaunchRequest {
   background?: string;
   debateRounds?: number;
   ideateModels?: IdeateModels;
+  from?: string;
+  profile?: string;
 }
 
 export interface CliRunLauncher {
@@ -100,7 +109,7 @@ export function defaultCliRunLauncher(): CliRunLauncher {
         if (pid === undefined) {
           throw new Error("failed to spawn councilkit (no pid)");
         }
-        if (input.action !== "review" && input.action !== "ideate") {
+        if (!needsHandshake(input.action)) {
           child.unref();
           return { pid };
         }
@@ -116,7 +125,27 @@ export function defaultCliRunLauncher(): CliRunLauncher {
   };
 }
 
+function needsHandshake(action: CliRunAction): boolean {
+  return (
+    action === "review" || action === "ideate" || action === "repair" || action === "repair-resume"
+  );
+}
+
 export function launchArgs(input: CliRunLaunchRequest): string[] {
+  if (input.action === "repair") {
+    const from = input.from?.trim() ?? "";
+    const profile = input.profile?.trim() ?? "";
+    if (from.length === 0 || profile.length === 0) {
+      throw new Error("repair spawn requires from and profile");
+    }
+    return ["repair", "run", "--from", from, "--profile", profile, "--run-id", input.runId];
+  }
+  if (input.action === "repair-stop") {
+    return ["repair", "stop", "--run", input.runId];
+  }
+  if (input.action === "repair-resume") {
+    return ["repair", "resume", "--run", input.runId];
+  }
   if (input.action === "ideate") {
     const idea = input.idea?.trim() ?? "";
     if (idea.length === 0) {
@@ -174,6 +203,10 @@ export async function handshakeReview(
       return { pid };
     }
     await sleep(REVIEW_HANDSHAKE_POLL_MS);
+  }
+  if (isRealDir(runDir) && isPidAlive(pid)) {
+    child.unref();
+    return { pid };
   }
   stopDetachedChild(child, pid);
   throw Object.assign(

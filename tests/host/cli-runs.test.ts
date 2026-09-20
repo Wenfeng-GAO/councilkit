@@ -13,6 +13,11 @@ import type { CliRunLaunchRequest } from "@host/cli-launcher";
 import { cliRunsRoutes } from "@host/routes/cli-runs";
 import { CANONICAL_HOST_HEADER } from "@shared/runtime/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createRepairGrant,
+  revokeRepairProfile,
+  saveRepairProfile,
+} from "../../cli/src/auto/repair-profile";
 import { type TestHost, authedHeaders, createTestHost } from "./helpers";
 
 const RUN_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
@@ -971,5 +976,240 @@ describe("POST /api/v1/cli-runs/ideate", () => {
     });
     expect(res.status).toBe(200);
     expect(launches[0]?.idea).toBe(idea);
+  });
+});
+
+describe("POST /api/v1/cli-runs/repair", () => {
+  function seedRepairProfile(): void {
+    saveRepairProfile({
+      name: "default",
+      prUrl: GH_PR,
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      base: "main",
+      capabilities: ["push-source-branch"],
+    });
+  }
+
+  it("starts a new parent run and does not write pipeline.pid on the source review", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: true; data: { runId: string; started: true } };
+    expect(body.data.started).toBe(true);
+    expect(body.data.runId).toMatch(/^ck-repair-[0-9a-fA-F-]+$/);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.action).toBe("repair");
+    expect(launches[0]?.runId).toBe(body.data.runId);
+    expect(launches[0]?.from).toBe(RUN_ID);
+    expect(launches[0]?.profile).toBe("default");
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
+    const sourceStatus = existsSync(join(home, "runs", RUN_ID, "status.json"))
+      ? readFileSync(join(home, "runs", RUN_ID, "status.json"), "utf8")
+      : null;
+    expect(sourceStatus).toBeNull();
+  });
+
+  it("returns the same active parent run on a repeated mutation without a second spawn", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview();
+    const headers = authedHeaders(host as TestHost);
+    const first = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    const second = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const a = (await first.json()) as { ok: true; data: { runId: string } };
+    const b = (await second.json()) as { ok: true; data: { runId: string } };
+    expect(a.data.runId).toBe(b.data.runId);
+    expect(launches).toHaveLength(1);
+  });
+
+  it("serializes overlapping POSTs onto one parent id", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview();
+    const headers = authedHeaders(host as TestHost);
+    const [first, second] = await Promise.all([
+      fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+      }),
+      fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+      }),
+    ]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const a = (await first.json()) as { ok: true; data: { runId: string } };
+    const b = (await second.json()) as { ok: true; data: { runId: string } };
+    expect(a.data.runId).toBe(b.data.runId);
+    expect(launches).toHaveLength(1);
+  });
+
+  it("rejects missing CSRF", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview();
+    const headers = authedHeaders(host as TestHost);
+    const { "x-councilkit-csrf": _csrf, ...withoutCsrf } = headers;
+    void _csrf;
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers: withoutCsrf,
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    expect(res.status).toBe(403);
+    expect(launches).toEqual([]);
+  });
+
+  it("rejects argv or authorized booleans in the start body", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview();
+    const headers = authedHeaders(host as TestHost);
+    const withArgv = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ from: RUN_ID, profile: "default", argv: ["-c", "curl evil"] }),
+    });
+    const withAuth = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ from: RUN_ID, profile: "default", authorized: true }),
+    });
+    expect(withArgv.status).toBe(400);
+    expect(withAuth.status).toBe(400);
+    expect(launches).toEqual([]);
+  });
+
+  it("returns the minted parent id when handshake times out after the CLI created the directory", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview((input) => {
+      const dir = join(home, "runs", input.runId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "repair.json"),
+        `${JSON.stringify({
+          version: 1,
+          casVersion: 0,
+          sourceRunId: RUN_ID,
+          profileName: "default",
+          outerUsed: 0,
+          outerMax: 10,
+          timeoutMs: null,
+          businessResult: null,
+          reasonCode: null,
+        })}\n`,
+      );
+      writeFileSync(join(dir, "pipeline.pid"), `${String(process.pid)}\n`);
+      writeFileSync(
+        join(dir, "status.json"),
+        `${JSON.stringify({
+          version: 1,
+          status: "running",
+          progress: {
+            phase: "repair-preparing",
+            attempts: [],
+            updatedAt: new Date().toISOString(),
+          },
+          pipeline: null,
+        })}\n`,
+      );
+      throw Object.assign(new Error("repair handshake timed out waiting for the run directory"), {
+        code: "HANDSHAKE_TIMEOUT",
+      });
+    });
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: true; data: { runId: string } };
+    expect(launches).toHaveLength(1);
+    expect(body.data.runId).toBe(launches[0]?.runId);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
+  });
+
+  it("refuses resume after the profile grant is revoked", async () => {
+    seed();
+    const profile = saveRepairProfile({
+      name: "default",
+      prUrl: GH_PR,
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      base: "main",
+      capabilities: ["push-source-branch"],
+    });
+    const grant = createRepairGrant(profile);
+    const repairId = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    const dir = join(home, "runs", repairId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "repair-grant.json"), `${JSON.stringify(grant, null, 2)}\n`);
+    writeFileSync(
+      join(dir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: RUN_ID,
+        profileName: "default",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: null,
+        reasonCode: null,
+      })}\n`,
+    );
+    revokeRepairProfile("default");
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/${repairId}/repair/resume`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect(launches).toEqual([]);
+    const body = (await res.json()) as { ok: false; error: { message: string } };
+    expect(body.error.message).toMatch(/revok/i);
+  });
+
+  it("stops via repair stop and does not touch the source review pid", async () => {
+    seed();
+    seedRepairProfile();
+    const { launches } = await bootStartReview();
+    const started = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    const created = (await started.json()) as { ok: true; data: { runId: string } };
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/${created.data.runId}/repair/stop`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    expect(launches.at(-1)?.action).toBe("repair-stop");
+    expect(launches.at(-1)?.runId).toBe(created.data.runId);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
   });
 });

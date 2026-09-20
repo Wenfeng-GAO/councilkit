@@ -1,0 +1,227 @@
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CliRunLaunchRequest } from "@host/cli-launcher";
+import { cliRunsRoutes } from "@host/routes/cli-runs";
+import type { HostServices, HttpError, RouteContext } from "@host/server";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createRepairGrant,
+  revokeRepairProfile,
+  saveRepairProfile,
+} from "../../cli/src/auto/repair-profile";
+
+const RUN_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+const GH_PR = "https://github.com/acme/repo/pull/1";
+
+let home: string;
+let oldHome: string | undefined;
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "ck-repair-mutation-"));
+  oldHome = process.env.COUNCILKIT_HOME;
+  process.env.COUNCILKIT_HOME = home;
+  mkdirSync(join(home, "runs", RUN_ID), { recursive: true });
+  writeFileSync(join(home, "runs", RUN_ID, "report.md"), "# source\n");
+});
+
+afterEach(() => {
+  if (oldHome === undefined) process.env.COUNCILKIT_HOME = undefined;
+  else process.env.COUNCILKIT_HOME = oldHome;
+  rmSync(home, { recursive: true, force: true });
+});
+
+function seedProfile() {
+  return saveRepairProfile({
+    name: "default",
+    prUrl: GH_PR,
+    repo: "github.com/acme/repo",
+    sourceBranch: "feat-x",
+    base: "main",
+    capabilities: ["push-source-branch"],
+  });
+}
+
+function routesWithLauncher(start?: (input: CliRunLaunchRequest) => { pid: number }) {
+  const launches: CliRunLaunchRequest[] = [];
+  const routes = cliRunsRoutes({
+    cliRunLauncher: {
+      start: (input: CliRunLaunchRequest) => {
+        launches.push(input);
+        return start ? start(input) : { pid: process.pid };
+      },
+    },
+  } as unknown as HostServices);
+  return { routes, launches };
+}
+
+function ctx(body: unknown, params: Record<string, string> = {}): RouteContext {
+  return {
+    body,
+    params,
+    query: new URLSearchParams(),
+    req: {} as IncomingMessage,
+    res: {} as ServerResponse,
+    services: {} as HostServices,
+  };
+}
+
+describe("repair mutation handlers", () => {
+  it("mints a parent run without writing pipeline.pid on the source review", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    const result = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+      started: true;
+    };
+    expect(result.started).toBe(true);
+    expect(result.runId).toMatch(/^ck-repair-/);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]?.action).toBe("repair");
+    expect(launches[0]?.from).toBe(RUN_ID);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
+  });
+
+  it("reuses the active parent id and does not spawn twice", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    const first = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    const second = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    expect(second.runId).toBe(first.runId);
+    expect(launches).toHaveLength(1);
+  });
+
+  it("serializes overlapping starts onto one parent id", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    const [a, b] = await Promise.all([
+      start.handler(ctx({ from: RUN_ID, profile: "default" })),
+      start.handler(ctx({ from: RUN_ID, profile: "default" })),
+    ]);
+    expect((a as { runId: string }).runId).toBe((b as { runId: string }).runId);
+    expect(launches).toHaveLength(1);
+  });
+
+  it("recovers the minted id when handshake times out after the CLI created the directory", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher((input) => {
+      const dir = join(home, "runs", input.runId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "repair.json"),
+        `${JSON.stringify({
+          version: 1,
+          casVersion: 0,
+          sourceRunId: RUN_ID,
+          profileName: "default",
+          outerUsed: 0,
+          outerMax: 10,
+          timeoutMs: null,
+          businessResult: null,
+          reasonCode: null,
+        })}\n`,
+      );
+      writeFileSync(join(dir, "pipeline.pid"), `${String(process.pid)}\n`);
+      writeFileSync(
+        join(dir, "status.json"),
+        `${JSON.stringify({
+          version: 1,
+          status: "running",
+          progress: {
+            phase: "repair-preparing",
+            attempts: [],
+            updatedAt: new Date().toISOString(),
+          },
+          pipeline: null,
+        })}\n`,
+      );
+      throw Object.assign(new Error("repair handshake timed out waiting for the run directory"), {
+        code: "HANDSHAKE_TIMEOUT",
+      });
+    });
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    const result = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    expect(launches).toHaveLength(1);
+    expect(result.runId).toBe(launches[0]?.runId);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
+  });
+
+  it("refuses resume after the profile is revoked", async () => {
+    const profile = seedProfile();
+    const grant = createRepairGrant(profile);
+    const repairId = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    mkdirSync(join(home, "runs", repairId), { recursive: true });
+    writeFileSync(
+      join(home, "runs", repairId, "repair-grant.json"),
+      `${JSON.stringify(grant, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(home, "runs", repairId, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: RUN_ID,
+        profileName: "default",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: null,
+        reasonCode: null,
+      })}\n`,
+    );
+    revokeRepairProfile("default");
+    const { routes, launches } = routesWithLauncher();
+    const resume = routes.find(
+      (route) => route.pattern === "/api/v1/cli-runs/:runId/repair/resume",
+    );
+    if (resume === undefined) throw new Error("missing resume route");
+    await expect(resume.handler(ctx({}, { runId: repairId }))).rejects.toMatchObject({
+      status: 400,
+    } satisfies Partial<HttpError>);
+    expect(launches).toEqual([]);
+  });
+
+  it("stops through repair stop and leaves the source review untouched", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    const stop = routes.find((route) => route.pattern === "/api/v1/cli-runs/:runId/repair/stop");
+    if (start === undefined || stop === undefined) throw new Error("missing routes");
+    const created = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    const stopped = (await stop.handler(ctx({}, { runId: created.runId }))) as {
+      runId: string;
+      stopped: true;
+    };
+    expect(stopped.stopped).toBe(true);
+    expect(launches.at(-1)?.action).toBe("repair-stop");
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.pid"))).toBe(false);
+  });
+
+  it("rejects argv on the start body schema", () => {
+    const { routes } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    expect(
+      start?.bodySchema?.safeParse({ from: RUN_ID, profile: "default", argv: ["-c"] }).success,
+    ).toBe(false);
+    expect(
+      start?.bodySchema?.safeParse({ from: RUN_ID, profile: "default", authorized: true }).success,
+    ).toBe(false);
+    expect(start?.bodySchema?.safeParse({ from: RUN_ID, profile: "default" }).success).toBe(true);
+  });
+});

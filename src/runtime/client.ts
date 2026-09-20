@@ -7,7 +7,9 @@ import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunRepairStopResponse,
   type CliRunStartIdeateRequest,
+  type CliRunStartRepairRequest,
   type CliRunStartReviewRequest,
   type CliRunStartReviewResponse,
   type CliRunsListResponse,
@@ -32,6 +34,7 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunRepairStopResponseSchema,
   cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
   closeScopeResponseSchema,
@@ -186,6 +189,30 @@ export class RuntimeClient {
   startCliIdeate(body: CliRunStartIdeateRequest): Promise<CliRunStartReviewResponse> {
     return this.call("POST", "/api/v1/cli-runs/ideate", {
       body,
+      schema: cliRunStartReviewResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  startCliRepair(body: CliRunStartRepairRequest): Promise<CliRunStartReviewResponse> {
+    return this.call("POST", "/api/v1/cli-runs/repair", {
+      body,
+      schema: cliRunStartReviewResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  stopCliRepair(runId: string): Promise<CliRunRepairStopResponse> {
+    return this.call("POST", `/api/v1/cli-runs/${encodeURIComponent(runId)}/repair/stop`, {
+      body: {},
+      schema: cliRunRepairStopResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  resumeCliRepair(runId: string): Promise<CliRunStartReviewResponse> {
+    return this.call("POST", `/api/v1/cli-runs/${encodeURIComponent(runId)}/repair/resume`, {
+      body: {},
       schema: cliRunStartReviewResponseSchema,
       auth: "mutation",
     });

@@ -5,9 +5,9 @@
  * runs review agents itself.
  */
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { type Stats, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   type AttemptLiveEvent,
   CLI_RUN_ATTEMPT_ID_RE,
@@ -19,10 +19,24 @@ import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-in
 import { makeError } from "@shared/runtime/errors";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
+  parseRepairGrantRecord,
+  parseRepairProfileRecord,
+  verifyRepairGrantRecord,
+} from "@shared/runtime/repair-auth";
+import {
+  type WriterLease,
+  isActiveRepairHolder,
+  parseWriterLease,
+  writerLeaseKey,
+  writerLeasePath,
+} from "@shared/runtime/repair-lease";
+import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunDetailResponse,
+  type CliRunRepairStopResponse,
   type CliRunStartIdeateRequest,
+  type CliRunStartRepairRequest,
   type CliRunStartReviewRequest,
   type CliRunStartReviewResponse,
   type CliRunsListResponse,
@@ -30,7 +44,10 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunDetailResponseSchema,
+  cliRunRepairControlRequestSchema,
+  cliRunRepairStopResponseSchema,
   cliRunStartIdeateRequestSchema,
+  cliRunStartRepairRequestSchema,
   cliRunStartReviewRequestSchema,
   cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
@@ -168,6 +185,92 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
           );
         }
         writeRunningStub(runId, "proposing");
+        return { runId, started: true };
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/api/v1/cli-runs/repair",
+      auth: "mutation",
+      bodySchema: cliRunStartRepairRequestSchema,
+      responseSchema: cliRunStartReviewResponseSchema,
+      handler: async (ctx): Promise<CliRunStartReviewResponse> => {
+        const body = ctx.body as CliRunStartRepairRequest;
+        return startRepairRun(launcher, body);
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/api/v1/cli-runs/:runId/repair/stop",
+      auth: "mutation",
+      bodySchema: cliRunRepairControlRequestSchema,
+      responseSchema: cliRunRepairStopResponseSchema,
+      handler: async (ctx): Promise<CliRunRepairStopResponse> => {
+        const runId = ctx.params.runId ?? "";
+        assertRepairRunId(runId);
+        const logPath = join(tmpdir(), `councilkit-host-repair-stop-${runId}.log`);
+        try {
+          await Promise.resolve(launcher.start({ action: "repair-stop", runId, logPath }));
+        } catch (error) {
+          throw mapRepairSpawnError(error);
+        }
+        return { runId, stopped: true };
+      },
+    },
+    {
+      method: "POST",
+      pattern: "/api/v1/cli-runs/:runId/repair/resume",
+      auth: "mutation",
+      bodySchema: cliRunRepairControlRequestSchema,
+      responseSchema: cliRunStartReviewResponseSchema,
+      handler: async (ctx): Promise<CliRunStartReviewResponse> => {
+        const runId = ctx.params.runId ?? "";
+        assertRepairRunId(runId);
+        const profileName = readRepairJson(runId)?.profileName;
+        if (!profileName) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "repair run is missing profile metadata.", {
+              retryable: false,
+            }),
+          );
+        }
+        const profile = readHostRepairProfile(profileName);
+        if (profile === null) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "repair profile not found.", {
+              retryable: false,
+            }),
+          );
+        }
+        const grant = readHostRepairGrant(runId);
+        if (grant === null) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", "repair grant is missing.", { retryable: false }),
+          );
+        }
+        const verified = verifyRepairGrantRecord(grant, profile, new Date().toISOString());
+        if (!verified.ok) {
+          throw httpError(
+            400,
+            makeError("BAD_REQUEST", "discovery", verified.reason, { retryable: false }),
+          );
+        }
+        const logPath = join(tmpdir(), `councilkit-host-repair-resume-${runId}.log`);
+        let started: { pid: number };
+        try {
+          started = await Promise.resolve(
+            launcher.start({ action: "repair-resume", runId, logPath }),
+          );
+        } catch (error) {
+          throw mapRepairSpawnError(error);
+        }
+        if (!isPidAlive(started.pid)) {
+          throw mapRepairSpawnError(new Error("councilkit repair resume exited before handshake"));
+        }
+        writeRunningStub(runId, "repair-preparing");
         return { runId, started: true };
       },
     },
@@ -311,6 +414,317 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
   ];
 }
 
+const repairLocks = new Map<string, Promise<void>>();
+
+function withRepairLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = repairLocks.get(key) ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  repairLocks.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
+
+async function startRepairRun(
+  launcher: CliRunLauncher,
+  body: CliRunStartRepairRequest,
+): Promise<CliRunStartReviewResponse> {
+  const sourceDir = join(resolveCliRunsRoot(), body.from);
+  if (!isRealDir(sourceDir)) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "review run not found.", { retryable: false }),
+    );
+  }
+  const profile = readHostRepairProfile(body.profile);
+  if (profile === null) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "repair profile not found.", { retryable: false }),
+    );
+  }
+  const key = writerLeaseKey({ repo: profile.repo, sourceBranch: profile.sourceBranch });
+  return withRepairLock(key, async () => {
+    const existing = findActiveRepairRunId(body.from, key);
+    if (existing !== null) {
+      return { runId: existing, started: true };
+    }
+    const runId = `ck-repair-${randomUUID()}`;
+    const claimed = claimRepairLease({
+      key,
+      holderRunId: runId,
+      pid: process.pid,
+    });
+    if (claimed.holderKind !== "repair") {
+      throw httpError(
+        409,
+        makeError(
+          "EXECUTION_CONFLICT",
+          "dispatch",
+          `a writer already holds this branch (${claimed.holderKind} ${claimed.holderRunId})`,
+          { retryable: true },
+        ),
+      );
+    }
+    if (claimed.holderRunId !== runId) {
+      return { runId: claimed.holderRunId, started: true };
+    }
+    const logPath = join(tmpdir(), `councilkit-host-repair-${runId}.log`);
+    let started: { pid: number };
+    try {
+      started = await Promise.resolve(
+        launcher.start({
+          action: "repair",
+          runId,
+          from: body.from,
+          profile: body.profile,
+          logPath,
+        }),
+      );
+    } catch (error) {
+      if (isHandshakeTimeout(error)) {
+        const recovered = findActiveRepairRunId(body.from, key);
+        if (recovered !== null && isRealDir(join(resolveCliRunsRoot(), recovered))) {
+          return { runId: recovered, started: true };
+        }
+        if (isRealDir(join(resolveCliRunsRoot(), runId))) {
+          return { runId, started: true };
+        }
+      }
+      throw mapRepairSpawnError(error);
+    }
+    if (!isPidAlive(started.pid)) {
+      const recovered = findActiveRepairRunId(body.from, key);
+      if (recovered !== null) return { runId: recovered, started: true };
+      throw mapRepairSpawnError(new Error("councilkit repair exited before handshake completed"));
+    }
+    refreshRepairLease({ key, holderRunId: runId, pid: started.pid });
+    writeRepairBootstrap(runId, body.from, body.profile);
+    return { runId, started: true };
+  });
+}
+
+function findActiveRepairRunId(fromId: string, leaseKey: string): string | null {
+  const home = resolveCouncilkitHome(process.env);
+  const lease = readLeaseFile(writerLeasePath(home, leaseKey));
+  if (lease?.holderKind === "repair") {
+    const detail = readCliRun(lease.holderRunId, process.env);
+    const state = readRepairJson(lease.holderRunId);
+    if (
+      isActiveRepairHolder({
+        kind: "repair",
+        status: detail?.status ?? "running",
+        businessResult: state?.businessResult ?? null,
+        lease,
+        pidAlive: isPidAlive(lease.pid),
+      })
+    ) {
+      return lease.holderRunId;
+    }
+    if (isPidAlive(lease.pid) && (state?.businessResult ?? null) === null) {
+      return lease.holderRunId;
+    }
+  }
+  for (const run of listCliRuns(process.env)) {
+    if (run.kind !== "repair") continue;
+    const state = readRepairJson(run.runId);
+    if (state?.sourceRunId !== fromId) continue;
+    if (state.businessResult !== null && state.businessResult !== undefined) continue;
+    if (run.status === "running" || run.status === "interrupted") return run.runId;
+  }
+  return null;
+}
+
+function claimRepairLease(input: {
+  key: string;
+  holderRunId: string;
+  pid: number;
+}): WriterLease {
+  const home = resolveCouncilkitHome(process.env);
+  const path = writerLeasePath(home, input.key);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const next: WriterLease = {
+    version: 1,
+    key: input.key,
+    holderKind: "repair",
+    holderRunId: input.holderRunId,
+    pid: input.pid,
+    epoch: 1,
+    grantedAt: new Date().toISOString(),
+  };
+  try {
+    writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    return next;
+  } catch {
+    const existing = readLeaseFile(path);
+    if (existing === null) {
+      throw httpError(
+        500,
+        makeError("INTERNAL", "dispatch", "cannot create writer lease", { retryable: true }),
+      );
+    }
+    return existing;
+  }
+}
+
+function refreshRepairLease(input: { key: string; holderRunId: string; pid: number }): void {
+  const home = resolveCouncilkitHome(process.env);
+  const path = writerLeasePath(home, input.key);
+  const existing = readLeaseFile(path);
+  if (existing === null || existing.holderRunId !== input.holderRunId) return;
+  try {
+    writeFileSync(path, `${JSON.stringify({ ...existing, pid: input.pid }, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  } catch {
+    // lease is advisory for Host lookup
+  }
+}
+
+function readLeaseFile(path: string): WriterLease | null {
+  try {
+    return parseWriterLease(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readHostRepairProfile(name: string): ReturnType<typeof parseRepairProfileRecord> {
+  const path = join(resolveCouncilkitHome(process.env), "profiles", `${name}.json`);
+  try {
+    return parseRepairProfileRecord(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readHostRepairGrant(runId: string): ReturnType<typeof parseRepairGrantRecord> {
+  const path = join(resolveCliRunsRoot(), runId, "repair-grant.json");
+  try {
+    return parseRepairGrantRecord(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readRepairJson(runId: string): {
+  sourceRunId?: string;
+  profileName?: string;
+  businessResult?: "approved" | "needs_attention" | "stopped" | null;
+} | null {
+  try {
+    const rec = JSON.parse(
+      readFileSync(join(resolveCliRunsRoot(), runId, "repair.json"), "utf8"),
+    ) as {
+      sourceRunId?: unknown;
+      profileName?: unknown;
+      businessResult?: unknown;
+    };
+    return {
+      sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : undefined,
+      profileName: typeof rec.profileName === "string" ? rec.profileName : undefined,
+      businessResult:
+        rec.businessResult === "approved" ||
+        rec.businessResult === "needs_attention" ||
+        rec.businessResult === "stopped"
+          ? rec.businessResult
+          : rec.businessResult === null
+            ? null
+            : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeRepairBootstrap(runId: string, sourceRunId: string, profileName: string): void {
+  const runDir = join(resolveCliRunsRoot(), runId);
+  mkdirSync(runDir, { recursive: true, mode: 0o700 });
+  const statePath = join(runDir, "repair.json");
+  if (!existsSync(statePath)) {
+    try {
+      writeFileSync(
+        statePath,
+        `${JSON.stringify({
+          version: 1,
+          casVersion: 0,
+          sourceRunId,
+          profileName,
+          outerUsed: 0,
+          outerMax: 10,
+          timeoutMs: null,
+          businessResult: null,
+          reasonCode: null,
+        })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+    } catch {
+      // CLI persist is authoritative
+    }
+  }
+  writeRunningStub(runId, "repair-preparing");
+}
+
+function assertRepairRunId(runId: string): void {
+  if (!isCliRunId(runId) || !runId.startsWith("ck-repair-")) {
+    throw httpError(
+      400,
+      makeError("BAD_REQUEST", "discovery", "Invalid CLI repair run id.", { retryable: false }),
+    );
+  }
+  if (readCliRun(runId, process.env) === null && readRepairJson(runId) === null) {
+    throw httpError(
+      404,
+      makeError("NOT_FOUND", "discovery", "CLI run not found.", { retryable: false }),
+    );
+  }
+}
+
+function isHandshakeTimeout(error: unknown): boolean {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code: unknown }).code)
+      : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === "HANDSHAKE_TIMEOUT" ||
+    message.includes("HANDSHAKE_TIMEOUT") ||
+    /handshake timed out/i.test(message)
+  );
+}
+
+function mapRepairSpawnError(error: unknown): never {
+  const message = error instanceof Error ? error.message : "failed to spawn councilkit";
+  if (isHandshakeTimeout(error)) {
+    throw httpError(
+      500,
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", message.slice(0, 1024), { retryable: true }),
+    );
+  }
+  throw httpError(
+    500,
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", message.slice(0, 1024), { retryable: false }),
+  );
+}
+
+function isRealDir(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 function hasPrJuryCouncil(): boolean {
   return hasNamedCouncil("pr-jury");
 }
@@ -399,6 +813,7 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
 function writeRunningStub(runId: string, phase: CliRunProgressPhase = "preflight"): void {
   const statusPath = join(resolveCliRunsRoot(), runId, CLI_RUN_STATUS_FILE);
   if (existsSync(statusPath)) return;
+  mkdirSync(dirname(statusPath), { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
   const live = {
     version: 1 as const,
