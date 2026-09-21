@@ -1,3 +1,4 @@
+import type { AgainstLedgerState } from "@/lib/finding-list";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
@@ -36,6 +37,7 @@ export function ReviewWorkbench({
   stale,
   onRefetch,
   backTo,
+  againstState = { status: "none" },
 }: {
   run: CliRunDetailResponse;
   parsed: ParsedReviewReport | null;
@@ -45,6 +47,7 @@ export function ReviewWorkbench({
   stale: boolean;
   onRefetch: () => void;
   backTo: WorkbenchBackLink;
+  againstState?: AgainstLedgerState;
 }) {
   const hostStatus = useWorkbenchHostStatus();
   const { selected, select, tabs, setTab, getOrInitTab } = useWorkbenchSelection();
@@ -164,8 +167,7 @@ export function ReviewWorkbench({
     let attempts = 0;
     let heldFrames = 0;
     let raf = 0;
-    const tallEnough = (node: HTMLElement) =>
-      node.scrollHeight >= saved + node.clientHeight - 8;
+    const tallEnough = (node: HTMLElement) => node.scrollHeight >= saved + node.clientHeight - 8;
     const tryRestore = () => {
       const node = readerRef.current;
       if (!node) return;
@@ -230,6 +232,7 @@ export function ReviewWorkbench({
               parsed={parsed}
               hasRepair={repairExists}
               onOpenRepair={() => select("repair")}
+              againstState={againstState}
             />
           ) : effectiveSelection === "repair" ? (
             <RepairView run={run} repair={repair} pipeline={pipeline} />

@@ -74,6 +74,26 @@ export function cliRunStatusPill(
   }
 }
 
+/** Overview heading for a review run. Completed review is “审查已完成”, never “问题已解决”. */
+export function reviewOverviewHeading(run: {
+  kind: CliRunSummaryDto["kind"];
+  status: CliRunStatusDto;
+  progress?: { phase: keyof typeof PHASE_LABEL } | null;
+  pipeline?: {
+    phase: string;
+    applyStatus?: string | null;
+    planVerdict?: string | null;
+    followUpRunId?: string | null;
+  } | null;
+  ideateIntegrity?: { incomplete: boolean } | null;
+}): string {
+  const status = primaryRunStatus(run);
+  if (run.kind === "review" && run.status === "completed" && status.text === "已完成") {
+    return "审查已完成";
+  }
+  return status.text;
+}
+
 export function primaryRunStatus(run: {
   kind: CliRunSummaryDto["kind"];
   status: CliRunStatusDto;

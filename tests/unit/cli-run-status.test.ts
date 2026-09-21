@@ -3,6 +3,7 @@ import {
   cliRunPhaseHeading,
   cliRunStatusPill,
   primaryRunStatus,
+  reviewOverviewHeading,
 } from "@/lib/cli-run-status";
 import { describe, expect, it } from "vitest";
 
@@ -35,6 +36,30 @@ describe("cliRunPhaseHeading", () => {
     expect(cliRunPhaseHeading("ideate", "running", "proposing")).toBe("独立提案中");
     expect(cliRunPhaseHeading("ideate", "running", "debating")).toBe("交叉辩论中");
     expect(cliRunPhaseHeading("ideate", "completed", "done")).toBe("已结束");
+  });
+});
+
+describe("reviewOverviewHeading", () => {
+  it("says 审查已完成 for a finished review, not that problems are solved", () => {
+    expect(
+      reviewOverviewHeading({
+        kind: "review",
+        status: "completed",
+      }),
+    ).toBe("审查已完成");
+    expect(
+      reviewOverviewHeading({
+        kind: "review",
+        status: "running",
+        progress: { phase: "aggregating" },
+      }),
+    ).toBe("正在汇总");
+    expect(
+      reviewOverviewHeading({
+        kind: "review",
+        status: "failed",
+      }),
+    ).toBe("失败");
   });
 });
 

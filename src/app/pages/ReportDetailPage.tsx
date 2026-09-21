@@ -14,6 +14,7 @@ import { ReviewWorkbench } from "@/components/report/workbench/ReviewWorkbench";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { cliRunNeedsPoll } from "@/lib/cli-run-status";
+import { type AgainstLedgerState, againstLedgerFromDetail } from "@/lib/finding-list";
 import { buildFixFromReviewPrompt, buildReviewResumeCommand } from "@/lib/fix-prompt";
 import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
 import { buildPrComment } from "@/lib/report-groups";
@@ -93,6 +94,22 @@ export function ReportDetailPage() {
     () => (query.data?.markdown ? parseReviewReport(query.data.markdown) : null),
     [query.data?.markdown],
   );
+  const againstId =
+    query.data?.kind === "review" ? (query.data.reviewEvidence?.againstRunId ?? null) : null;
+  const againstQuery = useQuery({
+    queryKey: ["cli-runs", againstId],
+    queryFn: () => client.getCliRun(againstId ?? ""),
+    enabled: Boolean(againstId),
+    retry: false,
+  });
+  const againstState: AgainstLedgerState =
+    againstId == null
+      ? { status: "none" }
+      : againstQuery.isPending
+        ? { status: "loading" }
+        : againstQuery.isSuccess && againstQuery.data
+          ? againstLedgerFromDetail(againstQuery.data)
+          : { status: "unavailable" };
 
   const copyText = async (kind: Exclude<CopiedKind, null>, text: string) => {
     try {
@@ -213,6 +230,7 @@ export function ReportDetailPage() {
         stale={query.isError}
         onRefetch={() => void query.refetch()}
         backTo={{ to: "/reports", label: "返回报告列表" }}
+        againstState={againstState}
         repair={{
           profiles: profilesQuery.data?.profiles ?? [],
           activeRepair,
