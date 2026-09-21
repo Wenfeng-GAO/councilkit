@@ -119,12 +119,26 @@ interface BridgeIdentity {
   processGroup: ProcessFingerprint[];
   observedExitCode: number | null;
   observedSignal: string | null;
+  executionId: string | null;
   toolVersion: string | null;
+}
+
+interface OwnedChild {
+  child: ChildProcess;
+  executionId: string;
+  fingerprint: ProcessFingerprint | null;
+}
+
+interface ExecutionGeneration {
+  executionId: string;
+  pid: number | null;
+  fingerprint: ProcessFingerprint | null;
+  child?: ChildProcess;
 }
 
 export class SquadctlBridge implements SquadBridge {
   private readonly tasks = new Map<string, string>();
-  private readonly children = new Map<string, ChildProcess>();
+  private readonly children = new Map<string, OwnedChild>();
 
   constructor(private readonly options: SquadctlBridgeOptions = {}) {}
 
@@ -227,15 +241,17 @@ export class SquadctlBridge implements SquadBridge {
       stopped: false,
       executionStatus: "running" as const,
       failReason: null,
+      observedExitCode: null,
+      observedSignal: null,
     };
-    this.writeIdentity(request.taskId, next);
     await this.spawnForTask(request.taskId, next);
     return this.status(request);
   }
 
   stop(request: { taskId: string }): { kind: "stopped" } {
     const identity = this.readIdentity(request.taskId);
-    const child = this.children.get(request.taskId);
+    const owned = this.children.get(request.taskId);
+    const child = owned?.child;
     const frozen =
       identity?.process ?? (child?.pid ? waitForLeaderFingerprint(child.pid, 200) : null);
     this.terminateWriters(frozen, identity ?? null, child);
@@ -289,7 +305,7 @@ export class SquadctlBridge implements SquadBridge {
         process: null,
       });
     }
-    this.children.delete(request.taskId);
+    this.releaseChild(request.taskId, identity?.executionId ?? owned?.executionId ?? null);
     return { kind: "stopped" };
   }
 
@@ -330,6 +346,13 @@ export class SquadctlBridge implements SquadBridge {
     ) {
       const failed = this.markObservedExit(
         request.taskId,
+        identity.executionId
+          ? {
+              executionId: identity.executionId,
+              pid: identity.orchestratorPid,
+              fingerprint: identity.process,
+            }
+          : null,
         identity.observedExitCode,
         identity.observedSignal,
         "orchestrator exited before a publishable candidate",
@@ -541,22 +564,22 @@ export class SquadctlBridge implements SquadBridge {
       processGroup: [],
       observedExitCode: null,
       observedSignal: null,
+      executionId: null,
     };
     this.writeIdentity(input.taskId, identity);
     await this.spawnForTask(input.taskId, identity);
   }
 
   writerPids(): number[] {
-    const pids: number[] = [];
+    const pids = new Set<number>();
     for (const identity of this.allIdentities()) {
-      if (this.writerStillLive(identity) && identity.process) {
-        pids.push(identity.process.pid);
-        for (const fp of identity.processGroup ?? []) {
-          if (sameProcess(fp, fingerprintPid(fp.pid))) pids.push(fp.pid);
-        }
+      if (!this.writerStillLive(identity) || !identity.process) continue;
+      pids.add(identity.process.pid);
+      for (const fp of identity.processGroup ?? []) {
+        if (sameProcess(fp, fingerprintPid(fp.pid))) pids.add(fp.pid);
       }
     }
-    return pids;
+    return [...pids];
   }
 
   private spawnChild(
@@ -566,6 +589,8 @@ export class SquadctlBridge implements SquadBridge {
     pid: number;
     child?: ChildProcess;
     stdoutBuf?: { text: string };
+    executionId: string;
+    fingerprint: ProcessFingerprint | null;
   } {
     const probe = this.probe();
     const orchExe = this.orchestrator(probe).executable;
@@ -596,7 +621,7 @@ export class SquadctlBridge implements SquadBridge {
       logPath,
       requestedSession: requested,
     });
-    if (spawned.child) this.children.set(taskId, spawned.child);
+    const executionId = randomUUID();
     const fingerprint = spawned.pid ? waitForLeaderFingerprint(spawned.pid) : null;
     const processGroup = fingerprint
       ? uniqueFingerprints([
@@ -612,6 +637,7 @@ export class SquadctlBridge implements SquadBridge {
           : [];
     this.writeIdentity(taskId, {
       ...identity,
+      executionId,
       orchestratorPid: spawned.pid,
       writerPids,
       process: fingerprint,
@@ -622,19 +648,30 @@ export class SquadctlBridge implements SquadBridge {
       requestedSession: identity.requestedSession ?? requested,
       stopped: false,
       executionStatus: "running",
+      failReason: null,
     });
-    return spawned;
+    if (spawned.child) {
+      this.children.set(taskId, { child: spawned.child, executionId, fingerprint });
+    }
+    return { ...spawned, executionId, fingerprint };
   }
 
   private async spawnForTask(taskId: string, identity: BridgeIdentity): Promise<void> {
     const spawned = this.spawnChild(taskId, identity);
-    if (spawned.child) this.attachLifecycle(taskId, spawned.child);
+    const generation: ExecutionGeneration = {
+      executionId: spawned.executionId,
+      pid: spawned.pid,
+      fingerprint: spawned.fingerprint,
+      child: spawned.child,
+    };
+    if (spawned.child) this.attachLifecycle(taskId, spawned.child, generation);
     const expectedSession = identity.nativeSession ?? identity.requestedSession;
     const supervised = spawned.child
       ? await superviseOrchestrator(spawned.child, SESSION_WAIT_MS, spawned.stdoutBuf)
       : { ok: false as const, reason: "orchestrator produced no child process", exitCode: null };
+    if (!this.isCurrentGeneration(taskId, generation)) return;
     if (!supervised.ok) {
-      this.abortSpawn(taskId, spawned.pid, supervised.reason);
+      this.abortSpawn(taskId, spawned.pid, supervised.reason, generation);
       throw errors.runFailed(supervised.reason);
     }
     if (!expectedSession || supervised.sessionId !== expectedSession) {
@@ -644,6 +681,7 @@ export class SquadctlBridge implements SquadBridge {
         expectedSession
           ? "native session_id did not match the frozen session"
           : "orchestrator produced no native session_id",
+        generation,
       );
       throw errors.runFailed(
         expectedSession
@@ -651,6 +689,7 @@ export class SquadctlBridge implements SquadBridge {
           : "orchestrator produced no native session_id",
       );
     }
+    if (!this.isCurrentGeneration(taskId, generation)) return;
     const current = this.readIdentity(taskId) ?? identity;
     if (current.executionStatus === "failed" || current.stopped) {
       if (!current.nativeSession) {
@@ -666,31 +705,40 @@ export class SquadctlBridge implements SquadBridge {
     });
   }
 
-  private attachLifecycle(taskId: string, child: ChildProcess): void {
+  private attachLifecycle(
+    taskId: string,
+    child: ChildProcess,
+    generation: ExecutionGeneration,
+  ): void {
     child.on("exit", (code, signal) => {
-      this.noteOrchestratorExit(taskId, code, signal, null);
+      this.noteOrchestratorExit(taskId, generation, code, signal, null);
     });
     child.on("error", (error) => {
-      this.noteOrchestratorExit(taskId, null, null, error);
+      this.noteOrchestratorExit(taskId, generation, null, null, error);
     });
   }
 
   private noteOrchestratorExit(
     taskId: string,
+    generation: ExecutionGeneration,
     code: number | null,
     signal: NodeJS.Signals | null,
     error: Error | null,
   ): void {
+    if (!this.isCurrentGeneration(taskId, generation)) return;
     const identity = this.readIdentity(taskId);
     if (!identity || identity.stopped || identity.executionStatus === "failed") return;
     const reason =
       error?.message ??
       (signal ? `orchestrator received ${signal}` : `orchestrator exited (${code ?? "null"})`);
     const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
+    if (!this.isCurrentGeneration(taskId, generation)) return;
     const event = mapSquadStatus(parseJson(snapshot.stdout));
     if ((code === 0 || (code === null && !signal && !error)) && canRequestPublish(event)) {
+      const latest = this.readIdentity(taskId);
+      if (!latest || !this.isCurrentGeneration(taskId, generation)) return;
       this.writeIdentity(taskId, {
-        ...identity,
+        ...latest,
         observedExitCode: code,
         observedSignal: signal,
         orchestratorPid: null,
@@ -698,19 +746,23 @@ export class SquadctlBridge implements SquadBridge {
       });
       return;
     }
-    this.markObservedExit(taskId, code, signal, reason);
+    this.markObservedExit(taskId, generation, code, signal, reason);
   }
 
   private markObservedExit(
     taskId: string,
+    generation: ExecutionGeneration | null,
     code: number | null,
     signal: string | null,
     reason: string,
   ): BridgeIdentity | null {
+    if (generation && !this.isCurrentGeneration(taskId, generation))
+      return this.readIdentity(taskId);
     const identity = this.readIdentity(taskId);
     if (!identity) return null;
     if (identity.stopped) return identity;
     if (identity.executionStatus === "failed") return identity;
+    if (generation && !this.isCurrentGeneration(taskId, generation)) return identity;
     return this.writeIdentity(taskId, {
       ...identity,
       executionStatus: "failed",
@@ -736,9 +788,17 @@ export class SquadctlBridge implements SquadBridge {
         writerPids: [],
       });
     }
+    const generation: ExecutionGeneration | null = identity.executionId
+      ? {
+          executionId: identity.executionId,
+          pid: identity.orchestratorPid,
+          fingerprint: identity.process,
+        }
+      : null;
     if (identity.nativeSession || identity.observedExitCode !== null || identity.observedSignal) {
       return this.markObservedExit(
         taskId,
+        generation,
         identity.observedExitCode,
         identity.observedSignal,
         identity.failReason ?? "orchestrator exited before a publishable candidate",
@@ -746,13 +806,20 @@ export class SquadctlBridge implements SquadBridge {
     }
     return this.markObservedExit(
       taskId,
+      generation,
       identity.observedExitCode,
       identity.observedSignal,
       "orchestrator process is no longer the frozen writer",
     );
   }
 
-  private abortSpawn(taskId: string, pid: number, reason: string): void {
+  private abortSpawn(
+    taskId: string,
+    pid: number,
+    reason: string,
+    generation?: ExecutionGeneration,
+  ): void {
+    if (generation && !this.isCurrentGeneration(taskId, generation)) return;
     const identity = this.readIdentity(taskId);
     const fp = identity?.process ?? fingerprintPid(pid);
     if (fp && sameProcess(fp, fingerprintPid(fp.pid))) {
@@ -764,8 +831,10 @@ export class SquadctlBridge implements SquadBridge {
         // already gone
       }
     }
+    if (generation && !this.isCurrentGeneration(taskId, generation)) return;
+    const latest = this.readIdentity(taskId) ?? identity;
     this.writeIdentity(taskId, {
-      ...(identity ?? {
+      ...(latest ?? {
         taskId,
         squadTaskId: taskId,
         taskDir: this.tasks.get(taskId) ?? "",
@@ -790,6 +859,7 @@ export class SquadctlBridge implements SquadBridge {
         processGroup: [],
         observedExitCode: null,
         observedSignal: null,
+        executionId: generation?.executionId ?? null,
       }),
       executionStatus: "failed",
       failReason: reason,
@@ -797,7 +867,10 @@ export class SquadctlBridge implements SquadBridge {
       writerPids: [],
       process: null,
     });
-    this.children.delete(taskId);
+    this.releaseChild(
+      taskId,
+      generation?.executionId ?? latest?.executionId ?? identity?.executionId ?? null,
+    );
   }
 
   private terminateWriters(
@@ -868,12 +941,42 @@ export class SquadctlBridge implements SquadBridge {
   }
 
   private writerStillLive(identity: BridgeIdentity): boolean {
-    const child = this.children.get(identity.taskId);
-    if (child && child.exitCode === null && !child.killed) return true;
+    const owned = this.children.get(identity.taskId);
+    if (
+      owned?.child &&
+      owned.child.exitCode === null &&
+      !owned.child.killed &&
+      (!identity.executionId || owned.executionId === identity.executionId)
+    ) {
+      return true;
+    }
     if (identity.process && sameProcess(identity.process, fingerprintPid(identity.process.pid))) {
       return true;
     }
     return (identity.processGroup ?? []).some((fp) => sameProcess(fp, fingerprintPid(fp.pid)));
+  }
+
+  private isCurrentGeneration(taskId: string, generation: ExecutionGeneration): boolean {
+    const identity = this.readIdentity(taskId);
+    if (!identity || identity.executionId !== generation.executionId) return false;
+    if (
+      generation.fingerprint &&
+      identity.process &&
+      !sameProcess(generation.fingerprint, identity.process)
+    ) {
+      return false;
+    }
+    const owned = this.children.get(taskId);
+    if (owned && owned.executionId !== generation.executionId) return false;
+    if (owned?.child && generation.child && owned.child !== generation.child) return false;
+    return true;
+  }
+
+  private releaseChild(taskId: string, executionId: string | null): void {
+    const owned = this.children.get(taskId);
+    if (!owned) return;
+    if (executionId && owned.executionId !== executionId) return;
+    this.children.delete(taskId);
   }
 
   private taskInitialized(taskDir: string): boolean {
@@ -1115,6 +1218,7 @@ export class SquadctlBridge implements SquadBridge {
           processGroup: parsed.processGroup ?? [],
           observedExitCode: parsed.observedExitCode ?? null,
           observedSignal: parsed.observedSignal ?? null,
+          executionId: parsed.executionId ?? null,
         };
       }
     } catch {

@@ -108,6 +108,8 @@ function identityOf(
   orchestratorPid: number | null;
   writerPids: number[];
   executionStatus: string;
+  executionId?: string | null;
+  failReason?: string | null;
 } {
   return JSON.parse(
     readFileSync(join(home, "squad-tasks", taskId, "councilkit-bridge.json"), "utf8"),
@@ -429,5 +431,58 @@ describe("squad bridge seams from independent review probes", () => {
     const bytes = readFileSync(canary).length;
     await sleep(80);
     expect(readFileSync(canary).length).toBeGreaterThan(bytes);
+  }, 20_000);
+
+  it("does not let a late stop exit callback fail the resumed execution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-seam-resume-race-"));
+    roots.push(root);
+    const { repo, sha } = initRepo(root);
+    const home = join(root, "ckhome");
+    mkdirSync(home);
+    const pkg = join(root, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const bridge = makeBridge(home, repo);
+    const delivery = {
+      grantHash: "a".repeat(64),
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      sourceSha: sha,
+      expectedOldSha: sha,
+      remote: "origin",
+      parentRunId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      newRepairChain: true,
+    };
+    const started = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery,
+      baseSha: sha,
+    });
+    if (!started.ok) throw new Error("start failed");
+    await bridge.prepare({
+      taskId: started.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery,
+    });
+    const before = identityOf(home, started.taskId);
+    if (before.orchestratorPid) pids.add(before.orchestratorPid);
+    expect(bridge.stop({ taskId: started.taskId })).toEqual({ kind: "stopped" });
+    const resumed = await bridge.resume({ taskId: started.taskId });
+    expect(["running", "blocked", "candidate_ready"]).toContain(resumed.event.kind);
+    await sleep(250);
+    const after = identityOf(home, started.taskId);
+    if (after.orchestratorPid) pids.add(after.orchestratorPid);
+    expect(after.executionStatus).toBe("running");
+    expect(after.failReason).toBeNull();
+    expect(after.orchestratorPid).toBeTruthy();
+    expect(after.orchestratorPid).not.toBe(before.orchestratorPid);
+    expect(after.nativeSession).toBe(before.nativeSession);
+    expect(bridge.writerPids()).toContain(after.orchestratorPid);
+    expect(bridge.status({ taskId: started.taskId }).event.kind).not.toBe("failed");
+    expect(bridge.stop({ taskId: started.taskId })).toEqual({ kind: "stopped" });
+    expect(bridge.writerPids()).toEqual([]);
+    expect(bridge.status({ taskId: started.taskId }).event.kind).toBe("stopped");
+    expect(fingerprintPid(after.orchestratorPid ?? 0)).toBeNull();
   }, 20_000);
 });

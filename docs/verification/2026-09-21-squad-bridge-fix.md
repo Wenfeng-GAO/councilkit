@@ -28,6 +28,7 @@
    - resume 必须同一 native session，禁止 silent fresh。crash 且 pid 已死才恢复。
    - prompt 含 skill/squadctl/包/授权/停点；禁止 Orchestrator 自行 push。
    - init 握手只结束 handshake Promise；exit/error 有持久 supervisor。init 后非零退出、零退出但无合法 candidate、外部 signal，都会落盘并让 status 离开 running。
+   - lifecycle 回调绑定 executionId + child PID/fingerprint；stop 后立即 resume 时，旧世代迟到 exit 不得改写新 identity 或删除新 child。
 
 5. **stop / 身份**
    - 冻结 orchestrator `pid/pgid/lstart`。对组发信号前必须 `sameProcess` 核验 live leader；PID 复用则拒绝信号并保留诊断。已核验的本组才 TERM → 有界等待 → KILL（leader 已死后只 SIGKILL 剩余正 PID，不杀复用组）。
