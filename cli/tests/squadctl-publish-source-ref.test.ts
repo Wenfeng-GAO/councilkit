@@ -10,7 +10,9 @@ import {
 import { type SquadPrProfile, buildFrozenPrProfile } from "@shared/runtime/squad-pr-profile";
 import { afterEach, describe, expect, it } from "vitest";
 import { privateCandidateRef } from "../src/auto/candidate-source-ref";
+import { type RunCommand, defaultRunCommand } from "../src/auto/checkout-pr";
 import { SquadctlBridge } from "../src/auto/squadctl-bridge";
+import { clearSecrets, registerSecrets } from "../src/redact";
 
 const FIXTURES = dirname(fileURLToPath(import.meta.url));
 const FAKE_SQUADCTL = join(FIXTURES, "fixtures", "fake-squadctl-publish.mjs");
@@ -19,6 +21,7 @@ const POLICY = "d".repeat(64);
 
 let roots: string[] = [];
 afterEach(() => {
+  clearSecrets();
   for (const root of roots) rmSync(root, { recursive: true, force: true });
   roots = [];
 });
@@ -115,13 +118,19 @@ function seedFrozenTask(input: {
   );
 }
 
-function makeBridge(home: string, repo: string, extraEnv: NodeJS.ProcessEnv = {}): SquadctlBridge {
+function makeBridge(
+  home: string,
+  repo: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+  runCommand?: RunCommand,
+): SquadctlBridge {
   chmodSync(FAKE_SQUADCTL, 0o755);
   return new SquadctlBridge({
     home,
     workspaceCwd: repo,
     executable: FAKE_SQUADCTL,
     skipCliVerify: true,
+    runCommand,
     env: {
       ...process.env,
       HOME: home,
@@ -280,5 +289,83 @@ describe("SquadctlBridge requestPublish source.ref binding", () => {
     expect(published.message).not.toContain(secret);
     expect(published.message).toContain("[redacted]");
     expect((published.message ?? "").length).toBeLessThanOrEqual(512);
+
+    const boundary = "CanaryBoundary12345";
+    registerSecrets({ cookie: boundary, csrfToken: "csrf-not-used" });
+    const straddle = makeBridge(home, repo, {
+      FAKE_CANDIDATE_SHA: candidateSha,
+      FAKE_INTEGRATE_STDERR: `integration refused before target update ${"x".repeat(500)}${boundary}`,
+      FAKE_INTEGRATE_EXIT: "4",
+    });
+    const straddleStarted = straddle.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+    });
+    if (!straddleStarted.ok) throw new Error("start failed");
+    const straddleDir = join(home, "squad-tasks", straddleStarted.taskId);
+    seedFrozenTask({ repo, sourceSha, taskId: straddleStarted.taskId, taskDir: straddleDir });
+    const leaked = await straddle.requestPublish({
+      taskId: straddleStarted.taskId,
+      identity: {
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        expectedOldSha: sourceSha,
+        candidateSha,
+      },
+    });
+    expect(leaked.ok).toBe(false);
+    if (leaked.ok) throw new Error("expected refuse");
+    expect(leaked.message).toMatch(/integration refused before target update/);
+    expect(leaked.message).not.toContain(boundary);
+    expect(leaked.message).not.toContain(boundary.slice(0, 12));
+  });
+
+  it("passes a replace/graft-free Git view to native check-remote and push-remote", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-publish-env-"));
+    roots.push(root);
+    const { repo, sourceSha, candidateSha } = initControllerWithIndependentWorktree(root);
+    const home = join(root, "ckhome");
+    mkdirSync(home);
+    const integrateEnv: NodeJS.ProcessEnv[] = [];
+    const runCommand: RunCommand = async (input) => {
+      if (input.argv[0] === "integrate") integrateEnv.push(input.env ?? {});
+      return defaultRunCommand(input);
+    };
+    const bridge = makeBridge(
+      home,
+      repo,
+      {
+        FAKE_CANDIDATE_SHA: candidateSha,
+        GIT_GRAFT_FILE: join(root, "caller-grafts"),
+        GIT_NO_REPLACE_OBJECTS: "0",
+      },
+      runCommand,
+    );
+    const started = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+    });
+    if (!started.ok) throw new Error("start failed");
+    seedFrozenTask({
+      repo,
+      sourceSha,
+      taskId: started.taskId,
+      taskDir: join(home, "squad-tasks", started.taskId),
+    });
+    const published = await bridge.requestPublish({
+      taskId: started.taskId,
+      identity: {
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        expectedOldSha: sourceSha,
+        candidateSha,
+      },
+    });
+    expect(published.ok).toBe(true);
+    expect(integrateEnv.length).toBe(2);
+    for (const env of integrateEnv) {
+      expect(env.GIT_NO_REPLACE_OBJECTS).toBe("1");
+      expect(env.GIT_GRAFT_FILE).toBe("/dev/null");
+    }
   });
 });

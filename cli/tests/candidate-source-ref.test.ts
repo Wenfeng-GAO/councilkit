@@ -9,7 +9,9 @@ import {
   bindPublishableCandidateProfile,
   pinPrivateCandidateRef,
   privateCandidateRef,
+  protectedGitEnv,
 } from "../src/auto/candidate-source-ref";
+import { defaultRunCommand } from "../src/auto/checkout-pr";
 import { HAS_LIVE_SQUADCTL, LIVE_SKILL_DIR, LIVE_SQUADCTL } from "./helpers/live-squadctl";
 
 const AUTH = "c".repeat(64);
@@ -166,6 +168,31 @@ describe("private candidate source ref pinning", () => {
     expect(invalidTask.reason).toBe("invalid-task-id");
   });
 
+  it("does not treat a descendant child ref as the exact private candidate ref", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-pin-child-"));
+    roots.push(root);
+    const { repo, sourceSha, candidateSha } = initControllerWithIndependentWorktree(root);
+    const ref = privateCandidateRef(TASK_ID, candidateSha);
+    if (!ref) throw new Error("expected ref");
+    const child = `${ref}/child`;
+    git(repo, ["update-ref", "--no-deref", child, candidateSha, "0".repeat(40)]);
+    const pin = await pinPrivateCandidateRef({
+      repo,
+      taskId: TASK_ID,
+      candidateSha,
+      expectedOldSha: sourceSha,
+    });
+    expect(pin.ok).toBe(false);
+    if (pin.ok) throw new Error("descendant must not count as the exact private ref");
+    expect(() => git(repo, ["show-ref", "--verify", "--", ref])).toThrow();
+    expect(git(repo, ["rev-parse", "--verify", child])).toBe(candidateSha);
+    expect(git(repo, ["rev-parse", "HEAD"])).toBe(sourceSha);
+    expect(git(repo, ["rev-parse", "refs/heads/feat-x"])).toBe(sourceSha);
+    expect(git(repo, ["ls-remote", "--heads", "origin", "refs/heads/feat-x"]).split("\t")[0]).toBe(
+      sourceSha,
+    );
+  });
+
   it("refuses absent, non-commit, and unrelated candidates", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-pin-objects-"));
     roots.push(root);
@@ -207,6 +234,82 @@ describe("private candidate source ref pinning", () => {
     expect(notFf.reason).toBe("not-fast-forward");
     expect(git(repo, ["rev-parse", "HEAD"])).toBe(sourceSha);
     expect(candidateSha).not.toBe(unrelated);
+  });
+
+  it("ignores replace-refs and graft overlays when proving ancestry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-pin-replace-"));
+    roots.push(root);
+    const { repo, sourceSha, candidateSha } = initControllerWithIndependentWorktree(root);
+    const orphan = git(repo, ["commit-tree", `${sourceSha}^{tree}`, "-m", "orphan"]);
+    git(repo, ["replace", orphan, candidateSha]);
+    execFileSync("git", ["merge-base", "--is-ancestor", sourceSha, orphan], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    const protectedEnv = protectedGitEnv({
+      ...process.env,
+      GIT_GRAFT_FILE: join(root, "forged-grafts"),
+      GIT_NO_REPLACE_OBJECTS: "0",
+    });
+    expect(protectedEnv.GIT_NO_REPLACE_OBJECTS).toBe("1");
+    expect(protectedEnv.GIT_GRAFT_FILE).toBe("/dev/null");
+    expect(() =>
+      execFileSync("git", ["merge-base", "--is-ancestor", sourceSha, orphan], {
+        cwd: repo,
+        encoding: "utf8",
+        env: protectedEnv,
+      }),
+    ).toThrow();
+
+    const seenMergeBaseEnv: NodeJS.ProcessEnv[] = [];
+    const runCommand = async (input: Parameters<typeof defaultRunCommand>[0]) => {
+      if (input.argv[0] === "merge-base") seenMergeBaseEnv.push(input.env ?? {});
+      return defaultRunCommand(input);
+    };
+    const replaced = await pinPrivateCandidateRef({
+      repo,
+      taskId: TASK_ID,
+      candidateSha: orphan,
+      expectedOldSha: sourceSha,
+      runCommand,
+      env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "0" },
+    });
+    expect(replaced.ok).toBe(false);
+    if (replaced.ok) throw new Error("replace overlay must not mint ancestry");
+    expect(replaced.reason).toBe("not-fast-forward");
+    expect(seenMergeBaseEnv[0]?.GIT_NO_REPLACE_OBJECTS).toBe("1");
+    expect(seenMergeBaseEnv[0]?.GIT_GRAFT_FILE).toBe("/dev/null");
+    expect(git(repo, ["rev-parse", "HEAD"])).toBe(sourceSha);
+
+    git(repo, ["replace", "-d", orphan]);
+    const gitDir = git(repo, ["rev-parse", "--git-dir"]);
+    const gitAbs = gitDir.startsWith("/") ? gitDir : join(repo, gitDir);
+    mkdirSync(join(gitAbs, "info"), { recursive: true });
+    writeFileSync(join(gitAbs, "info", "grafts"), `${orphan} ${sourceSha}\n`);
+    const callerGraft = join(root, "caller-grafts");
+    writeFileSync(callerGraft, `${orphan} ${sourceSha}\n`);
+    const grafted = await pinPrivateCandidateRef({
+      repo,
+      taskId: TASK_ID,
+      candidateSha: orphan,
+      expectedOldSha: sourceSha,
+      env: { ...process.env, GIT_GRAFT_FILE: callerGraft },
+    });
+    expect(grafted.ok).toBe(false);
+    if (grafted.ok) throw new Error("graft overlay must not mint ancestry");
+    expect(grafted.reason).toBe("not-fast-forward");
+
+    const honest = await pinPrivateCandidateRef({
+      repo,
+      taskId: TASK_ID,
+      candidateSha,
+      expectedOldSha: sourceSha,
+      env: { ...process.env, GIT_GRAFT_FILE: callerGraft, GIT_NO_REPLACE_OBJECTS: "0" },
+    });
+    expect(honest.ok).toBe(true);
+    if (!honest.ok) throw new Error("true S→C ancestry must still pin");
+    expect(git(repo, ["rev-parse", "--verify", honest.ref])).toBe(candidateSha);
+    expect(git(repo, ["rev-parse", "HEAD"])).toBe(sourceSha);
   });
 
   it("refuses a requested candidate that is not the publishable journal SHA before pinning", async () => {

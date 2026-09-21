@@ -376,6 +376,36 @@ describe("squad bridge contract", () => {
     expect(sanitizePublishDiagnostic({ stage: "evil-stage", message: "nope" }).stage).toBe(
       "publish",
     );
+
+    const representations = sanitizePublishMessage(
+      [
+        "integration refused before target update",
+        "https://alice:CanaryPassword123@example.invalid/repo.git",
+        '{"token":"CanaryJson123"}',
+        "token = CanarySpaced123",
+      ].join("\n"),
+    );
+    expect(representations).toMatch(/integration refused before target update/);
+    expect(representations).toContain("https://[redacted]@example.invalid/repo.git");
+    expect(representations).not.toContain("CanaryPassword123");
+    expect(representations).not.toContain("alice:");
+    expect(representations).not.toContain("CanaryJson123");
+    expect(representations).toContain('"token":"[redacted]"');
+    expect(representations).not.toContain("CanarySpaced123");
+    expect(representations).toMatch(/token=\[redacted\]/);
+
+    const boundarySecret = "CanaryBoundary12345";
+    const straddling = sanitizePublishDiagnostic(
+      {
+        stage: "check-remote",
+        message: `${"x".repeat(500)}${boundarySecret}`,
+      },
+      { redactText: (text) => text.split(boundarySecret).join("[redacted]") },
+    );
+    expect(straddling.message).not.toContain(boundarySecret);
+    expect(straddling.message).not.toContain(boundarySecret.slice(0, 12));
+    expect(straddling.message.endsWith("[redacted]")).toBe(true);
+    expect(straddling.message.length).toBeLessThanOrEqual(PUBLISH_DIAGNOSTIC_LIMIT);
   });
 
   it("probes unavailable when squadctl is not on PATH or skill installs", () => {

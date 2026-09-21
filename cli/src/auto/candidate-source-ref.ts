@@ -31,6 +31,7 @@ export type PinCandidateFailureReason =
   | "symbolic-ref"
   | "dangling-ref"
   | "ref-exists-with-different-value"
+  | "inspect-failed"
   | "create-failed";
 
 export type PinCandidateResult =
@@ -73,7 +74,7 @@ export async function pinPrivateCandidateRef(input: {
   env?: NodeJS.ProcessEnv;
 }): Promise<PinCandidateResult> {
   const run = input.runCommand ?? defaultRunCommand;
-  const env = gitEnv(input.env ?? process.env);
+  const env = protectedGitEnv(input.env ?? process.env);
   const candidateSha = input.candidateSha.toLowerCase();
   const expectedOldSha = input.expectedOldSha.toLowerCase();
   const ref = privateCandidateRef(input.taskId, candidateSha);
@@ -118,6 +119,9 @@ export async function pinPrivateCandidateRef(input: {
   }
 
   const existing = await inspectLocalRef(run, env, input.repo, ref);
+  if (existing.kind === "error") {
+    return fail("inspect-failed", existing.message);
+  }
   if (existing.kind === "symbolic") {
     return fail(
       "symbolic-ref",
@@ -263,16 +267,23 @@ function fail(reason: PinCandidateFailureReason, message: string): PinCandidateR
   return { ok: false, reason, message };
 }
 
-function gitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/** Strip repo-redirect env and force a replace/graft-free object view. */
+export function protectedGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const {
     GIT_DIR: _gitDir,
     GIT_WORK_TREE: _gitWorkTree,
     GIT_COMMON_DIR: _gitCommonDir,
     GIT_OBJECT_DIRECTORY: _gitObjectDirectory,
     GIT_ALTERNATE_OBJECT_DIRECTORIES: _gitAlternate,
+    GIT_GRAFT_FILE: _gitGraftFile,
+    GIT_NO_REPLACE_OBJECTS: _gitNoReplace,
     ...next
   } = env;
-  return next;
+  return {
+    ...next,
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_GRAFT_FILE: "/dev/null",
+  };
 }
 
 async function git(
@@ -309,16 +320,54 @@ async function inspectLocalRef(
   | { kind: "symbolic"; target: string }
   | { kind: "dangling"; sha: string }
   | { kind: "object"; sha: string; type: string }
+  | { kind: "error"; message: string }
 > {
   const symbolic = await git(run, env, repo, ["symbolic-ref", "--quiet", "--", ref]);
   if (symbolic.exitCode === 0) {
     const target = symbolic.stdout.trim();
+    if (!target) {
+      return { kind: "error", message: "symbolic-ref returned an empty target" };
+    }
     return { kind: "symbolic", target };
   }
-  const parsed = await git(run, env, repo, ["rev-parse", "--verify", "--end-of-options", ref]);
-  const sha = parsed.stdout.trim().toLowerCase();
-  if (parsed.exitCode !== 0 || !FULL_COMMIT_SHA.test(sha)) return { kind: "missing" };
-  const confirmed = await objectTypeAtSha(run, env, repo, sha);
-  if (confirmed === null) return { kind: "dangling", sha };
-  return { kind: "object", sha, type: confirmed };
+  const listed = await git(run, env, repo, [
+    "for-each-ref",
+    "--format=%(objectname)%00%(objecttype)%00%(symref)%00%(refname)",
+    "--",
+    ref,
+  ]);
+  if (listed.exitCode !== 0) {
+    const detail = `${listed.stderr} ${listed.stdout}`.trim();
+    const missingObject = detail.match(/missing object ([0-9a-f]{40})/i);
+    if (missingObject) return { kind: "dangling", sha: missingObject[1].toLowerCase() };
+    return {
+      kind: "error",
+      message: "exact ref lookup failed; refusing to treat the ref as missing",
+    };
+  }
+  const exact: Array<{ sha: string; type: string; symref: string; refname: string }> = [];
+  for (const line of listed.stdout.split("\n")) {
+    if (!line) continue;
+    const [shaRaw, typeRaw, symrefRaw, refnameRaw] = line.split("\0");
+    const refname = (refnameRaw ?? "").trim();
+    if (refname !== ref) continue;
+    exact.push({
+      sha: (shaRaw ?? "").trim().toLowerCase(),
+      type: (typeRaw ?? "").trim(),
+      symref: (symrefRaw ?? "").trim(),
+      refname,
+    });
+  }
+  if (exact.length > 1) {
+    return { kind: "error", message: "exact ref lookup returned multiple rows" };
+  }
+  if (exact.length === 0) return { kind: "missing" };
+  const row = exact[0];
+  if (row.symref) return { kind: "symbolic", target: row.symref };
+  if (!FULL_COMMIT_SHA.test(row.sha)) {
+    return { kind: "error", message: "exact ref lookup returned a malformed object name" };
+  }
+  const confirmed = await objectTypeAtSha(run, env, repo, row.sha);
+  if (confirmed === null) return { kind: "dangling", sha: row.sha };
+  return { kind: "object", sha: row.sha, type: confirmed };
 }

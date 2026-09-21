@@ -33,7 +33,10 @@ export const PUBLISH_DIAGNOSTIC_STAGES = [
 export type PublishDiagnosticStage = (typeof PUBLISH_DIAGNOSTIC_STAGES)[number];
 
 const CREDENTIAL_ASSIGNMENT =
-  /\b(authorization|token|password|secret|credential|api[_-]?key|GH_TOKEN|GITHUB_TOKEN|GIT_ASKPASS|ANTCODE_TOKEN)[=:][^\n]*/gi;
+  /\b(authorization|token|password|secret|credential|api[_-]?key|GH_TOKEN|GITHUB_TOKEN|GIT_ASKPASS|ANTCODE_TOKEN)\s*(?:=\s*|:\s+)(?:Bearer\s+)?\S+/gi;
+const JSON_CREDENTIAL_FIELD =
+  /("(?:authorization|token|password|secret|credential|api[_-]?key)"\s*:\s*")(?:\\.|[^"\\])*(")/gi;
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi;
 const CREDENTIAL_LIKE =
   /ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|BEGIN [A-Z ]+PRIVATE KEY[\s\S]*?END [A-Z ]+PRIVATE KEY/gi;
 
@@ -128,13 +131,16 @@ export function receiptContainsSecret(receipt: unknown): boolean {
   );
 }
 
-export function sanitizePublishDiagnostic(input: {
-  stage: string;
-  exitCode?: number | null;
-  message?: string;
-  stdout?: string;
-  stderr?: string;
-}): {
+export function sanitizePublishDiagnostic(
+  input: {
+    stage: string;
+    exitCode?: number | null;
+    message?: string;
+    stdout?: string;
+    stderr?: string;
+  },
+  opts?: { redactText?: (text: string) => string },
+): {
   stage: PublishDiagnosticStage | "publish";
   exitCode: number | null;
   message: string;
@@ -142,8 +148,10 @@ export function sanitizePublishDiagnostic(input: {
   const stage = (PUBLISH_DIAGNOSTIC_STAGES as readonly string[]).includes(input.stage)
     ? (input.stage as PublishDiagnosticStage)
     : "publish";
+  const redactText = opts?.redactText ?? ((text: string) => text);
   const raw = [input.message, input.stderr, input.stdout]
     .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .map((part) => redactText(part))
     .join("\n");
   const message = sanitizePublishMessage(raw);
   return {
@@ -157,10 +165,13 @@ export function sanitizePublishMessage(
   text: string,
   limit: number = PUBLISH_DIAGNOSTIC_LIMIT,
 ): string {
-  const collapsed = text.replace(/\s+/g, " ").trim();
-  const redacted = collapsed
+  const redacted = text
+    .replace(URL_USERINFO, "$1[redacted]@")
+    .replace(JSON_CREDENTIAL_FIELD, "$1[redacted]$2")
     .replace(CREDENTIAL_ASSIGNMENT, "$1=[redacted]")
-    .replace(CREDENTIAL_LIKE, "[redacted]");
+    .replace(CREDENTIAL_LIKE, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
   if (redacted.length <= limit) return redacted;
   return redacted.slice(0, limit);
 }

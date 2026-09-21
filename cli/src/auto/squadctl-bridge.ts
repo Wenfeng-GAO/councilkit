@@ -35,7 +35,7 @@ import { errors } from "../errors";
 import { redact } from "../redact";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
-import { bindPublishableCandidateProfile } from "./candidate-source-ref";
+import { bindPublishableCandidateProfile, protectedGitEnv } from "./candidate-source-ref";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
 import { GROK_SESSION_WAIT_MS, grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
 import {
@@ -1239,11 +1239,13 @@ export class SquadctlBridge implements SquadBridge {
       return { stdout: "", stderr: probe.reason ?? "squadctl missing", exitCode: 2 };
     }
     const run = this.options.runCommand ?? defaultRunCommand;
+    const baseEnv = this.options.env ?? process.env;
+    const env = isRemoteIntegrate(argv) ? protectedGitEnv(baseEnv) : baseEnv;
     return run({
       executable,
       argv,
       cwd: this.options.workspaceCwd ?? process.cwd(),
-      env: this.options.env ?? process.env,
+      env,
     });
   }
 
@@ -1596,6 +1598,10 @@ function readEpoch(view: unknown): number | null {
   return typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0 ? epoch : null;
 }
 
+function isRemoteIntegrate(argv: string[]): boolean {
+  return argv[0] === "integrate" && (argv[1] === "check-remote" || argv[1] === "push-remote");
+}
+
 function publishRefuse(
   code: SquadBridgeFailureCode,
   input: {
@@ -1606,13 +1612,14 @@ function publishRefuse(
     exitCode?: number | null;
   },
 ): SquadBridgePublishResult {
-  const sanitized = sanitizePublishDiagnostic(input);
-  const message = String(redact(sanitized.message));
+  const sanitized = sanitizePublishDiagnostic(input, {
+    redactText: (text) => String(redact(text)),
+  });
   return {
     ok: false,
     code,
     stage: sanitized.stage,
     exitCode: sanitized.exitCode,
-    message,
+    message: sanitized.message,
   };
 }
