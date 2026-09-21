@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { CLI_RUN_PIPELINE_PID_FILE, CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
-import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
+import {
+  DEFAULT_GATE_POLICY_ID,
+  REPAIR_GATE_POLICY_CATALOG,
+  hashRepairGatePolicy,
+} from "@shared/runtime/repair-policy";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
@@ -605,7 +609,9 @@ describe("repair outer loop", () => {
             independentReview: true,
             independentVerify: true,
             requiredGatesPassed: true,
-            gatePolicyHash: frozenRepairGatePolicyHash(),
+            gatePolicyHash: hashRepairGatePolicy(
+              REPAIR_GATE_POLICY_CATALOG[DEFAULT_GATE_POLICY_ID],
+            ),
           },
         }),
         reviewImpl: async () => {

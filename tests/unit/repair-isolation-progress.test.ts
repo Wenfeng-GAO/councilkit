@@ -37,8 +37,10 @@ describe("isolation capability", () => {
     expect(profile).toContain("(deny file-write*)");
     expect(profile).toContain("(deny network*)");
     expect(profile).toContain('(regex #"/.ssh/")');
+    expect(profile).toContain('(regex #"/.config/gh/")');
     expect(profile).not.toContain("string-append");
     expect(profile).toContain('(allow file-write* (subpath "/tmp/candidate"))');
+    expect(profile).not.toContain('(allow file-write* (regex #"^/tmp/"))');
   });
 
   it("can allow network for the builder while still denying credential reads", () => {
@@ -50,7 +52,8 @@ describe("isolation capability", () => {
       credentialHome: "/tmp/secrets",
     });
     expect(profile).toContain("(allow network*)");
-    expect(profile).toContain('(regex #"/.ssh/")');
+    expect(profile).toContain('(regex #"/.config/gh/")');
+    expect(profile).not.toContain('(allow file-write* (regex #"^/tmp/"))');
   });
 });
 

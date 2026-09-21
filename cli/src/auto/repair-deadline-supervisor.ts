@@ -3,7 +3,9 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type RepairExecution,
+  certifyDeadlineEnforced,
   enforceDeadline,
+  markUnknownWriter,
   repairExecutionSchema,
 } from "@shared/runtime/repair-execution";
 import { errors } from "../errors";
@@ -33,15 +35,30 @@ export function superviseDeadlineOnce(input: {
   const result = enforceDeadline(input.execution, input.nowMs);
   if (!result.due) return result.execution;
   const alive = input.isPidAlive ?? defaultAlive;
-  for (const pid of input.execution.pids) {
-    if (!alive(pid)) continue;
-    try {
-      input.kill(pid, "SIGTERM");
-    } catch {
-      // already gone
-    }
+  if (input.execution.pids.length === 0) {
+    return markUnknownWriter(input.execution);
   }
-  return result.execution;
+  const stopWith = (signal: NodeJS.Signals): boolean => {
+    let failed = false;
+    for (const pid of input.execution.pids) {
+      if (!alive(pid)) continue;
+      try {
+        input.kill(pid, signal);
+      } catch {
+        failed = true;
+      }
+    }
+    return failed;
+  };
+  stopWith("SIGTERM");
+  if (input.execution.pids.every((pid) => !alive(pid))) {
+    return certifyDeadlineEnforced(input.execution, input.nowMs);
+  }
+  const killFailed = stopWith("SIGKILL");
+  if (!killFailed && input.execution.pids.every((pid) => !alive(pid))) {
+    return certifyDeadlineEnforced(input.execution, input.nowMs);
+  }
+  return markUnknownWriter(input.execution);
 }
 
 export function spawnDeadlineSupervisor(input: {

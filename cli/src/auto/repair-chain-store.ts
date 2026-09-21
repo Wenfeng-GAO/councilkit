@@ -1,9 +1,13 @@
-import { closeSync, mkdirSync, openSync, unlinkSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   type RepairBudget,
   type RepairChain,
+  authorizeBudgetAppend,
   bootstrapChain,
+  canOpenSourceFix,
+  consumeRetry,
+  consumeSourceFix,
   inheritChain,
   repairChainSchema,
 } from "@shared/runtime/repair-chain";
@@ -29,6 +33,25 @@ export function writeRepairChain(chain: RepairChain): void {
   atomicWriteJson(chainPath(chain.chainId), chain);
 }
 
+export function findChainForRepoPr(repo: string, prUrl: string): RepairChain | null {
+  const dir = join(resolvePaths().home, "repair-chains");
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const wantRepo = repo.trim().toLowerCase();
+  const wantPr = prUrl.trim();
+  for (const name of names) {
+    if (!name.endsWith(".json") || name.endsWith(".lock")) continue;
+    const parsed = readRepairChain(name.replace(/\.json$/, ""));
+    if (!parsed || parsed.supersededBy) continue;
+    if (parsed.repo === wantRepo && parsed.prUrl === wantPr) return parsed;
+  }
+  return null;
+}
+
 export function loadOrCreateChain(input: {
   repo: string;
   prUrl: string;
@@ -36,7 +59,16 @@ export function loadOrCreateChain(input: {
   parentRunId: string;
   budget?: RepairBudget;
   nowMs?: number;
+  forceNewGoal?: boolean;
 }): { chain: RepairChain; inherited: boolean } {
+  if (!input.forceNewGoal) {
+    const existingForPr = findChainForRepoPr(input.repo, input.prUrl);
+    if (existingForPr) {
+      const inherited = inheritChain(existingForPr, input.parentRunId);
+      writeRepairChain(inherited);
+      return { chain: inherited, inherited: true };
+    }
+  }
   const created = bootstrapChain(input);
   const existing = readRepairChain(created.chainId);
   if (existing === null) {
@@ -73,6 +105,57 @@ export function withChainLock<T>(chainId: string, fn: () => T): T {
       // lock file
     }
   }
+}
+
+export function consumeLockedSourceFix(
+  chainId: string,
+  nowMs: number,
+): { ok: true; budget: RepairBudget } | { ok: false; reason: string } {
+  return withChainLock(chainId, () => {
+    const current = readRepairChain(chainId);
+    if (!current) return { ok: false as const, reason: "repair chain missing" };
+    const allowed = canOpenSourceFix(current.budget, nowMs);
+    if (!allowed.ok) return { ok: false as const, reason: allowed.reason };
+    const budget = consumeSourceFix(current.budget);
+    writeRepairChain({ ...current, budget, casVersion: current.casVersion + 1 });
+    return { ok: true as const, budget };
+  });
+}
+
+export function consumeLockedRetry(
+  chainId: string,
+  kind: "plan" | "verify" | "format" | "diagnose",
+): { ok: true; budget: RepairBudget } | { ok: false; reason: string } {
+  return withChainLock(chainId, () => {
+    const current = readRepairChain(chainId);
+    if (!current) return { ok: false as const, reason: "repair chain missing" };
+    const consumed = consumeRetry(current.budget, kind);
+    if (!consumed.ok) return consumed;
+    writeRepairChain({ ...current, budget: consumed.budget, casVersion: current.casVersion + 1 });
+    return { ok: true as const, budget: consumed.budget };
+  });
+}
+
+export function appendAuthorizedBudget(
+  chainId: string,
+  extra: Parameters<typeof authorizeBudgetAppend>[1],
+  parentRunId: string,
+): RepairChain {
+  return withChainLock(chainId, () => {
+    const current = readRepairChain(chainId);
+    if (!current) throw errors.runFailed("repair chain missing");
+    const budget = authorizeBudgetAppend(current.budget, extra);
+    const next = {
+      ...current,
+      budget,
+      parentRunIds: current.parentRunIds.includes(parentRunId)
+        ? current.parentRunIds
+        : [...current.parentRunIds, parentRunId],
+      casVersion: current.casVersion + 1,
+    };
+    writeRepairChain(next);
+    return next;
+  });
 }
 
 export function casWriteChain(expectedCas: number, next: RepairChain): RepairChain {

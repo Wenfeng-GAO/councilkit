@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "./digest";
-import { frozenRepairGatePolicyHash, isFrozenPolicyHash } from "./repair-policy";
+import { isFrozenPolicyHash } from "./repair-policy";
 
 const text = z
   .string()
@@ -94,6 +94,13 @@ export function contractFingerprint(contract: GoalContract): string {
     .digest("hex");
 }
 
+/** Stable chain identity: original request only. Finding titles must not mint a new chain. */
+export function goalIdentityFingerprint(originalRequest: string): string {
+  return createHash("sha256")
+    .update(canonicalJson({ originalRequest: originalRequest.trim() }))
+    .digest("hex");
+}
+
 export function buildGoalContract(input: {
   sourceRunId: string;
   originalRequest: string;
@@ -104,17 +111,18 @@ export function buildGoalContract(input: {
   authorizedExceptions?: string[];
   acceptance: AcceptanceMethod[];
   chainId: string;
-  frozenPolicyHash?: string;
+  frozenPolicyHash: string;
   createdAt?: string;
   version?: number;
+  goalId?: string;
 }): GoalContract {
-  const frozen = input.frozenPolicyHash ?? frozenRepairGatePolicyHash();
+  const frozen = input.frozenPolicyHash;
   if (!isFrozenPolicyHash(frozen)) {
     throw new Error("goal contract requires a frozen 64-char policy hash");
   }
   return goalContractSchema.parse({
     version: input.version ?? 1,
-    goalId: `goal-${input.sourceRunId}`,
+    goalId: input.goalId ?? `goal-${input.sourceRunId}`,
     sourceRunId: input.sourceRunId,
     originalRequest: input.originalRequest,
     goal: input.goal,
@@ -149,6 +157,14 @@ export function evaluateVerificationAsset(
     if (receipt.snapshotSha.toLowerCase() !== asset.snapshotSha.toLowerCase()) {
       return { ok: false, reason: "receipt snapshot drifted from asset" };
     }
+    if (receipt.testAssetVersion !== asset.testAssetVersion) {
+      return {
+        ok: false,
+        reason: asset.extraProbesDeclared
+          ? "extra probe test asset version mismatch"
+          : "undeclared extra probe or test asset version mismatch",
+      };
+    }
     if (receipt.skipped || receipt.ranZeroTests) {
       return { ok: false, reason: "zero tests or skipped tests cannot prove pass" };
     }
@@ -157,6 +173,24 @@ export function evaluateVerificationAsset(
     }
   }
   return { ok: true, reason: "verified" };
+}
+
+export function interpretTestLog(
+  stdout: string,
+  stderr: string,
+  exitCode: number,
+): {
+  skipped: boolean;
+  ranZeroTests: boolean;
+} {
+  const text = `${stdout}\n${stderr}`;
+  const skipped = /\bSKIP(?:PED)?\b/i.test(text) || /\b\d+\s+skipped\b/i.test(text);
+  const ranZeroTests =
+    stdout.trim().length === 0 ||
+    /\b0\s+tests?\b/i.test(text) ||
+    /\bno tests?\b/i.test(text) ||
+    /\bTest Files\s+0\b/i.test(text);
+  return { skipped: skipped && exitCode === 0, ranZeroTests };
 }
 
 export function generateTaskCard(input: {

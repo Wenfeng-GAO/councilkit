@@ -30,7 +30,7 @@ origin: docs/brainstorms/2026-09-21-repair-convergence-control-requirements.md
 
 | 决策 | 选择 | 理由 |
 | --- | --- | --- |
-| 可信 policy | 控制器冻结 `REPAIR_GATE_POLICY_DOCUMENT` 的 SHA-256；装配时作 expected，永不复制候选 journal hash | Pro 修订：候选自证 expected 非法 |
+| 可信 policy | 控制器目录里的策略**内容**（required gates + 版本）哈希为 expected；缺 persisted expected 必须拒绝。不得用测试 fixture / 活候选 journal 当全局默认 | Codex 验收 1：F1 |
 | 身份事实 | `Fact<T> = known \| unknown`；assemble 不把缺省变成 true | 现 parser 允许缺 baseSha/prOpen |
 | v2 profile | 可选 `protocolVersion: "v2"` + 独立 protocolHash；缺省=v1 | 不改现有 integrityHash |
 | v2 试运行默认 | 3 次源码派工 / 2h 总时限 / 15min 诊断；可配置 | 不写进用户已存 profile |
@@ -45,6 +45,17 @@ origin: docs/brainstorms/2026-09-21-repair-convergence-control-requirements.md
 2. **B 裁决与合同** — 验收投影、目标合同、验证资产、任务卡。
 3. **C 链与执行** — chain 继承、原子授权、幂等 execution、deadline、隔离 runner。
 4. **D v2 路径与界面** — pin-sha 审查、诊断路由、发布读回、CLI/Host/UI。
+
+## Acceptance-1 gaps (Codex rejected 689f6eb)
+
+| ID | Gap | Production fix |
+| --- | --- | --- |
+| F1/R8 | `frozenRepairGatePolicyHash()` 是 fixture 常量；`assembleProductionGate(null)` fallback 后仍能 PASS | 删除全局 fixture expected；装配缺 hash → `policy_unknown`；两份合法目录策略正例 |
+| F2/R1,R5 | chainKey 吃 finding title，同 PR 改标题会重开预算 | chain 身份 = repo+prUrl+冻结 originalRequest；同 PR 默认继承；合同只冻一次 |
+| F3/R2 | 每次从 raw 重建 v1 断言；`not_evaluated` 伪冲突 | 持久裁决；同 ID 含义变则保留旧断言并绑定新版本；diagnostics 弃权≠反证 |
+| F4/R3 | 评估器未进 gate；版本不符仍 ok | receipt 版本/未声明探针拒绝；独立执行回执进准出 |
+| F5/R4,R5 | kill 失败仍 `deadline_enforced`；锁外覆盖预算 | 确认退出才 terminal；锁内读最新 budget 再记账；diagnose 走 `consumeRetry` |
+| F6 | strong+allowNetwork 能读 dummy gh hosts.yml | 最后规则拒绝 `.config/gh` 等；去掉 `/tmp` 全写；能力声明与实现一致 |
 
 ## Out of Scope
 

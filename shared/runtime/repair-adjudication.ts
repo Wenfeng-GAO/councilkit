@@ -85,110 +85,237 @@ export function projectAdjudication(input: {
   falsified?: Array<{ findingId: string; evidence: string }>;
   outOfScope?: Array<{ findingId: string; blocking: boolean; evidence: string }>;
 }): AdjudicationProjection {
-  const aliasMap = new Map((input.aliases ?? []).map((row) => [row.fromId, row]));
-  const falsifiedMap = new Map((input.falsified ?? []).map((row) => [row.findingId, row]));
+  return ingestAdjudication({ ...input, prior: null });
+}
+
+/** Persist-and-merge: raw reports append observations; frozen assertions are not rewritten. */
+export function ingestAdjudication(input: {
+  prior: AdjudicationProjection | null;
+  sourceRunId: string;
+  candidateSha: string;
+  findings: LedgerFinding[];
+  findingGroups?: FindingGroupsFile | null;
+  kinds?: Partial<Record<string, AdjudicationKind>>;
+  aliases?: Array<{ fromId: string; toId: string; evidence: string }>;
+  falsified?: Array<{ findingId: string; evidence: string }>;
+  outOfScope?: Array<{ findingId: string; blocking: boolean; evidence: string }>;
+}): AdjudicationProjection {
+  const fromGroups = adjudicationInputsFromGroups(input.findingGroups);
+  const aliasMap = new Map(
+    [...fromGroups.aliases, ...(input.aliases ?? [])].map((row) => [row.fromId, row]),
+  );
+  const falsifiedMap = new Map(
+    [...fromGroups.falsified, ...(input.falsified ?? [])].map((row) => [row.findingId, row]),
+  );
   const outOfScopeMap = new Map((input.outOfScope ?? []).map((row) => [row.findingId, row]));
   const items: AdjudicatedItem[] = [];
-  const rawFindingIds = input.findings.map((row) => row.id);
+  const rawFindingIds = unique([
+    ...(input.prior?.rawFindingIds ?? []),
+    ...input.findings.map((row) => row.id),
+  ]);
   const mapped = new Set<string>();
   const rootCauses = new Set<string>();
+  const priorByFinding = new Map<string, AdjudicatedItem[]>();
+  for (const item of input.prior?.items ?? []) {
+    const list = priorByFinding.get(item.assertion.sourceFindingId) ?? [];
+    list.push(item);
+    priorByFinding.set(item.assertion.sourceFindingId, list);
+  }
+
+  for (const priorItems of priorByFinding.values()) {
+    items.push(...priorItems);
+    for (const item of priorItems) {
+      mapped.add(item.assertion.sourceFindingId);
+      rootCauses.add(item.rootCauseId);
+    }
+  }
 
   for (const row of input.findings) {
-    const alias = aliasMap.get(row.id);
-    const assertion: ImmutableAssertion = {
-      assertionId: assertionIdFor(row.id, 1),
-      assertionVersion: 1,
-      sourceFindingId: row.id,
+    const priorItems = priorByFinding.get(row.id) ?? [];
+    const latest = priorItems[priorItems.length - 1];
+    const meaning = assertionMeaning(row);
+    if (latest) {
+      if (latest.assertion.invariant !== meaning.invariant) {
+        const nextVersion =
+          Math.max(...priorItems.map((item) => item.assertion.assertionVersion)) + 1;
+        const added = itemFromFinding({
+          row,
+          candidateSha: input.candidateSha,
+          version: nextVersion,
+          kind: "evidence_conflict",
+          findingGroups: input.findingGroups,
+          alias: aliasMap.get(row.id),
+          falsified: falsifiedMap.get(row.id),
+          scoped: outOfScopeMap.get(row.id),
+          kinds: input.kinds,
+        });
+        added.relatedAssertionIds = [latest.assertion.assertionId];
+        items.push(added);
+        mapped.add(row.id);
+        rootCauses.add(added.rootCauseId);
+      } else {
+        const refreshed = itemFromFinding({
+          row,
+          candidateSha: input.candidateSha,
+          version: latest.assertion.assertionVersion,
+          kind: latest.kind,
+          findingGroups: input.findingGroups,
+          alias: aliasMap.get(row.id),
+          falsified: falsifiedMap.get(row.id),
+          scoped: outOfScopeMap.get(row.id),
+          kinds: input.kinds,
+        });
+        refreshed.assertion = latest.assertion;
+        const idx = items.findIndex(
+          (item) => item.assertion.assertionId === latest.assertion.assertionId,
+        );
+        if (idx >= 0) items[idx] = refreshed;
+      }
+      continue;
+    }
+    const added = itemFromFinding({
+      row,
       candidateSha: input.candidateSha,
-      invariant: row.title,
-      trigger: row.text || row.title,
-      expectedTerminal: "defect absent on candidate",
-      evidenceRef: row.verification?.evidence ?? row.text ?? row.title,
-    };
-    if (alias) {
-      items.push({
-        assertion,
-        kind: "duplicate_alias",
-        disposition: "aliased",
-        rootCauseId: resolveRootCause(alias.toId, input.findingGroups),
-        aliasOf: alias.toId,
-        requiredResponsibility: false,
-        blocking: false,
-        relatedAssertionIds: [assertionIdFor(alias.toId, 1)],
-        evidence: alias.evidence,
-      });
-      mapped.add(row.id);
-      continue;
-    }
-    const falsified = falsifiedMap.get(row.id);
-    if (falsified) {
-      items.push({
-        assertion,
-        kind: input.kinds?.[row.id] ?? "unverified_hypothesis",
-        disposition: "falsified",
-        rootCauseId: resolveRootCause(row.id, input.findingGroups),
-        aliasOf: null,
-        requiredResponsibility: true,
-        blocking: false,
-        relatedAssertionIds: [],
-        evidence: falsified.evidence,
-      });
-      mapped.add(row.id);
-      continue;
-    }
-    const scoped = outOfScopeMap.get(row.id);
-    if (scoped) {
-      items.push({
-        assertion,
-        kind: "out_of_scope",
-        disposition: scoped.blocking ? "out_of_scope_blocking" : "out_of_scope_recorded",
-        rootCauseId: resolveRootCause(row.id, input.findingGroups),
-        aliasOf: null,
-        requiredResponsibility: scoped.blocking,
-        blocking: scoped.blocking,
-        relatedAssertionIds: [],
-        evidence: scoped.evidence,
-      });
-      mapped.add(row.id);
-      continue;
-    }
-    const accepted = row.status === "accepted" && Boolean(row.acceptedReason?.trim());
-    const verified = isFindingVerifiedClosed(row, input.candidateSha);
-    const notEvaluated = row.verification?.outcome === "not_evaluated";
-    const required = row.reviewer !== null && row.reviewer !== undefined && row.reviewer.length > 0;
-    let disposition: AcceptanceDisposition;
-    if (verified) disposition = "verified_closed";
-    else if (accepted) disposition = "accepted_with_reason";
-    else if (notEvaluated && required) disposition = "coverage_gap";
-    else if (notEvaluated) disposition = "not_evaluated";
-    else disposition = "still_open";
-    const rootCauseId = resolveRootCause(row.id, input.findingGroups);
-    rootCauses.add(rootCauseId);
-    items.push({
-      assertion,
+      version: 1,
       kind: input.kinds?.[row.id] ?? "in_scope_omission",
-      disposition,
-      rootCauseId,
-      aliasOf: null,
-      requiredResponsibility: required || BLOCKING_SEVERITY.has(row.severity),
-      blocking:
-        BLOCKING_SEVERITY.has(row.severity) && disposition !== "verified_closed" && !accepted,
-      relatedAssertionIds: [],
-      evidence: row.verification?.evidence ?? row.text ?? row.title,
+      findingGroups: input.findingGroups,
+      alias: aliasMap.get(row.id),
+      falsified: falsifiedMap.get(row.id),
+      scoped: outOfScopeMap.get(row.id),
+      kinds: input.kinds,
     });
+    items.push(added);
     mapped.add(row.id);
+    if (added.disposition !== "aliased") rootCauses.add(added.rootCauseId);
   }
 
   const uncoveredSourceIds = rawFindingIds.filter((id) => !mapped.has(id));
   return {
-    version: 1,
+    version: (input.prior?.version ?? 0) + 1,
     sourceRunId: input.sourceRunId,
     candidateSha: input.candidateSha,
     items,
     rawFindingIds,
     uncoveredSourceIds,
-    rootCauseIds: [...rootCauses],
+    rootCauseIds: [...new Set([...rootCauses, ...(input.prior?.rootCauseIds ?? [])])],
   };
+}
+
+function assertionMeaning(row: LedgerFinding): { invariant: string; trigger: string } {
+  return { invariant: row.title, trigger: row.text || row.title };
+}
+
+function itemFromFinding(input: {
+  row: LedgerFinding;
+  candidateSha: string;
+  version: number;
+  kind: AdjudicationKind;
+  findingGroups?: FindingGroupsFile | null;
+  alias?: { fromId: string; toId: string; evidence: string };
+  falsified?: { findingId: string; evidence: string };
+  scoped?: { findingId: string; blocking: boolean; evidence: string };
+  kinds?: Partial<Record<string, AdjudicationKind>>;
+}): AdjudicatedItem {
+  const meaning = assertionMeaning(input.row);
+  const assertion: ImmutableAssertion = {
+    assertionId: assertionIdFor(input.row.id, input.version),
+    assertionVersion: input.version,
+    sourceFindingId: input.row.id,
+    candidateSha: input.candidateSha,
+    invariant: meaning.invariant,
+    trigger: meaning.trigger,
+    expectedTerminal: "defect absent on candidate",
+    evidenceRef: input.row.verification?.evidence ?? input.row.text ?? input.row.title,
+  };
+  if (input.alias) {
+    return {
+      assertion,
+      kind: "duplicate_alias",
+      disposition: "aliased",
+      rootCauseId: resolveRootCause(input.alias.toId, input.findingGroups),
+      aliasOf: input.alias.toId,
+      requiredResponsibility: false,
+      blocking: false,
+      relatedAssertionIds: [assertionIdFor(input.alias.toId, 1)],
+      evidence: input.alias.evidence,
+    };
+  }
+  if (input.falsified) {
+    return {
+      assertion,
+      kind: input.kinds?.[input.row.id] ?? "unverified_hypothesis",
+      disposition: "falsified",
+      rootCauseId: resolveRootCause(input.row.id, input.findingGroups),
+      aliasOf: null,
+      requiredResponsibility: true,
+      blocking: false,
+      relatedAssertionIds: [],
+      evidence: input.falsified.evidence,
+    };
+  }
+  if (input.scoped) {
+    return {
+      assertion,
+      kind: "out_of_scope",
+      disposition: input.scoped.blocking ? "out_of_scope_blocking" : "out_of_scope_recorded",
+      rootCauseId: resolveRootCause(input.row.id, input.findingGroups),
+      aliasOf: null,
+      requiredResponsibility: input.scoped.blocking,
+      blocking: input.scoped.blocking,
+      relatedAssertionIds: [],
+      evidence: input.scoped.evidence,
+    };
+  }
+  const accepted = input.row.status === "accepted" && Boolean(input.row.acceptedReason?.trim());
+  const verified = isFindingVerifiedClosed(input.row, input.candidateSha);
+  const notEvaluated = input.row.verification?.outcome === "not_evaluated";
+  const required =
+    input.row.reviewer !== null &&
+    input.row.reviewer !== undefined &&
+    input.row.reviewer.length > 0;
+  let disposition: AcceptanceDisposition;
+  if (verified) disposition = "verified_closed";
+  else if (accepted) disposition = "accepted_with_reason";
+  else if (notEvaluated && required) disposition = "coverage_gap";
+  else if (notEvaluated) disposition = "not_evaluated";
+  else disposition = "still_open";
+  return {
+    assertion,
+    kind: input.kind,
+    disposition,
+    rootCauseId: resolveRootCause(input.row.id, input.findingGroups),
+    aliasOf: null,
+    requiredResponsibility: required || BLOCKING_SEVERITY.has(input.row.severity),
+    blocking:
+      BLOCKING_SEVERITY.has(input.row.severity) && disposition !== "verified_closed" && !accepted,
+    relatedAssertionIds: [],
+    evidence: input.row.verification?.evidence ?? input.row.text ?? input.row.title,
+  };
+}
+
+export function adjudicationInputsFromGroups(groups: FindingGroupsFile | null | undefined): {
+  aliases: Array<{ fromId: string; toId: string; evidence: string }>;
+  falsified: Array<{ findingId: string; evidence: string }>;
+} {
+  const aliases: Array<{ fromId: string; toId: string; evidence: string }> = [];
+  const falsified: Array<{ findingId: string; evidence: string }> = [];
+  if (!groups) return { aliases, falsified };
+  for (const group of groups.groups) {
+    for (const alias of group.aliases) {
+      aliases.push({ fromId: alias, toId: group.rootCauseId, evidence: group.basis });
+    }
+    for (const id of group.findingIds) {
+      if (id !== group.rootCauseId) {
+        aliases.push({ fromId: id, toId: group.rootCauseId, evidence: group.basis });
+      }
+    }
+    if (group.adjudication?.kind === "unsupported" || group.adjudication?.kind === "dismissed") {
+      for (const id of group.findingIds) {
+        falsified.push({ findingId: id, evidence: group.adjudication.reason });
+      }
+    }
+  }
+  return { aliases, falsified };
 }
 
 /** New counter-example keeps the closed assertion; does not rewrite E1. */

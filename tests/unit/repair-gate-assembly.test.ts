@@ -4,7 +4,13 @@ import { fileURLToPath } from "node:url";
 import type { LedgerFinding } from "@shared/runtime/cli-ledger";
 import { assembleRepairGateInput, evaluateRepairGate } from "@shared/runtime/repair-gate";
 import { type RepairIdentityFacts, known, unknown } from "@shared/runtime/repair-identity";
-import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
+import {
+  SQUAD_REQUIRED_GATES_V1,
+  SQUAD_REQUIRED_GATES_V2,
+  attestTrustedSquadPolicy,
+  freezeExpectedGatePolicy,
+  hashRepairGatePolicy,
+} from "@shared/runtime/repair-policy";
 import { journalFromSquadStatus } from "@shared/runtime/squad-journal-map";
 import { describe, expect, it } from "vitest";
 
@@ -12,7 +18,8 @@ const SHA = "9c0e83b83496b47590667532e71b2ffdca9fd7de";
 const SOURCE = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2";
 const REVIEW = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4";
 const PR = "https://github.com/acme/repo/pull/1";
-const FIXTURE_POLICY = "b07590c09986aadf0b193743e3cf82026709003d2ffa8cec95a86ceaffbaf263";
+const POLICY_V1 = hashRepairGatePolicy(SQUAD_REQUIRED_GATES_V1);
+const POLICY_V2 = hashRepairGatePolicy(SQUAD_REQUIRED_GATES_V2);
 
 const official = JSON.parse(
   readFileSync(
@@ -88,40 +95,66 @@ function squadFromJournal() {
 }
 
 describe("production gate assembly", () => {
-  it("freezes expected policy from the official Squad snapshot mapping, not a CK-invented document", () => {
-    const mapped = journalFromSquadStatus(official).gatePolicyHash;
-    expect(frozenRepairGatePolicyHash()).toBe(mapped);
-    expect(frozenRepairGatePolicyHash()).toBe(FIXTURE_POLICY);
+  it("hashes two different controller policies independently and never uses a fixture constant as global expected", () => {
+    expect(POLICY_V1).toHaveLength(64);
+    expect(POLICY_V2).toHaveLength(64);
+    expect(POLICY_V1).not.toBe(POLICY_V2);
+    expect(freezeExpectedGatePolicy({ catalogId: "squad-required-gates-v1" })).toEqual({
+      ok: true,
+      hash: POLICY_V1,
+      source: "catalog",
+    });
+    expect(freezeExpectedGatePolicy({})).toMatchObject({ ok: false });
+  });
+
+  it("passes each legal policy when expected and observed hashes match", () => {
+    for (const hash of [POLICY_V1, POLICY_V2]) {
+      const assembled = assembleRepairGateInput({
+        frozenPolicyHash: hash,
+        identity: identity(),
+        source: { runId: SOURCE, prUrl: PR },
+        squad: { ...squadFromJournal(), gatePolicyHash: hash },
+        review: review(),
+        checkedAt: "2026-09-21T00:00:00.000Z",
+      });
+      expect(evaluateRepairGate(assembled).passed).toBe(true);
+    }
+  });
+
+  it("rejects a substituted policy even when the candidate still claims success", () => {
+    const assembled = assembleRepairGateInput({
+      frozenPolicyHash: POLICY_V1,
+      identity: identity(),
+      source: { runId: SOURCE, prUrl: PR },
+      squad: { ...squadFromJournal(), gatePolicyHash: POLICY_V2 },
+      review: review(),
+      checkedAt: "2026-09-21T00:00:00.000Z",
+    });
+    expect(evaluateRepairGate(assembled).passed).toBe(false);
   });
 
   it("does not copy a live candidate journal hash into expected policy", () => {
     const lying = { ...squadFromJournal(), gatePolicyHash: "a".repeat(64) };
     const assembled = assembleRepairGateInput({
-      frozenPolicyHash: frozenRepairGatePolicyHash(),
+      frozenPolicyHash: POLICY_V1,
       identity: identity(),
       source: { runId: SOURCE, prUrl: PR },
       squad: lying,
       review: review(),
       checkedAt: "2026-09-21T00:00:00.000Z",
     });
-    expect(assembled.policyHash).toBe(frozenRepairGatePolicyHash());
+    expect(assembled.policyHash).toBe(POLICY_V1);
     expect(assembled.policyHash).not.toBe(lying.gatePolicyHash);
     expect(evaluateRepairGate(assembled).passed).toBe(false);
   });
 
-  it("passes a legal candidate when the independently frozen hash matches the official journal", () => {
-    const assembled = assembleRepairGateInput({
-      frozenPolicyHash: frozenRepairGatePolicyHash(),
-      identity: identity(),
-      source: { runId: SOURCE, prUrl: PR },
-      squad: squadFromJournal(),
-      review: review(),
-      checkedAt: "2026-09-21T00:00:00.000Z",
-    });
-    expect(assembled.policyHash).toBe(journalFromSquadStatus(official).gatePolicyHash);
-    const result = evaluateRepairGate(assembled);
-    expect(result.passed).toBe(true);
-    expect(result.reasons).toEqual([]);
+  it("attests a trusted official Squad record without making it a global default", () => {
+    const attested = attestTrustedSquadPolicy(official, SQUAD_REQUIRED_GATES_V1);
+    expect(attested.ok).toBe(true);
+    if (!attested.ok) return;
+    expect(attested.hash).toBe(journalFromSquadStatus(official).gatePolicyHash);
+    expect(attested.hash).not.toBe(POLICY_V1);
+    expect(freezeExpectedGatePolicy({}).ok).toBe(false);
   });
 
   it("rejects when frozen policy is unknown instead of adopting the candidate hash", () => {
@@ -129,7 +162,7 @@ describe("production gate assembly", () => {
       frozenPolicyHash: null,
       identity: identity(),
       source: { runId: SOURCE, prUrl: PR },
-      squad: squadFromJournal(),
+      squad: { ...squadFromJournal(), gatePolicyHash: POLICY_V1 },
       review: review(),
       checkedAt: "2026-09-21T00:00:00.000Z",
     });
@@ -142,14 +175,14 @@ describe("production gate assembly", () => {
 
   it("rejects unknown base, PR open, and publish receipt instead of coercing them to true", () => {
     const assembled = assembleRepairGateInput({
-      frozenPolicyHash: FIXTURE_POLICY,
+      frozenPolicyHash: POLICY_V1,
       identity: identity({
         publishedSha: unknown("publish receipt missing"),
         baseUnchanged: unknown("observed base SHA missing"),
         prOpen: unknown("PR open state not reported"),
       }),
       source: { runId: SOURCE, prUrl: PR },
-      squad: squadFromJournal(),
+      squad: { ...squadFromJournal(), gatePolicyHash: POLICY_V1 },
       review: review(),
       checkedAt: "2026-09-21T00:00:00.000Z",
     });
@@ -163,13 +196,13 @@ describe("production gate assembly", () => {
 
   it("allows adopting an existing remote candidate with an explicit verification record", () => {
     const assembled = assembleRepairGateInput({
-      frozenPolicyHash: FIXTURE_POLICY,
+      frozenPolicyHash: POLICY_V1,
       identity: identity({
         publishedSha: unknown("receipt lost"),
         adoptedExistingRemote: true,
       }),
       source: { runId: SOURCE, prUrl: PR },
-      squad: squadFromJournal(),
+      squad: { ...squadFromJournal(), gatePolicyHash: POLICY_V1 },
       review: review(),
       checkedAt: "2026-09-21T00:00:00.000Z",
     });
@@ -179,7 +212,7 @@ describe("production gate assembly", () => {
 
   it("does not treat a local-candidate stage as a published PR approval", () => {
     const assembled = assembleRepairGateInput({
-      frozenPolicyHash: FIXTURE_POLICY,
+      frozenPolicyHash: POLICY_V1,
       identity: identity({
         publishedSha: known(null),
         remoteHead: unknown("not published yet"),
@@ -187,7 +220,7 @@ describe("production gate assembly", () => {
         baseUnchanged: unknown("not published yet"),
       }),
       source: { runId: SOURCE, prUrl: PR },
-      squad: squadFromJournal(),
+      squad: { ...squadFromJournal(), gatePolicyHash: POLICY_V1 },
       review: review(),
       checkedAt: "2026-09-21T00:00:00.000Z",
       stage: "local_candidate",

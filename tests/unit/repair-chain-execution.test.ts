@@ -155,7 +155,7 @@ describe("idempotent execution", () => {
     );
     const due = enforceDeadline(running, 50);
     expect(due.due).toBe(true);
-    expect(due.execution.state).toBe("deadline_enforced");
+    expect(due.execution.state).toBe("started");
   });
 });
 

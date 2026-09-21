@@ -1,50 +1,59 @@
+import { createHash } from "node:crypto";
+import { canonicalJson } from "./digest";
 import { journalFromSquadStatus } from "./squad-journal-map";
 
 const POLICY_HASH = /^[a-f0-9]{64}$/;
 
-/**
- * Trusted Squad gate-policy record. This is the official status snapshot used
- * by `journalFromSquadStatus` (same object as tests/fixtures/squad-status-official.json).
- * Expected policy is frozen from this mapping, never from a live candidate journal.
- */
-export const TRUSTED_SQUAD_GATE_STATUS_SNAPSHOT = {
-  phase: "reviewing",
-  control_status: "active",
-  candidate: {
-    status: "completed",
-    candidate_sha: "9c0e83b83496b47590667532e71b2ffdca9fd7de",
-    policy_hash: "b07590c09986aadf0b193743e3cf82026709003d2ffa8cec95a86ceaffbaf263",
-  },
-  independence: {
-    policy_status: "satisfied",
-    bound_same_sha: true,
-    provenance_complete: true,
-    shared_run: false,
-    shared_session: false,
-    shared_worktree: false,
-    actual_identity_complete: false,
-  },
-  projection: {
-    aggregate_verdict: {
-      approved: true,
-      binding_gaps: [],
-      candidate_sha: "9c0e83b83496b47590667532e71b2ffdca9fd7de",
-      independence_gaps: [],
-      required_gate_gaps: [],
-      reviewer_pass: true,
-      verdict: "pass",
-      verifier_pass: true,
-    },
-  },
-} as const;
+export const REPAIR_GATE_POLICY_IDS = [
+  "squad-required-gates-v1",
+  "squad-required-gates-v2",
+] as const;
+export type RepairGatePolicyId = (typeof REPAIR_GATE_POLICY_IDS)[number];
 
-/** Trusted expected hash: mapped from the official Squad snapshot, not a CK-invented document. */
-export function frozenRepairGatePolicyHash(): string {
-  const hash = journalFromSquadStatus(TRUSTED_SQUAD_GATE_STATUS_SNAPSHOT).gatePolicyHash;
-  if (!isFrozenPolicyHash(hash)) {
-    throw new Error("trusted Squad gate policy hash missing from official snapshot mapping");
-  }
-  return hash;
+export interface RepairGatePolicyDocument {
+  id: RepairGatePolicyId;
+  version: string;
+  source: "councilkit-controller";
+  requiredGates: readonly string[];
+  independenceRequired: boolean;
+}
+
+/** Controller-owned policy content. Hash this; never a live candidate journal. */
+export const SQUAD_REQUIRED_GATES_V1: RepairGatePolicyDocument = {
+  id: "squad-required-gates-v1",
+  version: "1",
+  source: "councilkit-controller",
+  requiredGates: ["independent_review", "independent_verify", "required_gates_passed"],
+  independenceRequired: true,
+};
+
+export const SQUAD_REQUIRED_GATES_V2: RepairGatePolicyDocument = {
+  id: "squad-required-gates-v2",
+  version: "2",
+  source: "councilkit-controller",
+  requiredGates: ["independent_review", "independent_verify", "required_gates_passed", "format"],
+  independenceRequired: true,
+};
+
+export const REPAIR_GATE_POLICY_CATALOG: Record<RepairGatePolicyId, RepairGatePolicyDocument> = {
+  "squad-required-gates-v1": SQUAD_REQUIRED_GATES_V1,
+  "squad-required-gates-v2": SQUAD_REQUIRED_GATES_V2,
+};
+
+export const DEFAULT_GATE_POLICY_ID: RepairGatePolicyId = "squad-required-gates-v1";
+
+export function hashRepairGatePolicy(policy: RepairGatePolicyDocument): string {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        id: policy.id,
+        version: policy.version,
+        source: policy.source,
+        requiredGates: [...policy.requiredGates],
+        independenceRequired: policy.independenceRequired,
+      }),
+    )
+    .digest("hex");
 }
 
 export function isFrozenPolicyHash(value: string | null | undefined): value is string {
@@ -59,4 +68,60 @@ export function expectedGatePolicyHash(frozen: string | null | undefined): strin
 export function policyHashMatches(expected: string | "unknown", observed: string): boolean {
   if (expected === "unknown") return false;
   return expected === observed;
+}
+
+export function freezeExpectedGatePolicy(input: {
+  persisted?: string | null;
+  catalogId?: string | null;
+  profileHash?: string | null;
+}):
+  | { ok: true; hash: string; source: "persisted" | "catalog" | "profile" }
+  | { ok: false; reason: string } {
+  if (isFrozenPolicyHash(input.persisted)) {
+    return { ok: true, hash: input.persisted, source: "persisted" };
+  }
+  if (isFrozenPolicyHash(input.profileHash)) {
+    return { ok: true, hash: input.profileHash, source: "profile" };
+  }
+  const catalogId = input.catalogId;
+  if (catalogId && catalogId in REPAIR_GATE_POLICY_CATALOG) {
+    return {
+      ok: true,
+      hash: hashRepairGatePolicy(REPAIR_GATE_POLICY_CATALOG[catalogId as RepairGatePolicyId]),
+      source: "catalog",
+    };
+  }
+  return {
+    ok: false,
+    reason: "no frozen gate policy; refuse to default to a fixture or candidate hash",
+  };
+}
+
+/**
+ * Explicit freeze from a trusted Squad status record (not a live candidate).
+ * Checks minimum required gates, then persists the attested hash.
+ */
+export function attestTrustedSquadPolicy(
+  status: unknown,
+  required: RepairGatePolicyDocument,
+): { ok: true; hash: string } | { ok: false; reason: string } {
+  const journal = journalFromSquadStatus(status);
+  if (!isFrozenPolicyHash(journal.gatePolicyHash)) {
+    return { ok: false, reason: "trusted Squad record has no policy hash" };
+  }
+  for (const gate of required.requiredGates) {
+    if (gate === "independent_review" && !journal.independentReview) {
+      return { ok: false, reason: "trusted record missing independent_review" };
+    }
+    if (gate === "independent_verify" && !journal.independentVerify) {
+      return { ok: false, reason: "trusted record missing independent_verify" };
+    }
+    if (gate === "required_gates_passed" && !journal.requiredGatesPassed) {
+      return { ok: false, reason: "trusted record missing required_gates_passed" };
+    }
+  }
+  if (required.independenceRequired && !journal.requiredGatesPassed) {
+    return { ok: false, reason: "trusted record failed independence gates" };
+  }
+  return { ok: true, hash: journal.gatePolicyHash };
 }

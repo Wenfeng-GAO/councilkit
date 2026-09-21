@@ -2,6 +2,7 @@ import type { LedgerFinding } from "@shared/runtime/cli-ledger";
 import {
   appendCounterExample,
   gateAcceptanceView,
+  ingestAdjudication,
   notEvaluatedIsNotCounterEvidence,
   projectAdjudication,
 } from "@shared/runtime/repair-adjudication";
@@ -143,5 +144,26 @@ describe("adjudication projection", () => {
       findings: [finding("R1"), finding("R2")],
     });
     expect(projection.rootCauseIds).toEqual(["R1", "R2"]);
+  });
+
+  it("preserves a frozen assertion and binds a new version when the same id changes meaning", () => {
+    const before = ingestAdjudication({
+      prior: null,
+      sourceRunId: "r1",
+      candidateSha: SHA,
+      findings: [finding("F-1", { title: "old assertion", text: "old assertion" })],
+    });
+    const after = ingestAdjudication({
+      prior: before,
+      sourceRunId: "r2",
+      candidateSha: SHA,
+      findings: [finding("F-1", { title: "different assertion", text: "different assertion" })],
+    });
+    const versions = after.items.filter((item) => item.assertion.sourceFindingId === "F-1");
+    expect(versions).toHaveLength(2);
+    expect(versions[0]?.assertion.invariant).toBe("old assertion");
+    expect(versions[0]?.assertion.assertionVersion).toBe(1);
+    expect(versions[1]?.assertion.invariant).toBe("different assertion");
+    expect(versions[1]?.assertion.assertionVersion).toBe(2);
   });
 });

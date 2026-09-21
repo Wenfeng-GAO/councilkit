@@ -229,7 +229,11 @@ export function buildAssessmentDiagnostics(input: {
       errorPath: `/correction/${extra.assessment.findingId}`,
     });
   }
-  const covered = new Set(valid.map((row) => row.assessment.findingId));
+  const covered = new Set(
+    valid
+      .filter((row) => row.assessment.outcome !== "not_evaluated")
+      .map((row) => row.assessment.findingId),
+  );
   for (const id of input.requiredFindingIds) {
     if (!covered.has(id)) {
       items.push({
@@ -240,10 +244,14 @@ export function buildAssessmentDiagnostics(input: {
         errorPath: `/required/${id}`,
       });
     }
-    const outcomes = new Set(
-      valid.filter((row) => row.assessment.findingId === id).map((row) => row.assessment.outcome),
+    const decisive = new Set(
+      valid
+        .filter(
+          (row) => row.assessment.findingId === id && row.assessment.outcome !== "not_evaluated",
+        )
+        .map((row) => row.assessment.outcome),
     );
-    if (outcomes.size > 1) {
+    if (decisive.size > 1) {
       items.push({
         findingId: id,
         attemptId: "coverage",
@@ -254,10 +262,14 @@ export function buildAssessmentDiagnostics(input: {
     }
   }
   const coverageComplete = input.requiredFindingIds.every((id) => {
-    const valids = valid.filter((row) => row.assessment.findingId === id);
-    if (valids.length === 0) return false;
-    const outcomes = new Set(valids.map((row) => row.assessment.outcome));
-    return outcomes.size === 1;
+    const decisive = new Set(
+      valid
+        .filter(
+          (row) => row.assessment.findingId === id && row.assessment.outcome !== "not_evaluated",
+        )
+        .map((row) => row.assessment.outcome),
+    );
+    return decisive.size === 1;
   });
   return {
     diagnostics: {

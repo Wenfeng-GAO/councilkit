@@ -43,8 +43,66 @@ describe("deadline supervisor", () => {
       },
       isPidAlive: () => true,
     });
+    expect(next.state).toBe("unknown_writer");
+    expect(killed).toEqual([
+      { pid: 4242, signal: "SIGTERM" },
+      { pid: 4242, signal: "SIGKILL" },
+    ]);
+  });
+
+  it("does not certify deadline enforced when stop throws and the pid stays alive", () => {
+    const running = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-stop-fail",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [999999],
+      1,
+    );
+    let signalAttempts = 0;
+    const next = superviseDeadlineOnce({
+      execution: running,
+      nowMs: 11,
+      isPidAlive: () => true,
+      kill: () => {
+        signalAttempts += 1;
+        throw new Error("simulated stop failed");
+      },
+    });
+    expect(next.state).toBe("unknown_writer");
+    expect(signalAttempts).toBeGreaterThan(0);
+  });
+
+  it("certifies deadline enforced only after recorded pids are confirmed dead", () => {
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const running = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-dead-ok",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [4242],
+      1,
+    );
+    const next = superviseDeadlineOnce({
+      execution: running,
+      nowMs: 10,
+      kill: (pid, signal) => {
+        killed.push({ pid, signal });
+      },
+      isPidAlive: () => false,
+    });
     expect(next.state).toBe("deadline_enforced");
-    expect(killed).toEqual([{ pid: 4242, signal: "SIGTERM" }]);
+    expect(killed).toEqual([]);
   });
 
   it("persists an execution record for later takeover", () => {
@@ -237,5 +295,30 @@ echo DONE
     expect(result.stdout).not.toMatch(/READ_SECRET/);
     expect(result.stdout).not.toMatch(/PUSHED/);
     expect(existsSync("/tmp/ck-iso-push")).toBe(false);
+  });
+
+  it("denies dummy gh publish credentials outside the candidate worktree", async () => {
+    const capability = detectIsolationCapability();
+    if (!capability.sandboxExec) return;
+    const root = mkdtempSync(join(tmpdir(), "ck-iso-gh-"));
+    const worktree = join(root, "worktree");
+    const fakeHome = join(root, "private-home");
+    mkdirSync(worktree);
+    mkdirSync(join(fakeHome, ".config", "gh"), { recursive: true });
+    const credential = join(fakeHome, ".config", "gh", "hosts.yml");
+    writeFileSync(credential, "DUMMY_ACCEPTANCE_SENTINEL\n");
+    const result = await runIsolatedCommand({
+      mode: "strong",
+      capability,
+      executable: "/bin/cat",
+      argv: [credential],
+      cwd: worktree,
+      outputDir: join(root, "out"),
+      tmpDir: join(root, "tmp"),
+      allowNetwork: true,
+      env: { ...process.env, HOME: fakeHome, PATH: "/usr/bin:/bin" },
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("DUMMY_ACCEPTANCE_SENTINEL");
   });
 });

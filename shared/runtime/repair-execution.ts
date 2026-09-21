@@ -161,15 +161,23 @@ export function enforceDeadline(
   ) {
     return { due: false, execution };
   }
+  return { due: true, execution };
+}
+
+export function certifyDeadlineEnforced(
+  execution: RepairExecution,
+  nowMs: number,
+): RepairExecution {
   return {
-    due: true,
-    execution: {
-      ...execution,
-      state: "deadline_enforced",
-      result: "cancelled",
-      endedAtMs: nowMs,
-    },
+    ...execution,
+    state: "deadline_enforced",
+    result: "cancelled",
+    endedAtMs: nowMs,
   };
+}
+
+export function markUnknownWriter(execution: RepairExecution): RepairExecution {
+  return { ...execution, state: "unknown_writer", result: null, endedAtMs: null };
 }
 
 export function countsAsSourceFixDispatch(execution: RepairExecution): boolean {

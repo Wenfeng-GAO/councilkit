@@ -1,4 +1,5 @@
 import type { GateAcceptanceView } from "@shared/runtime/repair-adjudication";
+import type { VerificationAsset } from "@shared/runtime/repair-contract";
 import {
   type RepairGateInput,
   type RepairGateReview,
@@ -13,11 +14,10 @@ import {
   remoteHeadFact,
   sourceShaFact,
 } from "@shared/runtime/repair-identity";
-import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
 import type { CheckedOutPr } from "./checkout-pr";
 
-export function frozenPolicyOrUnknown(value: string | null | undefined): string {
-  return value && value.length === 64 ? value : frozenRepairGatePolicyHash();
+export function frozenPolicyOrUnknown(value: string | null | undefined): string | "unknown" {
+  return value && /^[a-f0-9]{64}$/.test(value) ? value : "unknown";
 }
 
 export function identityFromRemote(input: {
@@ -61,9 +61,11 @@ export function assembleProductionGate(input: {
   unpublished?: boolean;
   adoptedExistingRemote?: boolean;
   acceptance?: GateAcceptanceView;
+  verificationAssets?: VerificationAsset[];
+  requiredAssertionIds?: string[];
 }): RepairGateInput {
   return assembleRepairGateInput({
-    frozenPolicyHash: input.frozenPolicyHash ?? frozenRepairGatePolicyHash(),
+    frozenPolicyHash: input.frozenPolicyHash,
     identity: identityFromRemote({
       candidateSha: input.candidateSha,
       publishedSha: input.publishedSha,
@@ -79,6 +81,8 @@ export function assembleProductionGate(input: {
     checkedAt: input.checkedAt,
     stage: input.unpublished ? "local_candidate" : "published_pr",
     acceptance: input.acceptance,
+    verificationAssets: input.verificationAssets,
+    requiredAssertionIds: input.requiredAssertionIds,
   });
 }
 

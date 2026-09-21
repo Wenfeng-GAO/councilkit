@@ -345,6 +345,48 @@ describe("assessment correction", () => {
     expect(conflict.diagnostics.coverageComplete).toBe(false);
   });
 
+  it("does not treat not_evaluated as a factual contradiction of verified_closed", () => {
+    const diag = buildAssessmentDiagnostics({
+      runId: "r1",
+      sha: SHA,
+      requiredFindingIds: ["F-1"],
+      attempts: [],
+      extraAssessments: [
+        {
+          attemptId: "r1",
+          reviewer: "reviewer",
+          assessment: {
+            findingId: "F-1",
+            candidateSha: SHA,
+            outcome: "verified_closed",
+            method: "regression_test",
+            reason: "original counterexample passed",
+            evidence: "probe passed",
+            command: "go test ./pkg",
+          },
+        },
+        {
+          attemptId: "r2",
+          reviewer: "abstainer",
+          assessment: {
+            findingId: "F-1",
+            candidateSha: SHA,
+            outcome: "not_evaluated",
+            method: "not_evaluated",
+            reason: "not assigned",
+            evidence: "no evaluation",
+          },
+        },
+      ],
+    });
+    expect(diag.diagnostics.coverageComplete).toBe(true);
+    expect(
+      diag.diagnostics.items
+        .filter((item) => item.errorClass !== "ok")
+        .map((item) => item.errorClass),
+    ).toEqual([]);
+  });
+
   it("lets one seat's valid row cover a finding omitted or unreadable on a peer seat", () => {
     const closed = {
       ...validRow("F-1"),

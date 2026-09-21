@@ -58,15 +58,27 @@ export function sandboxProfile(input: {
   const paths = [input.worktree, input.outputDir, input.tmpDir, ...(input.extraWritePaths ?? [])];
   const writes = paths.map((path) => `(allow file-write* (subpath ${quoted(path)}))`).join("\n");
   const network = input.allowNetwork === true ? "(allow network*)" : "(deny network*)";
+  const credentialHome = input.credentialHome;
+  const homeDenies = credentialHome
+    ? [
+        `(deny file-read* (subpath ${quoted(`${credentialHome}/.ssh`)}))`,
+        `(deny file-read* (subpath ${quoted(`${credentialHome}/.config/gh`)}))`,
+        `(deny file-read* (subpath ${quoted(`${credentialHome}/.config/antcode`)}))`,
+        `(deny file-read* (literal ${quoted(`${credentialHome}/.git-credentials`)}))`,
+        `(deny file-read* (literal ${quoted(`${credentialHome}/.netrc`)}))`,
+        `(deny file-read* (literal ${quoted(`${credentialHome}/.config/gh/hosts.yml`)}))`,
+      ].join("\n")
+    : "";
   const credentialDenies = `(deny file-read* (regex #"/.ssh/"))
 (deny file-read* (regex #"/.git-credentials"))
 (deny file-read* (regex #"/.netrc"))
-(deny file-read* (literal "/var/run/ssh-agent.socket"))`;
+(deny file-read* (regex #"/.config/gh/"))
+(deny file-read* (regex #"/.config/antcode/"))
+(deny file-read* (literal "/var/run/ssh-agent.socket"))
+${homeDenies}`;
   const tmpRuntime =
     input.allowNetwork === true
-      ? `(allow file-write* (regex #"^/private/tmp/"))
-(allow file-write* (regex #"^/tmp/"))
-(allow file-write-data (literal "/dev/null"))
+      ? `(allow file-write-data (literal "/dev/null"))
 (allow file-ioctl)
 (allow ipc-posix-shm)`
       : `(allow file-write-data (literal "/dev/null"))`;

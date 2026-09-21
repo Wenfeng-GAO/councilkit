@@ -2,11 +2,13 @@ import {
   buildGoalContract,
   evaluateVerificationAsset,
   generateTaskCard,
+  goalIdentityFingerprint,
 } from "@shared/runtime/repair-contract";
-import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
+import { SQUAD_REQUIRED_GATES_V1, hashRepairGatePolicy } from "@shared/runtime/repair-policy";
 import { describe, expect, it } from "vitest";
 
 const SHA = "b".repeat(40);
+const POLICY = hashRepairGatePolicy(SQUAD_REQUIRED_GATES_V1);
 
 describe("goal contract and verification assets", () => {
   it("freezes the controller policy hash rather than a candidate-claimed value", () => {
@@ -28,8 +30,9 @@ describe("goal contract and verification assets", () => {
         },
       ],
       chainId: "ck-chain-1",
+      frozenPolicyHash: POLICY,
     });
-    expect(contract.frozenPolicyHash).toBe(frozenRepairGatePolicyHash());
+    expect(contract.frozenPolicyHash).toBe(POLICY);
     expect(contract.frozenPolicyHash).toHaveLength(64);
   });
 
@@ -130,6 +133,43 @@ describe("goal contract and verification assets", () => {
     ).toMatch(/builder/);
   });
 
+  it("rejects mismatched test asset versions and undeclared extra probes", () => {
+    const result = evaluateVerificationAsset(
+      {
+        assertionId: "A1",
+        snapshotSha: SHA,
+        testAssetVersion: "expected-v1",
+        extraProbesDeclared: false,
+        receipts: [
+          {
+            command: "test",
+            cwd: "/tmp/test",
+            exitCode: 0,
+            logPath: "/tmp/test.log",
+            snapshotSha: SHA,
+            testAssetVersion: "different-v2",
+            dirtyTree: false,
+            skipped: false,
+            ranZeroTests: false,
+            role: "independent_adjudicator",
+          },
+        ],
+      },
+      "A1",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/version|undeclared extra probe/i);
+  });
+
+  it("keeps chain identity stable when finding titles change", () => {
+    expect(goalIdentityFingerprint("Keep the same PR goal")).toBe(
+      goalIdentityFingerprint("Keep the same PR goal"),
+    );
+    expect(goalIdentityFingerprint("Keep the same PR goal")).not.toBe(
+      goalIdentityFingerprint("a different user goal"),
+    );
+  });
+
   it("accepts an independent receipt on the immutable snapshot", () => {
     const result = evaluateVerificationAsset(
       {
@@ -176,6 +216,7 @@ describe("goal contract and verification assets", () => {
         },
       ],
       chainId: "ck-chain-1",
+      frozenPolicyHash: POLICY,
     });
     const card = generateTaskCard({
       contract,

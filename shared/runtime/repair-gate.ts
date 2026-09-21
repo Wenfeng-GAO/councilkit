@@ -4,6 +4,7 @@ import {
   type GateAcceptanceView,
   gateAcceptanceView,
 } from "./repair-adjudication";
+import { type VerificationAsset, evaluateVerificationAsset } from "./repair-contract";
 import { type RepairIdentityFacts, identityUnknownReasons, isKnown } from "./repair-identity";
 import { expectedGatePolicyHash, policyHashMatches } from "./repair-policy";
 
@@ -72,6 +73,8 @@ export interface RepairGateInput {
   adoptedExistingRemote?: boolean;
   stage?: RepairGateStage;
   acceptance?: GateAcceptanceView;
+  verificationAssets?: VerificationAsset[];
+  requiredAssertionIds?: string[];
 }
 
 export interface RepairGateReason {
@@ -120,6 +123,8 @@ export function assembleRepairGateInput(input: {
   stage?: RepairGateStage;
   acceptance?: GateAcceptanceView;
   projection?: AdjudicationProjection;
+  verificationAssets?: VerificationAsset[];
+  requiredAssertionIds?: string[];
 }): RepairGateInput {
   const expected = expectedGatePolicyHash(input.frozenPolicyHash);
   const sourceSha = isKnown(input.identity.sourceSha) ? input.identity.sourceSha.value : "unknown";
@@ -148,6 +153,8 @@ export function assembleRepairGateInput(input: {
     stage: input.stage ?? "published_pr",
     acceptance:
       input.acceptance ?? (input.projection ? gateAcceptanceView(input.projection) : undefined),
+    verificationAssets: input.verificationAssets,
+    requiredAssertionIds: input.requiredAssertionIds,
   };
 }
 
@@ -240,6 +247,28 @@ export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
       code: "findings_open",
       evidence: open.join(","),
     });
+  }
+
+  const requiredAssertions = input.requiredAssertionIds ?? [];
+  if (requiredAssertions.length > 0) {
+    const assets = input.verificationAssets ?? [];
+    for (const assertionId of requiredAssertions) {
+      const asset = assets.find((row) => row.assertionId === assertionId);
+      if (!asset) {
+        reasons.push({
+          code: "coverage_incomplete",
+          evidence: `missing verification asset for ${assertionId}`,
+        });
+        continue;
+      }
+      const evaluated = evaluateVerificationAsset(asset, assertionId);
+      if (!evaluated.ok) {
+        reasons.push({
+          code: "coverage_incomplete",
+          evidence: `${assertionId}: ${evaluated.reason}`,
+        });
+      }
+    }
   }
 
   const untraceable = input.review.findings.filter(
