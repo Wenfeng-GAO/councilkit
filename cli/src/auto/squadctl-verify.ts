@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { SquadBridgeProbe } from "@shared/runtime/squad-bridge-discovery";
 import { discoverSquadBridge } from "@shared/runtime/squad-bridge-discovery";
+import { parseHistoryCapabilities } from "@shared/runtime/squad-history-bridge";
 
 const HELP_MARKERS = [
   "init",
@@ -48,12 +49,44 @@ export function probeAndVerifySquadBridge(env: NodeJS.ProcessEnv = process.env):
     };
   }
   const versionText = version.stdout.trim().split("\n")[0] ?? "";
+  const historyRaw = spawnBounded(
+    discovered.executable,
+    ["history", "capabilities", "--json"],
+    env,
+  );
+  const history = parseHistoryJson(historyRaw.stdout);
+  const historyCaps = historyRaw.exitCode === 0 ? parseHistoryCapabilities(history) : null;
   return {
     ...discovered,
     version: discovered.version,
     toolVersion: versionText || null,
-    reason: null,
+    historyContract: historyCaps?.contract ?? null,
+    capabilities: historyCaps
+      ? [...discovered.capabilities, "history-export", "verified-origin-mapping"]
+      : discovered.capabilities,
+    reason: historyCaps
+      ? null
+      : "squadctl 可用，但未提供 squad-history-bridge.v1；跨 outer-cycle 修复需要升级 hengzhuo-engineering-squad。",
   };
+}
+
+function parseHistoryJson(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 }
 
 function spawnBounded(

@@ -176,7 +176,7 @@ pnpm exec councilkit repair resume --run <ck-repair-id> --json
 
 父 Run 是 `ck-repair-<uuid>`。成功只认机器准出（`businessResult=approved`，exit 0）；`needs_attention` 非零；用户停止 130。Host 只 spawn 同 checkout 的 `councilkit repair …`，不 spawn `squadctl`、不读 `.squad/`。
 
-`repair probe --json` 的 `version` 是协议版本 `squad-bridge.v1`；`toolVersion` 才是 `squadctl 2.1.0` 这类软件版本。生产 preflight 只认协议版本。首次子任务 intake 使用官方 `--new-repair-chain --project-id --repair-chain-id`。已安装 squadctl 2.1.0 不能把祖先 task 目录映射进 history completeness，因此第二个可写子任务在启动前以 `HISTORY_INVALID` 失败关闭，不会跳过独立门禁或把 CouncilKit 合成 JSON 当成官方已校验历史。resume 复用同一 grant。stop 先核验冻结进程指纹再对确认属于本任务的进程组 TERM → 有界等待 → KILL；PID 复用则拒绝发信号。隔离工作区同时冻结 fetch 与 push URL。真实 squadctl smoke 在未安装 skill 的 CI 上 skip；本机有 `scripts/squadctl` 时默认会跑。强制要求实桥：`COUNCILKIT_SQUAD_SMOKE=1`。
+`repair probe --json` 的 `version` 是协议版本 `squad-bridge.v1`；`toolVersion` 才是 `squadctl 2.1.0` 这类软件版本。生产 preflight 只认协议版本。首次子任务 intake 使用官方 `--new-repair-chain --project-id --repair-chain-id`。跨 outer-cycle 要求 `squadctl history capabilities --json` 声明 `squad-history-bridge.v1`；旧版本在生产入口说明升级。具备该契约时，前一 task 在 writer 终止后 `history export`，下一 task `intake --history` 加重复 `--origin-task-dir`，来源目录只来自官方 export 且必须属于本 parent 已冻结 task。官方内部修复轮次与 CK `outerUsed` 分列。resume 复用同一 grant。stop 先核验冻结进程指纹再对确认属于本任务的进程组 TERM → 有界等待 → KILL；PID 复用则拒绝发信号。隔离工作区同时冻结 fetch 与 push URL。真实 squadctl smoke 在未安装 skill 的 CI 上 skip；本机有 `scripts/squadctl` 时默认会跑。强制要求实桥：`COUNCILKIT_SQUAD_SMOKE=1`。
 
 手工导出仍可用：
 

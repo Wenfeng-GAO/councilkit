@@ -87,6 +87,7 @@ describe("squad bridge discovery", () => {
     expect(probe.available).toBe(true);
     expect(probe.version).toBe(SQUAD_BRIDGE_CONTRACT_VERSION);
     expect(probe.reason).toBeNull();
+    expect(probe.historyContract).toBeNull();
     expect(probe.executable).toBe(join(skillDir, "scripts", "squadctl"));
     expect(probe.skillDir).toBe(skillDir);
     expect(probe.orchestrator?.requestedRuntime).toBe("grokb");

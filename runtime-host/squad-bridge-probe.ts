@@ -29,6 +29,7 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
     executable: null,
     skillDir: null,
     capabilities: [],
+    historyContract: null,
     orchestrator: null,
   };
 }
@@ -56,6 +57,7 @@ function spawnCliProbe(env: NodeJS.ProcessEnv): SquadBridgeProbe | null {
     capabilities: Array.isArray(row.capabilities)
       ? row.capabilities.filter((item): item is string => typeof item === "string")
       : [],
+    historyContract: typeof row.historyContract === "string" ? row.historyContract : null,
     orchestrator: row.orchestrator ?? null,
   };
 }

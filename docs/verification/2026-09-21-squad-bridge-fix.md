@@ -40,8 +40,9 @@
    - origin 身份解析 SCP / `ssh://`（含端口）/ HTTPS 的 host+完整 path，不用 substring。本地 bare 路径仍可用。已有隔离目录只核验，不 `checkout -B` 原始 SHA。
 
 7. **history / 回执**
-   - 首个独立链：`intake --new-repair-chain --project-id --repair-chain-id`。
-   - 后续外循环：在启动第二个可写子任务前 `HISTORY_INVALID`。已安装 squadctl 2.1.0 的 completeness 只映射当前 task_dir，不能把 CouncilKit 合成 JSON 伪装成官方已校验祖先历史。外循环预算仍是 10，内部门禁不跳过。
+   - 入口验证 `squadctl history capabilities --json` 的 `squad-history-bridge.v1`（export / verified_origin_mapping / persisted_origins）。旧 2.1.0 在生产 `repair run` 入口说明升级，不在第二轮才硬挡。
+   - 首个独立链：`intake --new-repair-chain --project-id --repair-chain-id`。后续：前一 task writer 终止后 `history export`，原子保存 envelope+hash，下一 task `intake --history` + 重复 `--origin-task-dir`。parentRunId 是不变的 chain ID。来源目录只来自官方 export，且必须落在本 parent 已冻结 task 根内。
+   - 官方内部 `logical_rounds` 与 CK `outerUsed` 分列；不把 native 内部轮次写入 `state.historyCount`。父外循环 max 10 由 cycles/CAS 核对。
    - integrate 回执必须核对 remote / remote_ref / profile_hash（Python canonical JSON SHA-256）。`check-remote` 即使进程 exit 0，只要 `cas_ok` 或 `ff_possible` 为 false 也拒绝。
 
 8. **等待与 UI**
@@ -74,7 +75,8 @@ pnpm exec vitest run \
   cli/tests/squad-bridge-seams.test.ts \
   cli/tests/repair-command.test.ts \
   cli/tests/repair-profile.test.ts \
-  cli/tests/local-repo.test.ts
+  cli/tests/local-repo.test.ts \
+  cli/tests/squadctl-history.test.ts
 pnpm typecheck
 pnpm exec biome check <modified files>
 pnpm build
@@ -82,12 +84,12 @@ pnpm build
 
 `cli/tests/squad-bridge-seams.test.ts` 把独立验收的 workspace / session / stop-canary 探针收成有断言回归（Node 假 Orchestrator，finally 杀组）。真实 squadctl smoke/adapter 在没有个人 skill 的 CI 上 `describe.skipIf`；本机存在 `scripts/squadctl` 时默认执行。`COUNCILKIT_SQUAD_SMOKE=1` 时缺桥直接失败。不推实际 AntCode PR。
 
-本机 2026-09-21 已显式跑过并通过：`cli/tests/squadctl-real-smoke.test.ts`（真实 squadctl 2.1.0 init/intake `--new-repair-chain`/Python profile hash）、`cli/tests/squadctl-bridge.adapter.test.ts`、`cli/tests/squad-bridge-seams.test.ts`（含 init 后 exit 17/0、外部 SIGKILL、PID 复用不误杀、孙进程杀干净、pushurl 漂移拒绝）。不是靠 skip 交付。ccbfde8 的 4 条新 P1 关闭证据见 `cli/tests/squad-bridge-seams.test.ts` 与 `cli/tests/repair-workspace.test.ts`。
+本机 2026-09-21 已显式跑过并通过：`cli/tests/squadctl-real-smoke.test.ts`、`cli/tests/squadctl-bridge.adapter.test.ts`、`cli/tests/squad-bridge-seams.test.ts`、`cli/tests/squadctl-history.test.ts`（`COUNCILKIT_SQUADCTL`/`COUNCILKIT_SQUAD_SKILL` 指向带 `squad-history-bridge.v1` 的 skill；A→B→C 官方 export/intake verified，错误 project/缺 origin/换目录/改 package 拒绝）。不是靠 skip 交付。完整真实 Grok 角色 + integrate 仍由主会话在冻结候选上跑。
 
 ## 边界
 
 - 已安装 skill 仍无 `squadctl orchestrate`；CouncilKit 用独立 grok + 现有控制面补通。
-- 已安装 squadctl 2.1.0 不能 verified 跨任务 ancestor journal 映射，故第二个可写子任务 fail-closed。本轮不改 history 硬挡，等独立 history API。
+- 跨 outer-cycle 需要 squadctl `squad-history-bridge.v1`。未升级时生产入口拒绝并说明升级；已升级时用官方 export/intake 传递祖先，不再在第二轮无能力硬挡。
 - Host 不读 `.squad/`、不 spawn squadctl。
 - 未对用户真实 PR 做 integrate push。
 - 不能据此宣称「修到准出」的完整功能交付。

@@ -34,12 +34,17 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("real squadctl argv and control-plane smoke"
     const probe = probeAndVerifySquadBridge({
       ...process.env,
       COUNCILKIT_SQUADCTL: SQUADCTL,
-      COUNCILKIT_SQUAD_SKILL: join(homedir(), ".codex/skills/hengzhuo-engineering-squad"),
-      COUNCILKIT_GROKB: join(homedir(), "bin", "grokb"),
+      COUNCILKIT_SQUAD_SKILL: LIVE_SKILL_DIR,
+      COUNCILKIT_GROKB: process.env.COUNCILKIT_GROKB ?? join(homedir(), "bin", "grokb"),
     });
     expect(probe.available).toBe(true);
     expect(probe.version).toBe("squad-bridge.v1");
     expect(probe.toolVersion).toMatch(/squadctl 2\.1/);
+    if (probe.historyContract) {
+      expect(probe.historyContract).toBe("squad-history-bridge.v1");
+    } else {
+      expect(probe.reason).toMatch(/squad-history-bridge\.v1|升级/);
+    }
     expect(
       assertSquadBridgeVersion({
         requested: SQUAD_BRIDGE_CONTRACT_VERSION,

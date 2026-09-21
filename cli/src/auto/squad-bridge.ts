@@ -24,6 +24,9 @@ export interface SquadBridgeDelivery {
   pushUrl?: string;
   parentRunId?: string;
   newRepairChain?: boolean;
+  previousTaskId?: string;
+  previousTaskDir?: string;
+  historyExportPath?: string;
 }
 
 export interface SquadBridgeStartRequest {
@@ -77,6 +80,22 @@ export interface SquadBridge {
     packagePath: string;
     delivery?: SquadBridgeDelivery;
   }): Promise<void>;
+  exportHistory?(request: {
+    taskId: string;
+    allowedOrigins: Array<{ journalTaskId: string; taskDir: string }>;
+    projectId: string;
+    repairChainId: string;
+  }):
+    | {
+        envelope: unknown;
+        hash: string;
+        historyPath: string;
+      }
+    | Promise<{
+        envelope: unknown;
+        hash: string;
+        historyPath: string;
+      }>;
   writerPids?(): number[];
 }
 

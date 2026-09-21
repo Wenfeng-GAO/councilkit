@@ -14,6 +14,13 @@ import {
   isTrustedSquadctlIntegrateReceipt,
 } from "@shared/runtime/squad-bridge-contract";
 import { type SquadBridgeProbe, discoverSquadBridge } from "@shared/runtime/squad-bridge-discovery";
+import {
+  type SquadHistoryEnvelope,
+  assertHistoryOriginsOwned,
+  historyEnvelopeHash,
+  parseHistoryCapabilities,
+  parseHistoryEnvelope,
+} from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
 import {
   type SquadPrProfile,
@@ -144,6 +151,56 @@ export class SquadctlBridge implements SquadBridge {
     if (!history.ok) return history;
     this.tasks.set(taskId, taskDir);
     return { ok: true, taskId, taskDir };
+  }
+
+  exportHistory(request: {
+    taskId: string;
+    allowedOrigins: Array<{ journalTaskId: string; taskDir: string }>;
+    projectId: string;
+    repairChainId: string;
+  }): { envelope: SquadHistoryEnvelope; hash: string; historyPath: string } {
+    const identity = this.readIdentity(request.taskId);
+    if (!identity) throw errors.runFailed("cannot export history from an unknown squad task");
+    if (this.writerStillLive(identity)) {
+      throw errors.runFailed("refusing history export while the previous writer is alive");
+    }
+    this.stabilizeTask(identity);
+    const exported = this.runSquadctlSync([
+      "history",
+      "export",
+      "--task-dir",
+      identity.taskDir,
+      "--json",
+    ]);
+    if (exported.exitCode !== 0) {
+      throw errors.runFailed(
+        `squadctl history export failed: ${exported.stderr || exported.stdout}`,
+      );
+    }
+    const envelope = parseHistoryEnvelope(parseJson(exported.stdout));
+    if (!envelope) {
+      throw errors.runFailed("squadctl history export did not return squad-history-bridge.v1");
+    }
+    const ownedRoot = join(this.home(), "squad-tasks");
+    const owned = assertHistoryOriginsOwned(envelope, request.allowedOrigins, ownedRoot, {
+      projectId: request.projectId,
+      repairChainId: request.repairChainId,
+    });
+    if (!owned.ok) throw errors.runFailed(owned.reason);
+    const envelopePath = join(identity.taskDir, "councilkit-history-envelope.json");
+    writeFileSync(envelopePath, `${JSON.stringify(envelope)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    writeFileSync(
+      join(identity.taskDir, "councilkit-history.json"),
+      `${JSON.stringify(envelope.history)}\n`,
+      {
+        encoding: "utf8",
+        mode: 0o600,
+      },
+    );
+    return { envelope, hash: historyEnvelopeHash(envelope), historyPath: envelopePath };
   }
 
   async resume(request: { taskId: string }): Promise<SquadBridgeStatus> {
@@ -397,58 +454,62 @@ export class SquadctlBridge implements SquadBridge {
     }
     const taskDir = this.tasks.get(input.taskId) ?? join(this.home(), "squad-tasks", input.taskId);
     const existing = this.readIdentity(input.taskId);
-    if (existing?.squadTaskId && this.taskInitialized(taskDir)) {
-      if (this.writerStillLive(existing)) {
-        throw errors.runFailed("refusing a second orchestrator while the previous writer is alive");
-      }
-      await this.spawnForTask(input.taskId, existing);
-      return;
+    if (existing && this.writerStillLive(existing)) {
+      throw errors.runFailed("refusing a second orchestrator while the previous writer is alive");
     }
     const squadTaskId = existing?.squadTaskId ?? makeSquadTaskId();
     const cwd = this.options.workspaceCwd ?? process.cwd();
     const delivery = input.delivery ?? existing?.delivery ?? null;
-    const init = await this.runSquadctl(
-      [
-        "init",
-        "--task-dir",
-        taskDir,
-        "--task-id",
-        squadTaskId,
-        "--base-sha",
-        input.baseSha,
-        "--planning",
-        "simple",
-        "--owner",
-        "councilkit",
-        "--repo",
-        cwd,
-        "--no-observe",
-        "--allow-behind-origin",
-        "--json",
-      ],
-      exe,
-    );
-    if (init.exitCode !== 0) {
-      throw errors.runFailed(`squadctl init failed: ${init.stderr || init.stdout || "exit"}`);
-    }
-    const intakeArgv = ["intake", "--task-dir", taskDir, "--package", input.packagePath, "--json"];
-    if (delivery?.newRepairChain === true) {
-      if (!delivery.repo || !delivery.parentRunId) {
-        throw errors.usage("new repair chain requires frozen project-id and repair-chain-id");
-      }
-      intakeArgv.splice(
-        5,
-        0,
-        "--new-repair-chain",
-        "--project-id",
-        delivery.repo,
-        "--repair-chain-id",
-        delivery.parentRunId,
+    if (!this.taskInitialized(taskDir)) {
+      const init = await this.runSquadctl(
+        [
+          "init",
+          "--task-dir",
+          taskDir,
+          "--task-id",
+          squadTaskId,
+          "--base-sha",
+          input.baseSha,
+          "--planning",
+          "simple",
+          "--owner",
+          "councilkit",
+          "--repo",
+          cwd,
+          "--no-observe",
+          "--allow-behind-origin",
+          "--json",
+        ],
+        exe,
       );
+      if (init.exitCode !== 0) {
+        throw errors.runFailed(`squadctl init failed: ${init.stderr || init.stdout || "exit"}`);
+      }
     }
-    const intake = await this.runSquadctl(intakeArgv, exe);
-    if (intake.exitCode !== 0) {
-      throw errors.runFailed(`squadctl intake failed: ${intake.stderr || intake.stdout || "exit"}`);
+    if (!this.taskHasHistory(taskDir)) {
+      const intakeArgv = this.intakeArgv(taskDir, input.packagePath, delivery);
+      const intake = await this.runSquadctl(intakeArgv, exe);
+      if (intake.exitCode !== 0) {
+        throw errors.runFailed(
+          `squadctl intake failed: ${intake.stderr || intake.stdout || "exit"}`,
+        );
+      }
+      if (delivery && delivery.newRepairChain !== true && delivery.previousTaskId) {
+        const completeness = intakeCompleteness(parseJson(intake.stdout));
+        if (completeness !== "verified") {
+          throw errors.runFailed(
+            `subsequent intake historyCompleteness=${completeness ?? "missing"}; expected verified`,
+          );
+        }
+      }
+    }
+    if (existing?.squadTaskId && this.taskInitialized(taskDir) && this.taskHasHistory(taskDir)) {
+      await this.spawnForTask(input.taskId, {
+        ...existing,
+        delivery: delivery ?? existing.delivery,
+        packagePath: input.packagePath,
+      });
+      return;
     }
     if (delivery) {
       this.writeFrozenDelivery(taskDir, delivery, delivery.sourceSha);
@@ -823,6 +884,100 @@ export class SquadctlBridge implements SquadBridge {
     }
   }
 
+  private taskHasHistory(taskDir: string): boolean {
+    return existsSync(join(taskDir, "repair-history.v1.json"));
+  }
+
+  private intakeArgv(
+    taskDir: string,
+    packagePath: string,
+    delivery: SquadBridgeDelivery | null,
+  ): string[] {
+    const argv = ["intake", "--task-dir", taskDir, "--package", packagePath, "--json"];
+    if (delivery?.newRepairChain === true) {
+      if (!delivery.repo || !delivery.parentRunId) {
+        throw errors.usage("new repair chain requires frozen project-id and repair-chain-id");
+      }
+      argv.splice(
+        5,
+        0,
+        "--new-repair-chain",
+        "--project-id",
+        delivery.repo,
+        "--repair-chain-id",
+        delivery.parentRunId,
+      );
+      return argv;
+    }
+    if (delivery?.previousTaskId) {
+      if (!delivery.repo || !delivery.parentRunId) {
+        throw errors.usage("history intake requires frozen project-id and repair-chain-id");
+      }
+      const historyFile = delivery.historyExportPath;
+      if (!historyFile || !existsSync(historyFile)) {
+        throw errors.runFailed("subsequent squad task is missing a frozen history export");
+      }
+      const envelope = parseHistoryEnvelope(JSON.parse(readFileText(historyFile) ?? "null"));
+      const historyObjectPath = join(taskDir, "councilkit-history-import.json");
+      if (envelope) {
+        writeFileSync(historyObjectPath, `${JSON.stringify(envelope.history)}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+      } else {
+        writeFileSync(historyObjectPath, readFileText(historyFile) ?? "", {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+      }
+      argv.push(
+        "--history",
+        historyObjectPath,
+        "--project-id",
+        delivery.repo,
+        "--repair-chain-id",
+        delivery.parentRunId,
+      );
+      const origins = envelope?.origins ?? [];
+      if (origins.length === 0) {
+        throw errors.runFailed("frozen history export has no origin mapping");
+      }
+      for (const origin of origins) {
+        argv.push("--origin-task-dir", `${origin.task_id}=${origin.task_dir}`);
+      }
+    }
+    return argv;
+  }
+
+  private stabilizeTask(identity: BridgeIdentity): void {
+    if (identity.stopped) return;
+    const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
+    const epoch = readEpoch(parseJson(snapshot.stdout));
+    if (epoch === null) return;
+    this.runSquadctlSync([
+      "pause",
+      "--task-dir",
+      identity.taskDir,
+      "--expected-epoch",
+      String(epoch),
+      "--worktree",
+      identity.workspaceCwd,
+      "--json",
+    ]);
+  }
+
+  private readHistoryContract(executable: string, env: NodeJS.ProcessEnv): string | null {
+    const result = spawnSync(executable, ["history", "capabilities", "--json"], {
+      env,
+      encoding: "utf8",
+      timeout: 8_000,
+      shell: false,
+    });
+    if (result.status !== 0) return null;
+    const parsed = parseJson(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+    return parseHistoryCapabilities(parsed)?.contract ?? null;
+  }
+
   private probe(): SquadBridgeProbe {
     const env = this.options.env ?? process.env;
     if (this.options.executable) {
@@ -833,6 +988,7 @@ export class SquadctlBridge implements SquadBridge {
         reason: null,
         executable: this.options.executable,
         toolVersion: null,
+        historyContract: this.readHistoryContract(this.options.executable, env),
         orchestrator: {
           requestedRuntime: "grokb",
           actualRuntime: null,
@@ -1185,6 +1341,12 @@ function parseJson(text: string): unknown {
     }
     return null;
   }
+}
+
+function intakeCompleteness(raw: unknown): string | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = (raw as { historyCompleteness?: unknown }).historyCompleteness;
+  return typeof value === "string" ? value : null;
 }
 
 function uniqueFingerprints(rows: Array<ProcessFingerprint | null>): ProcessFingerprint[] {

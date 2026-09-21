@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import {
@@ -14,9 +14,17 @@ import {
   SQUAD_BRIDGE_CONTRACT_VERSION,
   canRequestPublish,
 } from "@shared/runtime/squad-bridge-contract";
+import {
+  type AllowedHistoryOrigin,
+  HISTORY_BRIDGE_UPGRADE_MESSAGE,
+  SQUAD_HISTORY_BRIDGE_CONTRACT,
+  historyEnvelopeHash,
+  parseHistoryEnvelope,
+} from "@shared/runtime/squad-history-bridge";
 import { ReviewExit, runReview } from "../commands/review";
 import { EXIT, errors } from "../errors";
 import type { OutputSink } from "../output";
+import { atomicWriteFile, atomicWriteJson } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import { type CheckedOutPr, defaultRunCommand, inspectPullRequest } from "./checkout-pr";
 import { loadFindingGroups } from "./finding-groups";
@@ -120,6 +128,13 @@ export async function executeRepairLoop(input: {
       businessResult: "needs_attention",
       reasonCode: "BRIDGE_VERSION_MISSING",
       message: probe.reason ?? "squad bridge is unavailable",
+    });
+  }
+  if (!deps.bridge && probe.historyContract !== SQUAD_HISTORY_BRIDGE_CONTRACT) {
+    return finish(input, {
+      businessResult: "needs_attention",
+      reasonCode: "HISTORY_INVALID",
+      message: probe.reason ?? HISTORY_BRIDGE_UPGRADE_MESSAGE,
     });
   }
   const profile = loadRepairProfile(input.profileName);
@@ -282,12 +297,11 @@ export async function executeRepairLoop(input: {
       });
     }
     if (!resumeSlot) {
-      if (cycleN > 1 && bridge.prepare) {
+      if (cycleN > 1 && bridge.prepare && !bridge.exportHistory) {
         return finish(input, {
           businessResult: "needs_attention",
           reasonCode: "HISTORY_INVALID",
-          message:
-            "subsequent squad subtask needs verified history import; installed squadctl cannot map ancestor journals",
+          message: HISTORY_BRIDGE_UPGRADE_MESSAGE,
           outerUsed: state.outerUsed,
         });
       }
@@ -331,6 +345,12 @@ export async function executeRepairLoop(input: {
               pushUrl: state.frozenPushUrl ?? state.frozenOriginUrl ?? undefined,
               parentRunId: input.runId,
               newRepairChain: cycleN === 1,
+              previousTaskId:
+                cycleN > 1 ? previousSquadTask(state, cycleN)?.squadTaskId : undefined,
+              previousTaskDir:
+                cycleN > 1
+                  ? (previousSquadTask(state, cycleN)?.squadTaskDir ?? undefined)
+                  : undefined,
             },
           });
           snapshot = bridge.status({ taskId });
@@ -387,6 +407,50 @@ export async function executeRepairLoop(input: {
         sha256: handoff.sha256,
         at: now(),
       });
+      const previous = cycleN > 1 ? previousSquadTask(state, cycleN) : null;
+      let historyExportPath: string | undefined;
+      if (cycleN > 1 && bridge.exportHistory) {
+        if (!previous?.squadTaskId || !previous.squadTaskDir) {
+          return finish(input, {
+            businessResult: "needs_attention",
+            reasonCode: "HISTORY_INVALID",
+            message: "subsequent squad subtask is missing a frozen previous task",
+            outerUsed: state.outerUsed,
+          });
+        }
+        try {
+          bridge.stop({ taskId: previous.squadTaskId });
+        } catch {
+          // already stopped
+        }
+        if ((bridge.writerPids?.() ?? []).length > 0) {
+          return finish(input, {
+            businessResult: "needs_attention",
+            reasonCode: "squad_failed",
+            message:
+              "previous squad writer is still alive; refusing to export or start a new writer",
+            outerUsed: state.outerUsed,
+          });
+        }
+        const saved = loadPersistedHistoryExport(input.runDir, previous.squadTaskId);
+        if (saved) {
+          historyExportPath = saved;
+        } else {
+          const exported = await Promise.resolve(
+            bridge.exportHistory({
+              taskId: previous.squadTaskId,
+              allowedOrigins: collectAllowedOrigins(state),
+              projectId: profile.repo,
+              repairChainId: input.runId,
+            }),
+          );
+          historyExportPath = persistHistoryExport(
+            input.runDir,
+            previous.squadTaskId,
+            exported.envelope,
+          );
+        }
+      }
       const delivery = {
         grantHash: grant.grantHash,
         repo: profile.repo,
@@ -397,7 +461,10 @@ export async function executeRepairLoop(input: {
         originUrl: state.frozenOriginUrl ?? undefined,
         pushUrl: state.frozenPushUrl ?? state.frozenOriginUrl ?? undefined,
         parentRunId: input.runId,
-        newRepairChain: true,
+        newRepairChain: cycleN === 1,
+        previousTaskId: previous?.squadTaskId,
+        previousTaskDir: previous?.squadTaskDir ?? undefined,
+        historyExportPath,
       };
       const started = bridge.start({
         requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
@@ -1048,6 +1115,70 @@ function expectedRemoteSha(state: RepairState, sourceSha: string): string {
   if (state.publishedSha) return state.publishedSha;
   if (state.candidateSha) return state.candidateSha;
   return sourceSha;
+}
+
+function previousSquadTask(
+  state: RepairState,
+  cycleN: number,
+): { squadTaskId: string; squadTaskDir: string } | null {
+  const cycles = [...(state.cycles ?? [])]
+    .filter(
+      (cycle) =>
+        cycle.n < cycleN &&
+        typeof cycle.squadTaskId === "string" &&
+        typeof cycle.squadTaskDir === "string",
+    )
+    .sort((a, b) => a.n - b.n);
+  const last = cycles.at(-1);
+  if (!last?.squadTaskId || !last.squadTaskDir) return null;
+  return { squadTaskId: last.squadTaskId, squadTaskDir: last.squadTaskDir };
+}
+
+function collectAllowedOrigins(state: RepairState): AllowedHistoryOrigin[] {
+  const origins: AllowedHistoryOrigin[] = [];
+  for (const cycle of state.cycles ?? []) {
+    if (!cycle.squadTaskDir) continue;
+    try {
+      const raw = JSON.parse(
+        readFileSync(join(cycle.squadTaskDir, "councilkit-bridge.json"), "utf8"),
+      ) as {
+        squadTaskId?: string;
+        taskDir?: string;
+      };
+      if (raw.squadTaskId && raw.taskDir) {
+        origins.push({ journalTaskId: raw.squadTaskId, taskDir: raw.taskDir });
+      }
+    } catch {
+      // skip unreadable identity
+    }
+  }
+  return origins;
+}
+
+function persistHistoryExport(runDir: string, taskId: string, envelope: unknown): string {
+  const parsed = parseHistoryEnvelope(envelope);
+  if (!parsed) throw errors.runFailed("refusing to persist an unverified history export");
+  const dir = join(runDir, "history");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, `${taskId}.json`);
+  atomicWriteJson(path, parsed);
+  atomicWriteFile(join(dir, `${taskId}.sha256`), `${historyEnvelopeHash(parsed)}\n`);
+  return path;
+}
+
+function loadPersistedHistoryExport(runDir: string, taskId: string): string | null {
+  const path = join(runDir, "history", `${taskId}.json`);
+  const hashPath = join(runDir, "history", `${taskId}.sha256`);
+  if (!existsSync(path) || !existsSync(hashPath)) return null;
+  const payload = readFileSync(path, "utf8");
+  const expected = readFileSync(hashPath, "utf8").trim();
+  const envelope = parseHistoryEnvelope(JSON.parse(payload) as unknown);
+  if (!envelope) return null;
+  const actual = historyEnvelopeHash(envelope);
+  if (actual !== expected) {
+    throw errors.runFailed("persisted history export hash drifted; refusing to reuse");
+  }
+  return path;
 }
 
 function startedTaskDir(state: RepairState): string | null {

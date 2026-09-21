@@ -32,6 +32,7 @@ export interface SquadBridgeProbe {
   executable: string | null;
   skillDir: string | null;
   capabilities: string[];
+  historyContract: string | null;
   orchestrator: SquadBridgeOrchestratorProbe | null;
 }
 
@@ -103,6 +104,7 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
     executable,
     skillDir,
     capabilities: [...REQUIRED_MARKERS],
+    historyContract: null,
     orchestrator: {
       requestedRuntime,
       actualRuntime: null,
@@ -122,6 +124,7 @@ function unavailable(reason: string): SquadBridgeProbe {
     executable: null,
     skillDir: null,
     capabilities: [],
+    historyContract: null,
     orchestrator: null,
   };
 }

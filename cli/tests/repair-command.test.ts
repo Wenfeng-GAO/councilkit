@@ -849,6 +849,7 @@ describe("repair outer loop", () => {
           executable: null,
           skillDir: null,
           capabilities: [],
+          historyContract: null,
           orchestrator: null,
         }),
         reviewImpl: async () => {
@@ -1000,6 +1001,7 @@ describe("repair outer loop", () => {
             executable: "/tmp/squadctl",
             skillDir: "/tmp/skill",
             capabilities: [],
+            historyContract: null,
             orchestrator: null,
           }),
           reviewImpl: async () => {
@@ -1031,6 +1033,7 @@ describe("repair outer loop", () => {
           executable: "/tmp/squadctl",
           skillDir: "/tmp/skill",
           capabilities: [],
+          historyContract: null,
           orchestrator: null,
         }),
         reviewImpl: async () => {
@@ -1152,7 +1155,40 @@ describe("repair outer loop", () => {
     expect(out.finished).toMatchObject({ businessResult: "approved" });
   });
 
-  it("fails closed on a second production subtask without verified ancestor history", async () => {
+  it("fails at the production entry when squadctl lacks squad-history-bridge.v1", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const out = makeSink();
+    await expect(
+      runRepair(["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID], out, {
+        workspaceCwd: home,
+        inspectPr: async () => inspectPr(),
+        bridgeProbe: () => ({
+          available: true,
+          version: SQUAD_BRIDGE_CONTRACT_VERSION,
+          toolVersion: "squadctl 2.1.0",
+          reason:
+            "squadctl 可用，但未提供 squad-history-bridge.v1；跨 outer-cycle 修复需要升级 hengzhuo-engineering-squad。",
+          executable: "/tmp/squadctl",
+          skillDir: "/tmp/skill",
+          capabilities: [],
+          historyContract: null,
+          orchestrator: null,
+        }),
+        reviewImpl: async () => {
+          throw new Error("should not review");
+        },
+      }),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "HISTORY_INVALID",
+    });
+    const { readRepairState } = await import("../src/auto/repair-persist");
+    expect(readRepairState(join(home, "runs", REPAIR_ID))?.outerUsed ?? 0).toBe(0);
+  });
+
+  it("fails closed on a second production subtask when the bridge cannot export history", async () => {
     seedCompleteReview(SOURCE_ID, { open: true });
     saveDefaultProfile();
     const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
