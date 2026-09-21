@@ -6,8 +6,10 @@ import type { WorkbenchAttempt } from "./selection";
  * 单测覆盖见 tests/unit/workbench-seat-detail.test.ts。
  */
 
-/** 过程活动行窗口：DOM 只渲染最近 WINDOW_LINES 行折叠活动，更早的行经入口加载。 */
+/** 过程活动行窗口：DOM 只渲染最近 WINDOW_LINES 行折叠活动，更早的行经入口分段加载。 */
 export const PROCESS_WINDOW_LINES = 200;
+/** 分段扩展步长：每次「显示更早」多渲染的行数（DOM 中活动行任何时候有界）。 */
+export const PROCESS_WINDOW_STEP = PROCESS_WINDOW_LINES;
 /** 单席过程原始事件缓存预算（原始 JSON 字节）：接近 Host 侧 2 MiB 保存上限并留余量。 */
 export const PROCESS_CACHE_BUDGET_BYTES = 2.5 * 1024 * 1024;
 /** 常规轮询间隔（与 detail/live 既有 POLL_MS 一致）。 */
@@ -25,6 +27,23 @@ export function nextPollDelayMs(failures: number, baseMs = PROCESS_POLL_MS): num
 /** 服务端游标重置检测：返回的 nextSeq 小于本地已应用游标 → 缓存重建、从头重读。 */
 export function isCursorReset(appliedNextSeq: number, serverNextSeq: number): boolean {
   return serverNextSeq < appliedNextSeq;
+}
+
+/** AC-03：迟到响应检测。轮询回调 capture 当时的 requestSeq；代次变了即迟到，一律丢弃。 */
+export function isStaleResponse(capturedSeq: number, currentSeq: number): boolean {
+  return capturedSeq !== currentSeq;
+}
+
+/**
+ * 分段窗口（容量）：总 folded 行数 total 只渲染最近 visibleCount 行；
+ * 「显示更早」每次 +PROCESS_WINDOW_STEP，DOM 活动行任何时候有界。
+ */
+export function chunkedWindow(
+  total: number,
+  visibleCount: number,
+): { hiddenCount: number; fromIndex: number } {
+  const hiddenCount = Math.max(0, total - visibleCount);
+  return { hiddenCount, fromIndex: hiddenCount };
 }
 
 /**

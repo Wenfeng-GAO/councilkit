@@ -1,5 +1,27 @@
 # 固定席位工作台 · 实现交付回执
 
+## 2026-09-21 验收后修订
+
+**Post-acceptance 状态**：实现已分两笔提交进 main（`4ffcebe` 工作台 + result API；`96e554b` repair 加固）。路由随 dist/dist-host 发布，launchd Host bootstrap 重启后 **B3 HTTP 端到端已补验**：`GET /api/v1/cli-runs/ck-review-a9eeca4f…/attempts/attempt-1/result` → HTTP 200，`executionRef=attempt-1#1.1`、`availability=available`、durable markdown 16009 B。验收报告指出回执的「Host 尚无新路由 / 待重启」陈述自此过时。
+
+**AC-01..AC-09 修复清单**（复测证据：四个 reproduce 脚本全部 exit 0；真实浏览器复测 7/7 PASS，截图 `/tmp/ck-workbench-acceptance2/`）：
+
+- AC-01：kind=review 常显「当前修复」入口（无 pipeline 也可进 RepairView 真实启动面板）。
+- AC-02：席位换执行后旧成功结果失效、重取新 durable 正文；运行中恢复 2s 轮询。
+- AC-03：过程请求单调 requestSeq，迟到响应不写新席位。
+- AC-04：默认 Tab 首次选择算一次即固化，席位完成只提示「报告已就绪」不抢阅读。
+- AC-05：滚动恢复重写——旧位置渲染期（DOM 提交前）捕获、过渡期内 suppress 记忆写入、恢复后短窗口守住位置、`.ck-wb-reader` 禁滚动锚定、过程 onScroll 在内容未加载时不转跟随。真实浏览器断言 7416→7416。
+- AC-06：1120px 五导航项有可见文字 + aria-label；390px 菜单项可见文字。
+- AC-07：单席报告 H2 computed font-family 为 InterVariable 栈。
+- AC-08：不可重试 auth 类失败按终态 failure/unavailable 返回（errorClass=auth/retryable=false），不再推测为下一次执行。
+- AC-09：轮询单一排程链（排程前清旧 timer；hidden 停排程、恢复续读；手动重读同路径）。
+
+**测试补充**：`tests/host/cli-runs.test.ts` 的 5 条 repair 用例按 96e554b 新行为更新（注入可用的 squadBridgeProbe；新增「桥不可用 → 400 拒绝且不 spawn」用例）。
+
+**仍未关闭**：容量 soak（§3.2 数值预算、2 小时）未实测；200% 缩放 / 整页 WCAG / 性能预算未验收；e2e cli-reports 2 条（本机缺 fixture/脚本 driver）与 modal-focus（需 e2e Host 控制面）环境受限未补；跨 resume 阅读连续性未实现；B0 硬崩溃共享 ref 缺口待 CLI 补 started 记录。
+
+---
+
 日期：2026-09-21。实现基线：main @ `2c5b903`（工作区未提交，本文件随改动一并交付）。设计契约：`docs/design/2026-09-20-review-workspace/v3-detail/`（WORKSPACE-STATES / DETAIL-SPEC / contracts/INTERACTION-SPEC / contracts/DELIVERY-PLAN）。本回执对照 DELIVERY-PLAN §6 给出。
 
 ## A：界面改善 —— 已交付

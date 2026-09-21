@@ -46,12 +46,16 @@ export function RepairView({
   pipeline: WorkbenchPipelineProps;
 }) {
   const sha = run.reviewEvidence?.sha ?? null;
+  const notStarted = run.pipeline === null && repair.activeRepair === null;
   return (
     <article className="ck-wb-document">
       <h1>当前修复</h1>
       <p className="ck-wb-source">
         原审查：{run.title} · {sha ? `SHA ${sha.slice(0, 7)}` : "提交信息缺失"}
       </p>
+      {notStarted ? (
+        <p className="ck-wb-source">尚未启动修复 · 使用下方真实面板启动（无占位动作）</p>
+      ) : null}
       <FixPipeline
         run={run}
         busy={pipeline.busy}

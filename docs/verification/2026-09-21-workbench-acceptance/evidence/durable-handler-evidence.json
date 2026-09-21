@@ -1,0 +1,128 @@
+[
+  {
+    "label": "full-report-300KiB",
+    "detailStatus": "running",
+    "seatStatus": "success",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "markdown": 307200,
+      "truncated": false,
+      "failure": null,
+      "reusedFrom": null
+    }
+  },
+  {
+    "label": "retry-final",
+    "detailStatus": "running",
+    "seatStatus": "success",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#1.2",
+      "executionStatus": "success",
+      "availability": "available",
+      "markdown": 9,
+      "truncated": false,
+      "failure": null,
+      "reusedFrom": null
+    }
+  },
+  {
+    "label": "resume-reuse",
+    "detailStatus": "running",
+    "seatStatus": "success",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "markdown": 14,
+      "truncated": false,
+      "failure": null,
+      "reusedFrom": {
+        "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        "executionRef": "attempt-0#1.1"
+      }
+    }
+  },
+  {
+    "label": "resume-no-old-fallback",
+    "detailStatus": "running",
+    "seatStatus": "queued",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#2.1",
+      "executionStatus": "queued",
+      "availability": "pending",
+      "markdown": null,
+      "truncated": false,
+      "failure": null,
+      "reusedFrom": null
+    }
+  },
+  {
+    "label": "non-retried-auth-exit-other-seat-active",
+    "detailStatus": "running",
+    "seatStatus": "failure",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#1.2",
+      "executionStatus": "running",
+      "availability": "pending",
+      "markdown": null,
+      "truncated": false,
+      "failure": null,
+      "reusedFrom": null
+    }
+  },
+  {
+    "label": "auth-classification",
+    "terminal": {
+      "errorClass": "auth",
+      "retryable": false,
+      "message": "authentication failed"
+    }
+  },
+  {
+    "label": "same-auth-exit-after-run-finished",
+    "detailStatus": "failed",
+    "seatStatus": "failure",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#1.1",
+      "executionStatus": "failure",
+      "availability": "unavailable",
+      "markdown": null,
+      "truncated": false,
+      "failure": {
+        "code": "EXIT",
+        "message": "authentication failed"
+      },
+      "reusedFrom": null
+    }
+  },
+  {
+    "label": "success-output-missing",
+    "detailStatus": "running",
+    "seatStatus": "success",
+    "result": {
+      "runId": "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "attemptId": "attempt-0",
+      "executionRef": "attempt-0#1.1",
+      "executionStatus": "success",
+      "availability": "empty",
+      "markdown": null,
+      "truncated": false,
+      "failure": null,
+      "reusedFrom": null
+    }
+  }
+]

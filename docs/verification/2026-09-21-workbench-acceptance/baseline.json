@@ -1,0 +1,55 @@
+{
+  "date": "2026-09-21",
+  "sourceHead": "96e554b4510619b2742f5daa3da3ba3794258983",
+  "target": "http://127.0.0.1:43127",
+  "verdict": "not_accepted",
+  "scope": "fixed-seat workbench A+B; no C requirement expansion",
+  "findings": [
+    {
+      "id": "AC-01",
+      "priority": "P1"
+    },
+    {
+      "id": "AC-02",
+      "priority": "P1"
+    },
+    {
+      "id": "AC-03",
+      "priority": "P1"
+    },
+    {
+      "id": "AC-04",
+      "priority": "P1"
+    },
+    {
+      "id": "AC-05",
+      "priority": "P2"
+    },
+    {
+      "id": "AC-06",
+      "priority": "P2"
+    },
+    {
+      "id": "AC-07",
+      "priority": "P2"
+    },
+    {
+      "id": "AC-08",
+      "priority": "P2"
+    },
+    {
+      "id": "AC-09",
+      "priority": "P2"
+    }
+  ],
+  "browserWidths": [
+    1440,
+    1120,
+    900,
+    390
+  ],
+  "knownUnitTests": 31,
+  "typecheck": "pass",
+  "fullE2E": "not_run_production_port",
+  "twoHourSoak": "not_verified"
+}

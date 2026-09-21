@@ -164,7 +164,7 @@ function SeatReportBody({
             <button type="button" className="ck-wb-statusbar-action" onClick={onViewProcess}>
               查看过程
             </button>
-            或复制净化诊断。
+            读取已保存记录。
           </p>
         </div>
       );

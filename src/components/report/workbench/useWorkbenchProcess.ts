@@ -6,14 +6,19 @@ import {
   PROCESS_CACHE_BUDGET_BYTES,
   PROCESS_POLL_MS,
   PROCESS_WINDOW_LINES,
+  PROCESS_WINDOW_STEP,
+  chunkedWindow,
   newActivityCount as countNewActivities,
   isCursorReset,
+  isStaleResponse,
   nextPollDelayMs,
 } from "./seatDetailModel";
 import type { WorkbenchAttempt } from "./selection";
 
 /** 滚离底部阈值：超过即暂停跟随（INTERACTION-SPEC §4.1）。 */
 const PIN_THRESHOLD_PX = 48;
+
+export { PROCESS_WINDOW_STEP };
 
 const TERMINAL = new Set(["success", "failure", "cancelled"]);
 
@@ -36,11 +41,12 @@ export interface WorkbenchProcessState {
   newCount: number;
   /** 折叠后的全部活动行（窗口化前的总数）。 */
   totalLines: number;
-  /** 窗口内活动行：默认最近 PROCESS_WINDOW_LINES 行。 */
+  /** 当前渲染窗口：最近 visibleCount 行（分段扩展，DOM 有界）。 */
   windowBlocks: TimelineBlock[];
+  /** 窗口外尚未渲染的较早行数。 */
   hiddenCount: number;
-  expanded: boolean;
-  expand: () => void;
+  /** 每次调用多渲染 PROCESS_WINDOW_STEP 行。 */
+  showEarlier: () => void;
   /** 席位已到终态（来自 progress），过程 Tab 显示「报告已就绪 · 查看报告」。 */
   reportReady: boolean;
   truncated: boolean;
@@ -48,15 +54,18 @@ export interface WorkbenchProcessState {
 }
 
 /**
- * 席位过程轮询（DELIVERY-PLAN §3.1 硬约束全部落在此处）：
- * - GET live?afterSeq=N，常规 2s；同一席位同时最多一个 in-flight（响应未返回不启动第二次）。
- * - 切席/关闭：effect cleanup 置 cancelled 并丢弃迟到响应（组件随席位选择卸载/重建）。
- * - 错误退避 2s→4s→8s→16s→30s（nextPollDelayMs），成功回退 2s。
- * - document.hidden 暂停排程，恢复可见时从当前游标立即续读（不重置）。
+ * 席位过程轮询（DELIVERY-PLAN §3.1 硬约束）：
+ * - GET live?afterSeq=N，常规 2s；同一席位同时最多一个 in-flight。
+ * - AC-03 切席/关闭防护：单调递增 requestSeq。每轮 effect capture 当前 seq，cleanup 只
+ *   做 seqRef++（绝不把任何共享布尔复位成允许旧写）；所有迟到回调（成功/失败/finally）
+ *   先比对 seq 才允许写 state/refs。
+ * - AC-09 单一排程链：schedule(delay) 是唯一定时器入口，排程前先 clearTimeout 旧 timer；
+ *   排程前检查 document.hidden（hidden 不排程，交给 visibilitychange 恢复路径）；
+ *   手动重读先清 timer 再走同一 pull 路径。
+ * - 错误退避 2s→4s→8s→16s→30s，成功回退 2s。
  * - done=true 停常规轮询；retry() 手动重读仍可用。
- * - 游标重置（nextSeq 回退）→ 清缓存重建。
- * - 容量：原始事件按席位 ≤2.5 MiB（PROCESS_CACHE_BUDGET_BYTES），超出淘汰最旧事件
- *   并整体重折叠（可从磁盘重读）；渲染端再按 PROCESS_WINDOW_LINES=200 行窗口化。
+ * - 容量：原始事件按席位 ≤2.5 MiB（淘汰最旧并可从磁盘重读）；渲染端分段窗口
+ *   （先最近 200 行，每次「显示更早」+200，DOM 活动行有界）。
  */
 export function useWorkbenchProcess(input: {
   runId: string;
@@ -71,7 +80,7 @@ export function useWorkbenchProcess(input: {
   const [readError, setReadError] = useState(false);
   const [pinned, setPinned] = useState(() => !TERMINAL.has(attempt.status));
   const [newCount, setNewCount] = useState(0);
-  const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(PROCESS_WINDOW_LINES);
   const [, setTick] = useState(0);
 
   const eventsRef = useRef<AttemptLiveEvent[]>([]);
@@ -81,7 +90,8 @@ export function useWorkbenchProcess(input: {
   const afterSeqRef = useRef(0);
   const failuresRef = useRef(0);
   const inFlightRef = useRef(false);
-  const cancelledRef = useRef(false);
+  /** AC-03：单调递增代次；cleanup 只 ++，永不复位。 */
+  const requestSeqRef = useRef(0);
   const pinnedRef = useRef(!TERMINAL.has(attempt.status));
   const baselineRef = useRef(0);
   const retryRef = useRef<() => void>(() => {});
@@ -95,7 +105,8 @@ export function useWorkbenchProcess(input: {
 
   useEffect(() => {
     const client = getAppRuntime().client;
-    cancelledRef.current = false;
+    const mySeq = ++requestSeqRef.current;
+    const isCurrent = () => !isStaleResponse(mySeq, requestSeqRef.current);
     eventsRef.current = [];
     blocksRef.current = [];
     bytesRef.current = 0;
@@ -110,22 +121,33 @@ export function useWorkbenchProcess(input: {
     setReadError(false);
     setPinned(pinnedRef.current);
     setNewCount(0);
-    setExpanded(false);
+    setVisibleCount(PROCESS_WINDOW_LINES);
 
-    const bump = () => setTick((tick) => tick + 1);
+    const bump = () => {
+      if (isCurrent()) setTick((tick) => tick + 1);
+    };
 
     const stickToBottom = () => {
       window.requestAnimationFrame(() => {
-        if (cancelledRef.current || !pinnedRef.current) return;
+        if (!isCurrent() || !pinnedRef.current) return;
         const el = getScroller();
         if (el) el.scrollTop = el.scrollHeight;
       });
     };
 
+    // AC-09：唯一定时器入口。排程前清旧 timer；hidden 时不排程（恢复路径在 visibilitychange）。
     let timer: number | undefined;
+    const clearScheduled = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+    };
     const schedule = (delay: number) => {
-      if (cancelledRef.current) return;
+      clearScheduled();
+      if (!isCurrent() || document.hidden) return;
       timer = window.setTimeout(() => {
+        timer = undefined;
         void pull();
       }, delay);
     };
@@ -158,11 +180,11 @@ export function useWorkbenchProcess(input: {
     };
 
     const pull = async (): Promise<void> => {
-      if (cancelledRef.current || inFlightRef.current) return;
+      if (!isCurrent() || inFlightRef.current) return;
       inFlightRef.current = true;
       try {
         const res = await client.getCliRunAttemptLive(runId, attemptId, afterSeqRef.current);
-        if (cancelledRef.current) return;
+        if (!isCurrent()) return; // AC-03：迟到响应，不得写入新席位
         if (isCursorReset(afterSeqRef.current, res.nextSeq)) {
           // 服务端事件序号重置：沿用旧游标会永久漏数据，重建该席缓存从头重读。
           eventsRef.current = [];
@@ -182,27 +204,32 @@ export function useWorkbenchProcess(input: {
         }
         schedule(PROCESS_POLL_MS);
       } catch {
-        if (cancelledRef.current) return;
+        if (!isCurrent()) return; // AC-03：迟到失败同样不得写入
         failuresRef.current += 1;
         setReadError(true);
         setReady(true);
         schedule(nextPollDelayMs(failuresRef.current));
       } finally {
-        inFlightRef.current = false;
+        // AC-03：只有当前轮的 finally 才能复位 inFlight；迟到 finally 不影响新一轮。
+        if (isCurrent()) inFlightRef.current = false;
       }
     };
 
+    // AC-09 手动重读：清掉已有 timer，走同一条 pull 路径（响应后统一 schedule）。
     retryRef.current = () => {
+      if (!isCurrent()) return;
       failuresRef.current = 0;
-      if (!inFlightRef.current) void pull();
+      if (!inFlightRef.current) {
+        clearScheduled();
+        void pull();
+      }
     };
 
-    // document.hidden：暂停排程；恢复可见时从当前游标立即续读（游标不回退）。
+    // document.hidden：暂停排程；恢复可见时从当前游标立即续读（不重置）。
     const onVisibility = () => {
-      if (cancelledRef.current) return;
+      if (!isCurrent()) return;
       if (document.hidden) {
-        if (timer !== undefined) window.clearTimeout(timer);
-        timer = undefined;
+        clearScheduled();
         return;
       }
       if (!inFlightRef.current) void pull();
@@ -212,6 +239,9 @@ export function useWorkbenchProcess(input: {
     const onScroll = () => {
       const el = getScroller();
       if (!el) return;
+      // 内容未加载时的滚动容器高度无意义（加载态 clamp 到 0 会伪造 nearBottom），
+      // 此时不得转为跟随，否则切回席位时跟随会把恢复中的阅读位置拖到底部（AC-05）。
+      if (blocksRef.current.length === 0) return;
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
       if (nearBottom) {
         if (!pinnedRef.current) {
@@ -233,8 +263,9 @@ export function useWorkbenchProcess(input: {
     stickToBottom();
 
     return () => {
-      cancelledRef.current = true;
-      if (timer !== undefined) window.clearTimeout(timer);
+      // AC-03：只递增代次使旧回调全部失效；绝不复位任何共享状态为「允许旧写」。
+      requestSeqRef.current += 1;
+      clearScheduled();
       document.removeEventListener("visibilitychange", onVisibility);
       scroller?.removeEventListener("scroll", onScroll);
     };
@@ -243,8 +274,8 @@ export function useWorkbenchProcess(input: {
   }, [runId, attemptId, getScroller]);
 
   const blocks = blocksRef.current;
-  const hiddenCount = expanded ? 0 : Math.max(0, blocks.length - PROCESS_WINDOW_LINES);
-  const windowBlocks = expanded ? blocks : blocks.slice(-PROCESS_WINDOW_LINES);
+  const { hiddenCount, fromIndex } = chunkedWindow(blocks.length, visibleCount);
+  const windowBlocks = blocks.slice(fromIndex);
   const truncated = blocks.some((block) => block.kind === "truncated");
 
   return {
@@ -257,8 +288,7 @@ export function useWorkbenchProcess(input: {
     totalLines: blocks.length,
     windowBlocks,
     hiddenCount,
-    expanded,
-    expand: () => setExpanded(true),
+    showEarlier: () => setVisibleCount((count) => count + PROCESS_WINDOW_STEP),
     reportReady,
     truncated,
     retry: () => retryRef.current(),

@@ -38,6 +38,7 @@ export function WorkbenchNav({ hostStatus }: { hostStatus: WorkbenchHostStatus }
           key={to}
           to={to}
           end={end}
+          aria-label={label}
           className={({ isActive }) => `ck-wb-nav-item${isActive ? " current" : ""}`}
         >
           <Icon className="ck-wb-icon" />
@@ -93,6 +94,7 @@ export function WorkbenchMobileMenu({ hostStatus }: { hostStatus: WorkbenchHostS
             key={to}
             to={to}
             end={end}
+            aria-label={label}
             className={({ isActive }) => `ck-wb-nav-item${isActive ? " current" : ""}`}
             onClick={close}
           >

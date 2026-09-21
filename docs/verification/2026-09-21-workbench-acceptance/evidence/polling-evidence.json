@@ -1,0 +1,12 @@
+[
+  {
+    "scenario": "hide during in-flight response",
+    "scheduledWhileHidden": 1,
+    "requestsAfterTimerFired": 2
+  },
+  {
+    "scenario": "manual retry with existing regular timer",
+    "timersAfterManualRetry": 2,
+    "orphanTimersAfterCleanup": 1
+  }
+]

@@ -238,3 +238,65 @@ describe("foldLiveEventsAppend 增量折叠等价性", () => {
     expect(foldLiveEventsAppend(folded, [])).toEqual(folded);
   });
 });
+
+describe("AC-02 reduceResultEpoch 执行代次", () => {
+  it("终态→running（resume）代次 +1；running 持续不重复；再次终态不回落", async () => {
+    const { reduceResultEpoch } = await import("@/components/report/workbench/useAttemptResult");
+    let state = { id: "a", epoch: 0, wasLive: false };
+    state = reduceResultEpoch(state, "a", "success");
+    expect(state).toEqual({ id: "a", epoch: 0, wasLive: false });
+    state = reduceResultEpoch(state, "a", "running");
+    expect(state).toEqual({ id: "a", epoch: 1, wasLive: true });
+    state = reduceResultEpoch(state, "a", "running");
+    expect(state).toEqual({ id: "a", epoch: 1, wasLive: true });
+    state = reduceResultEpoch(state, "a", "success");
+    expect(state).toEqual({ id: "a", epoch: 1, wasLive: false });
+  });
+
+  it("换席位重置代次；queued/pending 同样算执行进行中", async () => {
+    const { reduceResultEpoch } = await import("@/components/report/workbench/useAttemptResult");
+    let state = { id: "a", epoch: 2, wasLive: false };
+    state = reduceResultEpoch(state, "b", "running");
+    expect(state).toEqual({ id: "b", epoch: 0, wasLive: true });
+    state = reduceResultEpoch(state, "b", "queued");
+    expect(state.epoch).toBe(0);
+  });
+});
+
+describe("AC-03 isStaleResponse 迟到守卫", () => {
+  it("代次不一致即迟到：成功/失败/finally 一律不得写入", async () => {
+    const { isStaleResponse } = await import("@/components/report/workbench/seatDetailModel");
+    expect(isStaleResponse(1, 1)).toBe(false);
+    expect(isStaleResponse(1, 2)).toBe(true);
+    expect(isStaleResponse(2, 3)).toBe(true);
+  });
+});
+
+describe("AC-04 getOrInitTab 首次默认 Tab 持久化", () => {
+  it("首次按席位状态写入默认 Tab，之后状态变化不重算；手动切换优先", async () => {
+    const { workbenchSelectionStore } = await import("@/components/report/workbench/selection");
+    const store = workbenchSelectionStore.getState();
+    // 注意：store 是模块单例，测试间可能残留——用独立 attemptId 隔离。
+    const id = "ac04-test-seat";
+    expect(store.getOrInitTab(id, "process")).toBe("process");
+    expect(store.getOrInitTab(id, "report")).toBe("process");
+    store.setTab(id, "report");
+    expect(store.getOrInitTab(id, "process")).toBe("report");
+  });
+});
+
+describe("容量：chunkedWindow 分段窗口", () => {
+  it("DOM 行数有界：初始最近 200 行，每次扩展 +200，hiddenCount 如实", async () => {
+    const { chunkedWindow, PROCESS_WINDOW_LINES, PROCESS_WINDOW_STEP } = await import(
+      "@/components/report/workbench/seatDetailModel"
+    );
+    const total = 17_280;
+    const first = chunkedWindow(total, PROCESS_WINDOW_LINES);
+    expect(first).toEqual({ hiddenCount: total - 200, fromIndex: total - 200 });
+    const expanded = chunkedWindow(total, PROCESS_WINDOW_LINES + PROCESS_WINDOW_STEP);
+    expect(expanded.hiddenCount).toBe(total - 400);
+    expect(total - expanded.hiddenCount).toBe(400);
+    // 小总量不夸大 hiddenCount
+    expect(chunkedWindow(50, 200)).toEqual({ hiddenCount: 0, fromIndex: 0 });
+  });
+});

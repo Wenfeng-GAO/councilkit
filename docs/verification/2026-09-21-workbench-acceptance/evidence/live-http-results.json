@@ -1,0 +1,65 @@
+{
+  "runId": "ck-review-55554982-fb84-4aaa-b069-ed921ebd8aba",
+  "results": [
+    {
+      "attemptId": "attempt-0",
+      "http": 200,
+      "executionRef": "attempt-0#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "bytes": 12456,
+      "truncated": false,
+      "sha256": "f830b6eaca3c1ae68be0ec377ea7e913fd1cc0a79f315c18737cad063c56a41b"
+    },
+    {
+      "attemptId": "attempt-1",
+      "http": 200,
+      "executionRef": "attempt-1#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "bytes": 10145,
+      "truncated": false,
+      "sha256": "082602fa69f9af38cbf0546106799c7e9868453e06519321b2c57ecf9d176a22"
+    },
+    {
+      "attemptId": "attempt-2",
+      "http": 200,
+      "executionRef": "attempt-2#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "bytes": 10339,
+      "truncated": false,
+      "sha256": "91d489c20696d491491f0359d3441d49e52fd0d744c2d113da8e5dde33e1f84d"
+    },
+    {
+      "attemptId": "attempt-3",
+      "http": 200,
+      "executionRef": "attempt-3#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "bytes": 13257,
+      "truncated": false,
+      "sha256": "7c1efb29647cc8c5086b132a97a3c453ed5ca100d17c7c82785faea7a95cf705"
+    },
+    {
+      "attemptId": "attempt-4",
+      "http": 200,
+      "executionRef": "attempt-4#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "bytes": 14124,
+      "truncated": false,
+      "sha256": "8d2e31ba3d1cbc3dabc9b1af77f79a4f9ec7dde0d2fcedc95a02cd2413c667ae"
+    },
+    {
+      "attemptId": "aggregator",
+      "http": 200,
+      "executionRef": "aggregator#1.1",
+      "executionStatus": "success",
+      "availability": "available",
+      "bytes": 8345,
+      "truncated": false,
+      "sha256": "dbc68dd3f73e6f39641e6faf83c5c235c5c9ea53636d6e589141273c982deaf4"
+    }
+  ]
+}

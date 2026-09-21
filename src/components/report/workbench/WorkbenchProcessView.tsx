@@ -11,8 +11,7 @@ import {
 } from "@/lib/live-transcript";
 import { useEffect, useRef, useState } from "react";
 import { ArrowDownIcon, CircleXIcon } from "./icons";
-import type { WorkbenchProcessState } from "./useWorkbenchProcess";
-
+import { PROCESS_WINDOW_STEP, type WorkbenchProcessState } from "./useWorkbenchProcess";
 /**
  * 席位过程 Tab 内容（WORKSPACE-STATES §4 文案）。轮询/跟随状态由
  * useWorkbenchProcess 提供；本组件只负责渲染与滚动定位（钉底、回到最新）。
@@ -26,7 +25,7 @@ export function WorkbenchProcessView({
   getScroller: () => HTMLElement | null;
   onViewReport: () => void;
 }) {
-  const { windowBlocks, hiddenCount, expanded, expand } = state;
+  const { windowBlocks, hiddenCount, showEarlier } = state;
   const origin = windowBlocks[0]?.at ?? "";
   const lastIndex = windowBlocks.length - 1;
   const jumpTimerRef = useRef<number | undefined>(undefined);
@@ -94,10 +93,10 @@ export function WorkbenchProcessView({
         </output>
       ) : null}
       {state.done ? <p className="ck-wb-source">该席位已保存过程 · 版本未单独记录</p> : null}
-      {hiddenCount > 0 && !expanded ? (
+      {hiddenCount > 0 ? (
         <p className="ck-wb-source">
-          <button type="button" className="ck-wb-ghost" onClick={expand}>
-            已隐藏较早 {hiddenCount} 条 · 显示更早
+          <button type="button" className="ck-wb-ghost" onClick={showEarlier}>
+            已隐藏较早 {hiddenCount} 条 · 显示更早 {Math.min(PROCESS_WINDOW_STEP, hiddenCount)} 条
           </button>
         </p>
       ) : null}

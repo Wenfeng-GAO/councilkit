@@ -9,8 +9,9 @@ export type WorkbenchAttempt = NonNullable<CliRunDetailResponse["progress"]>["at
 
 /**
  * 工作台唯一选择器（WORKSPACE-STATES §1）。
- * 模型只有三种取值："overview"（本轮总览）| "repair"（当前修复，仅真实 pipeline 存在时可选）
- * | attemptId（单席报告/过程共用同一个所选 Attempt，含 Aggregator）。
+ * 模型只有三种取值："overview"（本轮总览）| "repair"（当前修复；kind=review 即可达——
+ * 无 pipeline 时 RepairView 提供真实启动面板，不留无效占位）| attemptId（单席报告/过程
+ * 共用同一个所选 Attempt，含 Aggregator）。
  * 窄屏 <select>、席位列、键盘切换全部读写本 store，保证全页面只有一个 selectedAttempt。
  *
  * 轮询纪律接入点（DELIVERY-PLAN §3.1，阶段 B 使用）：
@@ -30,9 +31,14 @@ interface WorkbenchSelectionState {
   tabs: Record<string, SeatViewTab>;
   select: (next: WorkbenchSelection) => void;
   setTab: (attemptId: string, tab: SeatViewTab) => void;
+  /**
+   * AC-04：首次选择席位时一次性写入默认 Tab 并持久化；之后永不重算
+   * （完成事件不得把过程自动切成报告）。已存在记录时原样返回。
+   */
+  getOrInitTab: (attemptId: string, fallback: SeatViewTab) => SeatViewTab;
 }
 
-export const workbenchSelectionStore = createStore<WorkbenchSelectionState>()((set) => ({
+export const workbenchSelectionStore = createStore<WorkbenchSelectionState>()((set, get) => ({
   selected: "overview",
   generation: 0,
   tabs: {},
@@ -41,6 +47,12 @@ export const workbenchSelectionStore = createStore<WorkbenchSelectionState>()((s
       next === state.selected ? state : { selected: next, generation: state.generation + 1 },
     ),
   setTab: (attemptId, tab) => set((state) => ({ tabs: { ...state.tabs, [attemptId]: tab } })),
+  getOrInitTab: (attemptId, fallback) => {
+    const existing = get().tabs[attemptId];
+    if (existing) return existing;
+    set((state) => ({ tabs: { ...state.tabs, [attemptId]: fallback } }));
+    return fallback;
+  },
 }));
 
 export function useWorkbenchSelection(): WorkbenchSelectionState {

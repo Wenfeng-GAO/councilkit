@@ -1,0 +1,56 @@
+[
+  {
+    "file": "screens/01-overview-1440.jpg",
+    "width": 1440,
+    "height": 1024,
+    "sha256": "7c86cc9169ab7a02bfa0c46c897f32309a076773585ab565156a92f11937eaf5"
+  },
+  {
+    "file": "screens/02-seat-report-1440.jpg",
+    "width": 1440,
+    "height": 1024,
+    "sha256": "010bef2566686da81618eac5a1ff4d14167f17c5b3946477cab2800b11e8c349"
+  },
+  {
+    "file": "screens/03-process-before-switch.jpg",
+    "width": 1440,
+    "height": 1024,
+    "sha256": "e7d69870154a6a26599e5984b64485110941155899586458ca48344d8c3f6841"
+  },
+  {
+    "file": "screens/04-process-after-switch.jpg",
+    "width": 1440,
+    "height": 1024,
+    "sha256": "5056f09bd0cb357a2495d3ba34a0ece18678d59baceaf6cb50e226e25f132d37"
+  },
+  {
+    "file": "screens/05-compact-1120.jpg",
+    "width": 1120,
+    "height": 900,
+    "sha256": "580ef31fe8762448209841c9965b055bfce17db94636b1d3d07f873354465806"
+  },
+  {
+    "file": "screens/06-selector-900.jpg",
+    "width": 900,
+    "height": 900,
+    "sha256": "02a6d4691630e0f108bd4b59166b1bf017eb20ac2927f004d13274bc449cc46a"
+  },
+  {
+    "file": "screens/07-mobile-report-390.jpg",
+    "width": 390,
+    "height": 844,
+    "sha256": "1df6107c2ad74219b9f7af710713c63b0b9149eb373f38e50df9ee737c2a3650"
+  },
+  {
+    "file": "screens/08-mobile-menu-missing-labels.jpg",
+    "width": 390,
+    "height": 844,
+    "sha256": "3a19c13132291b516a0bd6e4f38fa87d8795bec5efccae469cce6eec66bff8e0"
+  },
+  {
+    "file": "screens/09-cancelled-seat-390.jpg",
+    "width": 390,
+    "height": 844,
+    "sha256": "c43ba5175d21be36d8f4396eda0f6fdd2f84f433e9db8d68df9182ddb2bbe4fa"
+  }
+]

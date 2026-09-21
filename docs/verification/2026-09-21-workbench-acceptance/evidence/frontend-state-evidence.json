@@ -1,0 +1,35 @@
+{
+  "harnessScope": "Actual source functions bundled unchanged. Minimal React hook lifecycle; real TanStack QueryObserver; mocked transport and inert leaf UI. No browser, Host, real run, or product code mutated. Script expectations updated 2026-09-21 for the fixed behavior (AC-02/03/04); non-zero exit on regression.",
+  "raceEvidence": {
+    "selected": "seat-B",
+    "requests": [
+      {
+        "attemptId": "seat-A",
+        "afterSeq": 0
+      },
+      {
+        "attemptId": "seat-B",
+        "afterSeq": 0
+      }
+    ],
+    "done": false,
+    "windowBlocks": [],
+    "expected": "AC-03 fixed: done=false, windowBlocks=[] (late seat-A response must not write seat-B)"
+  },
+  "cacheEvidence": {
+    "requests": 3,
+    "progressStatusAfterResume": "running",
+    "resultAfterResume": null,
+    "configuredRefetchInterval": false,
+    "intervalWhileRunning": 2000,
+    "markdownAfterNewSuccess": "NEW_SUCCESS_REPORT",
+    "expected": "AC-02 fixed: requests>=3, resultAfterResume=null (旧成功失效), interval=2000, markdown=NEW_SUCCESS_REPORT"
+  },
+  "tabEvidence": {
+    "tabBefore": "process",
+    "tabAfter": "process",
+    "explicitTabs": {},
+    "action": "status only; no Tab click",
+    "expected": "AC-04 fixed: tabBefore=process, tabAfter=process（完成只提示，不自动切）"
+  }
+}
