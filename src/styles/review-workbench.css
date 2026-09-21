@@ -457,9 +457,47 @@
   padding-left: 2px;
   margin: 0;
 }
-/* FindingLedger 的行是 grid 容器而非正文列表项，不受列表排版规则影响。 */
+/* FindingLedger 的行是问题卡片而非正文列表项，不受列表排版规则影响。 */
 .ck-wb-document li.ck-ledger-row {
   padding-left: 0;
+  margin: 0;
+}
+.ck-wb-document .ck-finding-list {
+  margin-top: 32px;
+}
+.ck-wb-document .ck-finding-list h2 {
+  margin-bottom: 8px;
+}
+.ck-wb-document .ck-finding-filters {
+  margin-top: 14px;
+}
+.ck-wb-document .ck-finding-filter[aria-pressed="true"] {
+  color: var(--ck-text);
+  border-color: var(--ck-accent);
+}
+.ck-wb-document .ck-finding-list-link {
+  color: var(--ck-accent);
+}
+.ck-wb-overview-verdict {
+  margin: 12px 0 0;
+  width: fit-content;
+}
+.ck-wb-overview-brief {
+  margin-top: 28px;
+  min-width: 0;
+}
+.ck-wb-overview-brief .ck-doc,
+.ck-wb-overview-brief p {
+  overflow-wrap: anywhere;
+}
+.ck-wb-disagreements,
+.ck-wb-source-report {
+  min-width: 0;
+}
+.ck-wb-disagreements > *:not(summary),
+.ck-wb-source-report > *:not(summary) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ck-wb-history {
   margin-top: 30px;
@@ -699,7 +737,7 @@
     gap: 16px;
   }
   .ck-wb-reader {
-    padding: 24px 20px;
+    padding: 24px 20px 48px;
   }
   .ck-wb-document h1 {
     font-size: 24px;
