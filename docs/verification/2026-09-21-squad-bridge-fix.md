@@ -43,6 +43,9 @@
 7. **history / 回执**
    - 入口验证 `squadctl history capabilities --json` 的 `squad-history-bridge.v1`（export / verified_origin_mapping / persisted_origins）。旧 2.1.0 在生产 `repair run` 入口说明升级，不在第二轮才硬挡。
    - 首个独立链：`intake --new-repair-chain --project-id --repair-chain-id`。后续：前一 task writer 终止后 `history export`，原子保存 envelope+hash，下一 task `intake --history` + 重复 `--origin-task-dir`。parentRunId 是不变的 chain ID。来源目录只来自官方 export，且必须落在本 parent 已冻结 task 根内。
+   - 新建和恢复共用同一冻结 history 加载校验。cycle 持久化 `historyExportPath`/`historyExportHash`/previous identity；恢复只验证复用，不重新 export、不覆盖链。缺文件或 hash 不符明确失败。
+   - `squadctl init` 成功后立即按官方 `status.task_id` 落盘 identity。已 init 的重试读取官方 status 复用真实 task_id，并核验已有冻结身份/路径；官方状态坏则拒绝，不再 `makeSquadTaskId`。不在 init 前把文件塞进空 taskDir。
+   - 官方 `resume` 只有 exit 0 且回执含 `resumed=true` + `epoch` + `head_sha` + `diff_hash` 才分配新 execution、更新状态、启动 writer。非零/空/坏回执直接拒绝，原 identity 不变，spawn 次数 0。父 Run 把该拒绝落成 `needs_attention`/`lastError`，不留下 running stub。已启动过的 cycle 若 resume 返回 stopped，不得再 prepare 绕过拒绝。
    - 官方内部 `logical_rounds` 与 CK `outerUsed` 分列；不把 native 内部轮次写入 `state.historyCount`。父外循环 max 10 由 cycles/CAS 核对。
    - integrate 回执必须核对 remote / remote_ref / profile_hash（Python canonical JSON SHA-256）。`check-remote` 即使进程 exit 0，只要 `cas_ok` 或 `ff_possible` 为 false 也拒绝。
 
@@ -83,9 +86,9 @@ pnpm exec biome check <modified files>
 pnpm build
 ```
 
-`cli/tests/squad-bridge-seams.test.ts` 把独立验收的 workspace / session / stop-canary 探针收成有断言回归（Node 假 Orchestrator，finally 杀组）。真实 squadctl smoke/adapter 在没有个人 skill 的 CI 上 `describe.skipIf`；本机存在 `scripts/squadctl` 时默认执行。`COUNCILKIT_SQUAD_SMOKE=1` 时缺桥直接失败。不推实际 AntCode PR。
+`cli/tests/squad-bridge-seams.test.ts` 把独立验收的 workspace / session / stop-canary 探针收成有断言回归（Node 假 Orchestrator，finally 杀组）。真实 squadctl smoke/adapter 在没有个人 skill 的 CI 上 `describe.skipIf`；本机存在 `scripts/squadctl` 时默认执行。`COUNCILKIT_SQUAD_SMOKE=1` 时缺桥直接失败。真实测试显式 `COUNCILKIT_SQUADCTL`/`COUNCILKIT_SQUAD_SKILL` 指向冻结 skill 树 `/tmp/councilkit-squad-bridge-20260921/skill-history-worktree/hengzhuo-engineering-squad`（`749b44c`，`squadctl 2.1.1`）；不改 main 或已安装 symlink。不推实际 AntCode PR。
 
-本机 2026-09-21 已显式跑过并通过：`cli/tests/squadctl-real-smoke.test.ts`、`cli/tests/squadctl-bridge.adapter.test.ts`、`cli/tests/squad-bridge-seams.test.ts`、`cli/tests/squadctl-history.test.ts`（`COUNCILKIT_SQUADCTL`/`COUNCILKIT_SQUAD_SKILL` 指向带 `squad-history-bridge.v1` 的 skill；A→B→C 官方 export/intake verified，错误 project/缺 origin/换目录/改 package 拒绝）。不是靠 skip 交付。完整真实 Grok 角色 + integrate 仍由主会话在冻结候选上跑。
+本机 2026-09-21 已显式跑过并通过：`cli/tests/squadctl-real-smoke.test.ts`、`cli/tests/squadctl-bridge.adapter.test.ts`、`cli/tests/squad-bridge-seams.test.ts`、`cli/tests/squadctl-history.test.ts`、`cli/tests/repair-command.test.ts`（含 cycle-2 冻结 history 恢复、官方 resume 拒绝落 `needs_attention`）。真实 A→B 恢复：init-ok/intake-fail 后 identity 与官方 `task_id` 一致；官方 resume 因 history origin drift exit 5 时 CK 拒绝且 spawn=0。不是靠 skip 交付。完整真实 Grok 角色 + integrate 仍由主会话在独立临时 bare 上跑。
 
 ## 边界
 

@@ -20,6 +20,7 @@ import {
   historyEnvelopeHash,
   parseHistoryCapabilities,
   parseHistoryEnvelope,
+  readVerifiedHistoryExport,
 } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
 import {
@@ -236,18 +237,22 @@ export class SquadctlBridge implements SquadBridge {
       throw errors.runFailed("refusing resume while the previous orchestrator writer is alive");
     }
     if (!identity.nativeSession) {
-      throw errors.usage("no native session to resume; refusing a silent fresh session");
+      return { taskId: request.taskId, event: mapSquadStatus(null, { stopped: true }) };
     }
-    this.runSquadctlSync(["resume", "--task-dir", identity.taskDir, "--json"]);
-    const next = {
+    const resumed = this.runSquadctlSync(["resume", "--task-dir", identity.taskDir, "--json"]);
+    if (resumed.exitCode !== 0 || !isOfficialSquadResumeReceipt(parseJson(resumed.stdout))) {
+      throw errors.runFailed(
+        `squadctl resume failed: ${resumed.stderr || resumed.stdout || `exit ${resumed.exitCode}`}`,
+      );
+    }
+    await this.spawnForTask(request.taskId, {
       ...identity,
       stopped: false,
-      executionStatus: "running" as const,
+      executionStatus: "running",
       failReason: null,
       observedExitCode: null,
       observedSignal: null,
-    };
-    await this.spawnForTask(request.taskId, next);
+    });
     return this.status(request);
   }
 
@@ -483,10 +488,19 @@ export class SquadctlBridge implements SquadBridge {
     if (existing && this.writerStillLive(existing)) {
       throw errors.runFailed("refusing a second orchestrator while the previous writer is alive");
     }
-    const squadTaskId = existing?.squadTaskId ?? makeSquadTaskId();
     const cwd = this.options.workspaceCwd ?? process.cwd();
     const delivery = input.delivery ?? existing?.delivery ?? null;
-    if (!this.taskInitialized(taskDir)) {
+    let squadTaskId = existing?.squadTaskId ?? null;
+    if (this.taskInitialized(taskDir)) {
+      squadTaskId = this.requireOfficialTaskId(taskDir);
+      if (existing?.squadTaskId && existing.squadTaskId !== squadTaskId) {
+        throw errors.runFailed("frozen squad identity does not match official task_id");
+      }
+      if (existing?.taskDir && existing.taskDir !== taskDir) {
+        throw errors.runFailed("frozen squad task directory does not match");
+      }
+    } else {
+      squadTaskId = existing?.squadTaskId ?? makeSquadTaskId();
       const init = await this.runSquadctl(
         [
           "init",
@@ -511,7 +525,19 @@ export class SquadctlBridge implements SquadBridge {
       if (init.exitCode !== 0) {
         throw errors.runFailed(`squadctl init failed: ${init.stderr || init.stdout || "exit"}`);
       }
+      squadTaskId = this.requireOfficialTaskId(taskDir);
     }
+    const identity = this.persistInitIdentity({
+      taskId: input.taskId,
+      squadTaskId,
+      taskDir,
+      cwd,
+      delivery,
+      packagePath: input.packagePath,
+      probe,
+      exe,
+      existing,
+    });
     if (!this.taskHasHistory(taskDir)) {
       const intakeArgv = this.intakeArgv(taskDir, input.packagePath, delivery);
       const intake = await this.runSquadctl(intakeArgv, exe);
@@ -529,48 +555,14 @@ export class SquadctlBridge implements SquadBridge {
         }
       }
     }
-    if (existing?.squadTaskId && this.taskInitialized(taskDir) && this.taskHasHistory(taskDir)) {
-      await this.spawnForTask(input.taskId, {
-        ...existing,
-        delivery: delivery ?? existing.delivery,
-        packagePath: input.packagePath,
-      });
-      return;
-    }
     if (delivery) {
       this.writeFrozenDelivery(taskDir, delivery, delivery.sourceSha);
     }
-    const orch = this.orchestrator(probe);
-    const requestedSession = randomUUID();
-    const identity: BridgeIdentity = {
-      taskId: input.taskId,
-      squadTaskId,
-      taskDir,
-      workspaceCwd: cwd,
-      requestedRuntime: orch.requestedRuntime,
-      actualRuntime: orch.executable ? basename(orch.executable) : null,
-      model: DEFAULT_MODEL,
-      requestedSession,
-      nativeSession: null,
-      orchestratorPid: null,
-      writerPids: [],
-      skillVersion: probe.version ?? SQUAD_BRIDGE_CONTRACT_VERSION,
-      toolVersion: probe.toolVersion,
-      skillDir: probe.skillDir,
-      squadctlPath: exe,
+    await this.spawnForTask(input.taskId, {
+      ...identity,
+      delivery: delivery ?? identity.delivery,
       packagePath: input.packagePath,
-      delivery,
-      stopped: false,
-      executionStatus: "running",
-      failReason: null,
-      process: null,
-      processGroup: [],
-      observedExitCode: null,
-      observedSignal: null,
-      executionId: null,
-    };
-    this.writeIdentity(input.taskId, identity);
-    await this.spawnForTask(input.taskId, identity);
+    });
   }
 
   writerPids(): number[] {
@@ -986,6 +978,68 @@ export class SquadctlBridge implements SquadBridge {
     this.children.delete(taskId);
   }
 
+  private persistInitIdentity(input: {
+    taskId: string;
+    squadTaskId: string;
+    taskDir: string;
+    cwd: string;
+    delivery: SquadBridgeDelivery | null;
+    packagePath: string;
+    probe: SquadBridgeProbe;
+    exe: string;
+    existing: BridgeIdentity | null;
+  }): BridgeIdentity {
+    const previous = input.existing ?? this.readIdentity(input.taskId);
+    const orch = this.orchestrator(input.probe);
+    const launched = Boolean(previous?.nativeSession);
+    return this.writeIdentity(input.taskId, {
+      taskId: input.taskId,
+      squadTaskId: input.squadTaskId,
+      taskDir: input.taskDir,
+      workspaceCwd: input.cwd,
+      requestedRuntime: orch.requestedRuntime,
+      actualRuntime:
+        previous?.actualRuntime ?? (orch.executable ? basename(orch.executable) : null),
+      model: previous?.model ?? DEFAULT_MODEL,
+      requestedSession: previous?.requestedSession ?? randomUUID(),
+      nativeSession: previous?.nativeSession ?? null,
+      orchestratorPid: previous?.orchestratorPid ?? null,
+      writerPids: previous?.writerPids ?? [],
+      skillVersion: input.probe.version ?? SQUAD_BRIDGE_CONTRACT_VERSION,
+      toolVersion: input.probe.toolVersion,
+      skillDir: input.probe.skillDir,
+      squadctlPath: input.exe,
+      packagePath: input.packagePath,
+      delivery: input.delivery ?? previous?.delivery ?? null,
+      stopped: launched ? (previous?.stopped ?? false) : false,
+      executionStatus: launched ? (previous?.executionStatus ?? "stopped") : "stopped",
+      failReason: previous?.failReason ?? null,
+      process: previous?.process ?? null,
+      processGroup: previous?.processGroup ?? [],
+      observedExitCode: previous?.observedExitCode ?? null,
+      observedSignal: previous?.observedSignal ?? null,
+      executionId: previous?.executionId ?? null,
+    });
+  }
+
+  private requireOfficialTaskId(taskDir: string): string {
+    const snapshot = this.runSquadctlSync(["status", "--task-dir", taskDir, "--json"]);
+    if (snapshot.exitCode !== 0) {
+      throw errors.runFailed(
+        `initialized squad task has unreadable official status: ${snapshot.stderr || snapshot.stdout || "exit"}`,
+      );
+    }
+    const raw = parseJson(snapshot.stdout);
+    const taskId =
+      raw !== null && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as { task_id?: unknown }).task_id
+        : null;
+    if (typeof taskId !== "string" || !SQUAD_TASK_ID_RE.test(taskId)) {
+      throw errors.runFailed("initialized squad task has no official task_id");
+    }
+    return taskId;
+  }
+
   private taskInitialized(taskDir: string): boolean {
     try {
       return existsSync(join(taskDir, "events.jsonl"));
@@ -1024,22 +1078,19 @@ export class SquadctlBridge implements SquadBridge {
         throw errors.usage("history intake requires frozen project-id and repair-chain-id");
       }
       const historyFile = delivery.historyExportPath;
-      if (!historyFile || !existsSync(historyFile)) {
+      if (!historyFile) {
         throw errors.runFailed("subsequent squad task is missing a frozen history export");
       }
-      const envelope = parseHistoryEnvelope(JSON.parse(readFileText(historyFile) ?? "null"));
-      const historyObjectPath = join(taskDir, "councilkit-history-import.json");
-      if (envelope) {
-        writeFileSync(historyObjectPath, `${JSON.stringify(envelope.history)}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
-      } else {
-        writeFileSync(historyObjectPath, readFileText(historyFile) ?? "", {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+      const loaded = readVerifiedHistoryExport(historyFile, delivery.historyExportHash);
+      if (!loaded.ok) {
+        throw errors.runFailed(loaded.reason);
       }
+      const envelope = loaded.envelope;
+      const historyObjectPath = join(taskDir, "councilkit-history-import.json");
+      writeFileSync(historyObjectPath, `${JSON.stringify(envelope.history)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
       argv.push(
         "--history",
         historyObjectPath,
@@ -1430,10 +1481,24 @@ function writeOrchestratorPrompt(identity: BridgeIdentity, probe: SquadBridgePro
   return path;
 }
 
+const SQUAD_TASK_ID_RE = /^[0-9]{8}-[a-z0-9][a-z0-9-]{0,47}-[a-z0-9]{4}$/;
+
 function makeSquadTaskId(): string {
   const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
   const suffix = randomUUID().replaceAll("-", "").slice(0, 4);
   return `${day}-repair-${suffix}`;
+}
+
+function isOfficialSquadResumeReceipt(raw: unknown): boolean {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const row = raw as Record<string, unknown>;
+  if (row.resumed !== true) return false;
+  if (typeof row.epoch !== "number" || !Number.isInteger(row.epoch) || row.epoch < 0) {
+    return false;
+  }
+  if (typeof row.head_sha !== "string" || !/^[a-f0-9]{40}$/i.test(row.head_sha)) return false;
+  if (typeof row.diff_hash !== "string" || !/^[a-f0-9]{64}$/i.test(row.diff_hash)) return false;
+  return true;
 }
 
 function parseJson(text: string): unknown {

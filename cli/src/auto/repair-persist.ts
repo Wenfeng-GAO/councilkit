@@ -24,6 +24,14 @@ const repairCycleSchema = z
     childReviewId: z.string().min(1).max(80).nullable().optional(),
     squadTaskId: z.string().min(1).max(80).nullable().optional(),
     squadTaskDir: z.string().min(1).max(4096).nullable().optional(),
+    previousTaskId: z.string().min(1).max(80).nullable().optional(),
+    previousTaskDir: z.string().min(1).max(4096).nullable().optional(),
+    historyExportPath: z.string().min(1).max(4096).nullable().optional(),
+    historyExportHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .optional(),
   })
   .strict();
 

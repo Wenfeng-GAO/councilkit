@@ -110,6 +110,7 @@ function identityOf(
   executionStatus: string;
   executionId?: string | null;
   failReason?: string | null;
+  squadTaskId?: string;
 } {
   return JSON.parse(
     readFileSync(join(home, "squad-tasks", taskId, "councilkit-bridge.json"), "utf8"),
@@ -484,5 +485,202 @@ describe("squad bridge seams from independent review probes", () => {
     expect(bridge.writerPids()).toEqual([]);
     expect(bridge.status({ taskId: started.taskId }).event.kind).toBe("stopped");
     expect(fingerprintPid(after.orchestratorPid ?? 0)).toBeNull();
+  }, 20_000);
+
+  it("reuses the official task_id after init succeeds and intake fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-seam-init-id-"));
+    roots.push(root);
+    const { repo, sha } = initRepo(root);
+    const home = join(root, "ckhome");
+    mkdirSync(home);
+    const pkg = join(root, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const first = makeBridge(home, repo);
+    const chain = {
+      grantHash: "a".repeat(64),
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      sourceSha: sha,
+      expectedOldSha: sha,
+      remote: "origin",
+      parentRunId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    };
+    const ancestor = first.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery: { ...chain, newRepairChain: true },
+      baseSha: sha,
+    });
+    if (!ancestor.ok) throw new Error("start A failed");
+    await first.prepare({
+      taskId: ancestor.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery: { ...chain, newRepairChain: true },
+    });
+    first.stop({ taskId: ancestor.taskId });
+    const recover = first.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery: {
+        ...chain,
+        newRepairChain: false,
+        previousTaskId: ancestor.taskId,
+        previousTaskDir: join(home, "squad-tasks", ancestor.taskId),
+      },
+      baseSha: sha,
+    });
+    if (!recover.ok || !recover.taskDir) throw new Error("start B failed");
+    await expect(
+      first.prepare({
+        taskId: recover.taskId,
+        baseSha: sha,
+        packagePath: pkg,
+        delivery: {
+          ...chain,
+          newRepairChain: false,
+          previousTaskId: ancestor.taskId,
+          previousTaskDir: recover.taskDir,
+        },
+      }),
+    ).rejects.toThrow(/history export/);
+    const journal = JSON.parse(
+      execFileSync(FAKE_SQUADCTL, ["status", "--task-dir", recover.taskDir, "--json"], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, COUNCILKIT_HOME: home },
+      }),
+    ) as { task_id?: string };
+    expect(journal.task_id).toMatch(/^\d{8}-repair-[a-z0-9]{4}$/);
+    const afterInit = identityOf(home, recover.taskId);
+    expect(afterInit.squadTaskId).toBe(journal.task_id);
+    let spawnCount = 0;
+    const retried = new SquadctlBridge({
+      home,
+      workspaceCwd: repo,
+      executable: FAKE_SQUADCTL,
+      orchestratorExecutable: FAKE_GROKB,
+      env: { ...process.env, HOME: home, COUNCILKIT_HOME: home },
+      spawnOrchestrator: () => {
+        spawnCount += 1;
+        throw new Error("PROBE_STOP_BEFORE_VENDOR_SPAWN");
+      },
+    });
+    const ancestorId = identityOf(home, ancestor.taskId);
+    const ancestorDir = join(home, "squad-tasks", ancestor.taskId);
+    const historyPath = join(home, "frozen-history.json");
+    writeFileSync(
+      historyPath,
+      `${JSON.stringify({
+        schema_version: 1,
+        contract: "squad-history-bridge.v1",
+        complete: true,
+        history: {
+          schema_version: 1,
+          kind: "squad-repair-history",
+          project_id: chain.repo,
+          repair_chain_id: chain.parentRunId,
+          source_hash: "b".repeat(64),
+          entries: [
+            {
+              task_id: ancestorId.squadTaskId,
+              ancestor_task_ids: [],
+              journal_hash: "c".repeat(64),
+              package_hash: "d".repeat(64),
+              logical_rounds: [],
+            },
+          ],
+        },
+        origins: [
+          {
+            task_id: ancestorId.squadTaskId,
+            task_dir: ancestorDir,
+            journal_hash: "c".repeat(64),
+            package_hash: "d".repeat(64),
+          },
+        ],
+      })}\n`,
+    );
+    await expect(
+      retried.prepare({
+        taskId: recover.taskId,
+        baseSha: sha,
+        packagePath: pkg,
+        delivery: {
+          ...chain,
+          newRepairChain: false,
+          previousTaskId: ancestor.taskId,
+          previousTaskDir: ancestorDir,
+          historyExportPath: historyPath,
+        },
+      }),
+    ).rejects.toThrow(/PROBE_STOP_BEFORE_VENDOR_SPAWN/);
+    expect(identityOf(home, recover.taskId).squadTaskId).toBe(journal.task_id);
+    expect(spawnCount).toBe(1);
+  }, 20_000);
+
+  it("refuses a non-zero official resume without spawning a writer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-seam-resume-refuse-"));
+    roots.push(root);
+    const { repo, sha } = initRepo(root);
+    const home = join(root, "ckhome");
+    mkdirSync(home);
+    const pkg = join(root, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const delivery = {
+      grantHash: "a".repeat(64),
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      sourceSha: sha,
+      expectedOldSha: sha,
+      remote: "origin",
+      parentRunId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      newRepairChain: true,
+    };
+    const started = makeBridge(home, repo).start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery,
+      baseSha: sha,
+    });
+    if (!started.ok) throw new Error("start failed");
+    const prepared = makeBridge(home, repo);
+    await prepared.prepare({
+      taskId: started.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery,
+    });
+    const before = identityOf(home, started.taskId);
+    if (before.orchestratorPid) pids.add(before.orchestratorPid);
+    expect(prepared.stop({ taskId: started.taskId })).toEqual({ kind: "stopped" });
+    const stopped = identityOf(home, started.taskId);
+    let spawnCount = 0;
+    const refused = new SquadctlBridge({
+      home,
+      workspaceCwd: repo,
+      executable: FAKE_SQUADCTL,
+      orchestratorExecutable: FAKE_GROKB,
+      env: {
+        ...process.env,
+        HOME: home,
+        COUNCILKIT_HOME: home,
+        FAKE_SQUADCTL_RESUME_FAIL: "1",
+      },
+      sessionWaitMs: 200,
+      spawnOrchestrator: () => {
+        spawnCount += 1;
+        throw new Error("unexpected spawn after refused resume");
+      },
+    });
+    await expect(refused.resume({ taskId: started.taskId })).rejects.toThrow(
+      /resume failed|origins drifted|exit 5/i,
+    );
+    const after = identityOf(home, started.taskId);
+    expect(after.executionId).toBe(stopped.executionId);
+    expect(after.nativeSession).toBe(stopped.nativeSession);
+    expect(after.executionStatus).toBe("stopped");
+    expect(after.orchestratorPid).toBeNull();
+    expect(spawnCount).toBe(0);
+    expect(refused.writerPids()).toEqual([]);
   }, 20_000);
 });

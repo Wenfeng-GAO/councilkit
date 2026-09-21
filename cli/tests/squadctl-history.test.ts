@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -352,5 +360,198 @@ describe.skipIf(!HAS_HISTORY_BRIDGE)("real A→B→C history transfer", () => {
         }),
       }),
     ).rejects.toThrow();
+  }, 60_000);
+
+  it("reuses the official journal task_id across a new bridge after init-ok/intake-fail", async () => {
+    const home = tempHome();
+    const { repo, sha } = initRepo(home);
+    const pkg = join(home, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const first = makeBridge(home, repo);
+    const ancestor = first.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery: delivery(sha, { newRepairChain: true }),
+      baseSha: sha,
+    });
+    if (!ancestor.ok) throw new Error("start A failed");
+    await first.prepare({
+      taskId: ancestor.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery: delivery(sha, { newRepairChain: true }),
+    });
+    first.stop({ taskId: ancestor.taskId });
+    const idA = identityOf(home, ancestor.taskId);
+    const exported = first.exportHistory({
+      taskId: ancestor.taskId,
+      allowedOrigins: [{ journalTaskId: idA.squadTaskId, taskDir: idA.taskDir }],
+      projectId: REPO,
+      repairChainId: PARENT,
+    });
+    const recover = first.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery: delivery(sha, {
+        newRepairChain: false,
+        previousTaskId: ancestor.taskId,
+        previousTaskDir: idA.taskDir,
+      }),
+      baseSha: sha,
+    });
+    if (!recover.ok || !recover.taskDir) throw new Error("start B failed");
+    await expect(
+      first.prepare({
+        taskId: recover.taskId,
+        baseSha: sha,
+        packagePath: pkg,
+        delivery: delivery(sha, {
+          newRepairChain: false,
+          previousTaskId: ancestor.taskId,
+          previousTaskDir: idA.taskDir,
+        }),
+      }),
+    ).rejects.toThrow(/history export/);
+    expect(existsSync(join(recover.taskDir, "events.jsonl"))).toBe(true);
+    const journal = JSON.parse(
+      execFileSync(LIVE_SQUADCTL, ["status", "--task-dir", recover.taskDir, "--json"], {
+        encoding: "utf8",
+        env: historyEnv,
+      }),
+    ) as { task_id?: string };
+    expect(journal.task_id).toMatch(/^\d{8}-repair-[a-z0-9]{4}$/);
+    expect(identityOf(home, recover.taskId).squadTaskId).toBe(journal.task_id);
+    let spawnCount = 0;
+    const retried = new SquadctlBridge({
+      home,
+      workspaceCwd: repo,
+      executable: LIVE_SQUADCTL,
+      orchestratorExecutable: FAKE_GROKB,
+      env: { ...historyEnv, HOME: home, COUNCILKIT_HOME: home },
+      spawnOrchestrator: () => {
+        spawnCount += 1;
+        throw new Error("PROBE_STOP_BEFORE_VENDOR_SPAWN");
+      },
+    });
+    try {
+      await retried.prepare({
+        taskId: recover.taskId,
+        baseSha: sha,
+        packagePath: pkg,
+        delivery: delivery(sha, {
+          newRepairChain: false,
+          previousTaskId: ancestor.taskId,
+          previousTaskDir: idA.taskDir,
+          historyExportPath: exported.historyPath,
+        }),
+      });
+    } catch (error) {
+      if (!String(error).includes("PROBE_STOP_BEFORE_VENDOR_SPAWN")) throw error;
+    }
+    expect(identityOf(home, recover.taskId).squadTaskId).toBe(journal.task_id);
+    expect(spawnCount).toBe(1);
+    expect(convergence(recover.taskDir).historyCompleteness).toBe("verified");
+  }, 60_000);
+
+  it("refuses official history-drift resume without spawning a writer", async () => {
+    const home = tempHome();
+    const { repo, sha } = initRepo(home);
+    const pkg = join(home, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const bridge = makeBridge(home, repo);
+    const ancestor = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery: delivery(sha, { newRepairChain: true }),
+      baseSha: sha,
+    });
+    if (!ancestor.ok) throw new Error("start A failed");
+    await bridge.prepare({
+      taskId: ancestor.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery: delivery(sha, { newRepairChain: true }),
+    });
+    bridge.stop({ taskId: ancestor.taskId });
+    const idA = identityOf(home, ancestor.taskId);
+    const exported = bridge.exportHistory({
+      taskId: ancestor.taskId,
+      allowedOrigins: [{ journalTaskId: idA.squadTaskId, taskDir: idA.taskDir }],
+      projectId: REPO,
+      repairChainId: PARENT,
+    });
+    const child = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery: delivery(sha, {
+        newRepairChain: false,
+        previousTaskId: ancestor.taskId,
+        previousTaskDir: idA.taskDir,
+        historyExportPath: exported.historyPath,
+      }),
+      baseSha: sha,
+    });
+    if (!child.ok) throw new Error("start B failed");
+    await bridge.prepare({
+      taskId: child.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery: delivery(sha, {
+        newRepairChain: false,
+        previousTaskId: ancestor.taskId,
+        previousTaskDir: idA.taskDir,
+        historyExportPath: exported.historyPath,
+      }),
+    });
+    expect(bridge.stop({ taskId: child.taskId })).toEqual({ kind: "stopped" });
+    const before = JSON.parse(
+      readFileSync(join(home, "squad-tasks", child.taskId, "councilkit-bridge.json"), "utf8"),
+    ) as {
+      executionId: string | null;
+      nativeSession: string | null;
+      executionStatus: string;
+      orchestratorPid: number | null;
+    };
+    const resumeA = spawnSync(LIVE_SQUADCTL, ["resume", "--task-dir", idA.taskDir, "--json"], {
+      encoding: "utf8",
+      env: historyEnv,
+    });
+    expect(resumeA.status, resumeA.stderr).toBe(0);
+    const nativeB = spawnSync(
+      LIVE_SQUADCTL,
+      ["resume", "--task-dir", join(home, "squad-tasks", child.taskId), "--json"],
+      { encoding: "utf8", env: historyEnv },
+    );
+    expect(nativeB.status).toBe(5);
+    expect(nativeB.stderr).toMatch(/origins drifted/i);
+    let spawnCount = 0;
+    const watching = new SquadctlBridge({
+      home,
+      workspaceCwd: repo,
+      executable: LIVE_SQUADCTL,
+      orchestratorExecutable: FAKE_GROKB,
+      env: { ...historyEnv, HOME: home, COUNCILKIT_HOME: home },
+      spawnOrchestrator: (input) => {
+        spawnCount += 1;
+        throw new Error(`unexpected spawn after refused resume: ${input.executable}`);
+      },
+    });
+    await expect(watching.resume({ taskId: child.taskId })).rejects.toThrow(
+      /resume failed|origins drifted|exit 5/i,
+    );
+    const after = JSON.parse(
+      readFileSync(join(home, "squad-tasks", child.taskId, "councilkit-bridge.json"), "utf8"),
+    ) as {
+      executionId: string | null;
+      nativeSession: string | null;
+      executionStatus: string;
+      orchestratorPid: number | null;
+    };
+    expect(after.executionId).toBe(before.executionId);
+    expect(after.nativeSession).toBe(before.nativeSession);
+    expect(after.executionStatus).toBe(before.executionStatus);
+    expect(after.orchestratorPid).toBeNull();
+    expect(spawnCount).toBe(0);
+    expect(watching.writerPids()).toEqual([]);
   }, 60_000);
 });

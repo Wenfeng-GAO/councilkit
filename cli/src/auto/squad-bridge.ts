@@ -27,6 +27,7 @@ export interface SquadBridgeDelivery {
   previousTaskId?: string;
   previousTaskDir?: string;
   historyExportPath?: string;
+  historyExportHash?: string;
 }
 
 export interface SquadBridgeStartRequest {

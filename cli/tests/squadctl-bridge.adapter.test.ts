@@ -189,7 +189,16 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadct
         executionStatus: "running",
       })}\n`,
     );
-    await expect(instance.resume({ taskId: started.taskId })).rejects.toThrow(/native session/);
+    const snapshot = await instance.resume({ taskId: started.taskId });
+    expect(snapshot.event.kind).toBe("stopped");
+    const after = JSON.parse(readFileSync(path, "utf8")) as {
+      nativeSession: string | null;
+      orchestratorPid: number | null;
+      executionStatus: string;
+    };
+    expect(after.nativeSession).toBeNull();
+    expect(after.orchestratorPid).toBeNull();
+    expect(instance.writerPids()).toEqual([]);
     try {
       instance.stop({ taskId: started.taskId });
     } catch {

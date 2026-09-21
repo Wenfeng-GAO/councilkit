@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 export const SQUAD_HISTORY_BRIDGE_CONTRACT = "squad-history-bridge.v1";
@@ -143,6 +143,33 @@ export function parseHistoryEnvelope(raw: unknown): SquadHistoryEnvelope | null 
 
 export function historyEnvelopeHash(envelope: SquadHistoryEnvelope): string {
   return createHash("sha256").update(JSON.stringify(envelope)).digest("hex");
+}
+
+export function readVerifiedHistoryExport(
+  path: string,
+  expectedHash?: string | null,
+): { ok: true; envelope: SquadHistoryEnvelope; hash: string } | { ok: false; reason: string } {
+  let payload: string;
+  try {
+    payload = readFileSync(path, "utf8");
+  } catch {
+    return { ok: false, reason: "frozen history export is missing" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload) as unknown;
+  } catch {
+    return { ok: false, reason: "frozen history export is not JSON" };
+  }
+  const envelope = parseHistoryEnvelope(parsed);
+  if (!envelope) {
+    return { ok: false, reason: "frozen history export is not squad-history-bridge.v1" };
+  }
+  const hash = historyEnvelopeHash(envelope);
+  if (expectedHash && hash !== expectedHash) {
+    return { ok: false, reason: "frozen history export hash drifted; refusing to reuse" };
+  }
+  return { ok: true, envelope, hash };
 }
 
 export function canonicalOwnedDir(path: string, ownedRoot: string): string | null {

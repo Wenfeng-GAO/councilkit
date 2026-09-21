@@ -15,9 +15,15 @@ import { CLI_RUN_PIPELINE_PID_FILE, CLI_RUN_STATUS_FILE } from "@shared/runtime/
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
+import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
+import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { saveRepairProfile } from "../src/auto/repair-profile";
-import { FakeSquadBridge } from "../src/auto/squad-bridge";
+import {
+  createRepairGrant,
+  loadRepairProfile,
+  saveRepairProfile,
+} from "../src/auto/repair-profile";
+import { FakeSquadBridge, type SquadBridgeDelivery } from "../src/auto/squad-bridge";
 import { type RepairCommandDeps, RepairExit, runRepair } from "../src/commands/repair";
 import { CliError } from "../src/errors";
 import type { OutputSink } from "../src/output";
@@ -1214,6 +1220,296 @@ describe("repair outer loop", () => {
       businessResult: "needs_attention",
       reasonCode: "HISTORY_INVALID",
       outerUsed: 1,
+    });
+  });
+
+  it("recovers a second cycle with the frozen history export instead of re-exporting", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    const deliveries: SquadBridgeDelivery[] = [];
+    const prepared = new Set<string>();
+    let exportCalls = 0;
+    let journalSeq = 0;
+    const envelopeFor = (taskDir: string, journalTaskId: string) => {
+      const envelope = {
+        schema_version: 1 as const,
+        contract: "squad-history-bridge.v1" as const,
+        complete: true as const,
+        history: {
+          schema_version: 1 as const,
+          kind: "squad-repair-history" as const,
+          project_id: "github.com/acme/repo",
+          repair_chain_id: REPAIR_ID,
+          source_hash: "b".repeat(64),
+          entries: [
+            {
+              task_id: journalTaskId,
+              ancestor_task_ids: [],
+              journal_hash: "c".repeat(64),
+              package_hash: "d".repeat(64),
+              logical_rounds: [],
+            },
+          ],
+        },
+        origins: [
+          {
+            task_id: journalTaskId,
+            task_dir: taskDir,
+            journal_hash: "c".repeat(64),
+            package_hash: "d".repeat(64),
+          },
+        ],
+      };
+      expect(parseHistoryEnvelope(envelope)).not.toBeNull();
+      return envelope;
+    };
+    const bridge = {
+      start: (request: Parameters<FakeSquadBridge["start"]>[0]) => {
+        const started = fake.start(request);
+        if (!started.ok) return started;
+        const taskDir = join(home, "squad-tasks", started.taskId);
+        mkdirSync(taskDir, { recursive: true });
+        journalSeq += 1;
+        const squadTaskId = `20260921-repair-aa${String(journalSeq).padStart(2, "0")}`;
+        writeFileSync(
+          join(taskDir, "councilkit-bridge.json"),
+          `${JSON.stringify({
+            taskId: started.taskId,
+            squadTaskId,
+            taskDir,
+            nativeSession: null,
+          })}\n`,
+        );
+        return { ...started, taskDir };
+      },
+      prepare: async (input: {
+        taskId: string;
+        delivery?: SquadBridgeDelivery;
+      }) => {
+        deliveries.push(input.delivery ?? ({} as SquadBridgeDelivery));
+        if (deliveries.length === 2) {
+          throw new Error("crash after parent persisted cycle-2 taskId");
+        }
+        prepared.add(input.taskId);
+      },
+      resume: (request: { taskId: string }) => {
+        if (!prepared.has(request.taskId)) {
+          return { taskId: request.taskId, event: mapSquadStatus(null, { stopped: true }) };
+        }
+        return fake.resume(request);
+      },
+      stop: (request: { taskId: string }) => fake.stop(request),
+      status: (request: { taskId: string }) => fake.status(request),
+      requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
+        fake.requestPublish(request),
+      exportHistory: (request: { taskId: string }) => {
+        exportCalls += 1;
+        const taskDir = join(home, "squad-tasks", request.taskId);
+        const identity = JSON.parse(
+          readFileSync(join(taskDir, "councilkit-bridge.json"), "utf8"),
+        ) as { squadTaskId: string; taskDir: string };
+        const envelope = envelopeFor(identity.taskDir, identity.squadTaskId);
+        return {
+          envelope,
+          hash: historyEnvelopeHash(envelope),
+          historyPath: join(taskDir, "councilkit-history-envelope.json"),
+        };
+      },
+      writerPids: () => [],
+    };
+    const out = makeSink();
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+        out,
+        loopOpts({
+          bridge,
+          reviewImpl: async () => {
+            const childId = `ck-review-${randomUUID()}`;
+            seedCompleteReview(childId, { open: true, against: SOURCE_ID });
+            return { runId: childId };
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    const { readRepairState } = await import("../src/auto/repair-persist");
+    const crashed = readRepairState(join(home, "runs", REPAIR_ID));
+    const cycle2 = crashed?.cycles?.find((cycle) => cycle.n === 2);
+    expect(cycle2?.squadTaskId).toBeTruthy();
+    expect(cycle2?.historyExportPath).toMatch(/history\/.*\.json$/);
+    expect(cycle2?.historyExportHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(exportCalls).toBe(1);
+    expect(deliveries[1]?.historyExportPath).toBeTruthy();
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const resumed = makeSink();
+    await runRepair(
+      ["resume", "--run", REPAIR_ID],
+      resumed,
+      loopOpts({
+        bridge,
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      }),
+    );
+    expect(exportCalls).toBe(1);
+    const recovery = deliveries.at(-1);
+    expect(recovery?.historyExportPath).toBe(cycle2?.historyExportPath);
+    expect(recovery?.historyExportHash).toBe(cycle2?.historyExportHash);
+    expect(recovery?.previousTaskId).toBe(crashed?.cycles?.[0]?.squadTaskId);
+    expect(resumed.finished).toMatchObject({ businessResult: "approved", outerUsed: 2 });
+  });
+
+  it("lands official resume refusal as needs_attention without re-preparing", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const { readRepairState, writeRepairState } = await import("../src/auto/repair-persist");
+    const dir = join(home, "runs", REPAIR_ID);
+    const state = readRepairState(dir);
+    if (!state) throw new Error("missing state");
+    const grant = createRepairGrant(loadRepairProfile("default"));
+    writeFileSync(join(dir, "repair-grant.json"), `${JSON.stringify(grant)}\n`);
+    const taskId = "squad-task-resume-refuse";
+    const taskDir = join(home, "squad-tasks", taskId);
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(
+      join(taskDir, "councilkit-bridge.json"),
+      `${JSON.stringify({
+        taskId,
+        squadTaskId: "20260921-repair-dead",
+        taskDir,
+        nativeSession: "frozen-native-session",
+        executionStatus: "stopped",
+        stopped: true,
+        executionId: "exec-frozen",
+        orchestratorPid: null,
+      })}\n`,
+    );
+    writeRepairState(dir, {
+      ...state,
+      outerUsed: 1,
+      currentSquadTaskId: taskId,
+      grantId: grant.grantId,
+      grantHash: grant.grantHash,
+      cycles: [{ n: 1, phase: "active", squadTaskId: taskId, squadTaskDir: taskDir }],
+      businessResult: null,
+      reasonCode: null,
+      lastError: null,
+    });
+    let prepares = 0;
+    let resumes = 0;
+    const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    const bridge = {
+      start: () => {
+        throw new Error("must not start a new squad task after resume refusal");
+      },
+      prepare: async () => {
+        prepares += 1;
+      },
+      resume: async () => {
+        resumes += 1;
+        throw new Error(
+          "squadctl resume failed: StateDriftError: bound repair history origins drifted",
+        );
+      },
+      stop: (request: { taskId: string }) => fake.stop(request),
+      status: (request: { taskId: string }) => fake.status(request),
+      requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
+        fake.requestPublish(request),
+      writerPids: () => [],
+    };
+    const out = makeSink();
+    await expect(
+      runRepair(["resume", "--run", REPAIR_ID], out, loopOpts({ bridge })),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(resumes).toBe(1);
+    expect(prepares).toBe(0);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "squad_failed",
+    });
+    const finished = readRepairState(dir);
+    expect(finished?.lastError).toMatch(/origins drifted/i);
+    expect(finished?.businessResult).toBe("needs_attention");
+    expect(finished?.currentSquadTaskId).toBe(taskId);
+    const live = JSON.parse(readFileSync(join(dir, CLI_RUN_STATUS_FILE), "utf8")) as {
+      status: string;
+    };
+    expect(live.status).not.toBe("running");
+  });
+
+  it("does not treat a launched stopped cycle as a prepare bypass", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const { readRepairState, writeRepairState } = await import("../src/auto/repair-persist");
+    const dir = join(home, "runs", REPAIR_ID);
+    const state = readRepairState(dir);
+    if (!state) throw new Error("missing state");
+    const grant = createRepairGrant(loadRepairProfile("default"));
+    writeFileSync(join(dir, "repair-grant.json"), `${JSON.stringify(grant)}\n`);
+    const taskId = "squad-task-stopped-bypass";
+    const taskDir = join(home, "squad-tasks", taskId);
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(
+      join(taskDir, "councilkit-bridge.json"),
+      `${JSON.stringify({
+        taskId,
+        squadTaskId: "20260921-repair-stop",
+        taskDir,
+        nativeSession: "already-launched",
+        executionStatus: "stopped",
+        stopped: true,
+      })}\n`,
+    );
+    writeRepairState(dir, {
+      ...state,
+      outerUsed: 1,
+      currentSquadTaskId: taskId,
+      grantId: grant.grantId,
+      grantHash: grant.grantHash,
+      cycles: [{ n: 1, phase: "active", squadTaskId: taskId, squadTaskDir: taskDir }],
+      businessResult: null,
+      reasonCode: null,
+    });
+    let prepares = 0;
+    const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    const bridge = {
+      start: () => {
+        throw new Error("must not start after launched stop");
+      },
+      prepare: async () => {
+        prepares += 1;
+      },
+      resume: () => ({
+        taskId,
+        event: mapSquadStatus(null, { stopped: true }),
+      }),
+      stop: (request: { taskId: string }) => fake.stop(request),
+      status: (request: { taskId: string }) => fake.status(request),
+      requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
+        fake.requestPublish(request),
+      writerPids: () => [],
+    };
+    const out = makeSink();
+    await expect(
+      runRepair(["resume", "--run", REPAIR_ID], out, loopOpts({ bridge })),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(prepares).toBe(0);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "squad_failed",
     });
   });
 });
