@@ -20,6 +20,8 @@ export interface SquadBridgeDelivery {
   sourceSha: string;
   expectedOldSha: string;
   remote: string;
+  originUrl?: string;
+  pushUrl?: string;
   parentRunId?: string;
   newRepairChain?: boolean;
 }

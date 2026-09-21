@@ -1,10 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { afterEach, describe, expect, it } from "vitest";
+import { fingerprintPid, sameProcess } from "../src/auto/process-identity";
 import { materializeRepairWorkspace } from "../src/auto/repair-workspace";
 import { SquadctlBridge } from "../src/auto/squadctl-bridge";
 
@@ -282,5 +283,151 @@ describe("squad bridge seams from independent review probes", () => {
     expect(bytesLater).toBe(bytesImmediately);
     expect(alive(grand)).toBe(false);
     expect(bridge.status({ taskId: started.taskId }).event.kind).toBe("stopped");
+  }, 20_000);
+
+  it("marks failed after a successful init when the orchestrator later exits 17 or 0 without a candidate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-seam-postexit-"));
+    roots.push(root);
+    const { repo, sha } = initRepo(root);
+    const home = join(root, "ckhome");
+    mkdirSync(home);
+    const pkg = join(root, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const modePath = join(root, "mode");
+    writeFileSync(modePath, "postexit");
+    const delivery = {
+      grantHash: "a".repeat(64),
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      sourceSha: sha,
+      expectedOldSha: sha,
+      remote: "origin",
+      parentRunId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      newRepairChain: true,
+    };
+    const bridge = makeBridge(home, repo, { MODE_FILE: modePath });
+    const first = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery,
+      baseSha: sha,
+    });
+    if (!first.ok) throw new Error("start failed");
+    await bridge.prepare({
+      taskId: first.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery,
+    });
+    const id1 = identityOf(home, first.taskId);
+    if (id1.orchestratorPid) pids.add(id1.orchestratorPid);
+    await sleep(900);
+    expect(bridge.status({ taskId: first.taskId }).event.kind).toBe("failed");
+    expect(identityOf(home, first.taskId).executionStatus).toBe("failed");
+    expect(id1.nativeSession).toBe(id1.requestedSession);
+    writeFileSync(modePath, "exit0");
+    const second = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery,
+      baseSha: sha,
+    });
+    if (!second.ok) throw new Error("start failed");
+    await bridge.prepare({
+      taskId: second.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery,
+    });
+    const id2 = identityOf(home, second.taskId);
+    if (id2.orchestratorPid) pids.add(id2.orchestratorPid);
+    await sleep(600);
+    expect(bridge.status({ taskId: second.taskId }).event.kind).toBe("failed");
+    const signaled = bridge.start({
+      requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+      packageFields: {},
+      delivery,
+      baseSha: sha,
+    });
+    if (!signaled.ok) throw new Error("start failed");
+    writeFileSync(modePath, "");
+    await bridge.prepare({
+      taskId: signaled.taskId,
+      baseSha: sha,
+      packagePath: pkg,
+      delivery,
+    });
+    const id3 = identityOf(home, signaled.taskId);
+    if (!id3.orchestratorPid) throw new Error("missing pid");
+    pids.add(id3.orchestratorPid);
+    process.kill(id3.orchestratorPid, "SIGKILL");
+    await sleep(400);
+    expect(bridge.status({ taskId: signaled.taskId }).event.kind).toBe("failed");
+  }, 20_000);
+
+  it("does not kill a reused PID process group and still kills a live grandchild group", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-seam-stale-"));
+    roots.push(root);
+    const { repo, sha } = initRepo(root);
+    const home = join(root, "ckhome");
+    mkdirSync(home);
+    const pkg = join(root, "pkg.json");
+    writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+    const canary = join(root, "unrelated");
+    writeFileSync(canary, "");
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "const fs=require('fs');setInterval(()=>fs.appendFileSync(process.env.CANARY,'x'),20)",
+      ],
+      { detached: true, stdio: "ignore", env: { ...process.env, CANARY: canary } },
+    );
+    if (!child.pid) throw new Error("no unrelated pid");
+    child.unref();
+    pids.add(child.pid);
+    await sleep(150);
+    const current = fingerprintPid(child.pid);
+    if (!current) throw new Error("missing fingerprint");
+    const taskId = "squad-task-stale-proof";
+    const taskDir = join(home, "squad-tasks", taskId);
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "events.jsonl"), `${JSON.stringify({ type: "init", epoch: 1 })}\n`);
+    writeFileSync(
+      join(taskDir, "councilkit-bridge.json"),
+      `${JSON.stringify({
+        taskId,
+        squadTaskId: taskId,
+        taskDir,
+        workspaceCwd: repo,
+        requestedRuntime: "grokb",
+        actualRuntime: "node",
+        model: "grok-4.6",
+        requestedSession: "s",
+        nativeSession: "s",
+        orchestratorPid: child.pid,
+        writerPids: [child.pid],
+        skillVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+        toolVersion: null,
+        skillDir: null,
+        squadctlPath: FAKE_SQUADCTL,
+        packagePath: pkg,
+        delivery: null,
+        stopped: false,
+        executionStatus: "running",
+        failReason: null,
+        process: { ...current, startKey: "Mon Jan  1 00:00:00 2001" },
+        processGroup: [],
+        observedExitCode: null,
+        observedSignal: null,
+      })}\n`,
+    );
+    const staleBridge = makeBridge(home, repo);
+    expect(sameProcess({ ...current, startKey: "Mon Jan  1 00:00:00 2001" }, current)).toBe(false);
+    expect(() => staleBridge.stop({ taskId })).toThrow(/identity drifted|foreign process group/);
+    expect(alive(child.pid)).toBe(true);
+    const bytes = readFileSync(canary).length;
+    await sleep(80);
+    expect(readFileSync(canary).length).toBeGreaterThan(bytes);
   }, 20_000);
 });

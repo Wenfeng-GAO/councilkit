@@ -27,15 +27,17 @@
    - 独立 grok `streaming-messages-json`，解析 `session_id`，绑定 model/executable/skill/workspace。
    - resume 必须同一 native session，禁止 silent fresh。crash 且 pid 已死才恢复。
    - prompt 含 skill/squadctl/包/授权/停点；禁止 Orchestrator 自行 push。
+   - init 握手只结束 handshake Promise；exit/error 有持久 supervisor。init 后非零退出、零退出但无合法 candidate、外部 signal，都会落盘并让 status 离开 running。
 
 5. **stop / 身份**
-   - 冻结 orchestrator `pid/pgid/lstart`。TERM 整组 → 有界等待 → 对仍活成员 KILL → 确认组空后才 `pause --expected-epoch --worktree` 并清 identity。
+   - 冻结 orchestrator `pid/pgid/lstart`。对组发信号前必须 `sameProcess` 核验 live leader；PID 复用则拒绝信号并保留诊断。已核验的本组才 TERM → 有界等待 → KILL（leader 已死后只 SIGKILL 剩余正 PID，不杀复用组）。
    - 父 cycle→taskId/taskDir 在 prepare/spawn 前落盘；公开 stop/resume 扫 `currentSquadTaskId` 与 cycles。旧 writer 仍活不能开第二个。
    - 首次与 resume 共用异步 supervisor：必须观察到 `system/init` session_id。新会话用 `--session-id` 并核对 init；resume 用 `--resume` 且必须等于冻结 session。mismatch / 无 session / exit 17 取消刚启动的 writer 并失败。不把 `GROK_SESSION_ID` 当实际身份。
    - 同一 parent 只 mint 一次 grant；恢复核验并复用原 id/hash/冻结 profile。缺失损坏不重签。
 
 6. **工作区**
-   - `git clone --local --no-hardlinks` 后把 origin 设回源仓库的可信 fetch/push URL，并与 profile repo 核对。已有隔离目录只核验，不 `checkout -B` 原始 SHA。
+   - `git clone --local --no-hardlinks` 后冻结 fetch 与 push URL（含 `remote.origin.pushurl`）。首次、恢复、integrate 前都核对；pushurl 漂移先拒绝。
+   - origin 身份解析 SCP / `ssh://`（含端口）/ HTTPS 的 host+完整 path，不用 substring。本地 bare 路径仍可用。已有隔离目录只核验，不 `checkout -B` 原始 SHA。
 
 7. **history / 回执**
    - 首个独立链：`intake --new-repair-chain --project-id --repair-chain-id`。
@@ -71,7 +73,8 @@ pnpm exec vitest run \
   cli/tests/squadctl-bridge.adapter.test.ts \
   cli/tests/squad-bridge-seams.test.ts \
   cli/tests/repair-command.test.ts \
-  cli/tests/repair-profile.test.ts
+  cli/tests/repair-profile.test.ts \
+  cli/tests/local-repo.test.ts
 pnpm typecheck
 pnpm exec biome check <modified files>
 pnpm build
@@ -79,11 +82,12 @@ pnpm build
 
 `cli/tests/squad-bridge-seams.test.ts` 把独立验收的 workspace / session / stop-canary 探针收成有断言回归（Node 假 Orchestrator，finally 杀组）。真实 squadctl smoke/adapter 在没有个人 skill 的 CI 上 `describe.skipIf`；本机存在 `scripts/squadctl` 时默认执行。`COUNCILKIT_SQUAD_SMOKE=1` 时缺桥直接失败。不推实际 AntCode PR。
 
-本机 2026-09-21 已显式跑过并通过：`cli/tests/squadctl-real-smoke.test.ts`（真实 squadctl 2.1.0 init/intake `--new-repair-chain`/Python profile hash）、`cli/tests/squadctl-bridge.adapter.test.ts`、`cli/tests/squad-bridge-seams.test.ts`。不是靠 skip 交付。
+本机 2026-09-21 已显式跑过并通过：`cli/tests/squadctl-real-smoke.test.ts`（真实 squadctl 2.1.0 init/intake `--new-repair-chain`/Python profile hash）、`cli/tests/squadctl-bridge.adapter.test.ts`、`cli/tests/squad-bridge-seams.test.ts`（含 init 后 exit 17/0、外部 SIGKILL、PID 复用不误杀、孙进程杀干净、pushurl 漂移拒绝）。不是靠 skip 交付。ccbfde8 的 4 条新 P1 关闭证据见 `cli/tests/squad-bridge-seams.test.ts` 与 `cli/tests/repair-workspace.test.ts`。
 
 ## 边界
 
 - 已安装 skill 仍无 `squadctl orchestrate`；CouncilKit 用独立 grok + 现有控制面补通。
-- 已安装 squadctl 2.1.0 不能 verified 跨任务 ancestor journal 映射，故第二个可写子任务 fail-closed。
+- 已安装 squadctl 2.1.0 不能 verified 跨任务 ancestor journal 映射，故第二个可写子任务 fail-closed。本轮不改 history 硬挡，等独立 history API。
 - Host 不读 `.squad/`、不 spawn squadctl。
 - 未对用户真实 PR 做 integrate push。
+- 不能据此宣称「修到准出」的完整功能交付。

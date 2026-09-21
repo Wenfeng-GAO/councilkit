@@ -73,6 +73,19 @@ export function signalGroup(pgid: number, signal: NodeJS.Signals): void {
   }
 }
 
+/** Signal a process group only when the live leader still matches the frozen fingerprint. */
+export function signalVerifiedGroup(expected: ProcessFingerprint, signal: NodeJS.Signals): boolean {
+  if (!isProcessGroupLeader(expected)) return false;
+  const live = fingerprintPid(expected.pid);
+  if (!sameProcess(expected, live)) return false;
+  signalGroup(expected.pgid, signal);
+  return true;
+}
+
+export function liveMatchesFrozen(expected: ProcessFingerprint, pid = expected.pid): boolean {
+  return sameProcess(expected, fingerprintPid(pid));
+}
+
 export function groupHasLiveMembers(pgid: number, expected?: ProcessFingerprint): boolean {
   const members = listGroupPids(pgid);
   if (members.length === 0) return false;

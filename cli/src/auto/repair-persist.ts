@@ -55,6 +55,7 @@ const repairStateSchema = z
     lastError: z.string().min(1).max(2000).nullable().optional(),
     workspaceCwd: z.string().min(1).max(4096).nullable().optional(),
     frozenOriginUrl: z.string().min(1).max(4096).nullable().optional(),
+    frozenPushUrl: z.string().min(1).max(4096).nullable().optional(),
     packageSourceRunId: z.string().min(1).max(80).nullable().optional(),
     frozenBaseSha: z.string().min(1).max(64).nullable().optional(),
     supplementReviewId: z.string().min(1).max(80).nullable().optional(),

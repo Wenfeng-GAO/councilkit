@@ -33,15 +33,54 @@ interface ReposFile {
 
 /** Extract `group/project` from a git remote URL. */
 export function projectFromRemote(remote: string): string | null {
-  const trimmed = remote.trim().replace(/\.git$/i, "");
-  const scp = /^git@([^:]+):(.+)$/.exec(trimmed);
-  if (scp) return scp[2].replace(/^\/+/, "").replace(/\/+$/, "");
+  const identity = parseRemoteRepoIdentity(remote);
+  return identity ? identity.path : null;
+}
+
+export interface RemoteRepoIdentity {
+  host: string;
+  path: string;
+}
+
+/** Host + repo path from HTTPS, ssh:// (optional port), SCP-style, or a local path. */
+export function parseRemoteRepoIdentity(remote: string): RemoteRepoIdentity | null {
+  const trimmed = remote.trim();
+  if (!trimmed) return null;
+  if (isLocalRemotePath(trimmed)) {
+    const path = stripGitSuffix(trimmed.replace(/^file:\/\//i, ""));
+    return path.length > 0 ? { host: "", path } : null;
+  }
+  if (!trimmed.includes("://")) {
+    const scp = /^(?:[^@/?#]+@)?([^:/]+)[:/](.+)$/.exec(trimmed);
+    if (scp?.[1] && scp[2] && !scp[1].includes("\\")) {
+      return { host: scp[1].toLowerCase(), path: stripGitSuffix(scp[2]) };
+    }
+  }
   try {
-    const url = new URL(trimmed);
-    return url.pathname.replace(/^\/+/, "").replace(/\/+$/, "");
+    const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+    if (!url.hostname) return null;
+    return { host: url.hostname.toLowerCase(), path: stripGitSuffix(url.pathname) };
   } catch {
     return null;
   }
+}
+
+export function isLocalRemotePath(remote: string): boolean {
+  const trimmed = remote.trim();
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("file://") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../") ||
+    /^[A-Za-z]:[\\/]/.test(trimmed)
+  );
+}
+
+function stripGitSuffix(value: string): string {
+  return value
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "");
 }
 
 export function remoteMatchesProject(remote: string, project: string): boolean {

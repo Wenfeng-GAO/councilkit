@@ -34,7 +34,7 @@ import { type RepairProfile, loadRepairProfile, loadReusableRepairGrant } from "
 import {
   inspectCwdForRepair,
   materializeRepairWorkspace,
-  readRemoteUrl,
+  readRemoteUrls,
   resolveRepairWorkspaceCwd,
   sourceRepoRealpath,
 } from "./repair-workspace";
@@ -134,20 +134,23 @@ export async function executeRepairLoop(input: {
     const sourceRepo = sourceRepoRealpath(input.sourceRunId);
     const sourceSha = readCliRun(input.sourceRunId)?.reviewEvidence?.sha;
     if (sourceRepo && sourceSha && !deps.workspaceCwd) {
-      const origin =
-        state.frozenOriginUrl ?? (await readRemoteUrl(sourceRepo, defaultRunCommand, process.env));
+      const sourceUrls = await readRemoteUrls(sourceRepo, defaultRunCommand, process.env);
+      const origin = state.frozenOriginUrl ?? sourceUrls?.fetchUrl;
+      const push = state.frozenPushUrl ?? sourceUrls?.pushUrl ?? origin;
       const frozen = await materializeRepairWorkspace({
         dest: workspaceCwd,
         sourceRepo,
         sourceBranch: profile.sourceBranch,
         sourceSha,
         expectedOriginUrl: origin ?? undefined,
+        expectedPushUrl: push ?? undefined,
         expectedRepo: profile.repo,
       });
       workspaceCwd = frozen.cwd;
       state = patchState(input.runDir, {
         ...state,
-        frozenOriginUrl: frozen.originUrl,
+        frozenOriginUrl: frozen.fetchUrl,
+        frozenPushUrl: frozen.pushUrl,
         workspaceCwd,
       });
     }
@@ -324,6 +327,8 @@ export async function executeRepairLoop(input: {
               sourceSha: packageBody.source.sha,
               expectedOldSha: (state.publishedSha ?? preflight.sourceSha).toLowerCase(),
               remote: "origin",
+              originUrl: state.frozenOriginUrl ?? undefined,
+              pushUrl: state.frozenPushUrl ?? state.frozenOriginUrl ?? undefined,
               parentRunId: input.runId,
               newRepairChain: cycleN === 1,
             },
@@ -389,6 +394,8 @@ export async function executeRepairLoop(input: {
         sourceSha: packageBody.source.sha,
         expectedOldSha: (state.publishedSha ?? preflight.sourceSha).toLowerCase(),
         remote: "origin",
+        originUrl: state.frozenOriginUrl ?? undefined,
+        pushUrl: state.frozenPushUrl ?? state.frozenOriginUrl ?? undefined,
         parentRunId: input.runId,
         newRepairChain: true,
       };

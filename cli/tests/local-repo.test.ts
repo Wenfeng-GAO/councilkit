@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultRunCommand } from "../src/auto/checkout-pr";
 import {
+  parseRemoteRepoIdentity,
   projectFromRemote,
   projectKeyFromPr,
   remoteMatchesProject,
@@ -17,6 +18,25 @@ describe("project keys", () => {
     expect(projectKeyFromPr("https://code.alipay.com/paas-core/agentrun/pull_requests/126")).toBe(
       "paas-core/agentrun",
     );
+  });
+
+  it("parses SCP, ssh:// with port, and HTTPS remotes as host+path", () => {
+    expect(parseRemoteRepoIdentity("git@github.com:acme/repo.git")).toEqual({
+      host: "github.com",
+      path: "acme/repo",
+    });
+    expect(parseRemoteRepoIdentity("ssh://git@github.com:22/acme/repo.git")).toEqual({
+      host: "github.com",
+      path: "acme/repo",
+    });
+    expect(parseRemoteRepoIdentity("https://code.alipay.com/group/proj.git")).toEqual({
+      host: "code.alipay.com",
+      path: "group/proj",
+    });
+    expect(parseRemoteRepoIdentity("github.com/acme/repo")).toEqual({
+      host: "github.com",
+      path: "acme/repo",
+    });
   });
 
   it("matches gitlab/ssh remotes to an AntCode project key", () => {

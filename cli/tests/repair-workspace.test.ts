@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { materializeRepairWorkspace } from "../src/auto/repair-workspace";
+import { materializeRepairWorkspace, originMatchesRepo } from "../src/auto/repair-workspace";
 
 let roots: string[] = [];
 afterEach(() => {
@@ -58,5 +58,42 @@ describe("materializeRepairWorkspace", () => {
     });
     expect(resumed.headSha).toBe(candidate);
     expect(git(dest, ["rev-parse", "HEAD"])).toBe(candidate);
+    expect(resumed.pushUrl).toBe(bare);
+    expect(git(dest, ["remote", "get-url", "--push", "origin"])).toBe(bare);
+    git(dest, ["config", "remote.origin.pushurl", join(root, "unexpected.git")]);
+    await expect(
+      materializeRepairWorkspace({
+        dest,
+        sourceRepo: source,
+        sourceBranch: "feat-x",
+        sourceSha: sha,
+        expectedOriginUrl: bare,
+        expectedPushUrl: bare,
+      }),
+    ).rejects.toThrow(/push/i);
+  });
+
+  it("matches host+path for SCP, ssh://, HTTPS and rejects substring spoofs", () => {
+    const repo = "github.com/acme/repo";
+    expect(originMatchesRepo("https://github.com/acme/repo.git", repo)).toBe(true);
+    expect(originMatchesRepo("https://github.com/acme/repo", repo)).toBe(true);
+    expect(originMatchesRepo("git@github.com:acme/repo.git", repo)).toBe(true);
+    expect(originMatchesRepo("git@github.com:acme/repo", repo)).toBe(true);
+    expect(originMatchesRepo("ssh://git@github.com:22/acme/repo.git", repo)).toBe(true);
+    expect(originMatchesRepo("ssh://git@github.com/acme/repo.git", repo)).toBe(true);
+    expect(
+      originMatchesRepo("git@code.alipay.com:group/proj.git", "code.alipay.com/group/proj"),
+    ).toBe(true);
+    expect(
+      originMatchesRepo(
+        "ssh://git@code.alipay.com:2222/group/proj.git",
+        "code.alipay.com/group/proj",
+      ),
+    ).toBe(true);
+    expect(originMatchesRepo("https://wrong.example/github.com/acme/repo.git", repo)).toBe(false);
+    expect(originMatchesRepo("git@github.com:acme/repo-extra.git", repo)).toBe(false);
+    expect(originMatchesRepo("git@github.com:prefix/acme/repo.git", repo)).toBe(false);
+    expect(originMatchesRepo("git@evil.com:github.com/acme/repo.git", repo)).toBe(false);
+    expect(originMatchesRepo("https://github.com/acme/other.git", repo)).toBe(false);
   });
 });

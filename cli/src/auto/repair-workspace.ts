@@ -5,6 +5,7 @@ import { ensureHome, resolvePaths } from "../store/paths";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
 import { gitRevParse } from "./git-worktree";
 import { readInvocationManifest } from "./invocation-manifest";
+import { isLocalRemotePath, parseRemoteRepoIdentity } from "./local-repo";
 import { sourceReviewDir } from "./repair-persist";
 
 export function isCouncilKitCheckout(cwd: string): boolean {
@@ -69,23 +70,49 @@ export async function readRemoteUrl(
   env: NodeJS.ProcessEnv,
   remote = "origin",
 ): Promise<string | null> {
-  const fetchUrl = await run({
+  const urls = await readRemoteUrls(repo, run, env, remote);
+  return urls?.fetchUrl ?? null;
+}
+
+export async function readRemoteUrls(
+  repo: string,
+  run: RunCommand,
+  env: NodeJS.ProcessEnv,
+  remote = "origin",
+): Promise<{ fetchUrl: string; pushUrl: string; explicitPushUrl: string | null } | null> {
+  const fetchResult = await run({
     executable: "git",
     argv: ["remote", "get-url", remote],
     cwd: repo,
     env,
   });
-  if (fetchUrl.exitCode !== 0) return null;
-  const url = fetchUrl.stdout.trim();
-  return url.length > 0 ? url : null;
+  if (fetchResult.exitCode !== 0) return null;
+  const fetchUrl = fetchResult.stdout.trim();
+  if (!fetchUrl) return null;
+  const pushResult = await run({
+    executable: "git",
+    argv: ["remote", "get-url", "--push", remote],
+    cwd: repo,
+    env,
+  });
+  const pushUrl =
+    pushResult.exitCode === 0 && pushResult.stdout.trim() ? pushResult.stdout.trim() : fetchUrl;
+  const explicit = await run({
+    executable: "git",
+    argv: ["config", "--get", `remote.${remote}.pushurl`],
+    cwd: repo,
+    env,
+  });
+  const explicitPushUrl =
+    explicit.exitCode === 0 && explicit.stdout.trim().length > 0 ? explicit.stdout.trim() : null;
+  return { fetchUrl, pushUrl, explicitPushUrl };
 }
 
 export function originMatchesRepo(originUrl: string, repo: string): boolean {
-  const normalized = originUrl.replace(/\.git$/, "").replace(/\/+$/, "");
-  const identity = repo.replace(/\.git$/, "").replace(/\/+$/, "");
-  return (
-    normalized === identity || normalized.endsWith(`/${identity}`) || normalized.includes(identity)
-  );
+  const origin = parseRemoteRepoIdentity(originUrl);
+  const identity = parseRemoteRepoIdentity(repo);
+  if (!origin || !identity || !origin.host || !identity.host) return false;
+  return origin.host === identity.host && origin.path === identity.path;
 }
 
 export async function materializeRepairWorkspace(input: {
@@ -94,27 +121,32 @@ export async function materializeRepairWorkspace(input: {
   sourceBranch: string;
   sourceSha: string;
   expectedOriginUrl?: string;
+  expectedPushUrl?: string;
   expectedRepo?: string;
   runCommand?: RunCommand;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ cwd: string; headSha: string; sourceRef: string; originUrl: string }> {
+}): Promise<{
+  cwd: string;
+  headSha: string;
+  sourceRef: string;
+  originUrl: string;
+  fetchUrl: string;
+  pushUrl: string;
+}> {
   assertRepairWorkspace(input.dest);
   if (isCouncilKitCheckout(input.sourceRepo)) {
     throw errors.usage("repair workspace source must not be the CouncilKit checkout");
   }
   const run = input.runCommand ?? defaultRunCommand;
   const env = input.env ?? process.env;
-  const sourceOrigin = input.expectedOriginUrl ?? (await readRemoteUrl(input.sourceRepo, run, env));
-  if (!sourceOrigin) {
+  const sourceUrls = await readRemoteUrls(input.sourceRepo, run, env);
+  const fetchUrl = input.expectedOriginUrl ?? sourceUrls?.fetchUrl ?? null;
+  const pushUrl = input.expectedPushUrl ?? sourceUrls?.pushUrl ?? fetchUrl;
+  if (!fetchUrl || !pushUrl) {
     throw errors.runFailed("source repository has no origin URL to freeze");
   }
-  if (
-    input.expectedRepo &&
-    !originMatchesRepo(sourceOrigin, input.expectedRepo) &&
-    !sourceOrigin.startsWith("/")
-  ) {
-    throw errors.runFailed("frozen origin URL does not match the repair profile repo");
-  }
+  assertRemoteMatchesRepo(fetchUrl, input.expectedRepo);
+  assertRemoteMatchesRepo(pushUrl, input.expectedRepo);
   const existing = existsSync(join(input.dest, ".git"));
   if (!existing) {
     const cloned = await run({
@@ -126,14 +158,23 @@ export async function materializeRepairWorkspace(input: {
     if (cloned.exitCode !== 0) {
       throw errors.runFailed(`git clone of isolated repair workspace failed: ${cloned.stderr}`);
     }
-    const setUrl = await run({
+    const setFetch = await run({
       executable: "git",
-      argv: ["remote", "set-url", "origin", sourceOrigin],
+      argv: ["remote", "set-url", "origin", fetchUrl],
       cwd: input.dest,
       env,
     });
-    if (setUrl.exitCode !== 0) {
+    if (setFetch.exitCode !== 0) {
       throw errors.runFailed("could not freeze the isolated workspace origin URL");
+    }
+    const setPush = await run({
+      executable: "git",
+      argv: ["remote", "set-url", "--push", "origin", pushUrl],
+      cwd: input.dest,
+      env,
+    });
+    if (setPush.exitCode !== 0) {
+      throw errors.runFailed("could not freeze the isolated workspace push URL");
     }
     const branch = input.sourceBranch.replace(/^refs\/heads\//, "");
     const checkout = await run({
@@ -150,11 +191,7 @@ export async function materializeRepairWorkspace(input: {
       throw errors.runFailed("isolated workspace HEAD does not match the frozen source SHA");
     }
   }
-  const origin = await readRemoteUrl(input.dest, run, env);
-  if (!origin) throw errors.runFailed("isolated workspace is missing origin");
-  if (origin !== sourceOrigin) {
-    throw errors.runFailed("isolated workspace origin drifted from the frozen fetch/push URL");
-  }
+  await assertFrozenRemoteUrls(input.dest, fetchUrl, pushUrl, run, env);
   const branch = input.sourceBranch.replace(/^refs\/heads\//, "");
   const ref = await run({
     executable: "git",
@@ -171,8 +208,37 @@ export async function materializeRepairWorkspace(input: {
     cwd: input.dest,
     headSha: head.toLowerCase(),
     sourceRef: `refs/heads/${branch}`,
-    originUrl: origin,
+    originUrl: fetchUrl,
+    fetchUrl,
+    pushUrl,
   };
+}
+
+export async function assertFrozenRemoteUrls(
+  repo: string,
+  fetchUrl: string,
+  pushUrl: string,
+  run: RunCommand = defaultRunCommand,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const actual = await readRemoteUrls(repo, run, env);
+  if (!actual) throw errors.runFailed("isolated workspace is missing origin");
+  if (actual.fetchUrl !== fetchUrl) {
+    throw errors.runFailed("isolated workspace origin drifted from the frozen fetch URL");
+  }
+  if (actual.pushUrl !== pushUrl) {
+    throw errors.runFailed("isolated workspace origin drifted from the frozen push URL");
+  }
+  if (actual.explicitPushUrl && actual.explicitPushUrl !== pushUrl) {
+    throw errors.runFailed("isolated workspace pushurl drifted from the frozen push URL");
+  }
+}
+
+function assertRemoteMatchesRepo(url: string, repo?: string): void {
+  if (!repo || isLocalRemotePath(url)) return;
+  if (!originMatchesRepo(url, repo)) {
+    throw errors.runFailed("frozen origin URL does not match the repair profile repo");
+  }
 }
 
 export function inspectCwdForRepair(input: {
