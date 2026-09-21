@@ -155,31 +155,38 @@ export function grokLeaderSocketDir(): string {
 }
 
 /**
- * Private Grok leader socket path. Keeps `<workspace>/.grok-leader.sock` when
- * both the given path and its canonical form are AF_UNIX-safe. Longer
- * workspaces (deep or non-ASCII) get `/tmp/ck-grok-<uid>/<hash>.sock`.
+ * Private Grok leader socket path. Strategy is chosen from the canonical
+ * workspace identity so resume and path aliases share one endpoint:
+ * in-workspace `<canonical>/.grok-leader.sock` when that socket is AF_UNIX-safe,
+ * otherwise `/tmp/ck-grok-<uid>/<hash>.sock`. A short original spelling may be
+ * returned when it is itself safe and names that same in-workspace endpoint.
  */
 export function grokLeaderSocket(workspace: string): string {
-  const given = join(workspace, GROK_LEADER_SOCK);
-  const canonicalSock = join(canonicalWorkspacePath(workspace), GROK_LEADER_SOCK);
-  if (
-    utf8ByteLength(given) < AF_UNIX_PATH_MAX_BYTES &&
+  const canonicalWs = canonicalWorkspacePath(workspace);
+  const canonicalSock = join(canonicalWs, GROK_LEADER_SOCK);
+  const socketPath =
     utf8ByteLength(canonicalSock) < AF_UNIX_PATH_MAX_BYTES
-  ) {
-    return given;
-  }
+      ? shortWorkspaceSocket(workspace, canonicalSock)
+      : hashedGrokLeaderSocket(canonicalWs);
+  assertExistingSocketSafe(socketPath);
+  return socketPath;
+}
+
+function shortWorkspaceSocket(workspace: string, canonicalSock: string): string {
+  const given = join(workspace, GROK_LEADER_SOCK);
+  if (utf8ByteLength(given) < AF_UNIX_PATH_MAX_BYTES) return given;
+  return canonicalSock;
+}
+
+function hashedGrokLeaderSocket(canonicalWs: string): string {
   const dir = ensurePrivateSocketDir(grokLeaderSocketDir());
-  const hash = createHash("sha256")
-    .update(canonicalWorkspacePath(workspace), "utf8")
-    .digest("hex")
-    .slice(0, 16);
+  const hash = createHash("sha256").update(canonicalWs, "utf8").digest("hex").slice(0, 16);
   const socketPath = join(dir, `${hash}.sock`);
   if (utf8ByteLength(socketPath) >= AF_UNIX_PATH_MAX_BYTES) {
     throw errors.io(
       `grok leader socket path exceeds AF_UNIX limit (${utf8ByteLength(socketPath)} bytes)`,
     );
   }
-  assertExistingSocketSafe(socketPath);
   return socketPath;
 }
 
@@ -259,6 +266,9 @@ function assertExistingSocketSafe(socketPath: string): void {
   }
   if (st.isSymbolicLink()) {
     throw errors.io(`refusing existing symlink at grok leader socket path: ${socketPath}`);
+  }
+  if (!st.isSocket()) {
+    throw errors.io(`refusing existing non-socket at grok leader socket path: ${socketPath}`);
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   if (uid !== undefined && st.uid !== uid) {
