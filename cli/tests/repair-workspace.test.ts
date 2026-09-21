@@ -40,6 +40,23 @@ describe("materializeRepairWorkspace", () => {
     });
     expect(frozen.headSha).toBe(sha);
     expect(frozen.sourceRef).toBe("refs/heads/feat-x");
+    expect(frozen.originUrl).toBe(bare);
+    expect(git(dest, ["remote", "get-url", "origin"])).toBe(bare);
     expect(git(source, ["rev-parse", "HEAD"])).toBe(sha);
+    git(dest, ["config", "user.email", "squad@example.com"]);
+    git(dest, ["config", "user.name", "squad"]);
+    writeFileSync(join(dest, "README.md"), "candidate\n");
+    git(dest, ["add", "."]);
+    git(dest, ["commit", "-m", "candidate"]);
+    const candidate = git(dest, ["rev-parse", "HEAD"]);
+    const resumed = await materializeRepairWorkspace({
+      dest,
+      sourceRepo: source,
+      sourceBranch: "feat-x",
+      sourceSha: sha,
+      expectedOriginUrl: bare,
+    });
+    expect(resumed.headSha).toBe(candidate);
+    expect(git(dest, ["rev-parse", "HEAD"])).toBe(candidate);
   });
 });

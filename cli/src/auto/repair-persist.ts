@@ -23,6 +23,7 @@ const repairCycleSchema = z
     phase: z.enum(["reserved", "active", "published", "reviewed", "gated", "closed"]),
     childReviewId: z.string().min(1).max(80).nullable().optional(),
     squadTaskId: z.string().min(1).max(80).nullable().optional(),
+    squadTaskDir: z.string().min(1).max(4096).nullable().optional(),
   })
   .strict();
 
@@ -53,6 +54,7 @@ const repairStateSchema = z
     cycles: z.array(repairCycleSchema).optional(),
     lastError: z.string().min(1).max(2000).nullable().optional(),
     workspaceCwd: z.string().min(1).max(4096).nullable().optional(),
+    frozenOriginUrl: z.string().min(1).max(4096).nullable().optional(),
     packageSourceRunId: z.string().min(1).max(80).nullable().optional(),
     frozenBaseSha: z.string().min(1).max(64).nullable().optional(),
     supplementReviewId: z.string().min(1).max(80).nullable().optional(),

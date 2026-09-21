@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import {
@@ -18,8 +18,7 @@ import { ReviewExit, runReview } from "../commands/review";
 import { EXIT, errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
-import type { CheckedOutPr } from "./checkout-pr";
-import { inspectPullRequest } from "./checkout-pr";
+import { type CheckedOutPr, defaultRunCommand, inspectPullRequest } from "./checkout-pr";
 import { loadFindingGroups } from "./finding-groups";
 import { ensureRepairHandoff } from "./repair-handoff";
 import { acquireWriterLease, releaseWriterLease } from "./repair-lease";
@@ -31,10 +30,11 @@ import {
   writeRepairState,
 } from "./repair-persist";
 import { runRepairPreflight, sourceNeedsSupplementReview } from "./repair-preflight";
-import { type RepairProfile, createRepairGrant, loadRepairProfile } from "./repair-profile";
+import { type RepairProfile, loadRepairProfile, loadReusableRepairGrant } from "./repair-profile";
 import {
   inspectCwdForRepair,
   materializeRepairWorkspace,
+  readRemoteUrl,
   resolveRepairWorkspaceCwd,
   sourceRepoRealpath,
 } from "./repair-workspace";
@@ -134,13 +134,22 @@ export async function executeRepairLoop(input: {
     const sourceRepo = sourceRepoRealpath(input.sourceRunId);
     const sourceSha = readCliRun(input.sourceRunId)?.reviewEvidence?.sha;
     if (sourceRepo && sourceSha && !deps.workspaceCwd) {
+      const origin =
+        state.frozenOriginUrl ?? (await readRemoteUrl(sourceRepo, defaultRunCommand, process.env));
       const frozen = await materializeRepairWorkspace({
         dest: workspaceCwd,
         sourceRepo,
         sourceBranch: profile.sourceBranch,
         sourceSha,
+        expectedOriginUrl: origin ?? undefined,
+        expectedRepo: profile.repo,
       });
       workspaceCwd = frozen.cwd;
+      state = patchState(input.runDir, {
+        ...state,
+        frozenOriginUrl: frozen.originUrl,
+        workspaceCwd,
+      });
     }
   } catch (error) {
     return finish(input, {
@@ -165,10 +174,15 @@ export async function executeRepairLoop(input: {
       message: error instanceof Error ? error.message : "inspect failed",
     });
   }
-  const grant = createRepairGrant(profile);
-  writeFileSync(join(input.runDir, "repair-grant.json"), `${JSON.stringify(grant, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
+  const grant = loadReusableRepairGrant({
+    runDir: input.runDir,
+    profile,
+    grantId: state.grantId,
+    grantHash: state.grantHash,
+    now: now(),
+    hasWritableCycle: Boolean(
+      state.grantId || state.grantHash || state.cycles?.some((cycle) => Boolean(cycle.squadTaskId)),
+    ),
   });
   state = patchState(input.runDir, {
     ...state,
@@ -185,7 +199,7 @@ export async function executeRepairLoop(input: {
     sourceRunId: state.packageSourceRunId ?? input.sourceRunId,
     profile,
     pr,
-    bridgeVersion: deps.bridge ? SQUAD_BRIDGE_CONTRACT_VERSION : probe.version,
+    bridgeVersion: probe.version ?? (deps.bridge ? SQUAD_BRIDGE_CONTRACT_VERSION : null),
     historyCount: state.historyCount ?? null,
     parentOuterUsed: state.outerUsed,
     workspaceCwd,
@@ -265,6 +279,15 @@ export async function executeRepairLoop(input: {
       });
     }
     if (!resumeSlot) {
+      if (cycleN > 1 && bridge.prepare) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "HISTORY_INVALID",
+          message:
+            "subsequent squad subtask needs verified history import; installed squadctl cannot map ancestor journals",
+          outerUsed: state.outerUsed,
+        });
+      }
       appendRepairJournal(input.runDir, { kind: "outer_cycle.intent", n: cycleN, at: now() });
       const cycles = [...(state.cycles ?? []), { n: cycleN, phase: "reserved" as const }];
       state = patchState(input.runDir, {
@@ -278,10 +301,43 @@ export async function executeRepairLoop(input: {
     let taskId = cycle?.squadTaskId ?? null;
     if (cycle?.phase === "reviewed" || cycle?.phase === "published") {
       taskId = cycle.squadTaskId ?? taskId;
-    } else if (taskId && cycle?.phase === "active") {
+    } else if (taskId) {
       writeRepairLive(input.runDir, { status: "running", phase: "repair-squad-repair" });
       input.out.progress(`repair outer ${cycleN}/${state.outerMax}`);
-      let snapshot = bridge.resume({ taskId });
+      let snapshot: ReturnType<SquadBridge["status"]>;
+      try {
+        snapshot = await Promise.resolve(bridge.resume({ taskId }));
+        if (snapshot.event.kind === "stopped" && bridge.prepare) {
+          const packageBody = loadRepairPackage(packageSourceId);
+          await bridge.prepare({
+            taskId,
+            baseSha: packageBody.source.sha,
+            packagePath: ensureRepairHandoff({
+              runId: input.runId,
+              cycle: cycleN,
+              body: packageBody,
+            }).path,
+            delivery: {
+              grantHash: grant.grantHash,
+              repo: profile.repo,
+              sourceBranch: profile.sourceBranch,
+              sourceSha: packageBody.source.sha,
+              expectedOldSha: (state.publishedSha ?? preflight.sourceSha).toLowerCase(),
+              remote: "origin",
+              parentRunId: input.runId,
+              newRepairChain: cycleN === 1,
+            },
+          });
+          snapshot = bridge.status({ taskId });
+        }
+      } catch (error) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "squad_failed",
+          message: error instanceof Error ? error.message : "squad resume failed",
+          outerUsed: state.outerUsed,
+        });
+      }
       snapshot = await waitForCandidate(bridge, taskId, snapshot, input.runDir, now, deps, state);
       const waited = terminalWaitOutcome(input, snapshot, state);
       if (waited) return waited;
@@ -333,6 +389,8 @@ export async function executeRepairLoop(input: {
         sourceSha: packageBody.source.sha,
         expectedOldSha: (state.publishedSha ?? preflight.sourceSha).toLowerCase(),
         remote: "origin",
+        parentRunId: input.runId,
+        newRepairChain: true,
       };
       const started = bridge.start({
         requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
@@ -356,19 +414,29 @@ export async function executeRepairLoop(input: {
           outerUsed: state.outerUsed,
         });
       }
-      if (bridge.prepare) {
-        await bridge.prepare({
-          taskId: started.taskId,
-          baseSha: packageBody.source.sha,
-          packagePath: handoff.path,
-          delivery,
-        });
-      }
       taskId = started.taskId;
       state = patchCycle(input.runDir, state, cycleN, {
         phase: "active",
         squadTaskId: started.taskId,
+        squadTaskDir: started.taskDir ?? null,
       });
+      if (bridge.prepare) {
+        try {
+          await bridge.prepare({
+            taskId: started.taskId,
+            baseSha: packageBody.source.sha,
+            packagePath: handoff.path,
+            delivery,
+          });
+        } catch (error) {
+          return finish(input, {
+            businessResult: "needs_attention",
+            reasonCode: "squad_failed",
+            message: error instanceof Error ? error.message : "squad prepare failed",
+            outerUsed: state.outerUsed,
+          });
+        }
+      }
       if (bridge.writerPids) {
         state = patchState(input.runDir, { ...state, writerPids: bridge.writerPids() });
       }
@@ -976,8 +1044,12 @@ function expectedRemoteSha(state: RepairState, sourceSha: string): string {
 }
 
 function startedTaskDir(state: RepairState): string | null {
-  const last = state.cycles?.at(-1);
-  return last?.squadTaskId ? last.squadTaskId : null;
+  const cycles = state.cycles ?? [];
+  for (let index = cycles.length - 1; index >= 0; index -= 1) {
+    const dir = cycles[index]?.squadTaskDir;
+    if (dir) return dir;
+  }
+  return null;
 }
 
 function runIdFromArgv(argv: string[]): string | null {

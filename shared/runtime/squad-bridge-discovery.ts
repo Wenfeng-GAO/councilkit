@@ -27,6 +27,7 @@ export interface SquadBridgeOrchestratorProbe {
 export interface SquadBridgeProbe {
   available: boolean;
   version: string | null;
+  toolVersion: string | null;
   reason: string | null;
   executable: string | null;
   skillDir: string | null;
@@ -97,6 +98,7 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
   return {
     available: true,
     version: SQUAD_BRIDGE_CONTRACT_VERSION,
+    toolVersion: null,
     reason: null,
     executable,
     skillDir,
@@ -115,6 +117,7 @@ function unavailable(reason: string): SquadBridgeProbe {
   return {
     available: false,
     version: null,
+    toolVersion: null,
     reason,
     executable: null,
     skillDir: null,

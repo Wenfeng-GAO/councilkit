@@ -63,21 +63,60 @@ export function resolveRepairWorkspaceCwd(input: {
   );
 }
 
+export async function readRemoteUrl(
+  repo: string,
+  run: RunCommand,
+  env: NodeJS.ProcessEnv,
+  remote = "origin",
+): Promise<string | null> {
+  const fetchUrl = await run({
+    executable: "git",
+    argv: ["remote", "get-url", remote],
+    cwd: repo,
+    env,
+  });
+  if (fetchUrl.exitCode !== 0) return null;
+  const url = fetchUrl.stdout.trim();
+  return url.length > 0 ? url : null;
+}
+
+export function originMatchesRepo(originUrl: string, repo: string): boolean {
+  const normalized = originUrl.replace(/\.git$/, "").replace(/\/+$/, "");
+  const identity = repo.replace(/\.git$/, "").replace(/\/+$/, "");
+  return (
+    normalized === identity || normalized.endsWith(`/${identity}`) || normalized.includes(identity)
+  );
+}
+
 export async function materializeRepairWorkspace(input: {
   dest: string;
   sourceRepo: string;
   sourceBranch: string;
   sourceSha: string;
+  expectedOriginUrl?: string;
+  expectedRepo?: string;
   runCommand?: RunCommand;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ cwd: string; headSha: string; sourceRef: string }> {
+}): Promise<{ cwd: string; headSha: string; sourceRef: string; originUrl: string }> {
   assertRepairWorkspace(input.dest);
   if (isCouncilKitCheckout(input.sourceRepo)) {
     throw errors.usage("repair workspace source must not be the CouncilKit checkout");
   }
   const run = input.runCommand ?? defaultRunCommand;
   const env = input.env ?? process.env;
-  if (!existsSync(join(input.dest, ".git"))) {
+  const sourceOrigin = input.expectedOriginUrl ?? (await readRemoteUrl(input.sourceRepo, run, env));
+  if (!sourceOrigin) {
+    throw errors.runFailed("source repository has no origin URL to freeze");
+  }
+  if (
+    input.expectedRepo &&
+    !originMatchesRepo(sourceOrigin, input.expectedRepo) &&
+    !sourceOrigin.startsWith("/")
+  ) {
+    throw errors.runFailed("frozen origin URL does not match the repair profile repo");
+  }
+  const existing = existsSync(join(input.dest, ".git"));
+  if (!existing) {
     const cloned = await run({
       executable: "git",
       argv: ["clone", "--local", "--no-hardlinks", input.sourceRepo, input.dest],
@@ -87,41 +126,53 @@ export async function materializeRepairWorkspace(input: {
     if (cloned.exitCode !== 0) {
       throw errors.runFailed(`git clone of isolated repair workspace failed: ${cloned.stderr}`);
     }
+    const setUrl = await run({
+      executable: "git",
+      argv: ["remote", "set-url", "origin", sourceOrigin],
+      cwd: input.dest,
+      env,
+    });
+    if (setUrl.exitCode !== 0) {
+      throw errors.runFailed("could not freeze the isolated workspace origin URL");
+    }
+    const branch = input.sourceBranch.replace(/^refs\/heads\//, "");
+    const checkout = await run({
+      executable: "git",
+      argv: ["checkout", "-B", branch, input.sourceSha],
+      cwd: input.dest,
+      env,
+    });
+    if (checkout.exitCode !== 0) {
+      throw errors.runFailed(`isolated workspace checkout failed: ${checkout.stderr}`);
+    }
+    const head = await gitRevParse(input.dest, "HEAD", run, env);
+    if (!head || head.toLowerCase() !== input.sourceSha.toLowerCase()) {
+      throw errors.runFailed("isolated workspace HEAD does not match the frozen source SHA");
+    }
+  }
+  const origin = await readRemoteUrl(input.dest, run, env);
+  if (!origin) throw errors.runFailed("isolated workspace is missing origin");
+  if (origin !== sourceOrigin) {
+    throw errors.runFailed("isolated workspace origin drifted from the frozen fetch/push URL");
   }
   const branch = input.sourceBranch.replace(/^refs\/heads\//, "");
-  const checkout = await run({
-    executable: "git",
-    argv: ["checkout", "-B", branch, input.sourceSha],
-    cwd: input.dest,
-    env,
-  });
-  if (checkout.exitCode !== 0) {
-    throw errors.runFailed(`isolated workspace checkout failed: ${checkout.stderr}`);
-  }
-  const head = await gitRevParse(input.dest, "HEAD", run, env);
-  if (!head || head.toLowerCase() !== input.sourceSha.toLowerCase()) {
-    throw errors.runFailed("isolated workspace HEAD does not match the frozen source SHA");
-  }
   const ref = await run({
     executable: "git",
-    argv: ["rev-parse", "--symbolic-full-name", "HEAD"],
+    argv: ["rev-parse", "--symbolic-full-name", `refs/heads/${branch}`],
     cwd: input.dest,
     env,
   });
-  const sourceRef = ref.stdout.trim();
-  if (sourceRef !== `refs/heads/${branch}`) {
-    throw errors.runFailed("isolated workspace is not on the frozen source branch");
+  if (ref.stdout.trim() !== `refs/heads/${branch}`) {
+    throw errors.runFailed("isolated workspace is missing the frozen source branch");
   }
-  const origin = await run({
-    executable: "git",
-    argv: ["remote", "get-url", "origin"],
+  const head = await gitRevParse(input.dest, `refs/heads/${branch}`, run, env);
+  if (!head) throw errors.runFailed("isolated workspace source ref is not a commit");
+  return {
     cwd: input.dest,
-    env,
-  });
-  if (origin.exitCode !== 0) {
-    throw errors.runFailed("isolated workspace is missing origin");
-  }
-  return { cwd: input.dest, headSha: head.toLowerCase(), sourceRef };
+    headSha: head.toLowerCase(),
+    sourceRef: `refs/heads/${branch}`,
+    originUrl: origin,
+  };
 }
 
 export function inspectCwdForRepair(input: {

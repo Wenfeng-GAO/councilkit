@@ -1,15 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { afterEach, describe, expect, it } from "vitest";
 import { SquadctlBridge } from "../src/auto/squadctl-bridge";
+import { HAS_LIVE_SQUADCTL, LIVE_SQUADCTL } from "./helpers/live-squadctl";
 
 const FIXTURES = dirname(fileURLToPath(import.meta.url));
 const FAKE_GROKB = join(FIXTURES, "fixtures", "fake-grokb.mjs");
-const REAL_SQUADCTL = join(homedir(), ".codex/skills/hengzhuo-engineering-squad/scripts/squadctl");
+const REAL_SQUADCTL = LIVE_SQUADCTL;
 const AUTH = "a".repeat(64);
 
 let homes: string[] = [];
@@ -86,9 +87,8 @@ function makeBridge(home: string, workspace: string) {
   });
 }
 
-describe("production SquadctlBridge with real squadctl", () => {
+describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadctl", () => {
   it("inits, captures a native grok session, stops with epoch, and resumes the same session", async () => {
-    if (!REAL_SQUADCTL) return;
     const home = tempHome();
     const { repo, sha } = initRepo(home);
     const pkg = join(home, "pkg.json");
@@ -130,15 +130,24 @@ describe("production SquadctlBridge with real squadctl", () => {
     });
     const identity = JSON.parse(
       readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-bridge.json"), "utf8"),
-    ) as { nativeSession: string | null; actualRuntime: string | null };
-    expect(identity.nativeSession).toBe("native-session-1");
+    ) as {
+      nativeSession: string | null;
+      requestedSession: string | null;
+      actualRuntime: string | null;
+    };
+    expect(identity.nativeSession).toBe(identity.requestedSession);
+    expect(identity.nativeSession).toBeTruthy();
     expect(identity.actualRuntime).toBe("fake-grokb.mjs");
     const snapshot = instance.status({ taskId: started.taskId });
     expect(["running", "blocked", "failed", "candidate_ready"]).toContain(snapshot.event.kind);
     instance.stop({ taskId: started.taskId });
     expect(instance.status({ taskId: started.taskId }).event.kind).toBe("stopped");
-    const resumed = instance.resume({ taskId: started.taskId });
+    const resumed = await instance.resume({ taskId: started.taskId });
     expect(resumed.taskId).toBe(started.taskId);
+    const resumedIdentity = JSON.parse(
+      readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-bridge.json"), "utf8"),
+    ) as { nativeSession: string | null };
+    expect(resumedIdentity.nativeSession).toBe(identity.nativeSession);
     instance.stop({ taskId: started.taskId });
   }, 60_000);
 
@@ -165,13 +174,22 @@ describe("production SquadctlBridge with real squadctl", () => {
       baseSha: sha,
       packagePath: pkg,
     });
+    instance.stop({ taskId: started.taskId });
     const path = join(home, "squad-tasks", started.taskId, "councilkit-bridge.json");
     const identity = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
     writeFileSync(
       path,
-      `${JSON.stringify({ ...identity, nativeSession: null, orchestratorPid: null, stopped: false })}\n`,
+      `${JSON.stringify({
+        ...identity,
+        nativeSession: null,
+        orchestratorPid: null,
+        writerPids: [],
+        process: null,
+        stopped: false,
+        executionStatus: "running",
+      })}\n`,
     );
-    expect(() => instance.resume({ taskId: started.taskId })).toThrow(/native session/);
+    await expect(instance.resume({ taskId: started.taskId })).rejects.toThrow(/native session/);
     try {
       instance.stop({ taskId: started.taskId });
     } catch {

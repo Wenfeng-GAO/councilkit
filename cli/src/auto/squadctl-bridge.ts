@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   type FrozenIntegrateIdentity,
@@ -8,6 +8,7 @@ import {
   agentSeatEnv,
   assertSquadBridgeVersion,
   canRequestPublish,
+  canonicalSha256,
   frozenIntegrateCommand,
   inheritRepairHistory,
   isTrustedSquadctlIntegrateReceipt,
@@ -18,6 +19,7 @@ import {
   type SquadPrProfile,
   buildFrozenPrProfile,
   deliveryAuthorityFromProfile,
+  headsRef,
   withCandidateSha,
 } from "@shared/runtime/squad-pr-profile";
 import { errors } from "../errors";
@@ -25,6 +27,17 @@ import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
 import { grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
+import {
+  type ProcessFingerprint,
+  fingerprintPid,
+  groupHasLiveMembers,
+  isProcessGroupLeader,
+  listGroupPids,
+  sameProcess,
+  signalGroup,
+  waitForGroupIdle,
+  waitForLeaderFingerprint,
+} from "./process-identity";
 import type {
   SquadBridge,
   SquadBridgeDelivery,
@@ -93,6 +106,10 @@ interface BridgeIdentity {
   packagePath: string | null;
   delivery: SquadBridgeDelivery | null;
   stopped: boolean;
+  executionStatus: "running" | "failed" | "stopped";
+  failReason: string | null;
+  process: ProcessFingerprint | null;
+  toolVersion: string | null;
 }
 
 export class SquadctlBridge implements SquadBridge {
@@ -126,7 +143,7 @@ export class SquadctlBridge implements SquadBridge {
     return { ok: true, taskId, taskDir };
   }
 
-  resume(request: { taskId: string }): SquadBridgeStatus {
+  async resume(request: { taskId: string }): Promise<SquadBridgeStatus> {
     const identity = this.readIdentity(request.taskId);
     if (!identity) {
       return { taskId: request.taskId, event: mapSquadStatus(null, { stopped: true }) };
@@ -135,58 +152,55 @@ export class SquadctlBridge implements SquadBridge {
     if (identity.squadctlPath && probe.executable && identity.squadctlPath !== probe.executable) {
       throw errors.usage("squadctl path changed; refusing to resume a different bridge");
     }
-    if (identity.skillVersion && probe.version && identity.skillVersion !== probe.version) {
+    if (identity.toolVersion && probe.toolVersion && identity.toolVersion !== probe.toolVersion) {
       throw errors.usage("squadctl version changed; refusing to resume a different bridge");
     }
-    if (identity.orchestratorPid && this.pidAlive(identity.orchestratorPid)) {
+    if (this.writerStillLive(identity)) {
       throw errors.runFailed("refusing resume while the previous orchestrator writer is alive");
     }
     if (!identity.nativeSession) {
       throw errors.usage("no native session to resume; refusing a silent fresh session");
     }
     this.runSquadctlSync(["resume", "--task-dir", identity.taskDir, "--json"]);
-    const next = { ...identity, stopped: false };
+    const next = {
+      ...identity,
+      stopped: false,
+      executionStatus: "running" as const,
+      failReason: null,
+    };
     this.writeIdentity(request.taskId, next);
-    this.spawnChild(request.taskId, next);
+    await this.spawnForTask(request.taskId, next);
     return this.status(request);
   }
 
   stop(request: { taskId: string }): { kind: "stopped" } {
     const identity = this.readIdentity(request.taskId);
-    const pids = new Set<number>();
     const child = this.children.get(request.taskId);
-    if (child?.pid) pids.add(child.pid);
-    try {
-      child?.kill("SIGKILL");
-    } catch {
-      // already gone
-    }
-    if (identity?.orchestratorPid) pids.add(identity.orchestratorPid);
-    for (const pid of identity?.writerPids ?? []) pids.add(pid);
-    for (const pid of pids) this.killTree(pid);
-    const deadline = Date.now() + 8_000;
-    while (Date.now() < deadline) {
-      const alive = [...pids].filter((pid) => this.pidAlive(pid));
-      if (alive.length === 0) break;
-      for (const pid of alive) {
-        try {
-          (this.options.killProcess ?? process.kill)(pid, "SIGKILL");
-        } catch {
-          try {
-            (this.options.killProcess ?? process.kill)(-pid, "SIGKILL");
-          } catch {
-            // gone
-          }
-        }
+    const frozen =
+      identity?.process ?? (child?.pid ? waitForLeaderFingerprint(child.pid, 200) : null);
+    this.terminateWriters(frozen, identity, child);
+    if (child) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // already gone
       }
-      spawnSync("sleep", ["0.05"], { shell: false });
     }
-    const still = [...pids].filter((pid) => {
-      if (child && child.pid === pid && (child.killed || child.exitCode !== null)) return false;
-      return this.pidAlive(pid);
-    });
-    if (still.length > 0) {
-      throw errors.runFailed(`orchestrator writers still alive: ${still.join(",")}`);
+    if (frozen && isProcessGroupLeader(frozen) && groupHasLiveMembers(frozen.pgid, frozen)) {
+      const leftovers = listGroupPids(frozen.pgid).filter((pid) => {
+        const live = fingerprintPid(pid);
+        return live !== null && live.pgid === frozen.pgid;
+      });
+      throw errors.runFailed(`orchestrator writers still alive: ${leftovers.join(",")}`);
+    }
+    if (frozen && sameProcess(frozen, fingerprintPid(frozen.pid))) {
+      throw errors.runFailed(`orchestrator writer still alive: ${frozen.pid}`);
+    }
+    if (identity?.orchestratorPid && this.pidAlive(identity.orchestratorPid)) {
+      const expected = identity.process ?? frozen;
+      if (expected && sameProcess(expected, fingerprintPid(identity.orchestratorPid))) {
+        throw errors.runFailed("orchestrator process is alive without a frozen process group");
+      }
     }
     if (identity) {
       const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
@@ -210,8 +224,10 @@ export class SquadctlBridge implements SquadBridge {
       this.writeIdentity(request.taskId, {
         ...identity,
         stopped: true,
+        executionStatus: "stopped",
         orchestratorPid: null,
         writerPids: [],
+        process: null,
       });
     }
     this.children.delete(request.taskId);
@@ -220,17 +236,32 @@ export class SquadctlBridge implements SquadBridge {
 
   status(request: { taskId: string }): SquadBridgeStatus {
     const identity = this.readIdentity(request.taskId);
-    if (identity?.stopped) {
+    if (identity?.stopped || identity?.executionStatus === "stopped") {
       return {
         taskId: request.taskId,
         event: mapSquadStatus(null, { stopped: true }),
       };
     }
+    if (identity?.executionStatus === "failed") {
+      return {
+        taskId: request.taskId,
+        event: { kind: "failed", journal: mapSquadStatus(null).journal },
+      };
+    }
     const taskDir = identity?.taskDir ?? this.tasks.get(request.taskId);
     if (!taskDir) {
-      return { taskId: request.taskId, event: mapSquadStatus(null) };
+      return {
+        taskId: request.taskId,
+        event: { kind: "failed", journal: mapSquadStatus(null).journal },
+      };
     }
     const snapshot = this.runSquadctlSync(["status", "--task-dir", taskDir, "--json"]);
+    if (snapshot.exitCode !== 0) {
+      return {
+        taskId: request.taskId,
+        event: { kind: "failed", journal: mapSquadStatus(null).journal },
+      };
+    }
     return {
       taskId: request.taskId,
       event: mapSquadStatus(parseJson(snapshot.stdout), { stopped: identity?.stopped }),
@@ -258,6 +289,12 @@ export class SquadctlBridge implements SquadBridge {
     if (!frozen) return { ok: false, code: "UNTRUSTED_RECEIPT" };
     const profile = withCandidateSha(frozen, request.identity.candidateSha);
     const profilePath = this.writeProfile(taskDir, profile);
+    const expected = {
+      ...request.identity,
+      remote: stored.delivery.remote,
+      remoteRef: headsRef(request.identity.sourceBranch),
+      profileHash: canonicalSha256(profile),
+    };
     const check = await this.runSquadctl([
       "integrate",
       "check-remote",
@@ -275,7 +312,7 @@ export class SquadctlBridge implements SquadBridge {
     ]);
     if (
       check.exitCode !== 0 ||
-      !isTrustedSquadctlIntegrateReceipt(parseJson(check.stdout), request.identity, "check-remote")
+      !isTrustedSquadctlIntegrateReceipt(parseJson(check.stdout), expected, "check-remote")
     ) {
       return { ok: false, code: "UNTRUSTED_RECEIPT" };
     }
@@ -296,7 +333,7 @@ export class SquadctlBridge implements SquadBridge {
     ]);
     if (
       push.exitCode !== 0 ||
-      !isTrustedSquadctlIntegrateReceipt(parseJson(push.stdout), request.identity, "push-remote")
+      !isTrustedSquadctlIntegrateReceipt(parseJson(push.stdout), expected, "push-remote")
     ) {
       return { ok: false, code: "UNTRUSTED_RECEIPT" };
     }
@@ -325,9 +362,17 @@ export class SquadctlBridge implements SquadBridge {
       throw errors.usage(probe.reason ?? "squadctl not available");
     }
     const taskDir = this.tasks.get(input.taskId) ?? join(this.home(), "squad-tasks", input.taskId);
-    const squadTaskId = makeSquadTaskId();
+    const existing = this.readIdentity(input.taskId);
+    if (existing?.squadTaskId && this.taskInitialized(taskDir)) {
+      if (this.writerStillLive(existing)) {
+        throw errors.runFailed("refusing a second orchestrator while the previous writer is alive");
+      }
+      await this.spawnForTask(input.taskId, existing);
+      return;
+    }
+    const squadTaskId = existing?.squadTaskId ?? makeSquadTaskId();
     const cwd = this.options.workspaceCwd ?? process.cwd();
-    const delivery = input.delivery ?? null;
+    const delivery = input.delivery ?? existing?.delivery ?? null;
     const init = await this.runSquadctl(
       [
         "init",
@@ -352,10 +397,22 @@ export class SquadctlBridge implements SquadBridge {
     if (init.exitCode !== 0) {
       throw errors.runFailed(`squadctl init failed: ${init.stderr || init.stdout || "exit"}`);
     }
-    const intake = await this.runSquadctl(
-      ["intake", "--task-dir", taskDir, "--package", input.packagePath, "--json"],
-      exe,
-    );
+    const intakeArgv = ["intake", "--task-dir", taskDir, "--package", input.packagePath, "--json"];
+    if (delivery?.newRepairChain === true) {
+      if (!delivery.repo || !delivery.parentRunId) {
+        throw errors.usage("new repair chain requires frozen project-id and repair-chain-id");
+      }
+      intakeArgv.splice(
+        5,
+        0,
+        "--new-repair-chain",
+        "--project-id",
+        delivery.repo,
+        "--repair-chain-id",
+        delivery.parentRunId,
+      );
+    }
+    const intake = await this.runSquadctl(intakeArgv, exe);
     if (intake.exitCode !== 0) {
       throw errors.runFailed(`squadctl intake failed: ${intake.stderr || intake.stdout || "exit"}`);
     }
@@ -377,11 +434,15 @@ export class SquadctlBridge implements SquadBridge {
       orchestratorPid: null,
       writerPids: [],
       skillVersion: probe.version ?? SQUAD_BRIDGE_CONTRACT_VERSION,
+      toolVersion: probe.toolVersion,
       skillDir: probe.skillDir,
       squadctlPath: exe,
       packagePath: input.packagePath,
       delivery,
       stopped: false,
+      executionStatus: "running",
+      failReason: null,
+      process: null,
     };
     this.writeIdentity(input.taskId, identity);
     await this.spawnForTask(input.taskId, identity);
@@ -410,22 +471,21 @@ export class SquadctlBridge implements SquadBridge {
     if (!orchExe) throw errors.usage("independent Orchestrator executable missing");
     const promptPath = writeOrchestratorPrompt(identity, probe);
     const logPath = join(identity.taskDir, "orchestrator.log");
-    const requested = identity.nativeSession ?? identity.requestedSession ?? randomUUID();
+    const requested = identity.requestedSession ?? randomUUID();
     const argv = grokOrchestratorArgv({
       executable: orchExe,
       workspace: identity.workspaceCwd,
       model: identity.model ?? DEFAULT_MODEL,
       promptPath,
       resumeSession: identity.nativeSession,
+      sessionId: identity.nativeSession ? null : requested,
     });
     const baseEnv = this.options.env ?? process.env;
-    const isolated = this.options.executable
-      ? baseEnv
-      : spawnEnvForDriver("grok-stream-json", identity.workspaceCwd, baseEnv);
-    const env = {
-      ...agentSeatEnv(isolated),
-      GROK_SESSION_ID: requested,
-    };
+    const isolated =
+      this.options.executable || this.options.spawnOrchestrator
+        ? baseEnv
+        : spawnEnvForDriver("grok-stream-json", identity.workspaceCwd, baseEnv);
+    const { GROK_SESSION_ID: _session, GROK_AGENT: _agent, ...env } = agentSeatEnv(isolated);
     const spawnImpl = this.options.spawnOrchestrator ?? defaultSpawnOrchestrator;
     const spawned = spawnImpl({
       executable: orchExe,
@@ -436,32 +496,153 @@ export class SquadctlBridge implements SquadBridge {
       requestedSession: requested,
     });
     if (spawned.child) this.children.set(taskId, spawned.child);
+    const fingerprint = spawned.pid ? waitForLeaderFingerprint(spawned.pid) : null;
+    const writerPids = fingerprint
+      ? listGroupPids(fingerprint.pgid)
+      : spawned.pid
+        ? [spawned.pid]
+        : [];
     this.writeIdentity(taskId, {
       ...identity,
       orchestratorPid: spawned.pid,
-      writerPids: [spawned.pid],
+      writerPids: writerPids.length > 0 ? writerPids : spawned.pid ? [spawned.pid] : [],
+      process: fingerprint,
       actualRuntime: basename(orchExe),
       requestedSession: identity.requestedSession ?? requested,
       stopped: false,
+      executionStatus: "running",
     });
     return spawned;
   }
 
   private async spawnForTask(taskId: string, identity: BridgeIdentity): Promise<void> {
     const spawned = this.spawnChild(taskId, identity);
-    const frozen = identity.nativeSession;
-    const observed = spawned.child
-      ? await waitForSessionId(spawned.child, SESSION_WAIT_MS, spawned.stdoutBuf)
-      : null;
-    if (frozen && observed && observed !== frozen) {
-      this.killTree(spawned.pid);
-      throw errors.runFailed("native session_id did not match the frozen session");
+    const expectedSession = identity.nativeSession ?? identity.requestedSession;
+    const supervised = spawned.child
+      ? await superviseOrchestrator(spawned.child, SESSION_WAIT_MS, spawned.stdoutBuf)
+      : { ok: false as const, reason: "orchestrator produced no child process", exitCode: null };
+    if (!supervised.ok) {
+      this.abortSpawn(taskId, spawned.pid, supervised.reason);
+      throw errors.runFailed(supervised.reason);
+    }
+    if (!expectedSession || supervised.sessionId !== expectedSession) {
+      this.abortSpawn(
+        taskId,
+        spawned.pid,
+        expectedSession
+          ? "native session_id did not match the frozen session"
+          : "orchestrator produced no native session_id",
+      );
+      throw errors.runFailed(
+        expectedSession
+          ? "native session_id did not match the frozen session"
+          : "orchestrator produced no native session_id",
+      );
     }
     const current = this.readIdentity(taskId) ?? identity;
     this.writeIdentity(taskId, {
       ...current,
-      nativeSession: observed ?? frozen,
+      nativeSession: supervised.sessionId,
+      executionStatus: "running",
+      failReason: null,
     });
+  }
+
+  private abortSpawn(taskId: string, pid: number, reason: string): void {
+    const identity = this.readIdentity(taskId);
+    const fp = identity?.process ?? fingerprintPid(pid);
+    if (fp) signalGroup(fp.pgid, "SIGKILL");
+    else this.killTree(pid);
+    this.writeIdentity(taskId, {
+      ...(identity ?? {
+        taskId,
+        squadTaskId: taskId,
+        taskDir: this.tasks.get(taskId) ?? "",
+        workspaceCwd: this.options.workspaceCwd ?? process.cwd(),
+        requestedRuntime: "grokb",
+        actualRuntime: null,
+        model: DEFAULT_MODEL,
+        requestedSession: null,
+        nativeSession: null,
+        orchestratorPid: null,
+        writerPids: [],
+        skillVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+        toolVersion: null,
+        skillDir: null,
+        squadctlPath: null,
+        packagePath: null,
+        delivery: null,
+        stopped: false,
+        executionStatus: "failed",
+        failReason: reason,
+        process: null,
+      }),
+      executionStatus: "failed",
+      failReason: reason,
+      orchestratorPid: null,
+      writerPids: [],
+      process: null,
+    });
+    this.children.delete(taskId);
+  }
+
+  private terminateWriters(
+    frozen: ProcessFingerprint | null,
+    identity: BridgeIdentity | null,
+    child: ChildProcess | undefined,
+  ): void {
+    const known = new Set<number>(
+      [
+        ...(identity?.writerPids ?? []),
+        identity?.orchestratorPid ?? 0,
+        frozen?.pid ?? 0,
+        child?.pid ?? 0,
+      ].filter((pid) => pid > 0),
+    );
+    const signalKnown = (signal: NodeJS.Signals): void => {
+      for (const pid of known) {
+        const live = fingerprintPid(pid);
+        if (frozen && !sameProcess(frozen, live) && live?.pgid !== frozen.pgid) continue;
+        try {
+          process.kill(pid, signal);
+        } catch {
+          // already gone
+        }
+      }
+    };
+    if (frozen && isProcessGroupLeader(frozen)) {
+      signalGroup(frozen.pgid, "SIGTERM");
+      signalKnown("SIGTERM");
+      if (!waitForGroupIdle(frozen.pgid, 1_200, frozen)) {
+        signalGroup(frozen.pgid, "SIGKILL");
+        signalKnown("SIGKILL");
+        waitForGroupIdle(frozen.pgid, 1_200, frozen);
+      }
+      return;
+    }
+    signalKnown("SIGTERM");
+    const deadline = Date.now() + 1_200;
+    while (Date.now() < deadline && [...known].some((pid) => this.pidAlive(pid))) {
+      spawnSync("/bin/sleep", ["0.05"], { shell: false, timeout: 200 });
+    }
+    if ([...known].some((pid) => this.pidAlive(pid))) {
+      signalKnown("SIGKILL");
+      spawnSync("/bin/sleep", ["0.2"], { shell: false, timeout: 500 });
+    }
+  }
+
+  private writerStillLive(identity: BridgeIdentity): boolean {
+    if (identity.process) return groupHasLiveMembers(identity.process.pgid, identity.process);
+    if (identity.orchestratorPid) return this.pidAlive(identity.orchestratorPid);
+    return false;
+  }
+
+  private taskInitialized(taskDir: string): boolean {
+    try {
+      return existsSync(join(taskDir, "events.jsonl"));
+    } catch {
+      return false;
+    }
   }
 
   private probe(): SquadBridgeProbe {
@@ -473,6 +654,7 @@ export class SquadctlBridge implements SquadBridge {
         version: SQUAD_BRIDGE_CONTRACT_VERSION,
         reason: null,
         executable: this.options.executable,
+        toolVersion: null,
         orchestrator: {
           requestedRuntime: "grokb",
           actualRuntime: null,
@@ -649,6 +831,7 @@ function grokOrchestratorArgv(input: {
   model: string;
   promptPath: string;
   resumeSession: string | null;
+  sessionId: string | null;
 }): string[] {
   const argv = [
     "--cwd",
@@ -668,6 +851,8 @@ function grokOrchestratorArgv(input: {
   }
   if (input.resumeSession) {
     argv.unshift("--resume", input.resumeSession);
+  } else if (input.sessionId) {
+    argv.unshift("--session-id", input.sessionId);
   }
   return argv;
 }
@@ -701,29 +886,72 @@ function defaultSpawnOrchestrator(input: SpawnOrchestratorInput): {
   return { pid: child.pid, child, stdoutBuf };
 }
 
-function waitForSessionId(
+function superviseOrchestrator(
   child: ChildProcess,
   timeoutMs: number,
   stdoutBuf?: { text: string },
-): Promise<string | null> {
+): Promise<
+  { ok: true; sessionId: string } | { ok: false; reason: string; exitCode: number | null }
+> {
   return new Promise((resolve) => {
     const read = (): string => stdoutBuf?.text ?? "";
-    const early = parseGrokSessionId(read());
-    if (early) {
-      resolve(early);
-      return;
-    }
-    const finish = (value: string | null): void => {
+    let settled = false;
+    const finish = (
+      value:
+        | { ok: true; sessionId: string }
+        | { ok: false; reason: string; exitCode: number | null },
+    ): void => {
+      if (settled) return;
+      settled = true;
       child.stdout?.off("data", onData);
+      child.off("exit", onExit);
+      child.off("error", onError);
       clearTimeout(timer);
       resolve(value);
     };
     const onData = (): void => {
       const found = parseGrokSessionId(read());
-      if (found) finish(found);
+      if (found) finish({ ok: true, sessionId: found });
     };
-    const timer = setTimeout(() => finish(parseGrokSessionId(read())), timeoutMs);
+    const onExit = (code: number | null): void => {
+      const found = parseGrokSessionId(read());
+      if (found) finish({ ok: true, sessionId: found });
+      else
+        finish({
+          ok: false,
+          reason: `orchestrator exited before native session (${code ?? "null"})`,
+          exitCode: code,
+        });
+    };
+    const onError = (error: Error): void => {
+      finish({ ok: false, reason: error.message, exitCode: null });
+    };
+    const early = parseGrokSessionId(read());
+    if (early) {
+      finish({ ok: true, sessionId: early });
+      return;
+    }
+    if (child.exitCode !== null || child.signalCode) {
+      finish({
+        ok: false,
+        reason: `orchestrator exited before native session (${child.exitCode ?? child.signalCode})`,
+        exitCode: child.exitCode,
+      });
+      return;
+    }
+    const timer = setTimeout(() => {
+      const found = parseGrokSessionId(read());
+      if (found) finish({ ok: true, sessionId: found });
+      else
+        finish({
+          ok: false,
+          reason: "orchestrator produced no native session_id",
+          exitCode: child.exitCode,
+        });
+    }, timeoutMs);
     child.stdout?.on("data", onData);
+    child.once("exit", onExit);
+    child.once("error", onError);
     child.stdout?.resume();
   });
 }

@@ -3,14 +3,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  SQUAD_BRIDGE_CONTRACT_VERSION,
+  assertSquadBridgeVersion,
+  canonicalSha256,
+} from "@shared/runtime/squad-bridge-contract";
+import {
   buildFrozenPrProfile,
   deliveryAuthorityFromProfile,
 } from "@shared/runtime/squad-pr-profile";
 import { afterEach, describe, expect, it } from "vitest";
 import { probeAndVerifySquadBridge } from "../src/auto/squadctl-verify";
+import { HAS_LIVE_SQUADCTL, LIVE_SKILL_DIR, LIVE_SQUADCTL } from "./helpers/live-squadctl";
 
-const SQUADCTL = join(homedir(), ".codex/skills/hengzhuo-engineering-squad/scripts/squadctl");
-const SKILL_SCRIPTS = join(homedir(), ".codex/skills/hengzhuo-engineering-squad/scripts");
+const SQUADCTL = LIVE_SQUADCTL;
+const SKILL_SCRIPTS = join(LIVE_SKILL_DIR, "scripts");
 const AUTH = "d".repeat(64);
 
 let roots: string[] = [];
@@ -23,7 +29,7 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-describe("real squadctl argv and control-plane smoke", () => {
+describe.skipIf(!HAS_LIVE_SQUADCTL)("real squadctl argv and control-plane smoke", () => {
   it("verifies --help/--version and required integrate/pause flags", () => {
     const probe = probeAndVerifySquadBridge({
       ...process.env,
@@ -32,7 +38,20 @@ describe("real squadctl argv and control-plane smoke", () => {
       COUNCILKIT_GROKB: join(homedir(), "bin", "grokb"),
     });
     expect(probe.available).toBe(true);
-    expect(probe.version).toMatch(/squadctl 2\.1/);
+    expect(probe.version).toBe("squad-bridge.v1");
+    expect(probe.toolVersion).toMatch(/squadctl 2\.1/);
+    expect(
+      assertSquadBridgeVersion({
+        requested: SQUAD_BRIDGE_CONTRACT_VERSION,
+        actual: probe.version,
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      assertSquadBridgeVersion({
+        requested: SQUAD_BRIDGE_CONTRACT_VERSION,
+        actual: probe.toolVersion,
+      }).ok,
+    ).toBe(false);
   });
 
   it("runs init/intake/status and validates a frozen pr-profile with squadlib", () => {
@@ -103,16 +122,43 @@ describe("real squadctl argv and control-plane smoke", () => {
     );
     const intake = spawnSync(
       SQUADCTL,
-      ["intake", "--task-dir", taskDir, "--package", pkg, "--json"],
+      [
+        "intake",
+        "--task-dir",
+        taskDir,
+        "--package",
+        pkg,
+        "--json",
+        "--new-repair-chain",
+        "--project-id",
+        "github.com/acme/repo",
+        "--repair-chain-id",
+        "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      ],
       { encoding: "utf8" },
     );
     expect(intake.status, intake.stderr).toBe(0);
+    const intakeView = JSON.parse(intake.stdout) as {
+      historyCompleteness?: string;
+      newChain?: boolean;
+    };
+    expect(intakeView.historyCompleteness ?? "").toMatch(/verified|complete/);
     const status = spawnSync(SQUADCTL, ["status", "--task-dir", taskDir, "--json"], {
       encoding: "utf8",
     });
     expect(status.status, status.stderr).toBe(0);
-    const view = JSON.parse(status.stdout) as { epoch?: number; phase?: string };
+    const view = JSON.parse(status.stdout) as {
+      epoch?: number;
+      phase?: string;
+      repair_budget?: { completeness?: string; new_chain?: boolean };
+      projection?: { repair_budget?: { completeness?: string; new_chain?: boolean } };
+    };
     expect(view.epoch).toBeTypeOf("number");
+    const budget = view.repair_budget ?? view.projection?.repair_budget;
+    if (budget) {
+      expect(budget.new_chain).toBe(true);
+      expect(budget.completeness).toMatch(/verified|complete/);
+    }
     const profile = buildFrozenPrProfile({
       sourceBranch: "feat-x",
       sourceSha: sha,
@@ -134,5 +180,16 @@ describe("real squadctl argv and control-plane smoke", () => {
     );
     expect(validated.status, validated.stderr).toBe(0);
     expect(validated.stdout).toMatch(/ok/);
+    const hashed = spawnSync(
+      "python3",
+      [
+        "-c",
+        "from squadlib.model import content_hash; from squadlib.integration import load_pr_profile; import sys; print(content_hash(load_pr_profile(sys.argv[1])))",
+        profilePath,
+      ],
+      { encoding: "utf8", env: { ...process.env, PYTHONPATH: SKILL_SCRIPTS } },
+    );
+    expect(hashed.status, hashed.stderr).toBe(0);
+    expect(canonicalSha256(profile)).toBe(hashed.stdout.trim());
   });
 });

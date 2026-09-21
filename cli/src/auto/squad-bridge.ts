@@ -20,6 +20,8 @@ export interface SquadBridgeDelivery {
   sourceSha: string;
   expectedOldSha: string;
   remote: string;
+  parentRunId?: string;
+  newRepairChain?: boolean;
 }
 
 export interface SquadBridgeStartRequest {
@@ -60,7 +62,7 @@ export type SquadBridgePublishResult =
 
 export interface SquadBridge {
   start(request: SquadBridgeStartRequest): SquadBridgeStartResult;
-  resume(request: { taskId: string }): SquadBridgeStatus;
+  resume(request: { taskId: string }): SquadBridgeStatus | Promise<SquadBridgeStatus>;
   stop(request: { taskId: string }): { kind: "stopped" };
   status(request: { taskId: string }): SquadBridgeStatus;
   requestPublish(request: {

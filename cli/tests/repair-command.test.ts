@@ -844,6 +844,7 @@ describe("repair outer loop", () => {
         bridgeProbe: () => ({
           available: false,
           version: null,
+          toolVersion: null,
           reason: "squadctl not on PATH; Squad 桥不可用",
           executable: null,
           skillDir: null,
@@ -980,6 +981,204 @@ describe("repair outer loop", () => {
     ).rejects.toBeInstanceOf(RepairExit);
     expect(inspects).toBeGreaterThanOrEqual(3);
     expect(out.finished).toMatchObject({ reasonCode: "pr_drift" });
+  });
+
+  it("does not send a squadctl software version through production preflight", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const out = makeSink();
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+        out,
+        loopOpts({
+          bridgeProbe: () => ({
+            available: true,
+            version: "squadctl 2.1.0",
+            toolVersion: "squadctl 2.1.0",
+            reason: null,
+            executable: "/tmp/squadctl",
+            skillDir: "/tmp/skill",
+            capabilities: [],
+            orchestrator: null,
+          }),
+          reviewImpl: async () => {
+            throw new Error("should not review");
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "BRIDGE_VERSION_MISMATCH",
+    });
+  });
+
+  it("accepts protocol squad-bridge.v1 while recording toolVersion squadctl 2.1.0", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      loopOpts({
+        bridgeProbe: () => ({
+          available: true,
+          version: SQUAD_BRIDGE_CONTRACT_VERSION,
+          toolVersion: "squadctl 2.1.0",
+          reason: null,
+          executable: "/tmp/squadctl",
+          skillDir: "/tmp/skill",
+          capabilities: [],
+          orchestrator: null,
+        }),
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      }),
+    );
+    expect(out.finished).toMatchObject({ businessResult: "approved" });
+  });
+
+  it("persists cycle task identity before prepare so public stop can find the writer", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    const stopped: string[] = [];
+    const { readRepairState } = await import("../src/auto/repair-persist");
+    const bridge = {
+      start: (request: Parameters<FakeSquadBridge["start"]>[0]) => {
+        const started = fake.start(request);
+        if (!started.ok) return started;
+        return { ...started, taskDir: join(home, "squad-tasks", started.taskId) };
+      },
+      prepare: async () => {
+        const state = readRepairState(join(home, "runs", REPAIR_ID));
+        expect(state?.currentSquadTaskId).toBeTruthy();
+        expect(state?.cycles?.[0]?.squadTaskId).toBe(state?.currentSquadTaskId);
+        expect(state?.cycles?.[0]?.squadTaskDir).toContain("squad-tasks");
+        throw new Error(
+          "injected crash boundary after real writer spawn before parent task persistence",
+        );
+      },
+      resume: (request: { taskId: string }) => fake.resume(request),
+      stop: (request: { taskId: string }) => {
+        stopped.push(request.taskId);
+        return fake.stop(request);
+      },
+      status: (request: { taskId: string }) => fake.status(request),
+      requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
+        fake.requestPublish(request),
+      writerPids: () => [],
+    };
+    const out = makeSink();
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+        out,
+        loopOpts({ bridge }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    const state = readRepairState(join(home, "runs", REPAIR_ID));
+    expect(state?.currentSquadTaskId).toBeTruthy();
+    expect(state?.cycles?.[0]?.squadTaskId).toBe(state?.currentSquadTaskId);
+    const stopOut = makeSink();
+    await expect(
+      runRepair(["stop", "--run", REPAIR_ID], stopOut, loopOpts({ bridge, kill: () => {} })),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(stopped).toEqual([state?.currentSquadTaskId]);
+    expect(stopOut.finished).toMatchObject({ leaseReleased: true });
+  });
+
+  it("reuses the original grant on resume and refuses a second start", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    let starts = 0;
+    const bridge = {
+      start: (request: Parameters<FakeSquadBridge["start"]>[0]) => {
+        starts += 1;
+        if (starts > 1) throw new Error("probe stops before duplicate spawn");
+        const started = fake.start(request);
+        if (!started.ok) return started;
+        return { ...started, taskDir: join(home, "squad-tasks", started.taskId) };
+      },
+      prepare: async () => {
+        throw new Error(
+          "injected crash boundary after real writer spawn before parent task persistence",
+        );
+      },
+      resume: (request: { taskId: string }) => fake.resume(request),
+      stop: (request: { taskId: string }) => fake.stop(request),
+      status: (request: { taskId: string }) => fake.status(request),
+      requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
+        fake.requestPublish(request),
+      writerPids: () => [],
+    };
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+        makeSink(),
+        loopOpts({ bridge }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    const grantPath = join(home, "runs", REPAIR_ID, "repair-grant.json");
+    const grantBefore = JSON.parse(readFileSync(grantPath, "utf8")) as {
+      grantHash: string;
+      grantId: string;
+    };
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await runRepair(
+      ["resume", "--run", REPAIR_ID],
+      out,
+      loopOpts({
+        bridge,
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      }),
+    );
+    const grantAfter = JSON.parse(readFileSync(grantPath, "utf8")) as {
+      grantHash: string;
+      grantId: string;
+    };
+    expect(grantAfter.grantHash).toBe(grantBefore.grantHash);
+    expect(grantAfter.grantId).toBe(grantBefore.grantId);
+    expect(starts).toBe(1);
+    expect(out.finished).toMatchObject({ businessResult: "approved" });
+  });
+
+  it("fails closed on a second production subtask without verified ancestor history", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const fake = new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION });
+    const bridge = Object.assign(fake, {
+      prepare: async () => undefined,
+    });
+    const out = makeSink();
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+        out,
+        loopOpts({
+          bridge,
+          reviewImpl: async () => {
+            const childId = `ck-review-${randomUUID()}`;
+            seedCompleteReview(childId, { open: true, against: SOURCE_ID });
+            return { runId: childId };
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "HISTORY_INVALID",
+      outerUsed: 1,
+    });
   });
 });
 

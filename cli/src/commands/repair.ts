@@ -274,24 +274,27 @@ async function runRepairStop(
   const state = readRepairState(runDir);
   if (state === null) throw errors.usage("repair run not found");
   const isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
-  if (state.currentSquadTaskId) {
+  const taskIds = uniqueTaskIds(state);
+  if (taskIds.length > 0) {
     const bridge =
       deps.bridge ?? new SquadctlBridge({ workspaceCwd: state.workspaceCwd ?? undefined });
-    try {
-      bridge.stop({ taskId: state.currentSquadTaskId });
-    } catch (error) {
-      await out.finish(
-        {
-          runId,
-          status: "interrupted",
-          businessResult: "stopped",
-          leaseReleased: false,
-          pipeline: null,
-          error: error instanceof Error ? error.message : "stop failed",
-        },
-        () => `停止 ${runId} 失败：writer 仍存活`,
-      );
-      throw new RepairExit(EXIT.interrupted);
+    for (const taskId of taskIds) {
+      try {
+        bridge.stop({ taskId });
+      } catch (error) {
+        await out.finish(
+          {
+            runId,
+            status: "interrupted",
+            businessResult: "stopped",
+            leaseReleased: false,
+            pipeline: null,
+            error: error instanceof Error ? error.message : "stop failed",
+          },
+          () => `停止 ${runId} 失败：writer 仍存活`,
+        );
+        throw new RepairExit(EXIT.interrupted);
+      }
     }
   }
   const pid = readRepairPid(runDir);
@@ -426,4 +429,12 @@ function waitUntilAbort(signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
+}
+
+function uniqueTaskIds(state: RepairState): string[] {
+  const ids = [
+    state.currentSquadTaskId,
+    ...(state.cycles ?? []).map((cycle) => cycle.squadTaskId),
+  ].filter((id): id is string => typeof id === "string" && id.length > 0);
+  return [...new Set(ids)];
 }

@@ -2,6 +2,8 @@ import {
   SQUAD_BRIDGE_CONTRACT_VERSION,
   agentSeatEnv,
   assertSquadBridgeVersion,
+  canonicalJson,
+  canonicalSha256,
   frozenIntegrateCommand,
   inheritRepairHistory,
   integrateEnv,
@@ -10,17 +12,22 @@ import {
   isTrustedSquadctlIntegrateReceipt,
   parentOuterCycleDelta,
 } from "@shared/runtime/squad-bridge-contract";
+import { buildFrozenPrProfile } from "@shared/runtime/squad-pr-profile";
 import { describe, expect, it } from "vitest";
 import { FakeSquadBridge } from "../src/auto/squad-bridge";
 import { probeSquadBridge } from "../src/auto/squadctl-bridge";
 
 const SHA = "a".repeat(40);
 const POLICY = "gate-policy-1";
+const PROFILE_HASH = "d".repeat(64);
 const IDENTITY = {
   repo: "github.com/acme/repo",
   sourceBranch: "feat-x",
   expectedOldSha: SHA,
   candidateSha: SHA,
+  remote: "origin",
+  remoteRef: "refs/heads/feat-x",
+  profileHash: PROFILE_HASH,
 };
 
 function gatedJournal() {
@@ -176,6 +183,9 @@ describe("squad bridge contract", () => {
           remote_new_sha: "b".repeat(40),
           remote_verified: true,
           forced: false,
+          remote: "origin",
+          remote_ref: "refs/heads/feat-x",
+          profile_hash: PROFILE_HASH,
         },
         IDENTITY,
         "push-remote",
@@ -191,11 +201,94 @@ describe("squad bridge contract", () => {
           remote_new_sha: SHA,
           remote_verified: true,
           forced: false,
+          remote: "origin",
+          remote_ref: "refs/heads/feat-x",
+          profile_hash: PROFILE_HASH,
         },
         IDENTITY,
         "push-remote",
       ),
     ).toBe(true);
+    expect(
+      isTrustedSquadctlIntegrateReceipt(
+        {
+          action: "check-remote",
+          result: "checked",
+          candidate_sha: SHA,
+          expected_old_sha: SHA,
+          remote: "origin",
+          remote_ref: "refs/heads/feat-x",
+          profile_hash: PROFILE_HASH,
+          cas_ok: false,
+          ff_possible: false,
+        },
+        IDENTITY,
+        "check-remote",
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedSquadctlIntegrateReceipt(
+        {
+          action: "check-remote",
+          result: "checked",
+          candidate_sha: SHA,
+          expected_old_sha: SHA,
+          remote: "origin",
+          remote_ref: "refs/heads/feat-x",
+          profile_hash: PROFILE_HASH,
+          cas_ok: true,
+          ff_possible: true,
+        },
+        { ...IDENTITY, remote: "other" },
+        "check-remote",
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedSquadctlIntegrateReceipt(
+        {
+          action: "check-remote",
+          result: "checked",
+          candidate_sha: SHA,
+          expected_old_sha: SHA,
+          cas_ok: true,
+          ff_possible: true,
+        },
+        IDENTITY,
+        "check-remote",
+      ),
+    ).toBe(false);
+  });
+
+  it("hashes a normalized pr-profile the same way as Python canonical JSON", () => {
+    const pythonHash = "fddf053231f261216466088580c6c0785a7e3776f68dbed40e398644928cb908";
+    const pythonCanonical =
+      '{"authorization":{"authority_ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pr_mutation":false,"push":true},"delivery":{"mode":"source-branch-ready","supported_modes":["local-candidate","source-branch-ready","pr-ready"]},"gate_independence":{"reviewer_writable":false,"shared_workspace":false,"verifier_writable":true},"integration":{"base_ref":"refs/heads/feat-x","base_sha":"21a3096ce940f6e014eda2228c00f87a4e3e1124","cas":"expected-old-ref","ff_only":true},"schema_version":1,"source":{"ref":"refs/heads/feat-x","sha":"21a3096ce940f6e014eda2228c00f87a4e3e1124"},"target":{"conflict":"none","ref":"refs/heads/feat-x","remote":"origin","sha":"21a3096ce940f6e014eda2228c00f87a4e3e1124"},"title":"pr-profile"}';
+    const parsed = JSON.parse(pythonCanonical) as unknown;
+    expect(canonicalJson(parsed)).toBe(pythonCanonical);
+    expect(canonicalSha256(parsed)).toBe(pythonHash);
+    const profile = buildFrozenPrProfile({
+      sourceBranch: "feat-x",
+      sourceSha: "21a3096ce940f6e014eda2228c00f87a4e3e1124",
+      expectedOldSha: "21a3096ce940f6e014eda2228c00f87a4e3e1124",
+      remote: "origin",
+      authorityRef: "a".repeat(64),
+    });
+    expect(canonicalSha256(profile)).toBe(pythonHash);
+  });
+
+  it("rejects a squadctl software version as the bridge protocol version", () => {
+    expect(
+      assertSquadBridgeVersion({
+        requested: SQUAD_BRIDGE_CONTRACT_VERSION,
+        actual: "squadctl 2.1.0",
+      }),
+    ).toEqual({ ok: false, code: "BRIDGE_VERSION_MISMATCH" });
+    expect(
+      assertSquadBridgeVersion({
+        requested: SQUAD_BRIDGE_CONTRACT_VERSION,
+        actual: SQUAD_BRIDGE_CONTRACT_VERSION,
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("does not treat a receipt boolean or embedded token as a publish signal", () => {

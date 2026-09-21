@@ -16,6 +16,7 @@ const HELP_MARKERS = [
   "--repo-root",
   "--profile",
   "--expected-epoch",
+  "--new-repair-chain",
 ];
 
 export function probeAndVerifySquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBridgeProbe {
@@ -26,8 +27,9 @@ export function probeAndVerifySquadBridge(env: NodeJS.ProcessEnv = process.env):
   const integrate = spawnBounded(discovered.executable, ["integrate", "--help"], env);
   const push = spawnBounded(discovered.executable, ["integrate", "push-remote", "--help"], env);
   const pause = spawnBounded(discovered.executable, ["pause", "--help"], env);
+  const intake = spawnBounded(discovered.executable, ["intake", "--help"], env);
   const blob =
-    `${help.stdout}\n${version.stdout}\n${integrate.stdout}\n${push.stdout}\n${pause.stdout}`.toLowerCase();
+    `${help.stdout}\n${version.stdout}\n${integrate.stdout}\n${push.stdout}\n${pause.stdout}\n${intake.stdout}`.toLowerCase();
   const missing = HELP_MARKERS.filter((marker) => !blob.includes(marker.toLowerCase()));
   if (help.exitCode === null || version.exitCode === null) {
     return {
@@ -48,7 +50,8 @@ export function probeAndVerifySquadBridge(env: NodeJS.ProcessEnv = process.env):
   const versionText = version.stdout.trim().split("\n")[0] ?? "";
   return {
     ...discovered,
-    version: versionText || discovered.version,
+    version: discovered.version,
+    toolVersion: versionText || null,
     reason: null,
   };
 }

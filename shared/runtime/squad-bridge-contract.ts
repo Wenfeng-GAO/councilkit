@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { FULL_COMMIT_SHA } from "./cli-ledger";
 
@@ -49,6 +50,28 @@ export interface FrozenIntegrateIdentity {
   sourceBranch: string;
   expectedOldSha: string;
   candidateSha: string;
+  remote?: string;
+  remoteRef?: string;
+  profileHash?: string;
+}
+
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortKeys(value));
+}
+
+export function canonicalSha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function sortKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value !== null && typeof value === "object") {
+    const row = value as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    for (const key of Object.keys(row).sort()) next[key] = sortKeys(row[key]);
+    return next;
+  }
+  return value;
 }
 
 export function assertSquadBridgeVersion(input: {
@@ -119,6 +142,14 @@ export function isTrustedSquadctlIntegrateReceipt(
   ) {
     return false;
   }
+  if (typeof identity.remote !== "string" || identity.remote.length === 0) return false;
+  if (typeof identity.remoteRef !== "string" || identity.remoteRef.length === 0) return false;
+  if (typeof identity.profileHash !== "string" || !/^[a-f0-9]{64}$/.test(identity.profileHash)) {
+    return false;
+  }
+  if (row.remote !== identity.remote) return false;
+  if (row.remote_ref !== identity.remoteRef) return false;
+  if (row.profile_hash !== identity.profileHash) return false;
   if (verb === "check-remote") {
     return row.result === "checked" && row.cas_ok === true && row.ff_possible === true;
   }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createRepairGrant,
   loadRepairProfile,
+  loadReusableRepairGrant,
   reuseRepairProfile,
   revokeRepairProfile,
   saveRepairProfile,
@@ -121,5 +122,43 @@ describe("repair profile and grant", () => {
     const grant = createRepairGrant(profile);
     const tampered = { ...profile, integrityHash: "0".repeat(64) };
     expect(verifyRepairGrant(grant, tampered, { now: new Date().toISOString() }).ok).toBe(false);
+  });
+
+  it("mints a grant once and reuses the original bytes on recovery", () => {
+    const profile = saveRepairProfile({
+      name: "default",
+      ...IDENTITY,
+      capabilities: ["push-source-branch"],
+    });
+    const runDir = join(home, "runs", "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3");
+    mkdirSync(runDir, { recursive: true });
+    const first = loadReusableRepairGrant({
+      runDir,
+      profile,
+      now: "2026-09-21T00:00:00.000Z",
+      hasWritableCycle: false,
+    });
+    const second = loadReusableRepairGrant({
+      runDir,
+      profile,
+      grantId: first.grantId,
+      grantHash: first.grantHash,
+      now: "2026-09-21T00:01:00.000Z",
+      hasWritableCycle: true,
+    });
+    expect(second.grantId).toBe(first.grantId);
+    expect(second.grantHash).toBe(first.grantHash);
+    expect(second.issuedAt).toBe(first.issuedAt);
+    rmSync(join(runDir, "repair-grant.json"));
+    expect(() =>
+      loadReusableRepairGrant({
+        runDir,
+        profile,
+        grantId: first.grantId,
+        grantHash: first.grantHash,
+        now: "2026-09-21T00:02:00.000Z",
+        hasWritableCycle: true,
+      }),
+    ).toThrow(/cannot be reissued|missing/i);
   });
 });

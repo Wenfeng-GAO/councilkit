@@ -24,6 +24,7 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
   return {
     available: false,
     version: null,
+    toolVersion: null,
     reason: "无法运行同 checkout 的 councilkit repair probe。Host 不直接启动 squadctl。",
     executable: null,
     skillDir: null,
@@ -48,6 +49,7 @@ function spawnCliProbe(env: NodeJS.ProcessEnv): SquadBridgeProbe | null {
   return {
     available: row.available,
     version: typeof row.version === "string" ? row.version : null,
+    toolVersion: typeof row.toolVersion === "string" ? row.toolVersion : null,
     reason: typeof row.reason === "string" ? row.reason : null,
     executable: typeof row.executable === "string" ? row.executable : null,
     skillDir: typeof row.skillDir === "string" ? row.skillDir : null,

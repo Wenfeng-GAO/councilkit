@@ -146,6 +146,43 @@ export function revokeRepairProfile(name: string, now = new Date().toISOString()
   return next;
 }
 
+export function readRepairGrantFile(runDir: string): RepairGrant | null {
+  const text = readFileText(join(runDir, "repair-grant.json"));
+  if (text === null) return null;
+  const parsed = repairGrantSchema.safeParse(jsonParse(text));
+  return parsed.success ? parsed.data : null;
+}
+
+export function loadReusableRepairGrant(input: {
+  runDir: string;
+  profile: RepairProfile;
+  grantId?: string | null;
+  grantHash?: string | null;
+  now: string;
+  hasWritableCycle: boolean;
+}): RepairGrant {
+  const existing = readRepairGrantFile(input.runDir);
+  if (existing) {
+    const verified = verifyRepairGrant(existing, input.profile, { now: input.now });
+    if (!verified.ok) {
+      throw errors.usage(`repair grant is not reusable: ${verified.reason}`);
+    }
+    if (input.grantId && input.grantId !== existing.grantId) {
+      throw errors.usage("repair grant id drifted from parent state");
+    }
+    if (input.grantHash && input.grantHash !== existing.grantHash) {
+      throw errors.usage("repair grant hash drifted from parent state");
+    }
+    return existing;
+  }
+  if (input.hasWritableCycle || input.grantId || input.grantHash) {
+    throw errors.usage("repair grant is missing and cannot be reissued for an existing cycle");
+  }
+  const minted = createRepairGrant(input.profile, input.now);
+  atomicWriteJson(join(input.runDir, "repair-grant.json"), minted);
+  return minted;
+}
+
 export function createRepairGrant(
   profile: RepairProfile,
   now = new Date().toISOString(),
