@@ -2,6 +2,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { assertSquadPipelineIsolation } from "@shared/runtime/repair-isolation";
 import {
   type FrozenIntegrateIdentity,
   SQUAD_BRIDGE_CONTRACT_VERSION,
@@ -15,6 +16,10 @@ import {
   sanitizePublishDiagnostic,
 } from "@shared/runtime/squad-bridge-contract";
 import { type SquadBridgeProbe, discoverSquadBridge } from "@shared/runtime/squad-bridge-discovery";
+import type {
+  OfficialGatePolicyFile,
+  OfficialGatePolicyFreeze,
+} from "@shared/runtime/squad-gate-policy";
 import {
   type SquadHistoryEnvelope,
   assertHistoryOriginsOwned,
@@ -37,12 +42,7 @@ import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
 import { bindPublishableCandidateProfile, protectedGitEnv } from "./candidate-source-ref";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
-import {
-  GROK_SESSION_WAIT_MS,
-  grokLeaderSocket,
-  grokLeaderSocketDir,
-  spawnEnvForDriver,
-} from "./driver-commands";
+import { GROK_SESSION_WAIT_MS, grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
 import {
   type ProcessFingerprint,
   fingerprintPid,
@@ -53,12 +53,7 @@ import {
   waitForGroupIdle,
   waitForLeaderFingerprint,
 } from "./process-identity";
-import {
-  detectIsolationCapability,
-  disableCandidateGitHooksEnv,
-  stripCredentialEnv,
-  wrapIsolatedSpawn,
-} from "./repair-isolated-run";
+import { disableCandidateGitHooksEnv, stripCredentialEnv } from "./repair-isolated-run";
 import { assertFrozenRemoteUrls } from "./repair-workspace";
 import type {
   SquadBridge,
@@ -68,6 +63,12 @@ import type {
   SquadBridgeStartResult,
   SquadBridgeStatus,
 } from "./squad-bridge";
+import {
+  defaultSupervisedPolicy,
+  freezeOfficialGatePolicyWithSquadctl,
+  persistFreezeRecord,
+  readPersistedFreeze,
+} from "./squad-gate-policy";
 import { probeAndVerifySquadBridge } from "./squadctl-verify";
 
 export type { SquadBridgeProbe };
@@ -552,6 +553,11 @@ export class SquadctlBridge implements SquadBridge {
     if (existing && this.writerStillLive(existing)) {
       throw errors.runFailed("refusing a second orchestrator while the previous writer is alive");
     }
+    const isolationMode = this.options.isolationMode;
+    if (isolationMode === "strong") {
+      const refused = assertSquadPipelineIsolation("strong");
+      if (!refused.ok) throw errors.usage(refused.reason);
+    }
     const cwd = this.options.workspaceCwd ?? process.cwd();
     const delivery = input.delivery ?? existing?.delivery ?? null;
     let squadTaskId = existing?.squadTaskId ?? null;
@@ -622,11 +628,45 @@ export class SquadctlBridge implements SquadBridge {
     if (delivery) {
       this.writeFrozenDelivery(taskDir, delivery, delivery.sourceSha);
     }
+    this.writePlanningDocuments(taskDir, input.packagePath);
+    const frozen = this.freezeOfficialGatePolicy({ taskId: input.taskId });
+    if (!frozen.ok) {
+      throw errors.runFailed(frozen.reason);
+    }
+    persistFreezeRecord(taskDir, frozen.freeze);
     await this.spawnForTask(input.taskId, {
       ...identity,
       delivery: delivery ?? identity.delivery,
       packagePath: input.packagePath,
     });
+  }
+
+  freezeOfficialGatePolicy(request: {
+    taskId: string;
+  }): { ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string } {
+    const identity = this.readIdentity(request.taskId);
+    const taskDir = identity?.taskDir ?? this.tasks.get(request.taskId);
+    if (!taskDir) return { ok: false, reason: "squad task directory missing" };
+    const exe = this.executable(this.probe());
+    if (!exe) return { ok: false, reason: "squadctl not available" };
+    const policy = this.policyFileForTask(taskDir);
+    return freezeOfficialGatePolicyWithSquadctl({
+      exec: {
+        executable: exe,
+        env: this.options.env ?? process.env,
+        cwd: this.options.workspaceCwd ?? process.cwd(),
+      },
+      taskDir,
+      taskId: identity?.squadTaskId ?? request.taskId,
+      policy,
+    });
+  }
+
+  readOfficialGatePolicy(request: { taskId: string }): OfficialGatePolicyFreeze | null {
+    const identity = this.readIdentity(request.taskId);
+    const taskDir = identity?.taskDir ?? this.tasks.get(request.taskId);
+    if (!taskDir) return null;
+    return readPersistedFreeze(taskDir);
   }
 
   writerPids(): number[] {
@@ -677,26 +717,8 @@ export class SquadctlBridge implements SquadBridge {
       isolationMode === "strong" || isolationMode === "collaborative"
         ? stripCredentialEnv(env)
         : env;
-    let spawnExecutable = orchExe;
-    let spawnArgv = argv;
-    if (isolationMode === "strong" && !this.options.spawnOrchestrator) {
-      const capability = detectIsolationCapability(isolatedEnv);
-      const wrapped = wrapIsolatedSpawn({
-        mode: "strong",
-        capability,
-        executable: orchExe,
-        argv,
-        worktree: identity.workspaceCwd,
-        outputDir: join(identity.taskDir, "isolation-out"),
-        tmpDir: join(identity.taskDir, "isolation-tmp"),
-        extraWritePaths: [grokLeaderSocketDir()],
-        allowNetwork: true,
-        credentialHome: isolatedEnv.HOME,
-      });
-      spawnExecutable = wrapped.executable;
-      spawnArgv = wrapped.argv;
-      isolatedEnv.TMPDIR = join(identity.taskDir, "isolation-tmp");
-    }
+    const spawnExecutable = orchExe;
+    const spawnArgv = argv;
     const spawned = spawnImpl({
       executable: spawnExecutable,
       argv: spawnArgv,
@@ -1065,6 +1087,54 @@ export class SquadctlBridge implements SquadBridge {
     if (!owned) return;
     if (executionId && owned.executionId !== executionId) return;
     this.children.delete(taskId);
+  }
+
+  private writePlanningDocuments(taskDir: string, packagePath: string): void {
+    const briefPath = join(taskDir, "brief.md");
+    const planPath = join(taskDir, "plan.md");
+    if (existsSync(briefPath) && existsSync(planPath)) return;
+    let summary = "CouncilKit repair task";
+    try {
+      const raw = JSON.parse(readFileText(packagePath) ?? "{}") as {
+        findings?: Array<{ id?: string; title?: string }>;
+        source?: { runId?: string; sha?: string };
+      };
+      const findings = (raw.findings ?? [])
+        .map((row) => `- ${row.id ?? "?"}: ${row.title ?? ""}`)
+        .join("\n");
+      summary = [
+        "# Repair brief",
+        "",
+        `source: ${raw.source?.runId ?? "unknown"}`,
+        `base sha: ${raw.source?.sha ?? "unknown"}`,
+        "",
+        findings || "- (no findings listed)",
+        "",
+      ].join("\n");
+    } catch {
+      // bounded fallback
+    }
+    if (!existsSync(briefPath)) {
+      writeFileSync(briefPath, `${summary}\n`, { encoding: "utf8", mode: 0o600 });
+    }
+    if (!existsSync(planPath)) {
+      writeFileSync(
+        planPath,
+        [
+          "# Repair plan",
+          "",
+          "1. Keep the frozen brief and gate policy unchanged.",
+          "2. Implement in-scope repairs on a candidate worktree.",
+          "3. Stop after independent review and verify bind the same SHA.",
+          "",
+        ].join("\n"),
+        { encoding: "utf8", mode: 0o600 },
+      );
+    }
+  }
+
+  private policyFileForTask(_taskDir: string): OfficialGatePolicyFile {
+    return defaultSupervisedPolicy();
   }
 
   private persistInitIdentity(input: {
@@ -1577,8 +1647,8 @@ function writeOrchestratorPrompt(identity: BridgeIdentity, probe: SquadBridgePro
     delivery
       ? `frozen grant ${delivery.grantHash} repo ${delivery.repo} source ${delivery.sourceBranch} sha ${delivery.sourceSha} remote ${delivery.remote}`
       : "frozen grant missing",
-    "Roles: Orchestrator=this grok session; Builder continues this session after plan freeze; Reviewer and Verifier MUST be independent adapter runs.",
-    "When freezing gate policy, include delivery_authority from delivery-authority.json unchanged.",
+    "Roles: Orchestrator=this grok session; Builder continues this session after the controller has frozen planning and gate policy; Reviewer and Verifier MUST be independent adapter runs.",
+    "CouncilKit already froze planning and gate policy in this process. Do NOT run squadctl gate policy-freeze. Do not rewrite brief.md or plan.md.",
     "Do NOT run git push, squadctl integrate, or any remote update. CouncilKit will publish after you stop.",
     "Stop when candidate.status=completed, independent Review/Verify passed on the same SHA, and phase=integrating. Then wait; do not keep mutating.",
   ].join("\n");

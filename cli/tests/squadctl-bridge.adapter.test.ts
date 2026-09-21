@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SQUAD_REQUIRED_GATES_V1, hashRepairGatePolicy } from "@shared/runtime/repair-policy";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { afterEach, describe, expect, it } from "vitest";
 import { SquadctlBridge } from "../src/auto/squadctl-bridge";
@@ -146,6 +147,15 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadct
     expect(identity.nativeSession).toBe(identity.requestedSession);
     expect(identity.nativeSession).toBeTruthy();
     expect(identity.actualRuntime).toBe("fake-grokb.mjs");
+    const freezePath = join(home, "squad-tasks", started.taskId, "councilkit-policy-freeze.json");
+    expect(existsSync(freezePath)).toBe(true);
+    const freeze = JSON.parse(readFileSync(freezePath, "utf8")) as {
+      policyHash: string;
+      source: string;
+    };
+    expect(freeze.policyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(freeze.source).toBe("squadctl-gate-policy-freeze");
+    expect(freeze.policyHash).not.toBe(hashRepairGatePolicy(SQUAD_REQUIRED_GATES_V1));
     const snapshot = instance.status({ taskId: started.taskId });
     expect(["running", "blocked", "failed", "candidate_ready"]).toContain(snapshot.event.kind);
     instance.stop({ taskId: started.taskId });
@@ -215,25 +225,14 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadct
   }, 60_000);
 });
 
-describe.skipIf(!HAS_LIVE_SQUADCTL || !existsSync("/usr/bin/sandbox-exec"))(
-  "strong isolation wraps builder and candidate tests on the real bridge",
+describe.skipIf(!HAS_LIVE_SQUADCTL)(
+  "full Squad pipeline strong isolation is refused before source writes",
   () => {
-    it("keeps orchestrator control flow while denying control-plane writes from builder and child tests", async () => {
+    it("does not spawn an orchestrator when isolationMode is strong", async () => {
       const home = tempHome();
       const { repo, sha } = initRepo(home);
       const pkg = join(home, "pkg.json");
       writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
-      const ledger = join(home, "ledger.json");
-      writeFileSync(ledger, `${JSON.stringify({ ok: true })}\n`);
-      const mark = join(repo, "builder-ok.txt");
-      const candidateScript = join(repo, "candidate-test.sh");
-      writeFileSync(
-        candidateScript,
-        `#!/bin/sh
-echo hijack-child > "${ledger}"
-`,
-        { mode: 0o700 },
-      );
       const instance = new SquadctlBridge({
         home,
         workspaceCwd: repo,
@@ -245,9 +244,6 @@ echo hijack-child > "${ledger}"
           HOME: home,
           COUNCILKIT_HOME: home,
           FAKE_GROK_SESSION: "native-session-iso",
-          HIJACK_PATH: ledger,
-          WORKTREE_MARK: mark,
-          CANDIDATE_TEST_SCRIPT: candidateScript,
         },
       });
       const started = instance.start({
@@ -271,26 +267,21 @@ echo hijack-child > "${ledger}"
       });
       expect(started.ok).toBe(true);
       if (!started.ok) throw new Error("start failed");
-      await instance.prepare({
-        taskId: started.taskId,
-        baseSha: sha,
-        packagePath: pkg,
-        delivery: {
-          grantHash: AUTH,
-          repo: "github.com/acme/repo",
-          sourceBranch: "feat-x",
-          sourceSha: sha,
-          expectedOldSha: sha,
-          remote: "origin",
-        },
-      });
-      const identity = JSON.parse(
-        readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-bridge.json"), "utf8"),
-      ) as { nativeSession: string | null };
-      expect(identity.nativeSession).toBeTruthy();
-      expect(readFileSync(mark, "utf8")).toBe("ok\n");
-      expect(readFileSync(ledger, "utf8")).toBe(`${JSON.stringify({ ok: true })}\n`);
-      instance.stop({ taskId: started.taskId });
+      await expect(
+        instance.prepare({
+          taskId: started.taskId,
+          baseSha: sha,
+          packagePath: pkg,
+          delivery: {
+            grantHash: AUTH,
+            repo: "github.com/acme/repo",
+            sourceBranch: "feat-x",
+            sourceSha: sha,
+            expectedOldSha: sha,
+            remote: "origin",
+          },
+        }),
+      ).rejects.toThrow(/full Squad pipeline strong isolation is unsupported/i);
     }, 60_000);
   },
 );

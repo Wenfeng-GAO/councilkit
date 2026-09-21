@@ -5,6 +5,7 @@ import {
   type RepairChain,
   authorizeBudgetAppend,
   bootstrapChain,
+  canConsumeRetry,
   canOpenSourceFix,
   consumeRetry,
   consumeSourceFix,
@@ -120,6 +121,17 @@ export function consumeLockedSourceFix(
     writeRepairChain({ ...current, budget, casVersion: current.casVersion + 1 });
     return { ok: true as const, budget };
   });
+}
+
+export function peekLockedRetry(
+  chainId: string,
+  kind: "plan" | "verify" | "format" | "diagnose",
+): { ok: true; budget: RepairBudget } | { ok: false; reason: string } {
+  const current = readRepairChain(chainId);
+  if (!current) return { ok: false as const, reason: "repair chain missing" };
+  const allowed = canConsumeRetry(current.budget, kind);
+  if (!allowed.ok) return allowed;
+  return { ok: true as const, budget: current.budget };
 }
 
 export function consumeLockedRetry(

@@ -112,7 +112,9 @@ export function RepairRunPanel({
         ) : null}
         {run.isolationMode ? (
           <p className="mt-1 text-sm text-muted">
-            {run.isolationMode === "strong" ? "强隔离（OS sandbox）" : "协作约定（非 OS 隔离）"}
+            {run.isolationMode === "strong"
+              ? "整条真实 Squad 强隔离当前不支持"
+              : "协作约定（非 OS 硬隔离）"}
           </p>
         ) : null}
         <p className="mt-1 text-sm text-muted">

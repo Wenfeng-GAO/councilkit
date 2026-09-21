@@ -10,6 +10,9 @@ export interface IsolationCapability {
   canDenyPublish: boolean;
 }
 
+const PIPELINE_STRONG_UNAVAILABLE =
+  "full Squad pipeline strong isolation is unsupported: the Orchestrator must write the journal, and this runner cannot deny publish. Choose collaborative explicitly; candidate-command sandbox is only a local hardening and is not a pipeline strong boundary.";
+
 export function probeIsolationCapability(
   platform: NodeJS.Platform,
   sandboxExecAvailable: boolean,
@@ -21,10 +24,11 @@ export function probeIsolationCapability(
     canEnforceDeadlineAfterParentExit: platform === "darwin" || platform === "linux",
     canDenyCredentialRead: darwinSandbox,
     canDenyControlPlaneWrite: darwinSandbox,
-    canDenyPublish: darwinSandbox,
+    canDenyPublish: false,
   };
 }
 
+/** Candidate-side command sandbox. Not a full Squad pipeline strong guarantee. */
 export function assertIsolationMode(
   mode: IsolationMode,
   capability: IsolationCapability,
@@ -34,17 +38,18 @@ export function assertIsolationMode(
     return {
       ok: false,
       reason:
-        "strong isolation requires sandbox-exec on Darwin; this runner cannot deny control-plane writes, credential reads, or publish. Collaborative mode must be chosen explicitly.",
+        "candidate-command sandbox requires sandbox-exec on Darwin. Collaborative mode must be chosen explicitly for the Squad pipeline.",
     };
   }
-  if (
-    !capability.canDenyControlPlaneWrite ||
-    !capability.canDenyCredentialRead ||
-    !capability.canDenyPublish
-  ) {
-    return { ok: false, reason: "strong isolation is incomplete on this runner" };
-  }
   return { ok: true };
+}
+
+/** Whole-pipeline isolation for real Squad Orchestrator + journal + publish. */
+export function assertSquadPipelineIsolation(
+  mode: IsolationMode,
+): { ok: true } | { ok: false; reason: string } {
+  if (mode === "collaborative") return { ok: true };
+  return { ok: false, reason: PIPELINE_STRONG_UNAVAILABLE };
 }
 
 export function sandboxProfile(input: {
@@ -104,6 +109,6 @@ function quoted(value: string): string {
 
 export function isolationLabel(mode: IsolationMode): string {
   return mode === "strong"
-    ? "强隔离（OS sandbox；候选代码不可写控制面、读凭据或发布）"
-    : "协作约定（非 OS 隔离；不声称不可绕过）";
+    ? "整条真实 Squad 强隔离当前不支持（Orchestrator 需写 journal，无法拒绝发布）"
+    : "协作约定（非 OS 硬隔离；清除不必继承的凭据并禁止候选发布 hooks，不声称不可绕过）";
 }

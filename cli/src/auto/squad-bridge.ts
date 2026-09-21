@@ -1,9 +1,4 @@
-import { randomUUID } from "node:crypto";
-import {
-  DEFAULT_GATE_POLICY_ID,
-  REPAIR_GATE_POLICY_CATALOG,
-  hashRepairGatePolicy,
-} from "@shared/runtime/repair-policy";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type FrozenIntegrateIdentity,
   SQUAD_BRIDGE_CONTRACT_VERSION,
@@ -17,6 +12,11 @@ import {
   receiptContainsSecret,
   squadJournalRefsSchema,
 } from "@shared/runtime/squad-bridge-contract";
+import type { OfficialGatePolicyFreeze } from "@shared/runtime/squad-gate-policy";
+import {
+  SUPERVISED_REVIEW_VERIFY_POLICY,
+  hashOfficialGatePolicyFile,
+} from "@shared/runtime/squad-gate-policy";
 
 export interface SquadBridgeDelivery {
   grantHash: string;
@@ -109,6 +109,13 @@ export interface SquadBridge {
         historyPath: string;
       }>;
   writerPids?(): number[];
+  freezeOfficialGatePolicy?(request: {
+    taskId: string;
+  }):
+    | { ok: true; freeze: OfficialGatePolicyFreeze }
+    | { ok: false; reason: string }
+    | Promise<{ ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string }>;
+  readOfficialGatePolicy?(request: { taskId: string }): OfficialGatePolicyFreeze | null;
 }
 
 export interface FakeSquadBridgeOptions {
@@ -127,6 +134,8 @@ export interface FakeSquadBridgeOptions {
 
 export class FakeSquadBridge implements SquadBridge {
   private readonly tasks = new Map<string, SquadJournalRefs>();
+  private readonly taskDirs = new Map<string, string>();
+  private readonly frozen = new Map<string, OfficialGatePolicyFreeze>();
   private readonly stopped = new Set<string>();
   private readonly statusCounts = new Map<string, number>();
   publishCalls = 0;
@@ -156,6 +165,7 @@ export class FakeSquadBridge implements SquadBridge {
         },
     });
     if (!history.ok) return history;
+    const provided = this.options.journal?.gatePolicyHash;
     const journal = squadJournalRefsSchema.parse({
       ...(this.options.journal ?? {
         candidateSha: "a".repeat(40),
@@ -163,14 +173,17 @@ export class FakeSquadBridge implements SquadBridge {
         independentReview: true,
         independentVerify: true,
         requiredGatesPassed: true,
-        gatePolicyHash: hashRepairGatePolicy(REPAIR_GATE_POLICY_CATALOG[DEFAULT_GATE_POLICY_ID]),
+        gatePolicyHash: "unknown",
       }),
+      gatePolicyHash:
+        typeof provided === "string" && /^[a-f0-9]{64}$/.test(provided) ? provided : "unknown",
       ...(this.options.observeClosed === undefined
         ? {}
         : { observeClosed: this.options.observeClosed }),
     });
     const taskId = `fake-task-${randomUUID()}`;
     this.tasks.set(taskId, journal);
+    this.taskDirs.set(taskId, request.bridgeAncestorDir ?? "/tmp/fake-squad");
     return { ok: true, taskId };
   }
 
@@ -243,6 +256,39 @@ export class FakeSquadBridge implements SquadBridge {
         ref: request.identity.sourceBranch,
       },
     };
+  }
+
+  freezeOfficialGatePolicy(request: {
+    taskId: string;
+  }): { ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string } {
+    const existing = this.frozen.get(request.taskId);
+    if (existing) return { ok: true, freeze: existing };
+    const journal = this.tasks.get(request.taskId);
+    if (!journal) return { ok: false, reason: `unknown fake squad task ${request.taskId}` };
+    const already = journal.gatePolicyHash;
+    const policyHash =
+      typeof already === "string" && /^[a-f0-9]{64}$/.test(already)
+        ? already
+        : createHash("sha256").update(`fake-official-freeze:${request.taskId}`).digest("hex");
+    const freeze: OfficialGatePolicyFreeze = {
+      policyHash,
+      briefHash: createHash("sha256").update(`fake-brief:${request.taskId}`).digest("hex"),
+      taskId: request.taskId,
+      taskDir: this.taskDirs.get(request.taskId) ?? "/tmp/fake-squad",
+      requiredGates: SUPERVISED_REVIEW_VERIFY_POLICY.required_gates,
+      independence: SUPERVISED_REVIEW_VERIFY_POLICY.independence,
+      source: "squadctl-gate-policy-freeze",
+      createdAt: new Date().toISOString(),
+      alreadyFrozen: typeof already === "string" && /^[a-f0-9]{64}$/.test(already),
+      policyFileHash: hashOfficialGatePolicyFile(SUPERVISED_REVIEW_VERIFY_POLICY),
+    };
+    this.frozen.set(request.taskId, freeze);
+    this.tasks.set(request.taskId, { ...journal, gatePolicyHash: policyHash });
+    return { ok: true, freeze };
+  }
+
+  readOfficialGatePolicy(request: { taskId: string }): OfficialGatePolicyFreeze | null {
+    return this.frozen.get(request.taskId) ?? null;
   }
 }
 

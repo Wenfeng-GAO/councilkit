@@ -3,7 +3,6 @@ import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
-import { DEFAULT_GATE_POLICY_ID, freezeExpectedGatePolicy } from "@shared/runtime/repair-policy";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
 import { loadFindingGroups } from "../auto/finding-groups";
 import { runDeadlineSupervisorLoop } from "../auto/repair-deadline-supervisor";
@@ -210,11 +209,12 @@ async function runRepairRun(
   if (protocolVersion === "v2" && isolationMode !== "strong" && isolationMode !== "collaborative") {
     throw errors.usage("v2 repair requires --isolation strong|collaborative (explicit opt-in)");
   }
+  if (protocolVersion === "v2" && isolationMode === "strong") {
+    throw errors.usage(
+      "full Squad pipeline strong isolation is unsupported: the Orchestrator must write the journal and this runner cannot deny publish. Pass --isolation collaborative explicitly.",
+    );
+  }
   const runId = assigned ?? `ck-repair-${randomUUID()}`;
-  const freeze = freezeExpectedGatePolicy({
-    catalogId: DEFAULT_GATE_POLICY_ID,
-    profileHash: profile.expectedGatePolicyHash,
-  });
   const bootstrapped = bootstrapRepairRun({
     runId,
     sourceRunId: fromId,
@@ -224,7 +224,6 @@ async function runRepairRun(
     pid: deps.pid ?? process.pid,
     protocolVersion,
     isolationMode,
-    frozenPolicyHash: freeze.ok ? freeze.hash : undefined,
   });
   if (deps.loop === false) {
     const parked = await parkUntilStopped(deps);

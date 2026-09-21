@@ -1,5 +1,6 @@
 import {
   assertIsolationMode,
+  assertSquadPipelineIsolation,
   isolationLabel,
   probeIsolationCapability,
   sandboxProfile,
@@ -16,6 +17,7 @@ import { describe, expect, it } from "vitest";
 describe("isolation capability", () => {
   it("refuses strong mode when sandbox-exec is missing", () => {
     const capability = probeIsolationCapability("darwin", false);
+    expect(capability.canDenyPublish).toBe(false);
     const result = assertIsolationMode("strong", capability);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toMatch(/collaborative mode must be chosen explicitly/i);
@@ -24,7 +26,15 @@ describe("isolation capability", () => {
   it("accepts collaborative mode only as an explicit choice", () => {
     const capability = probeIsolationCapability("linux", false);
     expect(assertIsolationMode("collaborative", capability)).toEqual({ ok: true });
-    expect(isolationLabel("collaborative")).toMatch(/非 OS 隔离/);
+    expect(isolationLabel("collaborative")).toMatch(/协作约定/);
+  });
+
+  it("refuses full Squad pipeline strong even when Darwin sandbox-exec exists", () => {
+    const capability = probeIsolationCapability("darwin", true);
+    expect(capability.canDenyPublish).toBe(false);
+    expect(assertIsolationMode("strong", capability).ok).toBe(true);
+    expect(assertSquadPipelineIsolation("strong").ok).toBe(false);
+    expect(assertSquadPipelineIsolation("collaborative").ok).toBe(true);
   });
 
   it("emits a sandbox profile that denies credentials, control-plane writes, and network", () => {

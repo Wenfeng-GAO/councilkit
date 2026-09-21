@@ -102,15 +102,25 @@ export function consumeSourceFix(budget: RepairBudget): RepairBudget {
   return { ...budget, sourceFixUsed: budget.sourceFixUsed + 1 };
 }
 
-export function consumeRetry(
+export function canConsumeRetry(
   budget: RepairBudget,
   kind: "plan" | "verify" | "format" | "diagnose",
-): { ok: true; budget: RepairBudget } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: string } {
   const usedKey = `${kind}RetryUsed` as const;
   const maxKey = `${kind}RetryMax` as const;
   if (budget[usedKey] >= budget[maxKey]) {
     return { ok: false, reason: `${kind} retry budget exhausted` };
   }
+  return { ok: true };
+}
+
+export function consumeRetry(
+  budget: RepairBudget,
+  kind: "plan" | "verify" | "format" | "diagnose",
+): { ok: true; budget: RepairBudget } | { ok: false; reason: string } {
+  const allowed = canConsumeRetry(budget, kind);
+  if (!allowed.ok) return allowed;
+  const usedKey = `${kind}RetryUsed` as const;
   return { ok: true, budget: { ...budget, [usedKey]: budget[usedKey] + 1 } };
 }
 

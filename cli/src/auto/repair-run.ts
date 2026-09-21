@@ -22,8 +22,6 @@ import {
   generateTaskCard,
   goalContractSchema,
   goalIdentityFingerprint,
-  interpretTestLog,
-  verificationAssetSchema,
 } from "@shared/runtime/repair-contract";
 import {
   canStartWriter,
@@ -36,9 +34,9 @@ import {
   evaluateRepairGate,
   extractAggregatorVerdict,
 } from "@shared/runtime/repair-gate";
-import { type IsolationMode, assertIsolationMode } from "@shared/runtime/repair-isolation";
+import { assertSquadPipelineIsolation } from "@shared/runtime/repair-isolation";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
-import { DEFAULT_GATE_POLICY_ID, freezeExpectedGatePolicy } from "@shared/runtime/repair-policy";
+import { isFrozenPolicyHash } from "@shared/runtime/repair-policy";
 import {
   recordRootCauseFailure,
   recoveryActionFor,
@@ -68,9 +66,23 @@ import { resolvePaths } from "../store/paths";
 import { type CheckedOutPr, defaultRunCommand, inspectPullRequest } from "./checkout-pr";
 import { loadFindingGroups } from "./finding-groups";
 import {
+  codeTraceFromReview,
+  codeTraceMethods,
+  commandMethods,
+  ensureCandidateSnapshot,
+  extraProbeManifestVersion,
+  hashTestAssetContents,
+  persistVerificationAssets,
+  receiptFromIsolatedLog,
+  runCandidateCommand,
+  verificationCacheKey,
+  writeCommandLog,
+} from "./repair-candidate-verify";
+import {
   consumeLockedRetry,
   consumeLockedSourceFix,
   loadOrCreateChain,
+  peekLockedRetry,
   readRepairChain,
 } from "./repair-chain-store";
 import {
@@ -80,7 +92,6 @@ import {
   writeExecutionRecord,
 } from "./repair-deadline-supervisor";
 import { ensureRepairHandoff } from "./repair-handoff";
-import { detectIsolationCapability, runIsolatedCommand } from "./repair-isolated-run";
 import { acquireWriterLease, releaseWriterLease } from "./repair-lease";
 import {
   type RepairCycle,
@@ -261,18 +272,9 @@ export async function executeRepairLoop(input: {
       state.grantId || state.grantHash || state.cycles?.some((cycle) => Boolean(cycle.squadTaskId)),
     ),
   });
-  const policyFreeze = freezeExpectedGatePolicy({
-    persisted: state.frozenPolicyHash,
-    catalogId: DEFAULT_GATE_POLICY_ID,
-    profileHash: profile.expectedGatePolicyHash,
-  });
-  if (!policyFreeze.ok) {
-    return finish(input, {
-      businessResult: "needs_attention",
-      reasonCode: "policy_unknown",
-      message: policyFreeze.reason,
-    });
-  }
+  const persistedPolicy = isFrozenPolicyHash(state.frozenPolicyHash)
+    ? state.frozenPolicyHash
+    : null;
   state = patchState(input.runDir, {
     ...state,
     prUrl,
@@ -284,7 +286,7 @@ export async function executeRepairLoop(input: {
     priorCompleteReviewId: state.priorCompleteReviewId ?? input.sourceRunId,
     protocolVersion: state.protocolVersion ?? profile.protocolVersion ?? "v1",
     isolationMode: state.isolationMode ?? profile.isolationMode ?? null,
-    frozenPolicyHash: policyFreeze.hash,
+    frozenPolicyHash: persistedPolicy,
   });
   if (isV2Protocol(state.protocolVersion)) {
     const isolationMode = state.isolationMode;
@@ -295,7 +297,7 @@ export async function executeRepairLoop(input: {
         message: "v2 repair requires an explicit isolation mode (strong or collaborative)",
       });
     }
-    const isolation = assertIsolationMode(isolationMode, detectIsolationCapability());
+    const isolation = assertSquadPipelineIsolation(isolationMode);
     if (!isolation.ok) {
       return finish(input, {
         businessResult: "needs_attention",
@@ -334,40 +336,29 @@ export async function executeRepairLoop(input: {
       });
       const budget = loaded.chain.budget;
       const frozenPolicyHash = state.frozenPolicyHash;
-      if (!frozenPolicyHash) {
-        return finish(input, {
-          businessResult: "needs_attention",
-          reasonCode: "policy_unknown",
-          message: "v2 repair requires a frozen gate policy before writing a contract",
-        });
-      }
       const reused = loadFrozenGoalContract(input.runDir, loaded.chain.parentRunIds);
       const missingEvidence: string[] = [];
       const contract =
-        reused ??
-        buildGoalContract({
-          sourceRunId: input.sourceRunId,
-          originalRequest,
-          goal: originalRequest,
-          invariants: [],
-          allowedScope: uniqueScope(sourceRun?.findings ?? []),
-          acceptance: realAcceptanceMethods(sourceRun?.findings ?? [], missingEvidence),
-          chainId: loaded.chain.chainId,
-          frozenPolicyHash,
-        });
-      atomicWriteJson(join(input.runDir, "goal-contract.json"), contract);
-      atomicWriteJson(
-        join(input.runDir, "task-card.json"),
-        generateTaskCard({
-          contract,
-          candidateSha: state.candidateSha ?? null,
-          responsibleAssertions: contract.acceptance.map((row) => row.assertionId),
-          originalCounterexamples: contract.acceptance.map((row) => row.trigger),
-          rejectedApproaches: [],
-          missingEvidence,
-          remainingBudget: `${budget.sourceFixMax - budget.sourceFixUsed} source-fix left`,
-        }),
-      );
+        typeof frozenPolicyHash !== "string"
+          ? null
+          : persistGoalProjection({
+              runDir: input.runDir,
+              contract:
+                reused ??
+                buildGoalContract({
+                  sourceRunId: input.sourceRunId,
+                  originalRequest,
+                  goal: originalRequest,
+                  invariants: [],
+                  allowedScope: uniqueScope(sourceRun?.findings ?? []),
+                  acceptance: realAcceptanceMethods(sourceRun?.findings ?? [], missingEvidence),
+                  chainId: loaded.chain.chainId,
+                  frozenPolicyHash,
+                }),
+              candidateSha: state.candidateSha ?? null,
+              missingEvidence,
+              remainingBudget: `${budget.sourceFixMax - budget.sourceFixUsed} source-fix left`,
+            });
       state = patchState(input.runDir, {
         ...state,
         chainId: loaded.chain.chainId,
@@ -375,8 +366,8 @@ export async function executeRepairLoop(input: {
         budget,
         deadlineAtMs: state.deadlineAtMs ?? budget.startedAtMs + budget.deadlineMs,
         writeCutoffAtMs: state.writeCutoffAtMs ?? writeCutoffMs(budget),
-        contractVersion: contract.version,
-        goalSummary: contract.goal,
+        contractVersion: contract?.version ?? state.contractVersion ?? null,
+        goalSummary: contract?.goal ?? originalRequest,
         remainingBudget: `${budget.sourceFixMax - budget.sourceFixUsed} source-fix left`,
       });
     } catch (error) {
@@ -657,6 +648,16 @@ export async function executeRepairLoop(input: {
           nowMsOrNow(deps),
         );
       }
+      const boundResume = bindOfficialExpectedPolicy(bridge, taskId, input.runDir, state);
+      if (!boundResume.ok) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "policy_unknown",
+          message: boundResume.reason,
+          outerUsed: state.outerUsed,
+        });
+      }
+      state = bindOfficialPolicyState(input, state, boundResume.hash);
       snapshot = await waitForCandidate(bridge, taskId, snapshot, input.runDir, now, deps, state);
       const waited = terminalWaitOutcome(input, snapshot, state);
       if (waited) return waited;
@@ -798,6 +799,16 @@ export async function executeRepairLoop(input: {
           nowMsOrNow(deps),
         );
       }
+      const boundStart = bindOfficialExpectedPolicy(bridge, started.taskId, input.runDir, state);
+      if (!boundStart.ok) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "policy_unknown",
+          message: boundStart.reason,
+          outerUsed: state.outerUsed,
+        });
+      }
+      state = bindOfficialPolicyState(input, state, boundStart.hash);
       let snapshot = bridge.status({ taskId: started.taskId });
       snapshot = await waitForCandidate(
         bridge,
@@ -837,11 +848,27 @@ export async function executeRepairLoop(input: {
         outerUsed: state.outerUsed,
       });
     }
+    const candidateSnapshot = bridge.status({ taskId });
+    const journalSha = candidateSnapshot.event.journal.candidateSha?.toLowerCase() ?? "";
+    const usableJournalSha =
+      /^[0-9a-f]{40}$/i.test(journalSha) && journalSha !== "0".repeat(40) ? journalSha : null;
+    if (usableJournalSha && state.candidateSha !== usableJournalSha) {
+      state = patchState(input.runDir, { ...state, candidateSha: usableJournalSha });
+    }
     const identitySha = (
+      usableJournalSha ??
       state.candidateSha ??
       state.publishedSha ??
-      preflight.sourceSha
-    ).toLowerCase();
+      (isV2Protocol(state.protocolVersion) ? null : preflight.sourceSha)
+    )?.toLowerCase();
+    if (!identitySha || !/^[0-9a-f]{40}$/i.test(identitySha) || identitySha === "0".repeat(40)) {
+      return finish(input, {
+        businessResult: "needs_attention",
+        reasonCode: "coverage_incomplete",
+        message: "candidate SHA is unknown; refusing to verify against the source checkout",
+        outerUsed: state.outerUsed,
+      });
+    }
     const against = state.priorCompleteReviewId ?? input.sourceRunId;
     const existingChild =
       state.cycles?.find((row) => row.n === cycleN)?.childReviewId ??
@@ -926,28 +953,59 @@ export async function executeRepairLoop(input: {
     });
     const acceptance = gateAcceptanceView(projection);
     const contract = readGoalContractFile(join(input.runDir, "goal-contract.json"));
-    await materializeIndependentVerification({
+    const requiredForVerify = [
+      ...commandMethods(contract).map((row) => row.assertionId),
+      ...codeTraceMethods(contract).map((row) => row.assertionId),
+    ];
+    const commandAcceptance = commandMethods(contract);
+    const verifyChainId = state.chainId;
+    const materialized = await materializeIndependentVerification({
       runDir: input.runDir,
       contract,
       candidateSha: identitySha,
       workspaceCwd,
-      isolationMode: state.isolationMode ?? "collaborative",
+      deadlineAtMs: state.deadlineAtMs ?? null,
+      nowMs: nowMsOrNow(deps),
+      reserve:
+        isV2Protocol(state.protocolVersion) && verifyChainId && commandAcceptance.length > 0
+          ? () => {
+              const allowed = peekLockedRetry(verifyChainId, "verify");
+              if (!allowed.ok) return allowed;
+              const verifiedBudget = consumeLockedRetry(verifyChainId, "verify");
+              if (verifiedBudget.ok) {
+                const current = readRepairState(input.runDir);
+                if (current) {
+                  state = patchState(input.runDir, { ...current, budget: verifiedBudget.budget });
+                }
+              }
+              return verifiedBudget;
+            }
+          : undefined,
     });
+    if (!materialized.ok) {
+      return finish(input, {
+        businessResult: "needs_attention",
+        reasonCode: /deadline/.test(materialized.reason) ? "deadline" : "coverage_incomplete",
+        message: materialized.reason,
+        latestReviewId: childId,
+        outerUsed: state.outerUsed,
+      });
+    }
     const verification = bindVerificationForGate({
       runDir: input.runDir,
       contract,
       candidateSha: identitySha,
-      workspaceCwd,
+      workspaceCwd: materialized.cwd ?? workspaceCwd,
+      findings: reviewGate.findings,
     });
-    if (
-      isV2Protocol(state.protocolVersion) &&
-      state.chainId &&
-      verification.requiredAssertionIds.length > 0
-    ) {
-      const verifiedBudget = consumeLockedRetry(state.chainId, "verify");
-      if (verifiedBudget.ok) {
-        state = patchState(input.runDir, { ...state, budget: verifiedBudget.budget });
-      }
+    if (requiredForVerify.length > 0 && verification.requiredAssertionIds.length === 0) {
+      return finish(input, {
+        businessResult: "needs_attention",
+        reasonCode: "coverage_incomplete",
+        message: "required verification responsibilities are missing",
+        latestReviewId: childId,
+        outerUsed: state.outerUsed,
+      });
     }
     const squadCandidate = {
       taskId,
@@ -2033,53 +2091,183 @@ function uniqueScope(findings: readonly LedgerFinding[]): string[] {
   return [...new Set(findings.flatMap((row) => row.files))].slice(0, 200);
 }
 
+function persistGoalProjection(input: {
+  runDir: string;
+  contract: GoalContract;
+  candidateSha: string | null;
+  missingEvidence: string[];
+  remainingBudget: string;
+}): GoalContract {
+  atomicWriteJson(join(input.runDir, "goal-contract.json"), input.contract);
+  atomicWriteJson(
+    join(input.runDir, "task-card.json"),
+    generateTaskCard({
+      contract: input.contract,
+      candidateSha: input.candidateSha,
+      responsibleAssertions: input.contract.acceptance.map((row) => row.assertionId),
+      originalCounterexamples: input.contract.acceptance.map((row) => row.trigger),
+      rejectedApproaches: [],
+      missingEvidence: input.missingEvidence,
+      remainingBudget: input.remainingBudget,
+    }),
+  );
+  return input.contract;
+}
+
+function bindOfficialExpectedPolicy(
+  bridge: SquadBridge,
+  taskId: string,
+  runDir: string,
+  state: RepairState,
+): { ok: true; hash: string } | { ok: false; reason: string } {
+  if (bridge.readOfficialGatePolicy) {
+    const existing = bridge.readOfficialGatePolicy({ taskId });
+    if (existing && isFrozenPolicyHash(existing.policyHash)) {
+      atomicWriteJson(join(runDir, "official-gate-policy.json"), existing);
+      return { ok: true, hash: existing.policyHash };
+    }
+  }
+  if (bridge.freezeOfficialGatePolicy) {
+    const frozen = bridge.freezeOfficialGatePolicy({ taskId });
+    if (frozen instanceof Promise) {
+      return { ok: false, reason: "official policy freeze must be synchronous in this controller" };
+    }
+    if (!frozen.ok) return frozen;
+    atomicWriteJson(join(runDir, "official-gate-policy.json"), frozen.freeze);
+    return { ok: true, hash: frozen.freeze.policyHash };
+  }
+  if (isFrozenPolicyHash(state.frozenPolicyHash)) {
+    return { ok: true, hash: state.frozenPolicyHash };
+  }
+  return {
+    ok: false,
+    reason:
+      "no official squadctl gate policy-freeze record; catalog or candidate hashes are not expected",
+  };
+}
+
+function bindOfficialPolicyState(
+  input: { runId: string; runDir: string; sourceRunId: string },
+  state: RepairState,
+  hash: string,
+): RepairState {
+  const next = patchState(input.runDir, { ...state, frozenPolicyHash: hash });
+  if (
+    !isV2Protocol(next.protocolVersion) ||
+    readGoalContractFile(join(input.runDir, "goal-contract.json"))
+  ) {
+    return next;
+  }
+  const sourceRun = readCliRun(input.sourceRunId);
+  const originalRequest = sourceRun?.title?.trim();
+  if (!originalRequest || !next.chainId) return next;
+  const missingEvidence: string[] = [];
+  const contract = persistGoalProjection({
+    runDir: input.runDir,
+    contract: buildGoalContract({
+      sourceRunId: input.sourceRunId,
+      originalRequest,
+      goal: originalRequest,
+      invariants: [],
+      allowedScope: uniqueScope(sourceRun?.findings ?? []),
+      acceptance: realAcceptanceMethods(sourceRun?.findings ?? [], missingEvidence),
+      chainId: next.chainId,
+      frozenPolicyHash: hash,
+    }),
+    candidateSha: next.candidateSha ?? null,
+    missingEvidence,
+    remainingBudget: next.remainingBudget ?? "",
+  });
+  return patchState(input.runDir, {
+    ...next,
+    contractVersion: contract.version,
+    goalSummary: contract.goal,
+  });
+}
+
 async function materializeIndependentVerification(input: {
   runDir: string;
   contract: GoalContract | null;
   candidateSha: string;
   workspaceCwd: string;
-  isolationMode: IsolationMode;
-}): Promise<void> {
-  if (!input.contract) return;
-  const methods = input.contract.acceptance.filter(
-    (row) => row.evidenceKind === "regression_test" || row.evidenceKind === "command_receipt",
-  );
-  if (methods.length === 0) return;
+  deadlineAtMs?: number | null;
+  nowMs?: number;
+  reserve?: () => { ok: true } | { ok: false; reason: string };
+}): Promise<{ ok: true; cwd: string | null; executed: boolean } | { ok: false; reason: string }> {
+  if (!input.contract) return { ok: true, cwd: null, executed: false };
+  const methods = commandMethods(input.contract);
+  if (methods.length === 0) return { ok: true, cwd: null, executed: false };
+  if (!/^[0-9a-f]{40}$/i.test(input.candidateSha) || input.candidateSha === "0".repeat(40)) {
+    return { ok: false, reason: "candidate SHA is unknown; independent verification was not run" };
+  }
   const verificationDir = join(input.runDir, "verification");
   mkdirSync(verificationDir, { recursive: true });
-  const isolation = detectIsolationCapability();
-  for (const method of methods) {
-    const logPath = join(verificationDir, `${method.assertionId}.log`);
-    if (existsSync(logPath)) continue;
-    try {
-      const result = await runIsolatedCommand({
-        mode: input.isolationMode,
-        capability: isolation,
-        executable: "/bin/sh",
-        argv: ["-c", method.trigger],
-        cwd: input.workspaceCwd,
-        outputDir: join(input.runDir, "verification-out"),
-        tmpDir: join(input.runDir, "verification-tmp"),
-      });
-      writeIndependentLog(logPath, result.exitCode ?? 1, result.stdout, result.stderr);
-    } catch (error) {
-      writeIndependentLog(
-        logPath,
-        1,
-        "",
-        error instanceof Error ? error.message : "independent verification failed",
-      );
-    }
+  const snapshot = await ensureCandidateSnapshot({
+    sourceCwd: input.workspaceCwd,
+    candidateSha: input.candidateSha,
+    snapshotRoot: join(input.runDir, "candidate-snapshots"),
+  });
+  if (!snapshot.ok) {
+    atomicWriteJson(join(verificationDir, "snapshot-unknown.json"), { reason: snapshot.reason });
+    return { ok: true, cwd: null, executed: false };
   }
-}
-
-function writeIndependentLog(
-  logPath: string,
-  exitCode: number,
-  stdout: string,
-  stderr: string,
-): void {
-  atomicWriteFile(logPath, `exit=${exitCode}\n${stdout}${stderr}`);
+  const pending: Array<{
+    method: (typeof methods)[number];
+    testAssetVersion: string;
+    cacheKey: string;
+    logPath: string;
+  }> = [];
+  for (const method of methods) {
+    const testAssetVersion = hashTestAssetContents([method.trigger]);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: snapshot.head,
+      assertionVersion: method.assertionId,
+      testAssetVersion,
+    });
+    const logPath = join(verificationDir, `${method.assertionId}.log`);
+    const cached = receiptFromIsolatedLog({
+      assertionId: method.assertionId,
+      command: method.trigger,
+      cwd: snapshot.cwd,
+      snapshotSha: snapshot.head,
+      dirtyTree: snapshot.dirtyTree,
+      testAssetVersion,
+      logPath,
+      cacheKey,
+    });
+    if (cached) continue;
+    pending.push({ method, testAssetVersion, cacheKey, logPath });
+  }
+  if (pending.length === 0) return { ok: true, cwd: snapshot.cwd, executed: false };
+  if (
+    input.deadlineAtMs !== null &&
+    input.deadlineAtMs !== undefined &&
+    (input.nowMs ?? Date.now()) >= input.deadlineAtMs
+  ) {
+    return { ok: false, reason: "chain deadline reached before independent verification" };
+  }
+  if (input.reserve) {
+    const reserved = input.reserve();
+    if (!reserved.ok) return { ok: false, reason: reserved.reason };
+  }
+  for (const item of pending) {
+    const result = await runCandidateCommand({
+      command: item.method.trigger,
+      cwd: snapshot.cwd,
+      outputDir: join(input.runDir, "verification-out"),
+      tmpDir: join(input.runDir, "verification-tmp"),
+    });
+    writeCommandLog(item.logPath, {
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      snapshotSha: snapshot.head,
+      cwd: snapshot.cwd,
+      dirtyTree: snapshot.dirtyTree,
+      cacheKey: item.cacheKey,
+    });
+  }
+  return { ok: true, cwd: snapshot.cwd, executed: true };
 }
 
 function realAcceptanceMethods(
@@ -2090,20 +2278,33 @@ function realAcceptanceMethods(
   for (const row of findings) {
     if (row.status === "accepted") continue;
     const command = row.verification?.command?.trim();
-    if (!command) {
-      missingEvidence.push(row.id);
+    const locations = row.verification?.locations ?? [];
+    if (command) {
+      acceptance.push({
+        assertionId: assertionIdFor(row.id, 1),
+        precondition: row.verification?.evidence || row.text || row.title,
+        trigger: command,
+        allowedStimuli: [command],
+        observation: command,
+        environment: "isolated candidate worktree",
+        evidenceKind:
+          row.verification?.method === "regression_test" ? "regression_test" : "command_receipt",
+      });
       continue;
     }
-    acceptance.push({
-      assertionId: assertionIdFor(row.id, 1),
-      precondition: row.verification?.evidence || row.text || row.title,
-      trigger: command,
-      allowedStimuli: [command],
-      observation: command,
-      environment: "isolated candidate worktree",
-      evidenceKind:
-        row.verification?.method === "regression_test" ? "regression_test" : "command_receipt",
-    });
+    if (row.verification?.method === "code_trace" && locations.length > 0) {
+      acceptance.push({
+        assertionId: assertionIdFor(row.id, 1),
+        precondition: row.verification.evidence || row.text || row.title,
+        trigger: locations.join(","),
+        allowedStimuli: [...locations],
+        observation: locations.join(","),
+        environment: "independent reviewer trace",
+        evidenceKind: "code_trace",
+      });
+      continue;
+    }
+    missingEvidence.push(row.id);
   }
   return acceptance;
 }
@@ -2113,87 +2314,49 @@ function bindVerificationForGate(input: {
   contract: GoalContract | null;
   candidateSha: string;
   workspaceCwd: string;
+  findings: LedgerFinding[];
 }): { assets: VerificationAsset[]; requiredAssertionIds: string[] } {
-  const requiredAssertionIds =
-    input.contract?.acceptance
-      .filter(
-        (row) => row.evidenceKind === "regression_test" || row.evidenceKind === "command_receipt",
-      )
-      .map((row) => row.assertionId) ?? [];
-  const persisted = readVerificationAssets(join(input.runDir, "verification-assets.json"));
+  const requiredAssertionIds = [
+    ...commandMethods(input.contract).map((row) => row.assertionId),
+    ...codeTraceMethods(input.contract).map((row) => row.assertionId),
+  ];
   const assets: VerificationAsset[] = [];
-  for (const assertionId of requiredAssertionIds) {
-    const existing = persisted.find((row) => row.assertionId === assertionId);
-    if (existing) {
-      assets.push(existing);
-      continue;
-    }
-    const method = input.contract?.acceptance.find((row) => row.assertionId === assertionId);
-    if (!method) continue;
-    const collected = collectVerificationAssetFromDisk({
-      runDir: input.runDir,
-      assertionId,
-      command: method.trigger,
-      candidateSha: input.candidateSha,
-      workspaceCwd: input.workspaceCwd,
-    });
+  for (const method of codeTraceMethods(input.contract)) {
+    const collected = codeTraceFromReview(input.findings, method.assertionId, input.candidateSha);
     if (collected) assets.push(collected);
   }
+  const commands = commandMethods(input.contract);
+  for (const method of commands) {
+    const testAssetVersion = hashTestAssetContents([method.trigger]);
+    const logPath = join(input.runDir, "verification", `${method.assertionId}.log`);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: input.candidateSha,
+      assertionVersion: method.assertionId,
+      testAssetVersion,
+    });
+    const collected = receiptFromIsolatedLog({
+      assertionId: method.assertionId,
+      command: method.trigger,
+      cwd: input.workspaceCwd,
+      snapshotSha: input.candidateSha,
+      dirtyTree: false,
+      testAssetVersion,
+      logPath,
+      cacheKey,
+    });
+    if (collected?.receipts[0]) {
+      assets.push({
+        ...collected,
+        extraProbeManifestVersion: extraProbeManifestVersion([]),
+        receipts: collected.receipts.map((row) => ({
+          ...row,
+          dirtyTree: row.dirtyTree,
+        })),
+      });
+    }
+  }
   if (assets.length > 0) {
-    atomicWriteJson(join(input.runDir, "verification-assets.json"), assets);
+    persistVerificationAssets(join(input.runDir, "verification-assets.json"), assets);
   }
   return { assets, requiredAssertionIds };
-}
-
-function readVerificationAssets(path: string): VerificationAsset[] {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((row) => {
-      const result = verificationAssetSchema.safeParse(row);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function collectVerificationAssetFromDisk(input: {
-  runDir: string;
-  assertionId: string;
-  command: string;
-  candidateSha: string;
-  workspaceCwd: string;
-}): VerificationAsset | null {
-  const logPath = join(input.runDir, "verification", `${input.assertionId}.log`);
-  if (!existsSync(logPath)) return null;
-  let log = "";
-  try {
-    log = readFileSync(logPath, "utf8");
-  } catch {
-    return null;
-  }
-  const exitMatch = /^exit=(\-?\d+)/m.exec(log);
-  const exitCode = exitMatch ? Number(exitMatch[1]) : 1;
-  const interpreted = interpretTestLog(log, "", exitCode);
-  return {
-    assertionId: input.assertionId,
-    snapshotSha: input.candidateSha,
-    testAssetVersion: `cmd:${input.command}`,
-    extraProbesDeclared: false,
-    receipts: [
-      {
-        command: input.command,
-        cwd: input.workspaceCwd,
-        exitCode,
-        logPath,
-        snapshotSha: input.candidateSha,
-        testAssetVersion: `cmd:${input.command}`,
-        dirtyTree: false,
-        skipped: interpreted.skipped,
-        ranZeroTests: interpreted.ranZeroTests,
-        role: "independent_adjudicator",
-      },
-    ],
-  };
 }

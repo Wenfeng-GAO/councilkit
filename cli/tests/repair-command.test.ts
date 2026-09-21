@@ -1087,6 +1087,9 @@ describe("repair outer loop", () => {
       status: (request: { taskId: string }) => fake.status(request),
       requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
         fake.requestPublish(request),
+      freezeOfficialGatePolicy: (request: { taskId: string }) =>
+        fake.freezeOfficialGatePolicy(request),
+      readOfficialGatePolicy: (request: { taskId: string }) => fake.readOfficialGatePolicy(request),
       writerPids: () => [],
     };
     const out = makeSink();
@@ -1131,6 +1134,9 @@ describe("repair outer loop", () => {
       status: (request: { taskId: string }) => fake.status(request),
       requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
         fake.requestPublish(request),
+      freezeOfficialGatePolicy: (request: { taskId: string }) =>
+        fake.freezeOfficialGatePolicy(request),
+      readOfficialGatePolicy: (request: { taskId: string }) => fake.readOfficialGatePolicy(request),
       writerPids: () => [],
     };
     await expect(
@@ -1323,6 +1329,9 @@ describe("repair outer loop", () => {
           historyPath: join(taskDir, "councilkit-history-envelope.json"),
         };
       },
+      freezeOfficialGatePolicy: (request: { taskId: string }) =>
+        fake.freezeOfficialGatePolicy(request),
+      readOfficialGatePolicy: (request: { taskId: string }) => fake.readOfficialGatePolicy(request),
       writerPids: () => [],
     };
     const out = makeSink();
@@ -1430,6 +1439,9 @@ describe("repair outer loop", () => {
       status: (request: { taskId: string }) => fake.status(request),
       requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
         fake.requestPublish(request),
+      freezeOfficialGatePolicy: (request: { taskId: string }) =>
+        fake.freezeOfficialGatePolicy(request),
+      readOfficialGatePolicy: (request: { taskId: string }) => fake.readOfficialGatePolicy(request),
       writerPids: () => [],
     };
     const out = makeSink();
@@ -1507,6 +1519,9 @@ describe("repair outer loop", () => {
       status: (request: { taskId: string }) => fake.status(request),
       requestPublish: (request: Parameters<FakeSquadBridge["requestPublish"]>[0]) =>
         fake.requestPublish(request),
+      freezeOfficialGatePolicy: (request: { taskId: string }) =>
+        fake.freezeOfficialGatePolicy(request),
+      readOfficialGatePolicy: (request: { taskId: string }) => fake.readOfficialGatePolicy(request),
       writerPids: () => [],
     };
     const out = makeSink();
@@ -1616,6 +1631,30 @@ describe("repair v2 protocol", () => {
         { wait: async () => {}, loop: false },
       ),
     ).rejects.toThrow(/isolation/);
+  });
+
+  it("refuses full Squad pipeline strong isolation before writing source", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await expect(
+      runRepair(
+        [
+          "run",
+          "--from",
+          SOURCE_ID,
+          "--profile",
+          "default",
+          "--protocol",
+          "v2",
+          "--isolation",
+          "strong",
+          "--run-id",
+          REPAIR_ID,
+        ],
+        makeSink(),
+        { wait: async () => {}, loop: false },
+      ),
+    ).rejects.toThrow(/full Squad pipeline strong isolation is unsupported/i);
   });
 
   it("reviews a local pinned SHA before publishing", async () => {

@@ -6,7 +6,13 @@ import { goalIdentityFingerprint } from "@shared/runtime/repair-contract";
 import { evaluateRepairGate } from "@shared/runtime/repair-gate";
 import { SQUAD_REQUIRED_GATES_V1, hashRepairGatePolicy } from "@shared/runtime/repair-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { consumeLockedSourceFix, loadOrCreateChain } from "../src/auto/repair-chain-store";
+import {
+  consumeLockedRetry,
+  consumeLockedSourceFix,
+  loadOrCreateChain,
+  peekLockedRetry,
+  readRepairChain,
+} from "../src/auto/repair-chain-store";
 import { assembleProductionGate } from "../src/auto/repair-protocol";
 
 let home: string;
@@ -60,6 +66,25 @@ describe("repair chain store identity and locked budget", () => {
     const again = consumeLockedSourceFix(created.chain.chainId, 1);
     expect(again.ok).toBe(true);
     if (again.ok) expect(again.budget.sourceFixUsed).toBe(2);
+  });
+
+  it("peeks verify budget without executing and refuses once exhausted", () => {
+    const created = loadOrCreateChain({
+      repo: "github.com/acme/repo",
+      prUrl: "https://github.com/acme/repo/pull/3",
+      goalFingerprint: "b".repeat(64),
+      parentRunId: "ck-repair-1",
+      budget: newRepairBudget({ verifyRetryMax: 1 }, 0),
+      nowMs: 0,
+    });
+    const peeked = peekLockedRetry(created.chain.chainId, "verify");
+    expect(peeked.ok).toBe(true);
+    expect(readRepairChain(created.chain.chainId)?.budget.verifyRetryUsed).toBe(0);
+    const consumed = consumeLockedRetry(created.chain.chainId, "verify");
+    expect(consumed.ok).toBe(true);
+    const again = peekLockedRetry(created.chain.chainId, "verify");
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.reason).toMatch(/verify retry budget exhausted/);
   });
 });
 

@@ -42,18 +42,35 @@ export const goalContractSchema = z
   .strict();
 export type GoalContract = z.infer<typeof goalContractSchema>;
 
+export const EXECUTION_SOURCES = [
+  "squadctl-host-run",
+  "squadctl-evidence",
+  "ck-isolated-run",
+  "independent-reviewer-trace",
+] as const;
+
 export const testRunReceiptSchema = z
   .object({
-    command: text.max(2000),
-    cwd: text.max(4096),
-    exitCode: z.number().int(),
-    logPath: text.max(4096),
+    command: z.string().max(2000).optional(),
+    cwd: z.string().max(4096).optional(),
+    exitCode: z.number().int().optional(),
+    logPath: z.string().max(4096).optional(),
     snapshotSha: z.string().regex(/^[0-9a-f]{40}$/i),
     testAssetVersion: text.max(80),
     dirtyTree: z.boolean(),
     skipped: z.boolean(),
     ranZeroTests: z.boolean(),
     role: z.enum(VERDICT_ROLES),
+    executionSource: z.enum(EXECUTION_SOURCES).optional(),
+    locations: z.array(text.max(400)).max(32).optional(),
+    stdoutHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    cacheKey: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .strict();
 export type TestRunReceipt = z.infer<typeof testRunReceiptSchema>;
@@ -64,6 +81,8 @@ export const verificationAssetSchema = z
     snapshotSha: z.string().regex(/^[0-9a-f]{40}$/i),
     testAssetVersion: text.max(80),
     extraProbesDeclared: z.boolean(),
+    extraProbeManifestVersion: text.max(80).optional(),
+    kind: z.enum(["regression_test", "code_trace", "command_receipt"]).optional(),
     receipts: z.array(testRunReceiptSchema).max(16),
   })
   .strict();
@@ -147,6 +166,7 @@ export function evaluateVerificationAsset(
   if (asset.receipts.length === 0) {
     return { ok: false, reason: "no test receipts" };
   }
+  const kind = asset.kind ?? inferAssetKind(asset);
   for (const receipt of asset.receipts) {
     if (receipt.role === "builder") {
       return { ok: false, reason: "builder cannot certify verification" };
@@ -158,12 +178,28 @@ export function evaluateVerificationAsset(
       return { ok: false, reason: "receipt snapshot drifted from asset" };
     }
     if (receipt.testAssetVersion !== asset.testAssetVersion) {
-      return {
-        ok: false,
-        reason: asset.extraProbesDeclared
-          ? "extra probe test asset version mismatch"
-          : "undeclared extra probe or test asset version mismatch",
-      };
+      return { ok: false, reason: "test asset version mismatch" };
+    }
+    if (kind === "code_trace") {
+      if (receipt.executionSource !== "independent-reviewer-trace") {
+        return { ok: false, reason: "code_trace requires an independent reviewer trace" };
+      }
+      if (!receipt.locations || receipt.locations.length === 0) {
+        return { ok: false, reason: "code_trace missing locations" };
+      }
+      continue;
+    }
+    if (!receipt.command?.trim()) {
+      return { ok: false, reason: "command receipt missing command" };
+    }
+    if (!receipt.cwd?.trim()) {
+      return { ok: false, reason: "command receipt missing cwd" };
+    }
+    if (receipt.exitCode === undefined) {
+      return { ok: false, reason: "command receipt missing exit code" };
+    }
+    if (!receipt.executionSource) {
+      return { ok: false, reason: "command receipt missing execution source" };
     }
     if (receipt.skipped || receipt.ranZeroTests) {
       return { ok: false, reason: "zero tests or skipped tests cannot prove pass" };
@@ -173,6 +209,13 @@ export function evaluateVerificationAsset(
     }
   }
   return { ok: true, reason: "verified" };
+}
+
+function inferAssetKind(asset: VerificationAsset): NonNullable<VerificationAsset["kind"]> {
+  if (asset.receipts.every((row) => row.executionSource === "independent-reviewer-trace")) {
+    return "code_trace";
+  }
+  return "command_receipt";
 }
 
 export function interpretTestLog(
