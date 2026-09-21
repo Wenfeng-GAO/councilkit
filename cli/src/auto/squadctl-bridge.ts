@@ -33,7 +33,7 @@ import { errors } from "../errors";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
-import { grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
+import { GROK_SESSION_WAIT_MS, grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
 import {
   type ProcessFingerprint,
   fingerprintPid,
@@ -62,7 +62,8 @@ const PROMPT_FILE = "orchestrator-prompt.md";
 const PROFILE_FILE = "councilkit-pr-profile.json";
 const AUTHORITY_FILE = "delivery-authority.json";
 const DEFAULT_MODEL = "grok-4.6";
-const SESSION_WAIT_MS = 4_000;
+
+export { GROK_SESSION_WAIT_MS };
 
 export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBridgeProbe {
   return probeAndVerifySquadBridge(env);
@@ -93,6 +94,8 @@ export interface SquadctlBridgeOptions {
   executable?: string;
   orchestratorExecutable?: string;
   skipCliVerify?: boolean;
+  /** Test-only native-session wait. Production uses GROK_SESSION_WAIT_MS. */
+  sessionWaitMs?: number;
 }
 
 interface BridgeIdentity {
@@ -667,7 +670,11 @@ export class SquadctlBridge implements SquadBridge {
     if (spawned.child) this.attachLifecycle(taskId, spawned.child, generation);
     const expectedSession = identity.nativeSession ?? identity.requestedSession;
     const supervised = spawned.child
-      ? await superviseOrchestrator(spawned.child, SESSION_WAIT_MS, spawned.stdoutBuf)
+      ? await superviseOrchestrator(
+          spawned.child,
+          this.options.sessionWaitMs ?? GROK_SESSION_WAIT_MS,
+          spawned.stdoutBuf,
+        )
       : { ok: false as const, reason: "orchestrator produced no child process", exitCode: null };
     if (!this.isCurrentGeneration(taskId, generation)) return;
     if (!supervised.ok) {
@@ -1308,7 +1315,7 @@ function defaultSpawnOrchestrator(input: SpawnOrchestratorInput): {
   return { pid: child.pid, child, stdoutBuf };
 }
 
-function superviseOrchestrator(
+export function superviseOrchestrator(
   child: ChildProcess,
   timeoutMs: number,
   stdoutBuf?: { text: string },
@@ -1318,6 +1325,7 @@ function superviseOrchestrator(
   return new Promise((resolve) => {
     const read = (): string => stdoutBuf?.text ?? "";
     let settled = false;
+    const timer: { id: ReturnType<typeof setTimeout> | undefined } = { id: undefined };
     const finish = (
       value:
         | { ok: true; sessionId: string }
@@ -1328,7 +1336,7 @@ function superviseOrchestrator(
       child.stdout?.off("data", onData);
       child.off("exit", onExit);
       child.off("error", onError);
-      clearTimeout(timer);
+      if (timer.id !== undefined) clearTimeout(timer.id);
       resolve(value);
     };
     const onData = (): void => {
@@ -1348,6 +1356,10 @@ function superviseOrchestrator(
     const onError = (error: Error): void => {
       finish({ ok: false, reason: error.message, exitCode: null });
     };
+    child.stdout?.on("data", onData);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.stdout?.resume();
     const early = parseGrokSessionId(read());
     if (early) {
       finish({ ok: true, sessionId: early });
@@ -1361,7 +1373,7 @@ function superviseOrchestrator(
       });
       return;
     }
-    const timer = setTimeout(() => {
+    timer.id = setTimeout(() => {
       const found = parseGrokSessionId(read());
       if (found) finish({ ok: true, sessionId: found });
       else
@@ -1371,10 +1383,6 @@ function superviseOrchestrator(
           exitCode: child.exitCode,
         });
     }, timeoutMs);
-    child.stdout?.on("data", onData);
-    child.once("exit", onExit);
-    child.once("error", onError);
-    child.stdout?.resume();
   });
 }
 

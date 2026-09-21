@@ -18,15 +18,18 @@
  */
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   constants,
   accessSync,
+  chmodSync,
   closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeSync,
@@ -124,6 +127,14 @@ export const ISOLATED_GROK_CONFIG =
 export const DEFAULT_PROBE_TIMEOUT_MS = 60_000;
 /** grok 1.0 headless still bootstraps a full session; 60s false-negatives a live backend. */
 export const GROK_PROBE_TIMEOUT_MS = 180_000;
+/** Native-session capture budget for Grok orchestrator spawn. Same bound as probe. */
+export const GROK_SESSION_WAIT_MS = GROK_PROBE_TIMEOUT_MS;
+/**
+ * Exclusive AF_UNIX sun_path limit measured on macOS: 103 UTF-8 bytes bind,
+ * 104 fail. Paths we return must be strictly below this, including after
+ * `/tmp` → `/private/tmp` canonicalization.
+ */
+export const AF_UNIX_PATH_MAX_BYTES = 104;
 
 export function probeTimeoutMs(
   driverId: string,
@@ -133,8 +144,126 @@ export function probeTimeoutMs(
   return fallback;
 }
 
+export function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+/** Owner-private directory for hashed leader sockets. Never `os.tmpdir()` / TMPDIR. */
+export function grokLeaderSocketDir(): string {
+  const uid = typeof process.getuid === "function" ? String(process.getuid()) : "user";
+  return join("/tmp", `ck-grok-${uid}`);
+}
+
+/**
+ * Private Grok leader socket path. Keeps `<workspace>/.grok-leader.sock` when
+ * both the given path and its canonical form are AF_UNIX-safe. Longer
+ * workspaces (deep or non-ASCII) get `/tmp/ck-grok-<uid>/<hash>.sock`.
+ */
 export function grokLeaderSocket(workspace: string): string {
-  return join(workspace, GROK_LEADER_SOCK);
+  const given = join(workspace, GROK_LEADER_SOCK);
+  const canonicalSock = join(canonicalWorkspacePath(workspace), GROK_LEADER_SOCK);
+  if (
+    utf8ByteLength(given) < AF_UNIX_PATH_MAX_BYTES &&
+    utf8ByteLength(canonicalSock) < AF_UNIX_PATH_MAX_BYTES
+  ) {
+    return given;
+  }
+  const dir = ensurePrivateSocketDir(grokLeaderSocketDir());
+  const hash = createHash("sha256")
+    .update(canonicalWorkspacePath(workspace), "utf8")
+    .digest("hex")
+    .slice(0, 16);
+  const socketPath = join(dir, `${hash}.sock`);
+  if (utf8ByteLength(socketPath) >= AF_UNIX_PATH_MAX_BYTES) {
+    throw errors.io(
+      `grok leader socket path exceeds AF_UNIX limit (${utf8ByteLength(socketPath)} bytes)`,
+    );
+  }
+  assertExistingSocketSafe(socketPath);
+  return socketPath;
+}
+
+/** Create or reuse `dir` as a real, owner-only directory (mode 0700). Rejects symlinks. */
+export function ensurePrivateSocketDir(dir: string): string {
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw errors.io(`cannot create grok leader socket dir: ${dir}`, {
+        cause: (error as NodeJS.ErrnoException).code,
+      });
+    }
+  }
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(dir);
+  } catch (error) {
+    throw errors.io(`cannot stat grok leader socket dir: ${dir}`, {
+      cause: (error as NodeJS.ErrnoException).code,
+    });
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    throw errors.io(`refusing grok leader socket dir that is not a real directory: ${dir}`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (uid !== undefined && st.uid !== uid) {
+    throw errors.io(`refusing grok leader socket dir owned by uid ${st.uid}: ${dir}`);
+  }
+  try {
+    chmodSync(dir, 0o700);
+  } catch (error) {
+    throw errors.io(`cannot chmod grok leader socket dir: ${dir}`, {
+      cause: (error as NodeJS.ErrnoException).code,
+    });
+  }
+  let again: ReturnType<typeof lstatSync>;
+  try {
+    again = lstatSync(dir);
+  } catch (error) {
+    throw errors.io(`grok leader socket dir changed: ${dir}`, {
+      cause: (error as NodeJS.ErrnoException).code,
+    });
+  }
+  if (again.isSymbolicLink() || !again.isDirectory()) {
+    throw errors.io(`refusing grok leader socket dir that is not a real directory: ${dir}`);
+  }
+  if (uid !== undefined && again.uid !== uid) {
+    throw errors.io(`refusing grok leader socket dir owned by uid ${again.uid}: ${dir}`);
+  }
+  try {
+    return realpathSync(dir);
+  } catch (error) {
+    throw errors.io(`cannot resolve grok leader socket dir: ${dir}`, {
+      cause: (error as NodeJS.ErrnoException).code,
+    });
+  }
+}
+
+function canonicalWorkspacePath(workspace: string): string {
+  try {
+    return realpathSync(workspace);
+  } catch {
+    return resolve(workspace);
+  }
+}
+
+function assertExistingSocketSafe(socketPath: string): void {
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(socketPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw errors.io(`cannot stat grok leader socket: ${socketPath}`, {
+      cause: (error as NodeJS.ErrnoException).code,
+    });
+  }
+  if (st.isSymbolicLink()) {
+    throw errors.io(`refusing existing symlink at grok leader socket path: ${socketPath}`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (uid !== undefined && st.uid !== uid) {
+    throw errors.io(`refusing existing grok leader socket owned by uid ${st.uid}: ${socketPath}`);
+  }
 }
 
 /** Clash/mihomo mixed-port defaults on this machine. */
