@@ -794,9 +794,11 @@ function readHostRepairProfile(name: string): ReturnType<typeof parseRepairProfi
 
 async function listRepairProfiles(
   from: string | null,
-  bridgeProbe: () => { available: boolean },
+  bridgeProbe: () => { available: boolean; reason?: string | null },
 ): Promise<CliRunListRepairProfilesResponse> {
-  const bridgeAvailable = bridgeProbe().available;
+  const probe = bridgeProbe();
+  const bridgeAvailable = probe.available;
+  const bridgeReason = probe.reason ?? null;
   if (!from || !isCliRunId(from)) {
     return {
       profiles: listHostRepairProfiles().map(toProfileSummary),
@@ -804,6 +806,7 @@ async function listRepairProfiles(
       baseHint: null,
       hintSource: null,
       bridgeAvailable,
+      bridgeReason,
     };
   }
   const wantedPr = readCliRun(from, process.env)?.reviewEvidence?.prUrl ?? null;
@@ -817,6 +820,7 @@ async function listRepairProfiles(
     baseHint: hints.base,
     hintSource: hints.hintSource,
     bridgeAvailable,
+    bridgeReason,
   };
 }
 

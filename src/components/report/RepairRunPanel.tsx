@@ -40,6 +40,8 @@ export function RepairRunPanel({
   profiles = [],
   activeRepair = null,
   bridgeAvailable = false,
+  bridgeLoading = false,
+  bridgeReason = null,
   error = null,
   pending = false,
   outerUsed = 0,
@@ -70,6 +72,8 @@ export function RepairRunPanel({
     "runId" | "status" | "progress" | "businessResult" | "reasonCode"
   > | null;
   bridgeAvailable?: boolean;
+  bridgeLoading?: boolean;
+  bridgeReason?: string | null;
   error?: string | null;
   pending?: boolean;
   outerUsed?: number;
@@ -145,10 +149,13 @@ export function RepairRunPanel({
       <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
         Squad 自动修复
       </p>
-      {!bridgeAvailable ? (
-        <p className="mt-2 text-sm text-warn">Squad 桥不可用，无法启动自动修复。</p>
+      {bridgeLoading ? <p className="mt-2 text-sm text-muted">正在检查 Squad 桥依赖…</p> : null}
+      {!bridgeLoading && !bridgeAvailable ? (
+        <p className="mt-2 text-sm text-warn">
+          {bridgeReason ?? "Squad 桥不可用，无法启动自动修复。"}
+        </p>
       ) : null}
-      {bridgeAvailable && profiles.length === 0 ? (
+      {!bridgeLoading && bridgeAvailable && profiles.length === 0 ? (
         <form
           key={`${sourceBranchDefault}|${baseDefault}`}
           className="mt-3 flex flex-col gap-2"
@@ -221,7 +228,7 @@ export function RepairRunPanel({
           </Button>
         </form>
       ) : null}
-      {bridgeAvailable && profiles.length > 0 ? (
+      {!bridgeLoading && bridgeAvailable && profiles.length > 0 ? (
         <Button
           className="mt-3"
           disabled={pending}

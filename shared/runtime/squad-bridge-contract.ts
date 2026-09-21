@@ -4,6 +4,7 @@ import { FULL_COMMIT_SHA } from "./cli-ledger";
 export const SQUAD_BRIDGE_CONTRACT_VERSION = "squad-bridge.v1";
 
 export const SQUAD_BRIDGE_EVENT_KINDS = [
+  "running",
   "candidate_ready",
   "blocked",
   "failed",
@@ -94,6 +95,40 @@ export function isTrustedIntegrateReceipt(receipt: unknown): boolean {
   const row = receipt as Record<string, unknown>;
   if (row.action !== "check-remote" && row.action !== "push-remote") return false;
   return row.passed === true;
+}
+
+/** Real squadctl receipts use result/SHA fields. A lone passed boolean is not enough. */
+export function isTrustedSquadctlIntegrateReceipt(
+  receipt: unknown,
+  identity: FrozenIntegrateIdentity,
+  verb: "check-remote" | "push-remote",
+): boolean {
+  if (receiptContainsSecret(receipt)) return false;
+  if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) return false;
+  const row = receipt as Record<string, unknown>;
+  if (row.action !== verb) return false;
+  if (
+    typeof row.candidate_sha !== "string" ||
+    row.candidate_sha.toLowerCase() !== identity.candidateSha.toLowerCase()
+  ) {
+    return false;
+  }
+  if (
+    typeof row.expected_old_sha !== "string" ||
+    row.expected_old_sha.toLowerCase() !== identity.expectedOldSha.toLowerCase()
+  ) {
+    return false;
+  }
+  if (verb === "check-remote") {
+    return row.result === "checked" && row.cas_ok === true && row.ff_possible === true;
+  }
+  return (
+    row.result === "pushed" &&
+    row.remote_verified === true &&
+    row.forced === false &&
+    typeof row.remote_new_sha === "string" &&
+    row.remote_new_sha.toLowerCase() === identity.candidateSha.toLowerCase()
+  );
 }
 
 export function inheritRepairHistory(input: {

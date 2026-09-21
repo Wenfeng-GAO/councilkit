@@ -20,6 +20,7 @@ import {
 } from "../auto/repair-persist";
 import { loadRepairProfile } from "../auto/repair-profile";
 import { type RepairLoopDeps, executeRepairLoop } from "../auto/repair-run";
+import { SquadctlBridge, probeSquadBridge } from "../auto/squadctl-bridge";
 import { EXIT, errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
@@ -39,7 +40,7 @@ export interface RepairCommandDeps extends RepairLoopDeps {
   isPidAlive?: (pid: number) => boolean;
 }
 
-const SUBCOMMANDS = "export|run|status|stop|resume";
+const SUBCOMMANDS = "export|run|status|stop|resume|probe";
 
 /** `repair export` plus parent-run bootstrap. Unit 4 does not run the outer loop. */
 export async function runRepair(
@@ -53,6 +54,7 @@ export async function runRepair(
   if (sub === "status") return runRepairStatus(argv.slice(1), out);
   if (sub === "stop") return runRepairStop(argv.slice(1), out, deps);
   if (sub === "resume") return runRepairResume(argv.slice(1), out, deps);
+  if (sub === "probe") return runRepairProbe(argv.slice(1), out);
   throw errors.usage(
     sub === undefined
       ? `repair requires a subcommand: ${SUBCOMMANDS}`
@@ -242,6 +244,26 @@ async function runRepairStatus(argv: string[], out: OutputSink): Promise<void> {
   );
 }
 
+function defaultIsPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runRepairProbe(argv: string[], out: OutputSink): Promise<void> {
+  void argv;
+  const probe = probeSquadBridge();
+  await out.finish(probe, () =>
+    probe.available
+      ? `Squad 桥可用 ${probe.version ?? ""}`
+      : `Squad 桥不可用：${probe.reason ?? ""}`,
+  );
+  if (!probe.available) throw new RepairExit(EXIT.usage);
+}
+
 async function runRepairStop(
   argv: string[],
   out: OutputSink,
@@ -251,6 +273,27 @@ async function runRepairStop(
   const runDir = resolvePaths().runDir(runId);
   const state = readRepairState(runDir);
   if (state === null) throw errors.usage("repair run not found");
+  const isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
+  if (state.currentSquadTaskId) {
+    const bridge =
+      deps.bridge ?? new SquadctlBridge({ workspaceCwd: state.workspaceCwd ?? undefined });
+    try {
+      bridge.stop({ taskId: state.currentSquadTaskId });
+    } catch (error) {
+      await out.finish(
+        {
+          runId,
+          status: "interrupted",
+          businessResult: "stopped",
+          leaseReleased: false,
+          pipeline: null,
+          error: error instanceof Error ? error.message : "stop failed",
+        },
+        () => `停止 ${runId} 失败：writer 仍存活`,
+      );
+      throw new RepairExit(EXIT.interrupted);
+    }
+  }
   const pid = readRepairPid(runDir);
   if (pid !== null) {
     try {
@@ -259,8 +302,12 @@ async function runRepairStop(
       // already gone
     }
   }
-  const extras = deps.writerPids ?? state.writerPids ?? [];
-  const alive = extras.find((writer) => (deps.isPidAlive ?? (() => false))(writer));
+  const extras = [
+    ...(deps.writerPids ?? []),
+    ...(state.writerPids ?? []),
+    ...(deps.bridge?.writerPids?.() ?? []),
+  ];
+  const alive = extras.find((writer) => isPidAlive(writer));
   if (alive !== undefined) {
     await out.finish(
       {

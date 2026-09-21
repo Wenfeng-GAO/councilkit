@@ -7,6 +7,7 @@ import {
   integrateEnv,
   isPublishableCandidate,
   isTrustedIntegrateReceipt,
+  isTrustedSquadctlIntegrateReceipt,
   parentOuterCycleDelta,
 } from "@shared/runtime/squad-bridge-contract";
 import { describe, expect, it } from "vitest";
@@ -161,6 +162,42 @@ describe("squad bridge contract", () => {
     expect(mismatched.code).toBe("BRIDGE_VERSION_MISMATCH");
   });
 
+  it("does not treat a squadctl passed boolean as a trusted integrate receipt", () => {
+    expect(isTrustedSquadctlIntegrateReceipt({ passed: true }, IDENTITY, "push-remote")).toBe(
+      false,
+    );
+    expect(
+      isTrustedSquadctlIntegrateReceipt(
+        {
+          action: "push-remote",
+          result: "pushed",
+          candidate_sha: SHA,
+          expected_old_sha: SHA,
+          remote_new_sha: "b".repeat(40),
+          remote_verified: true,
+          forced: false,
+        },
+        IDENTITY,
+        "push-remote",
+      ),
+    ).toBe(false);
+    expect(
+      isTrustedSquadctlIntegrateReceipt(
+        {
+          action: "push-remote",
+          result: "pushed",
+          candidate_sha: SHA,
+          expected_old_sha: SHA,
+          remote_new_sha: SHA,
+          remote_verified: true,
+          forced: false,
+        },
+        IDENTITY,
+        "push-remote",
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat a receipt boolean or embedded token as a publish signal", () => {
     expect(isTrustedIntegrateReceipt({ passed: true })).toBe(false);
     expect(
@@ -220,8 +257,14 @@ describe("squad bridge contract", () => {
     expect(published.ok).toBe(false);
   });
 
-  it("probes unavailable when squadctl is not on PATH", () => {
-    const probe = probeSquadBridge({ PATH: "/tmp/does-not-have-squadctl" });
+  it("probes unavailable when squadctl is not on PATH or skill installs", () => {
+    const probe = probeSquadBridge({
+      PATH: "/tmp/does-not-have-squadctl",
+      HOME: "/tmp/does-not-have-squadctl-home",
+      CODEX_HOME: "/tmp/does-not-have-codex",
+      COUNCILKIT_HOME: "/tmp/does-not-have-ck-home",
+      XDG_CONFIG_HOME: "/tmp/does-not-have-xdg",
+    });
     expect(probe.available).toBe(false);
     expect(probe.version).toBeNull();
     expect(probe.reason).toMatch(/squadctl/);

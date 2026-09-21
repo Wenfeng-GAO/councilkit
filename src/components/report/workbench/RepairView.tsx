@@ -21,6 +21,8 @@ export interface WorkbenchRepairProps {
   baseDefault: string;
   hintSource: "pr" | "review" | "worktree" | null;
   bridgeAvailable?: boolean;
+  bridgeLoading?: boolean;
+  bridgeReason?: string | null;
   outerUsed?: number;
   outerMax?: number;
   error: string | null;
@@ -70,6 +72,8 @@ export function RepairView({
         profiles={repair.profiles}
         activeRepair={repair.activeRepair}
         bridgeAvailable={repair.bridgeAvailable ?? false}
+        bridgeLoading={repair.bridgeLoading ?? false}
+        bridgeReason={repair.bridgeReason ?? null}
         outerUsed={repair.outerUsed ?? 0}
         outerMax={repair.outerMax ?? 10}
         error={repair.error}

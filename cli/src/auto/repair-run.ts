@@ -13,7 +13,6 @@ import {
   type FrozenIntegrateIdentity,
   SQUAD_BRIDGE_CONTRACT_VERSION,
   canRequestPublish,
-  parentOuterCycleDelta,
 } from "@shared/runtime/squad-bridge-contract";
 import { ReviewExit, runReview } from "../commands/review";
 import { EXIT, errors } from "../errors";
@@ -33,7 +32,12 @@ import {
 } from "./repair-persist";
 import { runRepairPreflight, sourceNeedsSupplementReview } from "./repair-preflight";
 import { type RepairProfile, createRepairGrant, loadRepairProfile } from "./repair-profile";
-import { inspectCwdForRepair, resolveRepairWorkspaceCwd } from "./repair-workspace";
+import {
+  inspectCwdForRepair,
+  materializeRepairWorkspace,
+  resolveRepairWorkspaceCwd,
+  sourceRepoRealpath,
+} from "./repair-workspace";
 import type { SquadBridge } from "./squad-bridge";
 import { type SquadBridgeProbe, SquadctlBridge, probeSquadBridge } from "./squadctl-bridge";
 
@@ -59,6 +63,10 @@ export interface RepairLoopDeps {
   inspectPr?: (prUrl: string) => Promise<CheckedOutPr>;
   isPidAlive?: (pid: number) => boolean;
   now?: () => string;
+  nowMs?: () => number;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  abortSignal?: AbortSignal;
+  pollIntervalMs?: number;
   workspaceCwd?: string;
 }
 
@@ -114,6 +122,7 @@ export async function executeRepairLoop(input: {
       message: probe.reason ?? "squad bridge is unavailable",
     });
   }
+  const profile = loadRepairProfile(input.profileName);
   let workspaceCwd: string;
   try {
     workspaceCwd = resolveRepairWorkspaceCwd({
@@ -122,6 +131,17 @@ export async function executeRepairLoop(input: {
       sourceRunId: input.sourceRunId,
       runId: input.runId,
     });
+    const sourceRepo = sourceRepoRealpath(input.sourceRunId);
+    const sourceSha = readCliRun(input.sourceRunId)?.reviewEvidence?.sha;
+    if (sourceRepo && sourceSha && !deps.workspaceCwd) {
+      const frozen = await materializeRepairWorkspace({
+        dest: workspaceCwd,
+        sourceRepo,
+        sourceBranch: profile.sourceBranch,
+        sourceSha,
+      });
+      workspaceCwd = frozen.cwd;
+    }
   } catch (error) {
     return finish(input, {
       businessResult: "needs_attention",
@@ -130,7 +150,6 @@ export async function executeRepairLoop(input: {
     });
   }
   const bridge = deps.bridge ?? new SquadctlBridge({ workspaceCwd });
-  const profile = loadRepairProfile(input.profileName);
   const source = readCliRun(input.sourceRunId);
   const prUrl = source?.reviewEvidence?.prUrl ?? profile.prUrl;
   const inspectCwd = inspectCwdForRepair({ workspaceCwd, sourceRunId: input.sourceRunId });
@@ -263,15 +282,9 @@ export async function executeRepairLoop(input: {
       writeRepairLive(input.runDir, { status: "running", phase: "repair-squad-repair" });
       input.out.progress(`repair outer ${cycleN}/${state.outerMax}`);
       let snapshot = bridge.resume({ taskId });
-      snapshot = await waitForCandidate(bridge, taskId, snapshot, input.runDir, now);
-      if (!canRequestPublish(snapshot.event)) {
-        return finish(input, {
-          businessResult: "needs_attention",
-          reasonCode: "squad_candidate_invalid",
-          message: "squad journal gates incomplete",
-          outerUsed: state.outerUsed,
-        });
-      }
+      snapshot = await waitForCandidate(bridge, taskId, snapshot, input.runDir, now, deps, state);
+      const waited = terminalWaitOutcome(input, snapshot, state);
+      if (waited) return waited;
       const publishedOutcome = await publishIfNeeded({
         input,
         deps,
@@ -313,11 +326,20 @@ export async function executeRepairLoop(input: {
         sha256: handoff.sha256,
         at: now(),
       });
+      const delivery = {
+        grantHash: grant.grantHash,
+        repo: profile.repo,
+        sourceBranch: profile.sourceBranch,
+        sourceSha: packageBody.source.sha,
+        expectedOldSha: (state.publishedSha ?? preflight.sourceSha).toLowerCase(),
+        remote: "origin",
+      };
       const started = bridge.start({
         requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
         packageFields: {},
         handoffPath: handoff.path,
         baseSha: packageBody.source.sha,
+        delivery,
         history: {
           kind: "squad-repair-history",
           version: 1,
@@ -339,6 +361,7 @@ export async function executeRepairLoop(input: {
           taskId: started.taskId,
           baseSha: packageBody.source.sha,
           packagePath: handoff.path,
+          delivery,
         });
       }
       taskId = started.taskId;
@@ -346,23 +369,21 @@ export async function executeRepairLoop(input: {
         phase: "active",
         squadTaskId: started.taskId,
       });
+      if (bridge.writerPids) {
+        state = patchState(input.runDir, { ...state, writerPids: bridge.writerPids() });
+      }
       let snapshot = bridge.status({ taskId: started.taskId });
-      snapshot = await waitForCandidate(bridge, started.taskId, snapshot, input.runDir, now);
-      if (parentOuterCycleDelta({ kind: "candidate.fix" }) !== 0) {
-        return finish(input, {
-          businessResult: "needs_attention",
-          reasonCode: "verdict_contradiction",
-          message: "inner fix must not consume parent budget",
-        });
-      }
-      if (!canRequestPublish(snapshot.event)) {
-        return finish(input, {
-          businessResult: "needs_attention",
-          reasonCode: "squad_candidate_invalid",
-          message: "squad journal gates incomplete",
-          outerUsed: state.outerUsed,
-        });
-      }
+      snapshot = await waitForCandidate(
+        bridge,
+        started.taskId,
+        snapshot,
+        input.runDir,
+        now,
+        deps,
+        state,
+      );
+      const waited = terminalWaitOutcome(input, snapshot, state);
+      if (waited) return waited;
       const publishedOutcome = await publishIfNeeded({
         input,
         deps,
@@ -615,15 +636,103 @@ async function waitForCandidate(
   snapshot: ReturnType<SquadBridge["status"]>,
   runDir: string,
   now: () => string,
+  deps: RepairLoopDeps,
+  state: RepairState,
 ): Promise<ReturnType<SquadBridge["status"]>> {
-  let inner = 0;
+  const sleep = deps.sleep ?? defaultSleep;
+  const nowMs = deps.nowMs ?? (() => Date.now());
+  const startedAt = nowMs();
+  const interval = deps.pollIntervalMs ?? 2_000;
   let current = snapshot;
-  while (!canRequestPublish(current.event) && inner < 3) {
-    inner += 1;
-    appendRepairJournal(runDir, { kind: "candidate.fix", n: inner, at: now() });
+  while (!deps.abortSignal?.aborted) {
+    writeRepairLive(runDir, { status: "running", phase: "repair-squad-repair" });
+    if (canRequestPublish(current.event)) return current;
+    if (
+      current.event.kind === "blocked" ||
+      current.event.kind === "failed" ||
+      current.event.kind === "stopped"
+    ) {
+      appendRepairJournal(runDir, {
+        kind: "squad.event",
+        event: current.event.kind,
+        taskId,
+        at: now(),
+      });
+      return current;
+    }
+    if (state.timeoutMs !== null && nowMs() - startedAt >= state.timeoutMs) {
+      appendRepairJournal(runDir, { kind: "squad.wait.timeout", taskId, at: now() });
+      try {
+        bridge.stop({ taskId });
+      } catch {
+        // persist timeout even if stop races
+      }
+      return {
+        ...current,
+        event: { ...current.event, kind: "blocked" },
+      };
+    }
+    try {
+      await sleep(interval, deps.abortSignal);
+    } catch {
+      break;
+    }
     current = bridge.status({ taskId });
   }
-  return current;
+  try {
+    bridge.stop({ taskId });
+  } catch {
+    // already stopping
+  }
+  return bridge.status({ taskId });
+}
+
+function terminalWaitOutcome(
+  input: { runId: string; runDir: string; sourceRunId: string; out: OutputSink },
+  snapshot: ReturnType<SquadBridge["status"]>,
+  state: RepairState,
+): RepairLoopOutcome | null {
+  if (canRequestPublish(snapshot.event)) return null;
+  if (snapshot.event.kind === "stopped") {
+    return finish(input, {
+      businessResult: "stopped",
+      reasonCode: "stopped",
+      message: "squad task stopped",
+      outerUsed: state.outerUsed,
+    });
+  }
+  if (snapshot.event.kind === "failed") {
+    return finish(input, {
+      businessResult: "needs_attention",
+      reasonCode: "squad_failed",
+      message: "squad task failed",
+      outerUsed: state.outerUsed,
+    });
+  }
+  if (snapshot.event.kind === "blocked") {
+    return finish(input, {
+      businessResult: "needs_attention",
+      reasonCode: "squad_blocked",
+      message: "squad task blocked or timed out",
+      outerUsed: state.outerUsed,
+    });
+  }
+  return finish(input, {
+    businessResult: "needs_attention",
+    reasonCode: "squad_candidate_invalid",
+    message: "squad journal gates incomplete",
+    outerUsed: state.outerUsed,
+  });
+}
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(), ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new Error("aborted"));
+    });
+  });
 }
 
 async function publishIfNeeded(input: {
@@ -662,7 +771,10 @@ async function publishIfNeeded(input: {
       publishLadder: "intent",
       candidateSha: identity.candidateSha,
     });
-    const published = input.bridge.requestPublish({ taskId: input.taskId, identity });
+    const published = await input.bridge.requestPublish({
+      taskId: input.taskId,
+      identity,
+    });
     if (!published.ok) {
       return {
         done: true,

@@ -869,6 +869,7 @@ export const cliRunListRepairProfilesResponseSchema = z
     baseHint: z.string().max(200).nullable(),
     hintSource: z.enum(["pr", "review", "worktree"]).nullable(),
     bridgeAvailable: z.boolean().optional(),
+    bridgeReason: z.string().max(500).nullable().optional(),
   })
   .strict();
 export type CliRunListRepairProfilesResponse = z.infer<

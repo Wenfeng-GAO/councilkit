@@ -365,8 +365,12 @@ describe("repair mutation handlers", () => {
       (route) => route.method === "GET" && route.pattern === "/api/v1/cli-runs/repair/profiles",
     );
     if (get === undefined) throw new Error("missing list route");
-    const listed = (await get.handler(ctx({}))) as { bridgeAvailable?: boolean };
+    const listed = (await get.handler(ctx({}))) as {
+      bridgeAvailable?: boolean;
+      bridgeReason?: string | null;
+    };
     expect(listed.bridgeAvailable).toBe(false);
+    expect(listed.bridgeReason).toMatch(/squadctl/i);
   });
 
   it("resumes a preflight-failed parent without a grant when outerUsed is 0", async () => {

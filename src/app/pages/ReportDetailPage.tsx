@@ -220,6 +220,8 @@ export function ReportDetailPage() {
           baseDefault: profilesQuery.data?.baseHint ?? "",
           hintSource: profilesQuery.data?.hintSource ?? null,
           bridgeAvailable: profilesQuery.data?.bridgeAvailable ?? false,
+          bridgeLoading: profilesQuery.isPending,
+          bridgeReason: profilesQuery.data?.bridgeReason ?? null,
           outerUsed: run.outerUsed ?? 0,
           outerMax: run.outerMax ?? 10,
           error:
@@ -341,6 +343,8 @@ export function ReportDetailPage() {
                 hintSource={profilesQuery.data?.hintSource ?? null}
                 activeRepair={activeRepair}
                 bridgeAvailable={profilesQuery.data?.bridgeAvailable ?? false}
+                bridgeLoading={profilesQuery.isPending}
+                bridgeReason={profilesQuery.data?.bridgeReason ?? null}
                 outerUsed={query.data.outerUsed ?? 0}
                 outerMax={query.data.outerMax ?? 10}
                 error={

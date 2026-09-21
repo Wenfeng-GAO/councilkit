@@ -494,6 +494,8 @@ function loopOpts(extra: RepairCommandDeps = {}): RepairCommandDeps {
     workspaceCwd: home,
     inspectPr: async () => inspectPr(),
     bridge: new FakeSquadBridge({ version: SQUAD_BRIDGE_CONTRACT_VERSION }),
+    sleep: async () => undefined,
+    pollIntervalMs: 0,
     ...extra,
   };
 }
@@ -552,6 +554,30 @@ describe("repair outer loop", () => {
       }),
     );
     expect(out.finished).toMatchObject({ businessResult: "approved", outerUsed: 2 });
+  });
+
+  it("waits more than three status polls without writing candidate.fix", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const out = makeSink();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      out,
+      loopOpts({
+        bridge: new FakeSquadBridge({
+          version: SQUAD_BRIDGE_CONTRACT_VERSION,
+          runningPolls: 4,
+        }),
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      }),
+    );
+    expect(out.finished).toMatchObject({ businessResult: "approved", outerUsed: 1 });
+    const journal = readFileSync(join(home, "runs", REPAIR_ID, "journal.jsonl"), "utf8");
+    expect(journal).not.toMatch(/candidate\.fix/);
   });
 
   it("does not consume parent budget for inner candidate.fix retries", async () => {
@@ -819,6 +845,10 @@ describe("repair outer loop", () => {
           available: false,
           version: null,
           reason: "squadctl not on PATH; Squad 桥不可用",
+          executable: null,
+          skillDir: null,
+          capabilities: [],
+          orchestrator: null,
         }),
         reviewImpl: async () => {
           throw new Error("should not review");

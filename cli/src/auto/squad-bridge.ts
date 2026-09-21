@@ -13,6 +13,15 @@ import {
   squadJournalRefsSchema,
 } from "@shared/runtime/squad-bridge-contract";
 
+export interface SquadBridgeDelivery {
+  grantHash: string;
+  repo: string;
+  sourceBranch: string;
+  sourceSha: string;
+  expectedOldSha: string;
+  remote: string;
+}
+
 export interface SquadBridgeStartRequest {
   requestedVersion: string;
   packageFields: { ancestorDir?: string };
@@ -20,6 +29,7 @@ export interface SquadBridgeStartRequest {
   history?: unknown;
   handoffPath?: string;
   baseSha?: string;
+  delivery?: SquadBridgeDelivery;
 }
 
 export type SquadBridgeStartResult =
@@ -56,12 +66,14 @@ export interface SquadBridge {
   requestPublish(request: {
     taskId: string;
     identity: FrozenIntegrateIdentity;
-  }): SquadBridgePublishResult;
+  }): SquadBridgePublishResult | Promise<SquadBridgePublishResult>;
   prepare?(input: {
     taskId: string;
     baseSha: string;
     packagePath: string;
+    delivery?: SquadBridgeDelivery;
   }): Promise<void>;
+  writerPids?(): number[];
 }
 
 export interface FakeSquadBridgeOptions {
@@ -73,6 +85,7 @@ export interface FakeSquadBridgeOptions {
   history?: unknown;
   bridgeAncestorDir?: string | null;
   innerFails?: number;
+  runningPolls?: number;
   writerPids?: number[];
   refusePublish?: boolean;
 }
@@ -144,13 +157,16 @@ export class FakeSquadBridge implements SquadBridge {
     const seen = (this.statusCounts.get(request.taskId) ?? 0) + 1;
     this.statusCounts.set(request.taskId, seen);
     const innerFails = this.options.innerFails ?? 0;
+    const runningPolls = this.options.runningPolls ?? 0;
     const gated =
       seen <= innerFails
         ? { ...journal, independentVerify: false, requiredGatesPassed: false }
         : journal;
     const kind: SquadBridgeEventKind = this.stopped.has(request.taskId)
       ? "stopped"
-      : (this.options.eventKind ?? "candidate_ready");
+      : seen <= runningPolls
+        ? "running"
+        : (this.options.eventKind ?? "candidate_ready");
     return {
       taskId: request.taskId,
       event: { kind, journal: gated },

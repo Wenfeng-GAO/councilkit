@@ -19,6 +19,32 @@ function render(node: ReturnType<typeof createElement>) {
 }
 
 describe("RepairRunPanel", () => {
+  it("shows a loading state instead of treating pending as unavailable", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: review,
+        profiles: [],
+        bridgeAvailable: false,
+        bridgeLoading: true,
+      }),
+    );
+    expect(html).toContain("正在检查 Squad 桥依赖");
+    expect(html).not.toContain("Squad 桥不可用");
+    expect(html).not.toContain("Squad 自动修复</button>");
+  });
+
+  it("shows the probe reason when the bridge is missing", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: review,
+        profiles: [],
+        bridgeAvailable: false,
+        bridgeReason: "PATH 与配置中都没有可用的 squadctl。",
+      }),
+    );
+    expect(html).toContain("PATH 与配置中都没有可用的 squadctl。");
+  });
+
   it("shows the primary CTA when a profile is ready", () => {
     const html = render(
       createElement(RepairRunPanel, {
