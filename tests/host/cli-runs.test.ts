@@ -617,6 +617,9 @@ async function bootStartReview(start?: (input: CliRunLaunchRequest) => { pid: nu
   const launches: CliRunLaunchRequest[] = [];
   host = await createTestHost({
     routesFactory: (services) => {
+      // 96e554b gates repair launch on the Squad bridge probe; tests inject an
+      // available bridge instead of depending on squadctl being on PATH.
+      services.squadBridgeProbe = () => ({ available: true, version: "test", reason: null });
       services.cliRunLauncher = {
         start: (input: CliRunLaunchRequest) => {
           launches.push(input);
@@ -733,11 +736,57 @@ describe("GET /api/v1/cli-runs/:runId/attempts/:attemptId/result", () => {
     expect(body.reusedFrom).toBeNull();
   });
 
+  it("reports the evidenced in-flight retry window only when the record carries willRetry", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "failure", {
+        output: null,
+        attemptNumber: 1,
+        willRetry: true,
+        exitCode: 1,
+        durationMs: 5_000,
+        failure: { code: "EXIT", message: "non-zero exit 1" },
+      }),
+    ]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#1.2");
+    expect(body.executionStatus).toBe("running");
+    expect(body.availability).toBe("pending");
+    expect(body.markdown).toBeNull();
+    expect(body.failure).toBeNull();
+  });
+
+  it("AC-08: a fast auth-failure EXIT without willRetry stays terminal failure mid-run", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "failure", {
+        output: null,
+        attemptNumber: 1,
+        exitCode: 1,
+        durationMs: 3_000,
+        failure: { code: "EXIT", message: "authentication failed" },
+      }),
+      // Another seat is still running — the run is active.
+      finishedRecord("attempt-1", "success", { output: "other-seat-body", attemptNumber: 1 }),
+    ]);
+    host = await boot();
+    const { status, body } = await getResult("attempt-0");
+    expect(status).toBe(200);
+    expect(body.executionRef).toBe("attempt-0#1.1");
+    expect(body.executionStatus).toBe("failure");
+    expect(body.availability).toBe("unavailable");
+    expect(body.markdown).toBeNull();
+    expect(body.failure).toEqual({ code: "EXIT", message: "authentication failed" });
+  });
+
   it("serves the retried success, never the earlier failure, for the same attemptId", async () => {
     seedTranscript([
       startedRecord(),
       finishedRecord("attempt-0", "failure", {
         attemptNumber: 1,
+        willRetry: true,
         exitCode: 1,
         durationMs: 5_000,
         failure: { code: "EXIT", message: "non-zero exit 1" },
@@ -1405,6 +1454,38 @@ describe("POST /api/v1/cli-runs/repair", () => {
     const b = (await second.json()) as { ok: true; data: { runId: string } };
     expect(a.data.runId).toBe(b.data.runId);
     expect(launches).toHaveLength(1);
+  });
+
+  it("rejects the launch with 400 when the Squad bridge probe is unavailable", async () => {
+    seed();
+    seedRepairProfile();
+    const launches: CliRunLaunchRequest[] = [];
+    host = await createTestHost({
+      routesFactory: (services) => {
+        services.squadBridgeProbe = () => ({
+          available: false,
+          version: null,
+          reason: "squadctl not on PATH; Squad 桥不可用",
+        });
+        services.cliRunLauncher = {
+          start: (input: CliRunLaunchRequest) => {
+            launches.push(input);
+            return { pid: process.pid };
+          },
+        };
+        return cliRunsRoutes(services);
+      },
+    });
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/repair`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ from: RUN_ID, profile: "default" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { code: string; message: string } };
+    expect(body.error.code).toBe("BAD_REQUEST");
+    expect(body.error.message).toContain("Squad 桥不可用");
+    expect(launches).toEqual([]);
   });
 
   it("rejects missing CSRF", async () => {

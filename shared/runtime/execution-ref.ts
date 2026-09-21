@@ -22,6 +22,12 @@
  * terminal record WILL have once appended, so the ref is stable from running
  * through terminal as long as the execution leaves a durable record.
  *
+ * Retry evidence (AC-08): an in-flight retry is recognized ONLY from the
+ * producer-stamped `willRetry: true` on a terminal record (set by the runner
+ * at the moment it decides to retry) — never from duration/exit-code
+ * heuristics. Transcripts written before the marker existed conservatively
+ * report the last known terminal record mid-run; see the B0 note.
+ *
  * Known degradation (documented in the B0 note): an execution that dies
  * WITHOUT any terminal record (e.g. SIGKILL/power loss) is indistinguishable
  * from the next execution in the same generation — both map to the same
@@ -80,13 +86,6 @@ export function unavailableExecutionRef(attemptId: string): string {
 
 const TERMINAL_LIVE: ReadonlySet<string> = new Set(["success", "failure", "cancelled"]);
 
-/** Mirror of the runner's transient-EXIT retry window (runner.ts shouldRetry):
- *  only a non-zero EXIT under 120s is retried, and only once. `retryable` is
- *  NOT persisted on the transcript failure object, so a retryable=false EXIT
- *  failure may be conservatively reported as in-flight until the run reaches
- *  a terminal state (documented B0 degradation). */
-const TRANSIENT_RETRY_MAX_DURATION_MS = 120_000;
-
 const AGGREGATION_KEY = "aggregation.finished";
 
 interface FinishedEntry {
@@ -98,9 +97,11 @@ interface FinishedEntry {
   status: "success" | "failure";
   output: string | null;
   failure: AttemptFailureInfo | null;
-  attemptNumber: number | null;
-  durationMs: number;
-  exitCode: unknown;
+  /** Retry evidence stamped by the runner at the retry DECISION point (AC-08):
+   *  true only when a follow-up execution of this Attempt is starting. Never
+   *  inferred from duration/exit-code — an auth failure can exit in 3s and
+   *  must NOT be read as an in-flight retry. */
+  willRetry: boolean;
 }
 
 interface Roster {
@@ -163,9 +164,7 @@ export function resolveAttemptExecution(input: {
         status,
         output: typeof row.output === "string" ? row.output : null,
         failure: parseFailure(row.failure),
-        attemptNumber: typeof row.attemptNumber === "number" ? row.attemptNumber : null,
-        durationMs: typeof row.durationMs === "number" ? row.durationMs : Number.POSITIVE_INFINITY,
-        exitCode: row.exitCode,
+        willRetry: row.willRetry === true,
       });
     }
   }
@@ -209,9 +208,10 @@ export function resolveAttemptExecution(input: {
     lastFinished !== null && (lastResume === null || lastFinished.index > lastResume.index);
 
   if (recordCurrent && lastFinished !== null) {
-    if (runActive && isPossibleRetryAwaiting(lastFinished)) {
-      // The first try failed transiently and the retry is (presumed) running:
-      // the current execution is the retry — never serve the failed try.
+    if (runActive && lastFinished.willRetry) {
+      // The runner has PROVEN (willRetry evidence) that a follow-up execution
+      // of this Attempt is starting: the current execution is that retry —
+      // never serve the failed try.
       return {
         kind: "inflight",
         role,
@@ -223,6 +223,9 @@ export function resolveAttemptExecution(input: {
         executionStatus: "running",
       };
     }
+    // No willRetry evidence: the last terminal record IS the current state.
+    // Old transcripts (pre-marker) conservatively report this last known
+    // terminal record even mid-run — never a guessed `#1.2 running`.
     return terminalFromEntry(attemptId, role, lastFinished, null);
   }
 
@@ -271,15 +274,6 @@ function terminalFromEntry(
     failure,
     reusedExecutionRef,
   };
-}
-
-function isPossibleRetryAwaiting(entry: FinishedEntry): boolean {
-  if (entry.status !== "failure") return false;
-  // Only the first try can be retried; a retried second try is final.
-  if (entry.attemptNumber !== 1) return false;
-  if (entry.failure?.code !== "EXIT") return false;
-  if (typeof entry.exitCode !== "number" || entry.exitCode === 0) return false;
-  return entry.durationMs < TRANSIENT_RETRY_MAX_DURATION_MS;
 }
 
 function parseFailure(value: unknown): AttemptFailureInfo | null {

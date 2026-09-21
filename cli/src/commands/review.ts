@@ -854,6 +854,7 @@ export async function runReview(
       // synthetic results simply omit both.
       attemptNumber: r.attemptNumber,
       retryOf: r.retryOf,
+      willRetry: r.willRetry === true ? true : undefined,
       resumedAfterFailure: r.resumedAfterFailure === true ? true : undefined,
     };
     transcript.push(rec);

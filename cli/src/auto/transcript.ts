@@ -138,6 +138,12 @@ export const attemptFinishedRecordSchema = z
     /** Present (and `1`) on the retried second try, naming the failed first
      * try's `attemptNumber`. Absent on a non-retried Attempt. */
     retryOf: z.number().int().positive().optional(),
+    /** Retry evidence (AC-08): present and `true` ONLY on a first try whose
+     * transient-EXIT failure the runner has ALREADY decided to retry — i.e.
+     * a follow-up execution of this Attempt is starting. Readers must not
+     * infer an in-flight retry from timing/exit-code heuristics; when this
+     * is absent the record is the last known terminal state. */
+    willRetry: z.boolean().optional(),
     /** Present on a fresh success that followed a FAILED attempt in the run
      * being resumed — persisted so the appendix mark survives further resumes
      * (reviewer finding). */

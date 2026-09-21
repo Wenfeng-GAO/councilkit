@@ -817,6 +817,7 @@ function recordAttempt(transcript: IdeateTranscriptRecord[], result: AttemptResu
     activity: result.activity,
     attemptNumber: result.attemptNumber,
     retryOf: result.retryOf,
+    willRetry: result.willRetry === true ? true : undefined,
   });
 }
 

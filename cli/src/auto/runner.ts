@@ -89,6 +89,12 @@ export interface AttemptResult {
   /** This fresh result follows a FAILED attempt in the run being resumed —
    * the appendix marks it 「上一轮失败,resume 重跑」 (reviewer finding). */
   resumedAfterFailure?: boolean;
+  /** Evidence stamped at the retry DECISION point: true only on a first try
+   *  whose transient-EXIT failure the runner has decided to retry (B0/AC-08).
+   *  Persisted as `willRetry` on the transcript's attempt.finished record so
+   *  readers never have to guess from timing whether a follow-up execution
+   *  is in flight. Absent on every other result. */
+  willRetry?: boolean;
 }
 
 export interface SpawnInput {
@@ -269,7 +275,20 @@ export async function runAttempts(
     const specTimeout = spec.timeoutMs ?? timeoutMs;
     const subOpts = { ...opts, timeoutMs: specTimeout, signal: internal.signal };
     const first = await runOne(spec, subOpts);
-    const firstResult: AttemptResult = { ...first, attemptNumber: 1 };
+    // The retry decision is made BEFORE the finish callback so the durable
+    // record of the failed first try carries the willRetry evidence — readers
+    // must never infer an in-flight retry from duration/exit-code heuristics
+    // (AC-08: an auth failure exits in 3s and is NOT retried, yet looks
+    // identical to a transient blip without this mark). The stamp reflects the
+    // decision at finish time; the spawn below re-checks the signal so an
+    // abort fired BY the callback still suppresses the retry (in that race the
+    // run dies immediately and readers gate on runActive anyway).
+    const willRetry = shouldRetry(first, internal.signal);
+    const firstResult: AttemptResult = {
+      ...first,
+      attemptNumber: 1,
+      ...(willRetry ? { willRetry: true } : {}),
+    };
     opts.onAttemptFinish?.(firstResult);
     if (shouldRetry(firstResult, internal.signal)) {
       // Rebuild a PRISTINE workspace before the retry spawn: the first try's

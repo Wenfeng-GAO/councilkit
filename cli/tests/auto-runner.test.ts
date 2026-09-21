@@ -477,8 +477,12 @@ describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", ()
     expect(finishes).toHaveLength(2);
     expect(finishes[0].attemptNumber).toBe(1);
     expect(finishes[0].retryOf).toBeUndefined();
+    // The retry decision is stamped on the first try as durable evidence
+    // (AC-08): readers never infer an in-flight retry from timing.
+    expect(finishes[0].willRetry).toBe(true);
     expect(finishes[1].attemptNumber).toBe(2);
     expect(finishes[1].retryOf).toBe(1);
+    expect(finishes[1].willRetry).toBeUndefined();
   });
 
   it("refuses spawn when frozen tool bytes drift and does not retry", async () => {

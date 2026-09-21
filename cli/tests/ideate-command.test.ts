@@ -448,7 +448,7 @@ describe("councilkit ideate", () => {
       (row) => row.kind === "attempt.finished" && row.attemptId === "proposal-seat2",
     );
     expect(physical).toHaveLength(2);
-    expect(physical[0]).toMatchObject({ status: "failure", attemptNumber: 1 });
+    expect(physical[0]).toMatchObject({ status: "failure", attemptNumber: 1, willRetry: true });
     expect(physical[1]).toMatchObject({ status: "success", attemptNumber: 2, retryOf: 1 });
     expect(retryChecks).toHaveLength(1);
     expect(collectAuthHits(resolvePaths().runDir(out.runId))).toEqual([]);

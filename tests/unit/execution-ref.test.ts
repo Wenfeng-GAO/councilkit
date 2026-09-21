@@ -123,10 +123,12 @@ describe("resolveAttemptExecution", () => {
   });
 
   // 场景 2：自动重试 — 失败首试与重试成功是两个执行，终态取本次成功。
-  it("transient retry: failed first try and retried success are distinct executions", () => {
+  // 重试窗口只有 willRetry 证据标记时才报 in-flight（AC-08）。
+  it("transient retry: willRetry evidence marks the in-flight retry window", () => {
     const failedTry = finished("attempt-0", "failure", {
       output: null,
       attemptNumber: 1,
+      willRetry: true,
       exitCode: 1,
       durationMs: 5_000,
       failure: { code: "EXIT", message: "non-zero exit 1" },
@@ -161,6 +163,64 @@ describe("resolveAttemptExecution", () => {
       output: "retry-output",
     });
     expect((done as { output: string }).output).not.toContain("failure");
+  });
+
+  // AC-08：3 秒 EXIT、authentication failed、classifier retryable=false ——
+  // 无 willRetry 证据时，运行中也不得推测 #1.2 running，保守报最后已知终态。
+  it("AC-08: fast EXIT failure without willRetry evidence stays terminal mid-run", () => {
+    const authFailure = finished("attempt-0", "failure", {
+      output: null,
+      attemptNumber: 1,
+      exitCode: 1,
+      durationMs: 3_000,
+      failure: { code: "EXIT", message: "authentication failed" },
+    });
+    const midRun = resolveAttemptExecution({
+      records: [started, authFailure],
+      attemptId: "attempt-0",
+      liveStatus: "failure", // another seat is still running
+      runActive: true,
+    });
+    expect(midRun).toMatchObject({
+      kind: "terminal",
+      executionRef: "attempt-0#1.1",
+      executionStatus: "failure",
+    });
+    expect((midRun as AttemptExecutionResolution & { kind: "terminal" }).failure).toEqual({
+      code: "EXIT",
+      message: "authentication failed",
+    });
+
+    const runOver = resolveAttemptExecution({
+      records: [started, authFailure],
+      attemptId: "attempt-0",
+      liveStatus: "failure",
+      runActive: false,
+    });
+    expect(runOver).toMatchObject({ kind: "terminal", executionRef: "attempt-0#1.1" });
+  });
+
+  // 有 willRetry 证据但 run 已终态（重试随 run 死亡且无记录）：保守收敛为最后已知终态。
+  it("willRetry evidence is ignored once the run can no longer append records", () => {
+    const failedTry = finished("attempt-0", "failure", {
+      output: null,
+      attemptNumber: 1,
+      willRetry: true,
+      exitCode: 1,
+      durationMs: 5_000,
+      failure: { code: "EXIT", message: "non-zero exit 1" },
+    });
+    const res = resolveAttemptExecution({
+      records: [started, failedTry],
+      attemptId: "attempt-0",
+      liveStatus: "failure",
+      runActive: false,
+    });
+    expect(res).toMatchObject({
+      kind: "terminal",
+      executionRef: "attempt-0#1.1",
+      executionStatus: "failure",
+    });
   });
 
   // 场景 2b：重试的二次失败是终态，不再预测第三次。
@@ -371,8 +431,9 @@ describe("resolveAttemptExecution", () => {
     }
   });
 
-  // 旧数据退化 A：无 attemptNumber 的旧记录不预测重试，直接给终态。
-  it("legacy records without attemptNumber never predict a retry", () => {
+  // 旧数据退化：无 willRetry 字段的失败记录运行中保守报最后已知终态，
+  // 不再按「快 EXIT」推测重试（AC-08）。
+  it("legacy failure records without willRetry conservatively report the last terminal state", () => {
     const records = [
       started,
       finished("attempt-0", "failure", {
@@ -382,7 +443,11 @@ describe("resolveAttemptExecution", () => {
       }),
     ];
     const res = resolveAttemptExecution({ records, attemptId: "attempt-0", ...RUN_ACTIVE });
-    expect(res).toMatchObject({ kind: "terminal", executionStatus: "failure" });
+    expect(res).toMatchObject({
+      kind: "terminal",
+      executionRef: "attempt-0#1.1",
+      executionStatus: "failure",
+    });
   });
 
   // 旧数据退化 B：无 resume 的多记录时代同样落在第 1 代。

@@ -2763,8 +2763,11 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     );
     expect(alice).toHaveLength(2);
     expect(alice[0].attemptNumber).toBe(1);
+    // The failed first try carries the retry decision as durable evidence.
+    expect(alice[0].willRetry).toBe(true);
     expect(alice[1].attemptNumber).toBe(2);
     expect(alice[1].retryOf).toBe(1);
+    expect(alice[1].willRetry).toBeUndefined();
     // 45min default for attempts; probe stays 60s.
     expect(seen.find((s) => s.kind === "probe")?.timeoutMs).toBe(60_000);
     expect(seen.find((s) => s.kind === "attempt:Alice")?.timeoutMs).toBe(2_700_000);
