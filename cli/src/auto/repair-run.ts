@@ -68,10 +68,12 @@ import { loadFindingGroups } from "./finding-groups";
 import {
   codeTraceFromReview,
   codeTraceMethods,
+  commandLogPath,
   commandMethods,
   ensureCandidateSnapshot,
   extraProbeManifestVersion,
   hashTestAssetContents,
+  inspectCandidateSnapshot,
   persistVerificationAssets,
   receiptFromIsolatedLog,
   runCandidateCommand,
@@ -2211,6 +2213,12 @@ async function materializeIndependentVerification(input: {
     atomicWriteJson(join(verificationDir, "snapshot-unknown.json"), { reason: snapshot.reason });
     return { ok: true, cwd: null, executed: false };
   }
+  if (snapshot.dirtyTree) {
+    return {
+      ok: false,
+      reason: "candidate worktree is dirty; independent verification was not run",
+    };
+  }
   const pending: Array<{
     method: (typeof methods)[number];
     testAssetVersion: string;
@@ -2224,7 +2232,7 @@ async function materializeIndependentVerification(input: {
       assertionVersion: method.assertionId,
       testAssetVersion,
     });
-    const logPath = join(verificationDir, `${method.assertionId}.log`);
+    const logPath = commandLogPath(verificationDir, method.assertionId, cacheKey);
     const cached = receiptFromIsolatedLog({
       assertionId: method.assertionId,
       command: method.trigger,
@@ -2235,7 +2243,7 @@ async function materializeIndependentVerification(input: {
       logPath,
       cacheKey,
     });
-    if (cached) continue;
+    if (cached?.receipts[0]?.dirtyTree === false) continue;
     pending.push({ method, testAssetVersion, cacheKey, logPath });
   }
   if (pending.length === 0) return { ok: true, cwd: snapshot.cwd, executed: false };
@@ -2251,21 +2259,51 @@ async function materializeIndependentVerification(input: {
     if (!reserved.ok) return { ok: false, reason: reserved.reason };
   }
   for (const item of pending) {
+    const nowMs = Date.now();
+    if (
+      input.deadlineAtMs !== null &&
+      input.deadlineAtMs !== undefined &&
+      nowMs >= input.deadlineAtMs
+    ) {
+      return { ok: false, reason: "chain deadline reached during independent verification" };
+    }
+    const timeoutMs =
+      input.deadlineAtMs !== null && input.deadlineAtMs !== undefined
+        ? Math.max(1, input.deadlineAtMs - nowMs)
+        : undefined;
     const result = await runCandidateCommand({
       command: item.method.trigger,
       cwd: snapshot.cwd,
       outputDir: join(input.runDir, "verification-out"),
       tmpDir: join(input.runDir, "verification-tmp"),
+      timeoutMs,
     });
+    if (result.error && /timed out/.test(result.error)) {
+      return { ok: false, reason: "chain deadline reached during independent verification" };
+    }
+    const after = await inspectCandidateSnapshot({
+      cwd: snapshot.cwd,
+      expectedSha: snapshot.head,
+    });
+    if (!after.ok) {
+      return { ok: false, reason: after.reason };
+    }
     writeCommandLog(item.logPath, {
       exitCode: result.exitCode,
       stdout: result.stdout,
       stderr: result.stderr,
-      snapshotSha: snapshot.head,
-      cwd: snapshot.cwd,
-      dirtyTree: snapshot.dirtyTree,
+      snapshotSha: after.head,
+      cwd: after.cwd,
+      dirtyTree: after.dirtyTree,
       cacheKey: item.cacheKey,
+      command: item.method.trigger,
     });
+    if (after.dirtyTree) {
+      return {
+        ok: false,
+        reason: "verification command mutated tracked source; original candidate was not proven",
+      };
+    }
   }
   return { ok: true, cwd: snapshot.cwd, executed: true };
 }
@@ -2328,12 +2366,16 @@ function bindVerificationForGate(input: {
   const commands = commandMethods(input.contract);
   for (const method of commands) {
     const testAssetVersion = hashTestAssetContents([method.trigger]);
-    const logPath = join(input.runDir, "verification", `${method.assertionId}.log`);
     const cacheKey = verificationCacheKey({
       snapshotSha: input.candidateSha,
       assertionVersion: method.assertionId,
       testAssetVersion,
     });
+    const logPath = commandLogPath(
+      join(input.runDir, "verification"),
+      method.assertionId,
+      cacheKey,
+    );
     const collected = receiptFromIsolatedLog({
       assertionId: method.assertionId,
       command: method.trigger,

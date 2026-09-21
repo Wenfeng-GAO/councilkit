@@ -32,8 +32,10 @@ import {
   parseRepairGrantRecord,
   parseRepairProfileRecord,
   profileIntegrityHash,
+  protocolIntegrityHash,
   verifyRepairGrantRecord,
 } from "@shared/runtime/repair-auth";
+import { V2_TRIAL_DEFAULTS } from "@shared/runtime/repair-chain";
 import {
   type WriterLease,
   isActiveRepairHolder,
@@ -880,6 +882,17 @@ function writeHostRepairProfile(input: CliRunSaveRepairProfileRequest): RepairPr
   }
   const capabilities = [...new Set(input.capabilities)];
   const createdAt = new Date().toISOString();
+  if (input.isolationMode === "strong") {
+    throw httpError(
+      400,
+      makeError(
+        "BAD_REQUEST",
+        "discovery",
+        "full Squad pipeline strong isolation is unsupported. Choose collaborative explicitly.",
+        { retryable: false },
+      ),
+    );
+  }
   const record: RepairProfileRecord = {
     version: 1,
     name: input.name,
@@ -893,6 +906,25 @@ function writeHostRepairProfile(input: CliRunSaveRepairProfileRequest): RepairPr
     revokedAt: null,
     createdAt,
   };
+  if (input.isolationMode === "collaborative" || input.protocolVersion === "v2") {
+    if (input.isolationMode !== "collaborative") {
+      throw httpError(
+        400,
+        makeError(
+          "BAD_REQUEST",
+          "discovery",
+          "v2 repair profile requires explicit collaborative isolation.",
+          { retryable: false },
+        ),
+      );
+    }
+    record.protocolVersion = "v2";
+    record.isolationMode = "collaborative";
+    record.sourceFixMax = V2_TRIAL_DEFAULTS.sourceFixMax;
+    record.deadlineMs = V2_TRIAL_DEFAULTS.deadlineMs;
+    record.diagnoseMs = V2_TRIAL_DEFAULTS.diagnoseMs;
+    record.protocolHash = protocolIntegrityHash(record);
+  }
   record.integrityHash = profileIntegrityHash(record);
   const dir = join(resolveCouncilkitHome(process.env), "profiles");
   mkdirSync(dir, { recursive: true, mode: 0o700 });

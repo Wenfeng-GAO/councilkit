@@ -113,6 +113,36 @@ describe("RepairRunPanel", () => {
     });
   });
 
+  it("requires an explicit collaborative isolation choice and keeps strong unavailable", () => {
+    const missing = new FormData();
+    missing.set("name", "default");
+    missing.set("sourceBranch", "feat");
+    missing.set("base", "main");
+    expect(readRepairLaunchSummary(missing)).toEqual({
+      ok: false,
+      error: "请显式选择协作约定（非 OS 硬隔离）",
+    });
+    const html = render(
+      createElement(RepairRunPanel, { run: review, profiles: [], bridgeAvailable: true }),
+    );
+    expect(html).toContain("隔离模式");
+    expect(html).toContain("整条真实 Squad 强隔离当前不支持");
+    expect(html).toContain("协作约定（非 OS 硬隔离）");
+    expect(html).toContain("disabled");
+    const chosen = new FormData();
+    chosen.set("name", "default");
+    chosen.set("sourceBranch", "feat");
+    chosen.set("base", "main");
+    chosen.set("isolation", "collaborative");
+    expect(readRepairLaunchSummary(chosen)).toEqual({
+      ok: true,
+      name: "default",
+      sourceBranch: "feat",
+      base: "main",
+      isolationMode: "collaborative",
+    });
+  });
+
   it("disables the CTA when the squad bridge is missing", () => {
     const html = render(
       createElement(RepairRunPanel, {

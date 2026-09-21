@@ -11,12 +11,19 @@ export interface RepairProfileSummary {
   base: string;
 }
 
-export function readRepairLaunchSummary(
-  data: FormData,
-): { ok: true; name: string; sourceBranch: string; base: string } | { ok: false; error: string } {
+export function readRepairLaunchSummary(data: FormData):
+  | {
+      ok: true;
+      name: string;
+      sourceBranch: string;
+      base: string;
+      isolationMode: "collaborative";
+    }
+  | { ok: false; error: string } {
   const name = String(data.get("name") ?? "default").trim() || "default";
   const sourceBranch = String(data.get("sourceBranch") ?? "").trim();
   const base = String(data.get("base") ?? "").trim();
+  const isolation = String(data.get("isolation") ?? "").trim();
   if (!isRepairProfileName(name)) {
     return { ok: false, error: "profile 名必须是不含路径的短名" };
   }
@@ -26,7 +33,13 @@ export function readRepairLaunchSummary(
   if (!base) {
     return { ok: false, error: "请填写目标分支（本 PR 的 base 分支）" };
   }
-  return { ok: true, name, sourceBranch, base };
+  if (isolation === "strong") {
+    return { ok: false, error: "整条真实 Squad 强隔离当前不支持，请显式选择协作约定" };
+  }
+  if (isolation !== "collaborative") {
+    return { ok: false, error: "请显式选择协作约定（非 OS 硬隔离）" };
+  }
+  return { ok: true, name, sourceBranch, base, isolationMode: "collaborative" };
 }
 
 function hintSourceLabel(source: "pr" | "review" | "worktree"): string {
@@ -90,7 +103,12 @@ export function RepairRunPanel({
   onStart?: (profile: string) => void;
   onStop?: () => void;
   onResume?: () => void;
-  onSaveProfile?: (input: { name: string; sourceBranch: string; base: string }) => void;
+  onSaveProfile?: (input: {
+    name: string;
+    sourceBranch: string;
+    base: string;
+    isolationMode: "collaborative";
+  }) => void;
 }) {
   const [formError, setFormError] = useState<string | null>(null);
   if (run.kind === "repair") {
@@ -248,6 +266,17 @@ export function RepairRunPanel({
               </label>
             </>
           )}
+          <fieldset className="mt-1 flex flex-col gap-2 rounded border border-edge px-3 py-2">
+            <legend className="text-sm text-muted">隔离模式</legend>
+            <label className="flex items-start gap-2 text-sm text-fg">
+              <input type="radio" name="isolation" value="collaborative" />
+              <span>协作约定（非 OS 硬隔离）</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-muted">
+              <input type="radio" name="isolation" value="strong" disabled />
+              <span>整条真实 Squad 强隔离当前不支持</span>
+            </label>
+          </fieldset>
           {formError ? <p className="text-sm text-error">{formError}</p> : null}
           <Button type="submit" disabled={pending}>
             保存授权并启动
@@ -255,13 +284,18 @@ export function RepairRunPanel({
         </form>
       ) : null}
       {!bridgeLoading && bridgeAvailable && profiles.length > 0 ? (
-        <Button
-          className="mt-3"
-          disabled={pending}
-          onClick={() => onStart?.(profiles[0]?.name ?? "default")}
-        >
-          Squad 自动修复
-        </Button>
+        <>
+          <p className="mt-2 text-sm text-muted">
+            整条真实 Squad 强隔离当前不支持；已保存授权按协作约定启动。
+          </p>
+          <Button
+            className="mt-3"
+            disabled={pending}
+            onClick={() => onStart?.(profiles[0]?.name ?? "default")}
+          >
+            Squad 自动修复
+          </Button>
+        </>
       ) : null}
       {error ? <p className="mt-2 text-sm text-error">{error}</p> : null}
     </section>

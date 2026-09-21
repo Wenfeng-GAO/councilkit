@@ -852,6 +852,8 @@ export const cliRunSaveRepairProfileRequestSchema = z
     sourceBranch: z.string().min(1).max(200),
     base: z.string().min(1).max(200),
     capabilities: z.array(z.literal("push-source-branch")).min(1).max(8),
+    protocolVersion: z.enum(["v1", "v2"]).optional(),
+    isolationMode: z.enum(["strong", "collaborative"]).optional(),
   })
   .strict();
 export type CliRunSaveRepairProfileRequest = z.infer<typeof cliRunSaveRepairProfileRequestSchema>;

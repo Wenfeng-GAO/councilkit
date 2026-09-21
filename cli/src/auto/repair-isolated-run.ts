@@ -101,6 +101,7 @@ export async function runIsolatedCommand(input: {
   allowNetwork?: boolean;
   env?: NodeJS.ProcessEnv;
   runCommand?: RunCommand;
+  timeoutMs?: number;
 }): Promise<RunCommandResult> {
   const env: NodeJS.ProcessEnv = {
     ...stripCredentialEnv(input.env ?? process.env),
@@ -124,6 +125,7 @@ export async function runIsolatedCommand(input: {
     argv: wrapped.argv,
     cwd: input.cwd,
     env,
+    timeoutMs: input.timeoutMs,
   });
 }
 

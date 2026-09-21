@@ -236,6 +236,14 @@ export function assetFromOfficialEvidence(input: {
   };
 }
 
+export function commandLogPath(
+  verificationDir: string,
+  assertionId: string,
+  cacheKey: string,
+): string {
+  return join(verificationDir, `${assertionId}.${cacheKey.slice(0, 16)}.log`);
+}
+
 export function writeCommandLog(
   logPath: string,
   receipt: {
@@ -246,13 +254,48 @@ export function writeCommandLog(
     cwd: string;
     dirtyTree: boolean;
     cacheKey: string;
+    command: string;
   },
 ): void {
   mkdirSync(join(logPath, ".."), { recursive: true });
   atomicWriteFile(
     logPath,
-    `exit=${receipt.exitCode}\ncwd=${receipt.cwd}\nsha=${receipt.snapshotSha}\ndirty=${receipt.dirtyTree ? "1" : "0"}\ncache=${receipt.cacheKey}\n${receipt.stdout}${receipt.stderr}`,
+    `exit=${receipt.exitCode}\ncwd=${receipt.cwd}\nsha=${receipt.snapshotSha.toLowerCase()}\ndirty=${receipt.dirtyTree ? "1" : "0"}\ncache=${receipt.cacheKey}\ncommand=${receipt.command}\n---\n${receipt.stdout}${receipt.stderr}`,
   );
+}
+
+export function parseCommandLogMetadata(log: string): {
+  exitCode: number;
+  cwd: string;
+  snapshotSha: string;
+  dirtyTree: boolean;
+  cacheKey: string;
+  command: string;
+} | null {
+  const header: Record<string, string> = {};
+  const lines = log.split("\n");
+  for (const line of lines) {
+    if (line === "---") break;
+    const match = /^(exit|cwd|sha|dirty|cache|command)=(.*)$/.exec(line);
+    if (!match) break;
+    header[match[1]] = match[2] ?? "";
+  }
+  const exitCode = Number(header.exit);
+  const snapshotSha = header.sha?.toLowerCase() ?? "";
+  const cacheKey = header.cache ?? "";
+  const cwd = header.cwd ?? "";
+  const command = header.command ?? "";
+  if (!Number.isInteger(exitCode) || !/^[0-9a-f]{40}$/.test(snapshotSha)) return null;
+  if (!/^[a-f0-9]{64}$/.test(cacheKey) || cwd.length === 0) return null;
+  if (header.dirty !== "0" && header.dirty !== "1") return null;
+  return {
+    exitCode,
+    cwd,
+    snapshotSha,
+    dirtyTree: header.dirty === "1",
+    cacheKey,
+    command,
+  };
 }
 
 export function receiptFromIsolatedLog(input: {
@@ -272,36 +315,34 @@ export function receiptFromIsolatedLog(input: {
   } catch {
     return null;
   }
-  if (!log.includes(`sha=${input.snapshotSha.toLowerCase()}`) && !log.includes(input.cacheKey)) {
-    return null;
-  }
-  const exitMatch = /^exit=(-?\d+)/m.exec(log);
-  if (!exitMatch) return null;
-  const exitCode = Number(exitMatch[1]);
-  const dirtyMatch = /^dirty=([01])/m.exec(log);
-  if (!dirtyMatch) return null;
-  const interpreted = interpretTestLog(log, "", exitCode);
+  const meta = parseCommandLogMetadata(log);
+  if (!meta) return null;
+  if (meta.snapshotSha !== input.snapshotSha.toLowerCase()) return null;
+  if (meta.cacheKey !== input.cacheKey) return null;
+  if (meta.cwd !== input.cwd) return null;
+  if (meta.command !== input.command) return null;
+  const interpreted = interpretTestLog(log, "", meta.exitCode);
   return {
     assertionId: input.assertionId,
-    snapshotSha: input.snapshotSha.toLowerCase(),
+    snapshotSha: meta.snapshotSha,
     testAssetVersion: input.testAssetVersion,
     extraProbesDeclared: false,
     extraProbeManifestVersion: EMPTY_EXTRA_PROBE_MANIFEST,
     kind: "command_receipt",
     receipts: [
       {
-        command: input.command,
-        cwd: input.cwd,
-        exitCode,
+        command: meta.command,
+        cwd: meta.cwd,
+        exitCode: meta.exitCode,
         logPath: input.logPath,
-        snapshotSha: input.snapshotSha.toLowerCase(),
+        snapshotSha: meta.snapshotSha,
         testAssetVersion: input.testAssetVersion,
-        dirtyTree: dirtyMatch[1] === "1",
+        dirtyTree: meta.dirtyTree,
         skipped: interpreted.skipped,
         ranZeroTests: interpreted.ranZeroTests,
         role: "independent_adjudicator",
         executionSource: "ck-isolated-run",
-        cacheKey: input.cacheKey,
+        cacheKey: meta.cacheKey,
       },
     ],
   };
@@ -312,7 +353,8 @@ export async function runCandidateCommand(input: {
   cwd: string;
   outputDir: string;
   tmpDir: string;
-}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  timeoutMs?: number;
+}): Promise<{ exitCode: number; stdout: string; stderr: string; error?: string }> {
   const isolation = detectIsolationCapability();
   const result = await runIsolatedCommand({
     mode: isolation.sandboxExec ? "strong" : "collaborative",
@@ -322,11 +364,13 @@ export async function runCandidateCommand(input: {
     cwd: input.cwd,
     outputDir: input.outputDir,
     tmpDir: input.tmpDir,
+    timeoutMs: input.timeoutMs,
   });
   return {
     exitCode: result.exitCode ?? 1,
     stdout: result.stdout,
     stderr: result.stderr,
+    ...(result.error ? { error: result.error } : {}),
   };
 }
 

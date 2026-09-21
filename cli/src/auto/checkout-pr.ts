@@ -101,6 +101,14 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
       } catch {
         // best effort
       }
+      const killFollowup = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // best effort
+        }
+      }, 1000);
+      killFollowup.unref?.();
       finish({
         stdout,
         stderr,
@@ -193,6 +201,15 @@ export async function inspectPullRequest(
       env,
       cwd,
     }));
+  const baseSha =
+    meta.baseSha ??
+    (await resolveRemoteBranchSha({
+      cloneUrl: meta.targetCloneUrl ?? meta.cloneUrl,
+      branch: meta.baseBranch,
+      runCommand,
+      env,
+      cwd,
+    }));
   return {
     prUrl: parsed.url.toString(),
     host: "antcode",
@@ -200,7 +217,7 @@ export async function inspectPullRequest(
     cloneUrl: meta.cloneUrl,
     baseBranch: meta.baseBranch,
     ...(headSha ? { headSha } : {}),
-    ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
+    ...(baseSha ? { baseSha } : {}),
     ...(meta.prOpen === undefined ? {} : { prOpen: meta.prOpen }),
   };
 }
@@ -303,6 +320,15 @@ async function checkoutAntCode(
       env,
       cwd,
     }));
+  const baseSha =
+    meta.baseSha ??
+    (await resolveRemoteBranchSha({
+      cloneUrl: meta.targetCloneUrl ?? meta.cloneUrl,
+      branch: meta.baseBranch,
+      runCommand,
+      env,
+      cwd,
+    }));
   return {
     prUrl: url.toString(),
     host: "antcode",
@@ -310,7 +336,7 @@ async function checkoutAntCode(
     cloneUrl: meta.cloneUrl,
     baseBranch: meta.baseBranch,
     ...(headSha ? { headSha } : {}),
-    ...(meta.baseSha ? { baseSha: meta.baseSha } : {}),
+    ...(baseSha ? { baseSha } : {}),
     ...(meta.prOpen === undefined ? {} : { prOpen: meta.prOpen }),
   };
 }
@@ -539,6 +565,7 @@ function parseAntCodePrShow(
 ): {
   branch: string;
   cloneUrl: string;
+  targetCloneUrl?: string;
   baseBranch: string;
   headSha?: string;
   baseSha?: string;
@@ -565,18 +592,15 @@ function parseAntCodePrShow(
   if (!BRANCH_RE.test(targetRaw)) {
     throw errors.runFailed("antcode pr show did not include a usable target_branch");
   }
-  const source = row.source;
-  let cloneUrl = "";
-  if (source !== null && typeof source === "object") {
-    const s = source as Record<string, unknown>;
-    if (typeof s.ssh_url === "string" && s.ssh_url.length > 0) cloneUrl = s.ssh_url;
-    else if (typeof s.http_url === "string" && s.http_url.length > 0) cloneUrl = s.http_url;
-  }
-  if (cloneUrl.length === 0 || /[\n\r]/.test(cloneUrl)) {
+  const cloneUrl = repoCloneUrl(row.source);
+  if (cloneUrl.length === 0) {
     throw errors.runFailed("antcode pr show did not include a usable clone URL");
   }
+  const targetCloneUrl = repoCloneUrl(row.target);
   const nested =
-    source !== null && typeof source === "object" ? (source as Record<string, unknown>) : {};
+    row.source !== null && typeof row.source === "object"
+      ? (row.source as Record<string, unknown>)
+      : {};
   const headSha =
     readFullSha(row, [
       "head_sha",
@@ -586,16 +610,33 @@ function parseAntCodePrShow(
       "commit_id",
       "diff_head_sha",
     ]) ?? readFullSha(nested, ["sha", "commit_id", "id"]);
-  const baseSha = readFullSha(row, ["base_sha", "target_sha", "target_commit_id"]);
+  const targetNested =
+    row.target !== null && typeof row.target === "object"
+      ? (row.target as Record<string, unknown>)
+      : {};
+  const baseSha =
+    readFullSha(row, ["base_sha", "target_sha", "target_commit_id"]) ??
+    readFullSha(targetNested, ["sha", "commit_id", "id"]);
   const prOpen = parsePrOpen(row.state ?? row.merge_status ?? row.merged);
   return {
     branch,
     cloneUrl,
+    ...(targetCloneUrl ? { targetCloneUrl } : {}),
     baseBranch: targetRaw,
     ...(headSha ? { headSha } : {}),
     ...(baseSha ? { baseSha } : {}),
     ...(prOpen === undefined ? {} : { prOpen }),
   };
+}
+
+function repoCloneUrl(row: unknown): string {
+  if (row === null || typeof row !== "object" || Array.isArray(row)) return "";
+  const rec = row as Record<string, unknown>;
+  const ssh = typeof rec.ssh_url === "string" ? rec.ssh_url : "";
+  if (ssh.length > 0 && /[\n\r]/.test(ssh) === false) return ssh;
+  const http = typeof rec.http_url === "string" ? rec.http_url : "";
+  if (http.length > 0 && /[\n\r]/.test(http) === false) return http;
+  return "";
 }
 
 function readFullSha(row: Record<string, unknown>, keys: readonly string[]): string | undefined {

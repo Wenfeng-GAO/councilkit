@@ -90,6 +90,38 @@ export function hashOfficialGatePolicyFile(policy: OfficialGatePolicyFile): stri
   return createHash("sha256").update(canonicalJson(policy)).digest("hex");
 }
 
+/** Official freeze identity: SHA-256 of canonical {schema_version, brief_hash, required_gates, independence[, delivery_authority]}. */
+export function hashOfficialFrozenPolicy(
+  policy: OfficialGatePolicyFile,
+  briefHash: string,
+): string {
+  const body: Record<string, unknown> = {
+    schema_version: 1,
+    brief_hash: briefHash,
+    independence: policy.independence,
+    required_gates: policy.required_gates,
+  };
+  if (policy.delivery_authority) body.delivery_authority = policy.delivery_authority;
+  return createHash("sha256").update(canonicalJson(body)).digest("hex");
+}
+
+export interface RegisteredPolicyIntent {
+  policyFileHash: string;
+  taskId: string;
+  taskDir: string;
+  required_gates: OfficialRequiredGate[];
+  independence: OfficialIndependence;
+  delivery_authority?: OfficialDeliveryAuthority;
+}
+
+export function officialPolicyFromIntent(intent: RegisteredPolicyIntent): OfficialGatePolicyFile {
+  return {
+    required_gates: intent.required_gates,
+    independence: intent.independence,
+    ...(intent.delivery_authority ? { delivery_authority: intent.delivery_authority } : {}),
+  };
+}
+
 export function hasSupervisedReviewerAndVerifier(policy: OfficialGatePolicyFile): boolean {
   const roles = new Set(policy.required_gates.map((row) => row.role));
   const kinds = policy.required_gates.filter(
@@ -101,7 +133,13 @@ export function hasSupervisedReviewerAndVerifier(policy: OfficialGatePolicyFile)
 
 export function parseOfficialPolicyFreezeStdout(
   stdout: string,
-  input: { taskId: string; taskDir: string; policyFileHash: string; alreadyFrozen?: boolean },
+  input: {
+    taskId: string;
+    taskDir: string;
+    policyFileHash: string;
+    alreadyFrozen?: boolean;
+    policy?: OfficialGatePolicyFile;
+  },
 ): { ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string } {
   const parsed = parseJsonObject(stdout);
   if (!parsed) return { ok: false, reason: "official policy freeze stdout was not JSON" };
@@ -112,12 +150,20 @@ export function parseOfficialPolicyFreezeStdout(
   const briefHash = readHash(parsed.brief_hash) ?? readHash(parsed.briefHash);
   if (!policyHash) return { ok: false, reason: "official freeze stdout missing policy_hash" };
   if (!briefHash) return { ok: false, reason: "official freeze stdout missing brief_hash" };
-  const requiredGates = Array.isArray(parsed.required_gates)
+  const stdoutGates = Array.isArray(parsed.required_gates)
     ? (parsed.required_gates as OfficialRequiredGate[])
     : [];
-  const independence = isIndependence(parsed.independence)
-    ? parsed.independence
-    : SUPERVISED_REVIEW_VERIFY_POLICY.independence;
+  const expected = input.policy;
+  const requiredGates =
+    expected?.required_gates ?? (stdoutGates.length > 0 ? stdoutGates : []);
+  if (requiredGates.length === 0) {
+    return { ok: false, reason: "official freeze missing required_gates" };
+  }
+  const independence = expected?.independence ??
+    (isIndependence(parsed.independence) ? parsed.independence : undefined);
+  if (!independence) {
+    return { ok: false, reason: "official freeze missing independence" };
+  }
   const createdAt =
     typeof parsed.created_at === "string" && parsed.created_at.length > 0
       ? parsed.created_at
@@ -142,56 +188,130 @@ export function parseOfficialPolicyFreezeStdout(
 export function recoverOfficialPolicyFreeze(
   recorded: unknown,
   officialProjection: unknown,
-  intent: { policyFileHash: string; taskId: string; taskDir: string },
+  intent: RegisteredPolicyIntent,
 ): { ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string } {
+  const policy = officialPolicyFromIntent(intent);
+  if (!hasSupervisedReviewerAndVerifier(policy)) {
+    return { ok: false, reason: "registered intent is missing supervised reviewer and verifier" };
+  }
+  if (hashOfficialGatePolicyFile(policy) !== intent.policyFileHash) {
+    return { ok: false, reason: "registered intent hash does not match intent policy body" };
+  }
   const recordedObj = asRecord(recorded);
-  const recordedHash = readHash(recordedObj.policyHash) ?? readHash(recordedObj.policy_hash);
   const projection = asRecord(officialProjection);
+  const recordedHash = readHash(recordedObj.policyHash) ?? readHash(recordedObj.policy_hash);
   const projectionHash = readHash(projection.policy_hash) ?? readHash(projection.policyHash);
-  if (!recordedHash && !projectionHash) {
-    return { ok: false, reason: "no official freeze record to recover" };
-  }
-  if (recordedHash && projectionHash && recordedHash !== projectionHash) {
-    return { ok: false, reason: "recorded freeze does not match official journal projection" };
-  }
-  const policyHash = recordedHash ?? projectionHash;
-  if (!policyHash) return { ok: false, reason: "official policy hash unknown" };
   const briefHash =
     readHash(recordedObj.briefHash) ??
     readHash(recordedObj.brief_hash) ??
-    readHash(projection.brief_hash);
+    readHash(projection.brief_hash) ??
+    readHash(projection.briefHash);
   if (!briefHash) return { ok: false, reason: "official freeze missing brief_hash" };
+  const reconstructed = hashOfficialFrozenPolicy(policy, briefHash);
   const recordedFileHash =
     typeof recordedObj.policyFileHash === "string" ? recordedObj.policyFileHash : null;
-  if (recordedFileHash && recordedFileHash !== intent.policyFileHash) {
-    return { ok: false, reason: "recovered freeze does not match registered policy intent" };
+  const recordedTaskId = typeof recordedObj.taskId === "string" ? recordedObj.taskId : null;
+  const completeRecord =
+    Boolean(recordedHash) &&
+    Boolean(recordedFileHash) &&
+    Array.isArray(recordedObj.requiredGates) &&
+    isIndependence(recordedObj.independence);
+
+  if (completeRecord && recordedHash && recordedFileHash) {
+    if (recordedFileHash !== intent.policyFileHash) {
+      return { ok: false, reason: "recovered freeze does not match registered policy intent" };
+    }
+    if (recordedTaskId && recordedTaskId !== intent.taskId) {
+      return { ok: false, reason: "recovered freeze task does not match registered intent" };
+    }
+    if (!gatesMatch(recordedObj.requiredGates, intent.required_gates)) {
+      return { ok: false, reason: "recovered freeze gates do not match registered intent" };
+    }
+    if (
+      !isIndependence(recordedObj.independence) ||
+      !independenceMatch(recordedObj.independence, intent.independence)
+    ) {
+      return {
+        ok: false,
+        reason: "recovered freeze independence does not match registered intent",
+      };
+    }
+    if (projectionHash && projectionHash !== recordedHash) {
+      return { ok: false, reason: "recorded freeze does not match official journal projection" };
+    }
+    if (
+      Array.isArray(projection.required_gates) &&
+      !gatesMatch(projection.required_gates, intent.required_gates)
+    ) {
+      return {
+        ok: false,
+        reason: "official projection was tampered relative to registered intent",
+      };
+    }
+    return {
+      ok: true,
+      freeze: {
+        policyHash: recordedHash,
+        briefHash,
+        taskId: intent.taskId,
+        taskDir: intent.taskDir,
+        requiredGates: intent.required_gates,
+        independence: intent.independence,
+        source: SQUAD_GATE_POLICY_FREEZE_SOURCE,
+        createdAt:
+          typeof recordedObj.createdAt === "string"
+            ? recordedObj.createdAt
+            : new Date().toISOString(),
+        alreadyFrozen: true,
+        policyFileHash: intent.policyFileHash,
+      },
+    };
+  }
+
+  if (!projectionHash) {
+    return { ok: false, reason: "no official freeze record to recover" };
+  }
+  if (!gatesMatch(projection.required_gates, intent.required_gates)) {
+    return { ok: false, reason: "official projection does not match registered policy intent" };
+  }
+  if (
+    !isIndependence(projection.independence) ||
+    !independenceMatch(projection.independence, intent.independence)
+  ) {
+    return {
+      ok: false,
+      reason: "official projection independence does not match registered intent",
+    };
+  }
+  if (projectionHash !== reconstructed) {
+    return {
+      ok: false,
+      reason: "official projection hash does not match registered intent canonical freeze",
+    };
   }
   return {
     ok: true,
     freeze: {
-      policyHash,
+      policyHash: projectionHash,
       briefHash,
       taskId: intent.taskId,
       taskDir: intent.taskDir,
-      requiredGates: Array.isArray(recordedObj.requiredGates)
-        ? (recordedObj.requiredGates as OfficialRequiredGate[])
-        : Array.isArray(projection.required_gates)
-          ? (projection.required_gates as OfficialRequiredGate[])
-          : [],
-      independence: isIndependence(recordedObj.independence)
-        ? recordedObj.independence
-        : isIndependence(projection.independence)
-          ? projection.independence
-          : SUPERVISED_REVIEW_VERIFY_POLICY.independence,
+      requiredGates: intent.required_gates,
+      independence: intent.independence,
       source: SQUAD_GATE_POLICY_FREEZE_SOURCE,
-      createdAt:
-        typeof recordedObj.createdAt === "string"
-          ? recordedObj.createdAt
-          : new Date().toISOString(),
+      createdAt: new Date().toISOString(),
       alreadyFrozen: true,
       policyFileHash: intent.policyFileHash,
     },
   };
+}
+
+function gatesMatch(left: unknown, right: OfficialRequiredGate[]): boolean {
+  return Array.isArray(left) && canonicalJson(left) === canonicalJson(right);
+}
+
+function independenceMatch(left: OfficialIndependence, right: OfficialIndependence): boolean {
+  return canonicalJson(left) === canonicalJson(right);
 }
 
 function readHash(value: unknown): string | null {

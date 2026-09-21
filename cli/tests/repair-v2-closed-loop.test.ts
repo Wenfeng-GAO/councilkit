@@ -365,7 +365,13 @@ describe("v2 closed loop with a temp repo", () => {
       }),
     );
     expect(out.finished).toMatchObject({ businessResult: "approved" });
-    const log = readFileSync(join(home, "runs", REPAIR_ID, "verification", "A-F-1-v1.log"), "utf8");
+    const logs = readdirSync(join(home, "runs", REPAIR_ID, "verification")).filter((name) =>
+      name.startsWith("A-F-1-v1."),
+    );
+    expect(logs.length).toBeGreaterThan(0);
+    const log = logs
+      .map((name) => readFileSync(join(home, "runs", REPAIR_ID, "verification", name), "utf8"))
+      .join("\n");
     expect(log).toContain(`sha=${secondSha}`);
   });
 

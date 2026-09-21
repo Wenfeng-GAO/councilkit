@@ -30,7 +30,12 @@ export interface WorkbenchRepairProps {
   onStart: (profile: string) => void;
   onStop: () => void;
   onResume: () => void;
-  onSaveProfile: (input: { name: string; sourceBranch: string; base: string }) => void;
+  onSaveProfile: (input: {
+    name: string;
+    sourceBranch: string;
+    base: string;
+    isolationMode: "collaborative";
+  }) => void;
 }
 
 /**

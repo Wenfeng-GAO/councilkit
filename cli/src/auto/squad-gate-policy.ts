@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   type OfficialGatePolicyFile,
   type OfficialGatePolicyFreeze,
+  type RegisteredPolicyIntent,
   SUPERVISED_REVIEW_VERIFY_POLICY,
   hasSupervisedReviewerAndVerifier,
   hashOfficialGatePolicyFile,
@@ -29,6 +30,7 @@ export function defaultSupervisedPolicy(): OfficialGatePolicyFile {
 export function writePolicyIntent(
   taskDir: string,
   policy: OfficialGatePolicyFile,
+  extra?: { taskId?: string },
 ): { policyFile: string; policyFileHash: string } {
   if (!hasSupervisedReviewerAndVerifier(policy)) {
     throw errors.usage("gate policy must include supervised reviewer and verifier");
@@ -39,11 +41,50 @@ export function writePolicyIntent(
   writeFileSync(policyFile, body, { encoding: "utf8", mode: 0o600 });
   const policyFileHash = hashOfficialGatePolicyFile(policy);
   atomicWriteJson(join(taskDir, CK_POLICY_INTENT_FILE), {
+    taskId: extra?.taskId ?? null,
     policyFileHash,
     required_gates: policy.required_gates,
     independence: policy.independence,
+    ...(policy.delivery_authority ? { delivery_authority: policy.delivery_authority } : {}),
   });
   return { policyFile, policyFileHash };
+}
+
+export function readRegisteredIntent(
+  taskDir: string,
+  taskId: string,
+): RegisteredPolicyIntent | null {
+  const parsed = readJson(join(taskDir, CK_POLICY_INTENT_FILE));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const row = parsed as Record<string, unknown>;
+  const policyFileHash = typeof row.policyFileHash === "string" ? row.policyFileHash : "";
+  if (!/^[a-f0-9]{64}$/.test(policyFileHash)) return null;
+  if (!Array.isArray(row.required_gates)) return null;
+  if (
+    row.independence === null ||
+    typeof row.independence !== "object" ||
+    Array.isArray(row.independence)
+  ) {
+    return null;
+  }
+  const recordedTaskId =
+    typeof row.taskId === "string" && row.taskId.length > 0 ? row.taskId : null;
+  if (recordedTaskId && recordedTaskId !== taskId) return null;
+  const independence = row.independence as RegisteredPolicyIntent["independence"];
+  const delivery =
+    row.delivery_authority !== null &&
+    typeof row.delivery_authority === "object" &&
+    Array.isArray(row.delivery_authority) === false
+      ? (row.delivery_authority as RegisteredPolicyIntent["delivery_authority"])
+      : undefined;
+  return {
+    policyFileHash,
+    taskId,
+    taskDir,
+    required_gates: row.required_gates as RegisteredPolicyIntent["required_gates"],
+    independence,
+    ...(delivery ? { delivery_authority: delivery } : {}),
+  };
 }
 
 export function freezeOfficialGatePolicyWithSquadctl(input: {
@@ -56,9 +97,22 @@ export function freezeOfficialGatePolicyWithSquadctl(input: {
 }): { ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string } {
   const recovered = recoverWrittenFreeze(input.taskDir, input.taskId, input.policy);
   if (recovered.ok) return recovered;
+  const existingIntent = readRegisteredIntent(input.taskDir, input.taskId);
+  if (existingIntent) {
+    const callerHash = hashOfficialGatePolicyFile(input.policy);
+    if (existingIntent.policyFileHash !== callerHash) {
+      return {
+        ok: false,
+        reason: "registered intent does not match caller policy; will not rewrite intent",
+      };
+    }
+  }
+  if (readPersistedFreeze(input.taskDir) && !recovered.ok) return recovered;
   const planning = ensurePlanningFrozen(input);
   if (!planning.ok) return planning;
-  const { policyFile, policyFileHash } = writePolicyIntent(input.taskDir, input.policy);
+  const { policyFile, policyFileHash } = writePolicyIntent(input.taskDir, input.policy, {
+    taskId: input.taskId,
+  });
   const frozen = runSquadctl(input.exec, [
     "gate",
     "policy-freeze",
@@ -80,6 +134,7 @@ export function freezeOfficialGatePolicyWithSquadctl(input: {
     taskId: input.taskId,
     taskDir: input.taskDir,
     policyFileHash,
+    policy: input.policy,
   });
   if (!parsed.ok) return parsed;
   persistFreezeRecord(input.taskDir, parsed.freeze);
@@ -89,16 +144,18 @@ export function freezeOfficialGatePolicyWithSquadctl(input: {
 export function recoverWrittenFreeze(
   taskDir: string,
   taskId: string,
-  policy: OfficialGatePolicyFile,
+  policy?: OfficialGatePolicyFile,
 ): { ok: true; freeze: OfficialGatePolicyFreeze } | { ok: false; reason: string } {
-  const intentHash = hashOfficialGatePolicyFile(policy);
+  const intent = readRegisteredIntent(taskDir, taskId);
+  if (!intent) {
+    return { ok: false, reason: "no registered policy intent" };
+  }
+  if (policy && hashOfficialGatePolicyFile(policy) !== intent.policyFileHash) {
+    return { ok: false, reason: "caller policy is not the registered intent" };
+  }
   const recorded = readJson(join(taskDir, CK_POLICY_FREEZE_FILE));
   const projection = readJson(join(taskDir, "gate-policy.json"));
-  return recoverOfficialPolicyFreeze(recorded, projection, {
-    policyFileHash: intentHash,
-    taskId,
-    taskDir,
-  });
+  return recoverOfficialPolicyFreeze(recorded, projection, intent);
 }
 
 function ensurePlanningFrozen(input: {

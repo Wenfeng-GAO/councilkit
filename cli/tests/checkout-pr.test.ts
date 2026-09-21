@@ -150,12 +150,10 @@ describe("checkoutPullRequest command sequence", () => {
         };
       }
       if (input.executable === "git" && input.argv[0] === "ls-remote") {
-        expect(input.argv).toEqual([
-          "ls-remote",
-          "git@code.alipay.com:acme/repo.git",
-          "refs/heads/feat/live",
-        ]);
-        return { stdout: `${remoteSha}\trefs/heads/feat/live\n`, stderr: "", exitCode: 0 };
+        if (input.argv[2] === "refs/heads/feat/live") {
+          return { stdout: `${remoteSha}\trefs/heads/feat/live\n`, stderr: "", exitCode: 0 };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     };
@@ -167,6 +165,95 @@ describe("checkoutPullRequest command sequence", () => {
     expect(result.headSha).toBe(remoteSha);
     expect(result.prOpen).toBe(true);
     expect(calls.some((row) => row[0] === "git" && row[1] === "ls-remote")).toBe(true);
+  });
+
+  it("AntCode inspect backfills baseSha from the target repo and branch when metadata omits it", async () => {
+    const headSha = "90fcab7b3a225132e7f5262942cb1e57b8769e07";
+    const baseSha = "1111111111111111111111111111111111111111";
+    const calls: string[][] = [];
+    const runCommand: RunCommand = async (input) => {
+      calls.push([input.executable, ...input.argv]);
+      if (input.executable === "antcode") {
+        return {
+          stdout: JSON.stringify({
+            source_branch: "squad/20260920-session-recovery-k8n4",
+            target_branch: "master",
+            state: "opened",
+            source: { ssh_url: "git@code.alipay.com:fork/repo.git" },
+            target: { ssh_url: "git@code.alipay.com:acme/repo.git" },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (input.executable === "git" && input.argv[0] === "ls-remote") {
+        if (input.argv[1] === "git@code.alipay.com:fork/repo.git") {
+          return {
+            stdout: `${headSha}\trefs/heads/squad/20260920-session-recovery-k8n4\n`,
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        expect(input.argv).toEqual([
+          "ls-remote",
+          "git@code.alipay.com:acme/repo.git",
+          "refs/heads/master",
+        ]);
+        return { stdout: `${baseSha}\trefs/heads/master\n`, stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const result = await inspectPullRequest(
+      "https://code.alipay.com/acme/repo/pull_requests/128",
+      runCommand,
+      { PATH: process.env.PATH },
+    );
+    expect(result.headSha).toBe(headSha);
+    expect(result.baseSha).toBe(baseSha);
+    expect(result.baseBranch).toBe("master");
+    expect(
+      calls.some(
+        (row) =>
+          row[0] === "git" &&
+          row[1] === "ls-remote" &&
+          row[2] === "git@code.alipay.com:fork/repo.git" &&
+          row[3]?.includes("squad/"),
+      ),
+    ).toBe(true);
+  });
+
+  it("AntCode inspect leaves baseSha unknown when the target branch SHA cannot be resolved", async () => {
+    const runCommand: RunCommand = async (input) => {
+      if (input.executable === "antcode") {
+        return {
+          stdout: JSON.stringify({
+            source_branch: "feat/live",
+            target_branch: "master",
+            source: { ssh_url: "git@code.alipay.com:acme/repo.git" },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (input.executable === "git" && input.argv[0] === "ls-remote") {
+        if (input.argv[2] === "refs/heads/feat/live") {
+          return {
+            stdout: "e75ee6755ea846f2772aca2d13d6ec1ac9b87bed\trefs/heads/feat/live\n",
+            stderr: "",
+            exitCode: 0,
+          };
+        }
+        return { stdout: "not-a-sha\trefs/heads/master\n", stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const result = await inspectPullRequest(
+      "https://code.alipay.com/acme/repo/pull_requests/1",
+      runCommand,
+      { PATH: process.env.PATH },
+    );
+    expect(result.headSha).toBe("e75ee6755ea846f2772aca2d13d6ec1ac9b87bed");
+    expect(result.baseSha).toBeUndefined();
   });
 
   it("AntCode inspect does not invent headSha when ls-remote has no full SHA", async () => {

@@ -283,6 +283,45 @@ describe("repair mutation handlers", () => {
     expect(listed.hintSource).toBe("review");
   });
 
+  it("persists explicit collaborative isolation and refuses strong", async () => {
+    const { routes } = routesWithLauncher();
+    const post = routes.find(
+      (route) => route.method === "POST" && route.pattern === "/api/v1/cli-runs/repair/profiles",
+    );
+    if (post === undefined) throw new Error("missing profile route");
+    let denied: unknown;
+    try {
+      post.handler(
+        ctx({
+          name: "default",
+          prUrl: GH_PR,
+          repo: "github.com/acme/repo",
+          sourceBranch: "feat-x",
+          base: "main",
+          capabilities: ["push-source-branch"],
+          isolationMode: "strong",
+        }),
+      );
+    } catch (error) {
+      denied = error;
+    }
+    expect(denied).toMatchObject({ status: 400 });
+    const saved = (await post.handler(
+      ctx({
+        name: "default",
+        prUrl: GH_PR,
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        base: "main",
+        capabilities: ["push-source-branch"],
+        protocolVersion: "v2",
+        isolationMode: "collaborative",
+      }),
+    )) as { name: string };
+    expect(loadRepairProfile("default").isolationMode).toBe("collaborative");
+    expect(saved.name).toBe("default");
+  });
+
   it("inspects the live PR when frozen review context is missing", async () => {
     writeFileSync(
       join(home, "runs", RUN_ID, "transcript.jsonl"),

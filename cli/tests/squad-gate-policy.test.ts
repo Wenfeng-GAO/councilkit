@@ -7,11 +7,18 @@ import { SQUAD_REQUIRED_GATES_V1, hashRepairGatePolicy } from "@shared/runtime/r
 import {
   SUPERVISED_REVIEW_VERIFY_FORMAT_POLICY,
   SUPERVISED_REVIEW_VERIFY_POLICY,
+  hashOfficialFrozenPolicy,
   hashOfficialGatePolicyFile,
   parseOfficialPolicyFreezeStdout,
   recoverOfficialPolicyFreeze,
 } from "@shared/runtime/squad-gate-policy";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  defaultSupervisedPolicy,
+  persistFreezeRecord,
+  recoverWrittenFreeze,
+  writePolicyIntent,
+} from "../src/auto/squad-gate-policy";
 import { HAS_LIVE_SQUADCTL, LIVE_SQUADCTL } from "./helpers/live-squadctl";
 
 let homes: string[] = [];
@@ -125,6 +132,7 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("official squadctl gate policy-freeze", () =
         taskId,
         taskDir,
         policyFileHash: hashOfficialGatePolicyFile(policy),
+        policy,
       });
       expect(parsed.ok).toBe(true);
       if (!parsed.ok) throw new Error(parsed.reason);
@@ -146,7 +154,7 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("official squadctl gate policy-freeze", () =
 describe("official freeze recovery", () => {
   it("recovers a persisted freeze and refuses a missing record", () => {
     const recorded = {
-      policyHash: "a".repeat(64),
+      policyHash: hashOfficialFrozenPolicy(SUPERVISED_REVIEW_VERIFY_POLICY, "b".repeat(64)),
       briefHash: "b".repeat(64),
       taskId: "20260921-freeze-aa01",
       taskDir: "/tmp/task",
@@ -159,11 +167,13 @@ describe("official freeze recovery", () => {
     };
     const recovered = recoverOfficialPolicyFreeze(
       recorded,
-      { policy_hash: "a".repeat(64), brief_hash: "b".repeat(64) },
+      { policy_hash: recorded.policyHash, brief_hash: "b".repeat(64) },
       {
         policyFileHash: recorded.policyFileHash,
         taskId: recorded.taskId,
         taskDir: recorded.taskDir,
+        required_gates: SUPERVISED_REVIEW_VERIFY_POLICY.required_gates,
+        independence: SUPERVISED_REVIEW_VERIFY_POLICY.independence,
       },
     );
     expect(recovered.ok).toBe(true);
@@ -172,6 +182,8 @@ describe("official freeze recovery", () => {
       policyFileHash: recorded.policyFileHash,
       taskId: recorded.taskId,
       taskDir: recorded.taskDir,
+      required_gates: SUPERVISED_REVIEW_VERIFY_POLICY.required_gates,
+      independence: SUPERVISED_REVIEW_VERIFY_POLICY.independence,
     });
     expect(missing.ok).toBe(false);
   });
@@ -189,5 +201,82 @@ describe("catalog hashes are not official freeze hashes", () => {
         .update(JSON.stringify({ schema_version: 1, brief_hash: "a".repeat(64) }))
         .digest("hex"),
     ).not.toBe(catalog);
+  });
+});
+
+describe("production freeze recovery IO", () => {
+  it("refuses a weak journal when no registered intent exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-recover-io-"));
+    homes.push(root);
+    writeFileSync(
+      join(root, "gate-policy.json"),
+      JSON.stringify({
+        policy_hash: "a".repeat(64),
+        brief_hash: "b".repeat(64),
+        required_gates: [],
+        independence: {
+          distinct_runs: false,
+          distinct_sessions: false,
+          distinct_worktrees: false,
+        },
+      }),
+    );
+    const recovered = recoverWrittenFreeze(root, "task-A", defaultSupervisedPolicy());
+    expect(recovered.ok).toBe(false);
+  });
+
+  it("recovers a complete freeze after the parent receipt is gone", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-recover-ok-"));
+    homes.push(root);
+    const policy = defaultSupervisedPolicy();
+    const { policyFileHash } = writePolicyIntent(root, policy, { taskId: "task-A" });
+    const briefHash = "b".repeat(64);
+    persistFreezeRecord(root, {
+      policyHash: hashOfficialFrozenPolicy(policy, briefHash),
+      briefHash,
+      taskId: "task-A",
+      taskDir: root,
+      requiredGates: policy.required_gates,
+      independence: policy.independence,
+      source: "squadctl-gate-policy-freeze",
+      createdAt: "2026-09-21T00:00:00.000Z",
+      alreadyFrozen: false,
+      policyFileHash,
+    });
+    const recovered = recoverWrittenFreeze(root, "task-A", policy);
+    expect(recovered.ok).toBe(true);
+  });
+
+  it("refuses a rewritten caller policy and a tampered projection", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-recover-tamper-"));
+    homes.push(root);
+    const policy = defaultSupervisedPolicy();
+    const { policyFileHash } = writePolicyIntent(root, policy, { taskId: "task-A" });
+    const briefHash = "b".repeat(64);
+    persistFreezeRecord(root, {
+      policyHash: hashOfficialFrozenPolicy(policy, briefHash),
+      briefHash,
+      taskId: "task-A",
+      taskDir: root,
+      requiredGates: policy.required_gates,
+      independence: policy.independence,
+      source: "squadctl-gate-policy-freeze",
+      createdAt: "2026-09-21T00:00:00.000Z",
+      alreadyFrozen: false,
+      policyFileHash,
+    });
+    expect(recoverWrittenFreeze(root, "task-A", SUPERVISED_REVIEW_VERIFY_FORMAT_POLICY).ok).toBe(
+      false,
+    );
+    writeFileSync(
+      join(root, "gate-policy.json"),
+      JSON.stringify({
+        policy_hash: "c".repeat(64),
+        brief_hash: briefHash,
+        required_gates: SUPERVISED_REVIEW_VERIFY_FORMAT_POLICY.required_gates,
+        independence: policy.independence,
+      }),
+    );
+    expect(recoverWrittenFreeze(root, "task-A", policy).ok).toBe(false);
   });
 });

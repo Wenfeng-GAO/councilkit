@@ -11,7 +11,9 @@ import {
   extraProbeManifestVersion,
   hashTestAssetContents,
   inspectCandidateSnapshot,
+  receiptFromIsolatedLog,
   verificationCacheKey,
+  writeCommandLog,
 } from "../src/auto/repair-candidate-verify";
 
 let homes: string[] = [];
@@ -115,5 +117,58 @@ describe("candidate snapshot and verification cache", () => {
     if (!snapshot.ok) throw new Error(snapshot.reason);
     expect(snapshot.cwd).not.toBe(root);
     expect(git(root, ["rev-parse", "HEAD"])).toBe(sourceSha);
+  });
+
+  it("does not relabel an old command log as a new cache key or asset version", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-cache-"));
+    homes.push(root);
+    const sha = "c".repeat(40);
+    const oldKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "old-version",
+    });
+    const newKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "new-version",
+    });
+    const logPath = join(root, "verify.log");
+    writeCommandLog(logPath, {
+      exitCode: 0,
+      stdout: "1 tests passed\n",
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey: oldKey,
+      command: "go test ./ready",
+    });
+    const receipt = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "different command",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "new-version",
+      logPath,
+      cacheKey: newKey,
+    });
+    expect(receipt).toBeNull();
+  });
+
+  it("measures dirtyTree after a command mutates tracked source", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-mut-"));
+    homes.push(root);
+    git(root, ["init", "-b", "main"]);
+    git(root, ["config", "user.email", "cand@example.com"]);
+    git(root, ["config", "user.name", "cand"]);
+    writeFileSync(join(root, "ok.txt"), "a\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "a"]);
+    const sha = git(root, ["rev-parse", "HEAD"]);
+    writeFileSync(join(root, "ok.txt"), "mutated\n");
+    const after = await inspectCandidateSnapshot({ cwd: root, expectedSha: sha });
+    expect(after).toMatchObject({ ok: true, dirtyTree: true, head: sha.toLowerCase() });
   });
 });

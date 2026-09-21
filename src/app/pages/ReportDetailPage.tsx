@@ -167,7 +167,12 @@ export function ReportDetailPage() {
     mutationFn: async (input: {
       kind: "start" | "stop" | "resume" | "save";
       profile?: string;
-      launch?: { name: string; sourceBranch: string; base: string };
+      launch?: {
+        name: string;
+        sourceBranch: string;
+        base: string;
+        isolationMode: "collaborative";
+      };
     }) => {
       if (input.kind === "save") {
         const prUrl = query.data?.reviewEvidence?.prUrl ?? "";
@@ -184,6 +189,8 @@ export function ReportDetailPage() {
           sourceBranch: launch.sourceBranch,
           base: launch.base,
           capabilities: ["push-source-branch"],
+          protocolVersion: "v2",
+          isolationMode: launch.isolationMode,
         });
         return client.startCliRepair({ from: runId, profile: saved.name });
       }
