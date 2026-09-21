@@ -199,6 +199,7 @@ export async function runReview(
         "run-id": { type: "string" },
         repo: { type: "string" },
         against: { type: "string" },
+        "pin-sha": { type: "string" },
       },
       allowPositionals: 1,
     },
@@ -404,6 +405,17 @@ export async function runReview(
   );
   const runCommand = deps.runCommand ?? defaultRunCommand;
   const env = process.env;
+  const pinShaRaw = values["pin-sha"] as string | undefined;
+  const pinSha = pinShaRaw !== undefined ? pinShaRaw.trim().toLowerCase() : "";
+  if (pinShaRaw !== undefined) {
+    if (!FULL_COMMIT_SHA.test(pinSha)) {
+      throw errors.usage("--pin-sha must be a full 40-character commit SHA");
+    }
+    if (values.repo === undefined) {
+      throw errors.usage("--pin-sha requires --repo pointing at the candidate checkout");
+    }
+  }
+  const pinnedRef = pinSha || deps.worktreeRef;
   let localRepo: LocalRepo | null = null;
   if (task.pr) {
     if (frozenManifest?.repoRealpath && existsSync(frozenManifest.repoRealpath)) {
@@ -1003,7 +1015,7 @@ export async function runReview(
           let host: "github" | "antcode" = "github";
           let expectedHeadSha: string | undefined;
           let expectedTargetSha: string | undefined;
-          if (deps.worktreeRef === undefined) {
+          if (pinnedRef === undefined) {
             const meta = await inspectPullRequest(task.pr, runCommand, env);
             branch = meta.branch;
             targetRef = meta.baseBranch;
@@ -1012,19 +1024,23 @@ export async function runReview(
             host = meta.host;
             out.progress(`  worktree branch: ${branch}`);
           } else {
-            // Test hook: the checkout is already pinned. Freeze against the local
-            // parent without touching origin — production never sets worktreeRef.
+            // Pinned candidate: freeze against the local parent without touching origin.
             targetRef = "HEAD~1";
           }
           const sha = await resolveLocalPrSha({
             repo: localRepo.path,
             branch,
-            pinnedRef: deps.worktreeRef ?? frozenManifest?.reviewedSha ?? undefined,
+            pinnedRef: pinnedRef ?? frozenManifest?.reviewedSha ?? undefined,
             expectedSha: expectedHeadSha,
             runCommand,
             env,
           });
           reviewedSha = sha;
+          if (pinSha && sha.toLowerCase() !== pinSha) {
+            throw errors.runFailed(
+              `pinned SHA ${pinSha} is not the worktree HEAD ${sha.toLowerCase()}`,
+            );
+          }
           if (
             againstFindings?.sha &&
             FULL_COMMIT_SHA.test(againstFindings.sha) &&
@@ -1049,7 +1065,7 @@ export async function runReview(
               targetRef,
               host,
               expectedTargetSha,
-              skipRemoteFetch: deps.worktreeRef !== undefined,
+              skipRemoteFetch: pinnedRef !== undefined,
               runCommand,
               env,
             });

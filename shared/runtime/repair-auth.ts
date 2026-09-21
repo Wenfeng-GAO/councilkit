@@ -20,6 +20,19 @@ export const repairProfileRecordSchema = z
     expiresAt: z.string().min(1).max(40).nullable(),
     revokedAt: z.string().min(1).max(40).nullable(),
     createdAt: z.string().min(1).max(40),
+    protocolVersion: z.enum(["v1", "v2"]).optional(),
+    isolationMode: z.enum(["strong", "collaborative"]).optional(),
+    sourceFixMax: z.number().int().positive().max(10).optional(),
+    deadlineMs: z.number().int().positive().optional(),
+    diagnoseMs: z.number().int().positive().optional(),
+    expectedGatePolicyHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    protocolHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .strict();
 export type RepairProfileRecord = z.infer<typeof repairProfileRecordSchema>;
@@ -59,6 +72,26 @@ export function profileIntegrityHash(input: {
   );
 }
 
+export function protocolIntegrityHash(input: {
+  protocolVersion?: "v1" | "v2";
+  isolationMode?: "strong" | "collaborative";
+  sourceFixMax?: number;
+  deadlineMs?: number;
+  diagnoseMs?: number;
+  expectedGatePolicyHash?: string;
+}): string {
+  return sha(
+    JSON.stringify({
+      protocolVersion: input.protocolVersion ?? "v2",
+      isolationMode: input.isolationMode,
+      sourceFixMax: input.sourceFixMax ?? null,
+      deadlineMs: input.deadlineMs ?? null,
+      diagnoseMs: input.diagnoseMs ?? null,
+      expectedGatePolicyHash: input.expectedGatePolicyHash ?? null,
+    }),
+  );
+}
+
 export function grantIntegrityHash(
   grant: Omit<RepairGrantRecord, "grantHash"> & { grantHash: string },
 ): string {
@@ -80,6 +113,12 @@ export function parseRepairProfileRecord(text: string): RepairProfileRecord | nu
   if (!parsed.success) return null;
   if (!isRepairProfileName(parsed.data.name)) return null;
   if (parsed.data.integrityHash !== profileIntegrityHash(parsed.data)) return null;
+  if (parsed.data.protocolVersion === "v2") {
+    if (parsed.data.isolationMode !== "strong" && parsed.data.isolationMode !== "collaborative") {
+      return null;
+    }
+    if (parsed.data.protocolHash !== protocolIntegrityHash(parsed.data)) return null;
+  }
   return parsed.data;
 }
 

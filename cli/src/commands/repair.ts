@@ -5,6 +5,7 @@ import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
 import { loadFindingGroups } from "../auto/finding-groups";
+import { runDeadlineSupervisorLoop } from "../auto/repair-deadline-supervisor";
 import {
   DEFAULT_REPAIR_OUTER_MAX,
   type RepairState,
@@ -40,7 +41,7 @@ export interface RepairCommandDeps extends RepairLoopDeps {
   isPidAlive?: (pid: number) => boolean;
 }
 
-const SUBCOMMANDS = "export|run|status|stop|resume|probe";
+const SUBCOMMANDS = "export|run|status|stop|resume|probe|supervise-deadline";
 
 /** `repair export` plus parent-run bootstrap. Unit 4 does not run the outer loop. */
 export async function runRepair(
@@ -55,6 +56,7 @@ export async function runRepair(
   if (sub === "stop") return runRepairStop(argv.slice(1), out, deps);
   if (sub === "resume") return runRepairResume(argv.slice(1), out, deps);
   if (sub === "probe") return runRepairProbe(argv.slice(1), out);
+  if (sub === "supervise-deadline") return runRepairSuperviseDeadline(argv.slice(1), out);
   throw errors.usage(
     sub === undefined
       ? `repair requires a subcommand: ${SUBCOMMANDS}`
@@ -162,6 +164,8 @@ async function runRepairRun(
         "run-id": { type: "string" },
         "max-outer-cycles": { type: "string" },
         timeout: { type: "string" },
+        protocol: { type: "string" },
+        isolation: { type: "string" },
         json: { type: "boolean" },
       },
       allowPositionals: 0,
@@ -188,14 +192,34 @@ async function runRepairRun(
   }
   const timeoutMs =
     values.timeout === undefined ? null : parseTimeoutMs(values.timeout as string, 1, "timeout");
+  const protocolRaw = typeof values.protocol === "string" ? values.protocol.trim() : "";
+  const protocolVersion =
+    protocolRaw === "v2" || protocolRaw === "v1" ? protocolRaw : profile.protocolVersion;
+  if (protocolRaw && protocolRaw !== "v1" && protocolRaw !== "v2") {
+    throw errors.usage("--protocol must be v1 or v2");
+  }
+  const isolationRaw = typeof values.isolation === "string" ? values.isolation.trim() : "";
+  const isolationMode =
+    isolationRaw === "strong" || isolationRaw === "collaborative"
+      ? isolationRaw
+      : (profile.isolationMode ?? null);
+  if (isolationRaw && isolationRaw !== "strong" && isolationRaw !== "collaborative") {
+    throw errors.usage("--isolation must be strong or collaborative");
+  }
+  if (protocolVersion === "v2" && isolationMode !== "strong" && isolationMode !== "collaborative") {
+    throw errors.usage("v2 repair requires --isolation strong|collaborative (explicit opt-in)");
+  }
   const runId = assigned ?? `ck-repair-${randomUUID()}`;
   const bootstrapped = bootstrapRepairRun({
     runId,
     sourceRunId: fromId,
     profileName: profile.name,
-    outerMax,
-    timeoutMs,
+    outerMax: protocolVersion === "v2" ? (profile.sourceFixMax ?? outerMax) : outerMax,
+    timeoutMs: protocolVersion === "v2" ? (profile.deadlineMs ?? timeoutMs) : timeoutMs,
     pid: deps.pid ?? process.pid,
+    protocolVersion,
+    isolationMode,
+    frozenPolicyHash: profile.expectedGatePolicyHash ?? undefined,
   });
   if (deps.loop === false) {
     const parked = await parkUntilStopped(deps);
@@ -239,6 +263,13 @@ async function runRepairStatus(argv: string[], out: OutputSink): Promise<void> {
       progress: run.progress,
       sourceRunId: state?.sourceRunId ?? null,
       businessResult: state?.businessResult ?? null,
+      protocolVersion: state?.protocolVersion ?? "v1",
+      isolationMode: state?.isolationMode ?? null,
+      goalSummary: state?.goalSummary ?? null,
+      acceptanceCoverage: state?.acceptanceCoverage ?? null,
+      remainingBudget: state?.remainingBudget ?? null,
+      recoveryAction: state?.recoveryAction ?? null,
+      interrupted: run.status === "interrupted",
     },
     () => `${runId} ${run.status}${run.pipeline ? "" : " pipeline=null"}`,
   );
@@ -262,6 +293,23 @@ async function runRepairProbe(argv: string[], out: OutputSink): Promise<void> {
       : `Squad 桥不可用：${probe.reason ?? ""}`,
   );
   if (!probe.available) throw new RepairExit(EXIT.usage);
+}
+
+async function runRepairSuperviseDeadline(argv: string[], out: OutputSink): Promise<void> {
+  const { values } = parseFlags(
+    {
+      flags: {
+        execution: { type: "string" },
+        json: { type: "boolean" },
+      },
+      allowPositionals: 0,
+    },
+    argv,
+  );
+  const executionPath = typeof values.execution === "string" ? values.execution.trim() : "";
+  if (!executionPath) throw errors.usage("--execution is required");
+  const execution = await runDeadlineSupervisorLoop({ executionPath });
+  await out.finish(execution, () => `${execution.executionId} ${execution.state}`);
 }
 
 async function runRepairStop(

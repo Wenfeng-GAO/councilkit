@@ -8,6 +8,8 @@ import {
   type CliRunProgressPhase,
 } from "@shared/runtime/cli-run-progress";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
+import { repairBudgetSchema } from "@shared/runtime/repair-chain";
+import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteFile, atomicWriteJson, readFileText } from "../store/atomic-write";
@@ -67,6 +69,37 @@ const repairStateSchema = z
     packageSourceRunId: z.string().min(1).max(80).nullable().optional(),
     frozenBaseSha: z.string().min(1).max(64).nullable().optional(),
     supplementReviewId: z.string().min(1).max(80).nullable().optional(),
+    protocolVersion: z.enum(["v1", "v2"]).optional(),
+    chainId: z.string().min(1).max(80).nullable().optional(),
+    frozenPolicyHash: z.string().min(1).max(128).nullable().optional(),
+    isolationMode: z.enum(["strong", "collaborative"]).nullable().optional(),
+    deadlineAtMs: z.number().int().nonnegative().nullable().optional(),
+    writeCutoffAtMs: z.number().int().nonnegative().nullable().optional(),
+    goalFingerprint: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable()
+      .optional(),
+    adoptedExistingRemote: z.boolean().optional(),
+    contractVersion: z.number().int().positive().nullable().optional(),
+    budget: repairBudgetSchema.optional(),
+    executions: z.array(repairExecutionSchema).max(64).optional(),
+    rootCauseFailures: z
+      .array(
+        z
+          .object({
+            rootCauseId: z.string().min(1).max(400),
+            validSourceFixFailures: z.number().int().nonnegative(),
+            lastEvidence: z.string().min(1).max(4000),
+          })
+          .strict(),
+      )
+      .max(200)
+      .optional(),
+    acceptanceCoverage: z.string().min(1).max(200).nullable().optional(),
+    remainingBudget: z.string().min(1).max(200).nullable().optional(),
+    recoveryAction: z.string().min(1).max(400).nullable().optional(),
+    goalSummary: z.string().min(1).max(400).nullable().optional(),
   })
   .strict();
 export type RepairState = z.infer<typeof repairStateSchema>;
@@ -87,6 +120,9 @@ export function bootstrapRepairRun(input: {
   outerMax: number;
   timeoutMs: number | null;
   pid: number;
+  protocolVersion?: "v1" | "v2";
+  isolationMode?: "strong" | "collaborative" | null;
+  frozenPolicyHash?: string | null;
 }): { runDir: string; reused: boolean; state: RepairState } {
   if (!isRepairRunId(input.runId)) {
     throw errors.usage(`--run-id must be a ck-repair-<uuid> run id, got "${input.runId}"`);
@@ -115,6 +151,9 @@ export function bootstrapRepairRun(input: {
       timeoutMs: input.timeoutMs,
       businessResult: null,
       reasonCode: null,
+      protocolVersion: input.protocolVersion,
+      isolationMode: input.isolationMode ?? null,
+      frozenPolicyHash: input.frozenPolicyHash ?? null,
     };
     writeRepairState(runDir, state);
   }

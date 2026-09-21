@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { CLI_RUN_PIPELINE_PID_FILE, CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
+import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
@@ -604,7 +605,7 @@ describe("repair outer loop", () => {
             independentReview: true,
             independentVerify: true,
             requiredGatesPassed: true,
-            gatePolicyHash: "gate-policy-1",
+            gatePolicyHash: frozenRepairGatePolicyHash(),
           },
         }),
         reviewImpl: async () => {
@@ -1574,3 +1575,110 @@ function seedIncompleteReview(runId: string) {
   );
   return dir;
 }
+
+function saveV2Profile(): void {
+  saveRepairProfile({
+    name: "v2",
+    prUrl: PR,
+    repo: "github.com/acme/repo",
+    sourceBranch: "feat-x",
+    base: "main",
+    capabilities: ["push-source-branch"],
+    protocolVersion: "v2",
+    isolationMode: "collaborative",
+  });
+}
+
+describe("repair v2 protocol", () => {
+  it("refuses v2 without an explicit isolation mode", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await expect(
+      runRepair(
+        [
+          "run",
+          "--from",
+          SOURCE_ID,
+          "--profile",
+          "default",
+          "--protocol",
+          "v2",
+          "--run-id",
+          REPAIR_ID,
+        ],
+        makeSink(),
+        { wait: async () => {}, loop: false },
+      ),
+    ).rejects.toThrow(/isolation/);
+  });
+
+  it("reviews a local pinned SHA before publishing", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveV2Profile();
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const argvLog: string[][] = [];
+    const out = makeSink();
+    await runRepair(
+      [
+        "run",
+        "--from",
+        SOURCE_ID,
+        "--profile",
+        "v2",
+        "--protocol",
+        "v2",
+        "--isolation",
+        "collaborative",
+        "--run-id",
+        REPAIR_ID,
+      ],
+      out,
+      loopOpts({
+        reviewImpl: async (argv) => {
+          argvLog.push(argv);
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      }),
+    );
+    expect(out.finished).toMatchObject({ businessResult: "approved" });
+    expect(argvLog[0]).toContain("--pin-sha");
+    expect(argvLog[0]).toContain("--repo");
+  });
+
+  it("enters diagnosis after two valid failures of the same root cause", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveV2Profile();
+    const out = makeSink();
+    await expect(
+      runRepair(
+        [
+          "run",
+          "--from",
+          SOURCE_ID,
+          "--profile",
+          "v2",
+          "--protocol",
+          "v2",
+          "--isolation",
+          "collaborative",
+          "--run-id",
+          REPAIR_ID,
+        ],
+        out,
+        loopOpts({
+          reviewImpl: async () => {
+            const childId = `ck-review-${randomUUID()}`;
+            seedCompleteReview(childId, { open: true, against: SOURCE_ID });
+            return { runId: childId };
+          },
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "same_root_cause",
+    });
+    expect((out.finished as { outerUsed: number }).outerUsed).toBe(2);
+  });
+});

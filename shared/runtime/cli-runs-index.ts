@@ -110,6 +110,12 @@ export interface CliRunSummary {
   outerUsed?: number;
   outerMax?: number;
   resumeEligible?: boolean;
+  protocolVersion?: "v1" | "v2";
+  isolationMode?: "strong" | "collaborative" | null;
+  goalSummary?: string | null;
+  acceptanceCoverage?: string | null;
+  remainingBudget?: string | null;
+  recoveryAction?: string | null;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -300,6 +306,12 @@ function readRepairProjection(
   | "outerUsed"
   | "outerMax"
   | "resumeEligible"
+  | "protocolVersion"
+  | "isolationMode"
+  | "goalSummary"
+  | "acceptanceCoverage"
+  | "remainingBudget"
+  | "recoveryAction"
 > {
   if (kind !== "repair") return {};
   try {
@@ -327,6 +339,19 @@ function readRepairProjection(
         business === "needs_attention" &&
         outerUsed < outerMax &&
         (Boolean(grantId) || outerUsed === 0),
+      protocolVersion:
+        rec.protocolVersion === "v2" ? "v2" : rec.protocolVersion === "v1" ? "v1" : undefined,
+      isolationMode:
+        rec.isolationMode === "strong" || rec.isolationMode === "collaborative"
+          ? rec.isolationMode
+          : rec.isolationMode === null
+            ? null
+            : undefined,
+      goalSummary: typeof rec.goalSummary === "string" ? rec.goalSummary : null,
+      acceptanceCoverage:
+        typeof rec.acceptanceCoverage === "string" ? rec.acceptanceCoverage : null,
+      remainingBudget: typeof rec.remainingBudget === "string" ? rec.remainingBudget : null,
+      recoveryAction: typeof rec.recoveryAction === "string" ? rec.recoveryAction : null,
     };
   } catch {
     return {

@@ -1,4 +1,11 @@
 import { type LedgerFinding, isFindingVerifiedClosed } from "./cli-ledger";
+import {
+  type AdjudicationProjection,
+  type GateAcceptanceView,
+  gateAcceptanceView,
+} from "./repair-adjudication";
+import { type RepairIdentityFacts, identityUnknownReasons, isKnown } from "./repair-identity";
+import { expectedGatePolicyHash, policyHashMatches } from "./repair-policy";
 
 export const REPAIR_PROGRESS_PHASES = [
   "repair-preparing",
@@ -22,7 +29,9 @@ export type RepairGateReasonCode =
   | "findings_open"
   | "verdict_contradiction"
   | "exception_untraceable"
-  | "pr_drift";
+  | "pr_drift"
+  | "policy_unknown"
+  | "identity_unknown";
 
 export interface RepairGateSquadCandidate {
   taskId: string;
@@ -47,17 +56,22 @@ export interface RepairGateReview {
   findings: LedgerFinding[];
 }
 
+export type RepairGateStage = "local_candidate" | "published_pr";
+
 export interface RepairGateInput {
-  source: { runId: string; prUrl: string; sha: string };
+  source: { runId: string; prUrl: string; sha: string | "unknown" };
   candidateSha: string;
-  publishedSha: string | null;
-  remoteHead: string | null;
-  baseUnchanged: boolean;
-  prOpen: boolean;
+  publishedSha: string | null | "unknown";
+  remoteHead: string | null | "unknown";
+  baseUnchanged: boolean | "unknown";
+  prOpen: boolean | "unknown";
   squad: RepairGateSquadCandidate | null;
   review: RepairGateReview;
-  policyHash: string;
+  policyHash: string | "unknown";
   checkedAt: string;
+  adoptedExistingRemote?: boolean;
+  stage?: RepairGateStage;
+  acceptance?: GateAcceptanceView;
 }
 
 export interface RepairGateReason {
@@ -74,6 +88,7 @@ export interface RepairGateResult {
   finalReviewRunId: string;
   squadTaskId: string | null;
   reasons: RepairGateReason[];
+  stage: RepairGateStage;
 }
 
 export function extractAggregatorVerdict(
@@ -95,15 +110,68 @@ function acceptedWithReason(row: LedgerFinding): boolean {
   return row.status === "accepted" && Boolean(row.acceptedReason?.trim());
 }
 
+export function assembleRepairGateInput(input: {
+  frozenPolicyHash: string | null | undefined;
+  identity: RepairIdentityFacts;
+  source: { runId: string; prUrl: string };
+  squad: RepairGateSquadCandidate | null;
+  review: RepairGateReview;
+  checkedAt: string;
+  stage?: RepairGateStage;
+  acceptance?: GateAcceptanceView;
+  projection?: AdjudicationProjection;
+}): RepairGateInput {
+  const expected = expectedGatePolicyHash(input.frozenPolicyHash);
+  const sourceSha = isKnown(input.identity.sourceSha) ? input.identity.sourceSha.value : "unknown";
+  const publishedSha = isKnown(input.identity.publishedSha)
+    ? input.identity.publishedSha.value
+    : "unknown";
+  const remoteHead = isKnown(input.identity.remoteHead)
+    ? input.identity.remoteHead.value
+    : "unknown";
+  const baseUnchanged = isKnown(input.identity.baseUnchanged)
+    ? input.identity.baseUnchanged.value
+    : "unknown";
+  const prOpen = isKnown(input.identity.prOpen) ? input.identity.prOpen.value : "unknown";
+  return {
+    source: { runId: input.source.runId, prUrl: input.source.prUrl, sha: sourceSha },
+    candidateSha: input.identity.candidateSha,
+    publishedSha,
+    remoteHead,
+    baseUnchanged,
+    prOpen,
+    squad: input.squad,
+    review: input.review,
+    policyHash: expected,
+    checkedAt: input.checkedAt,
+    adoptedExistingRemote: input.identity.adoptedExistingRemote,
+    stage: input.stage ?? "published_pr",
+    acceptance:
+      input.acceptance ?? (input.projection ? gateAcceptanceView(input.projection) : undefined),
+  };
+}
+
 export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
   const reasons: RepairGateReason[] = [];
   const candidate = input.candidateSha.toLowerCase();
+  const stage = input.stage ?? "published_pr";
+  const policyHash = input.policyHash === "unknown" ? "unknown" : input.policyHash;
+
+  if (input.policyHash === "unknown") {
+    reasons.push({
+      code: "policy_unknown",
+      evidence: "frozen gate policy hash is unknown; refusing to use candidate-claimed hash",
+    });
+  }
 
   if (
     !sha40(candidate) ||
+    input.source.sha === "unknown" ||
     input.source.sha.toLowerCase() !== candidate ||
     input.review.sha.toLowerCase() !== candidate ||
-    (input.publishedSha !== null && input.publishedSha.toLowerCase() !== candidate) ||
+    (typeof input.publishedSha === "string" &&
+      input.publishedSha !== "unknown" &&
+      input.publishedSha.toLowerCase() !== candidate) ||
     !input.source.prUrl ||
     !input.source.runId
   ) {
@@ -121,12 +189,14 @@ export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
     !squad.independentVerify ||
     !squad.requiredGatesPassed ||
     squad.sha.toLowerCase() !== candidate ||
-    squad.gatePolicyHash !== input.policyHash
+    !policyHashMatches(input.policyHash, squad.gatePolicyHash)
   ) {
     reasons.push({
       code: "squad_candidate_invalid",
       evidence:
-        squad === null ? "missing squad candidate" : `task=${squad.taskId} sha=${squad.sha}`,
+        squad === null
+          ? "missing squad candidate"
+          : `task=${squad.taskId} sha=${squad.sha} expectedPolicy=${input.policyHash} observedPolicy=${squad.gatePolicyHash}`,
     });
   }
 
@@ -142,23 +212,33 @@ export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
     });
   }
 
-  if (input.review.evidenceComplete !== true || input.review.uncoveredIds.length > 0) {
+  const acceptance = input.acceptance;
+  const uncovered = [
+    ...(acceptance?.coverageGaps ?? []),
+    ...(!acceptance && input.review.uncoveredIds.length > 0 ? input.review.uncoveredIds : []),
+  ];
+  if (input.review.evidenceComplete !== true || uncovered.length > 0) {
     reasons.push({
       code: "coverage_incomplete",
       evidence:
         input.review.evidenceComplete === undefined
           ? "evidenceComplete omitted"
-          : `uncovered=${input.review.uncoveredIds.join(",")}`,
+          : `uncovered=${uncovered.join(",")}`,
     });
   }
 
-  const open = input.review.findings.filter(
-    (row) => !acceptedWithReason(row) && !isFindingVerifiedClosed(row, candidate),
-  );
+  let open: string[];
+  if (acceptance) {
+    open = [...acceptance.openIds, ...acceptance.blockingOutOfScope];
+  } else {
+    open = input.review.findings
+      .filter((row) => !acceptedWithReason(row) && !isFindingVerifiedClosed(row, candidate))
+      .map((row) => row.id);
+  }
   if (open.length > 0) {
     reasons.push({
       code: "findings_open",
-      evidence: open.map((row) => row.id).join(","),
+      evidence: open.join(","),
     });
   }
 
@@ -179,26 +259,55 @@ export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
     });
   }
 
-  if (
-    input.remoteHead === null ||
-    input.remoteHead.toLowerCase() !== candidate ||
-    !input.baseUnchanged ||
-    !input.prOpen
-  ) {
-    reasons.push({
-      code: "pr_drift",
-      evidence: `head=${input.remoteHead} baseUnchanged=${input.baseUnchanged} open=${input.prOpen}`,
-    });
+  if (stage === "published_pr") {
+    const publishedUnknown = input.publishedSha === "unknown";
+    const remoteUnknown = input.remoteHead === "unknown" || input.remoteHead === null;
+    const remoteMismatch =
+      typeof input.remoteHead === "string" &&
+      input.remoteHead !== "unknown" &&
+      input.remoteHead.toLowerCase() !== candidate;
+    const publishedMismatch =
+      typeof input.publishedSha === "string" &&
+      input.publishedSha !== "unknown" &&
+      input.publishedSha.toLowerCase() !== candidate;
+    const adopted =
+      input.adoptedExistingRemote === true &&
+      typeof input.remoteHead === "string" &&
+      input.remoteHead !== "unknown" &&
+      input.remoteHead.toLowerCase() === candidate;
+    if (
+      input.baseUnchanged === "unknown" ||
+      input.prOpen === "unknown" ||
+      (publishedUnknown && !adopted) ||
+      remoteUnknown ||
+      remoteMismatch ||
+      publishedMismatch ||
+      input.baseUnchanged !== true ||
+      input.prOpen !== true
+    ) {
+      reasons.push({
+        code:
+          input.baseUnchanged === "unknown" || input.prOpen === "unknown" || publishedUnknown
+            ? "identity_unknown"
+            : "pr_drift",
+        evidence: `head=${input.remoteHead} baseUnchanged=${input.baseUnchanged} open=${input.prOpen} published=${input.publishedSha} adopted=${adopted}`,
+      });
+    }
   }
 
   return {
     passed: reasons.length === 0,
     candidateSha: candidate,
     checkedAt: input.checkedAt,
-    policyHash: input.policyHash,
+    policyHash: policyHash === "unknown" ? "unknown" : policyHash,
     sourceReviewRunId: input.source.runId,
     finalReviewRunId: input.review.runId,
     squadTaskId: squad?.taskId ?? null,
     reasons,
+    stage,
   };
+}
+
+export function identityAssemblyNotes(facts: RepairIdentityFacts): string[] {
+  return identityUnknownReasons(facts);
 }

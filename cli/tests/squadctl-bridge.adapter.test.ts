@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -206,3 +214,83 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadct
     }
   }, 60_000);
 });
+
+describe.skipIf(!HAS_LIVE_SQUADCTL || !existsSync("/usr/bin/sandbox-exec"))(
+  "strong isolation wraps builder and candidate tests on the real bridge",
+  () => {
+    it("keeps orchestrator control flow while denying control-plane writes from builder and child tests", async () => {
+      const home = tempHome();
+      const { repo, sha } = initRepo(home);
+      const pkg = join(home, "pkg.json");
+      writeFileSync(pkg, `${JSON.stringify(packageBody(sha))}\n`);
+      const ledger = join(home, "ledger.json");
+      writeFileSync(ledger, `${JSON.stringify({ ok: true })}\n`);
+      const mark = join(repo, "builder-ok.txt");
+      const candidateScript = join(repo, "candidate-test.sh");
+      writeFileSync(
+        candidateScript,
+        `#!/bin/sh
+echo hijack-child > "${ledger}"
+`,
+        { mode: 0o700 },
+      );
+      const instance = new SquadctlBridge({
+        home,
+        workspaceCwd: repo,
+        executable: REAL_SQUADCTL,
+        orchestratorExecutable: FAKE_GROKB,
+        isolationMode: "strong",
+        env: {
+          ...process.env,
+          HOME: home,
+          COUNCILKIT_HOME: home,
+          FAKE_GROK_SESSION: "native-session-iso",
+          HIJACK_PATH: ledger,
+          WORKTREE_MARK: mark,
+          CANDIDATE_TEST_SCRIPT: candidateScript,
+        },
+      });
+      const started = instance.start({
+        requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
+        packageFields: {},
+        history: {
+          kind: "squad-repair-history",
+          version: 1,
+          source_hash: "b".repeat(64),
+          project: "github.com/acme/repo",
+        },
+        delivery: {
+          grantHash: AUTH,
+          repo: "github.com/acme/repo",
+          sourceBranch: "feat-x",
+          sourceSha: sha,
+          expectedOldSha: sha,
+          remote: "origin",
+        },
+        baseSha: sha,
+      });
+      expect(started.ok).toBe(true);
+      if (!started.ok) throw new Error("start failed");
+      await instance.prepare({
+        taskId: started.taskId,
+        baseSha: sha,
+        packagePath: pkg,
+        delivery: {
+          grantHash: AUTH,
+          repo: "github.com/acme/repo",
+          sourceBranch: "feat-x",
+          sourceSha: sha,
+          expectedOldSha: sha,
+          remote: "origin",
+        },
+      });
+      const identity = JSON.parse(
+        readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-bridge.json"), "utf8"),
+      ) as { nativeSession: string | null };
+      expect(identity.nativeSession).toBeTruthy();
+      expect(readFileSync(mark, "utf8")).toBe("ok\n");
+      expect(readFileSync(ledger, "utf8")).toBe(`${JSON.stringify({ ok: true })}\n`);
+      instance.stop({ taskId: started.taskId });
+    }, 60_000);
+  },
+);

@@ -37,7 +37,12 @@ import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
 import { bindPublishableCandidateProfile, protectedGitEnv } from "./candidate-source-ref";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
-import { GROK_SESSION_WAIT_MS, grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
+import {
+  GROK_SESSION_WAIT_MS,
+  grokLeaderSocket,
+  grokLeaderSocketDir,
+  spawnEnvForDriver,
+} from "./driver-commands";
 import {
   type ProcessFingerprint,
   fingerprintPid,
@@ -48,6 +53,12 @@ import {
   waitForGroupIdle,
   waitForLeaderFingerprint,
 } from "./process-identity";
+import {
+  detectIsolationCapability,
+  disableCandidateGitHooksEnv,
+  stripCredentialEnv,
+  wrapIsolatedSpawn,
+} from "./repair-isolated-run";
 import { assertFrozenRemoteUrls } from "./repair-workspace";
 import type {
   SquadBridge,
@@ -100,6 +111,7 @@ export interface SquadctlBridgeOptions {
   skipCliVerify?: boolean;
   /** Test-only native-session wait. Production uses GROK_SESSION_WAIT_MS. */
   sessionWaitMs?: number;
+  isolationMode?: "strong" | "collaborative" | null;
 }
 
 interface BridgeIdentity {
@@ -660,11 +672,36 @@ export class SquadctlBridge implements SquadBridge {
         : spawnEnvForDriver("grok-stream-json", identity.workspaceCwd, baseEnv);
     const { GROK_SESSION_ID: _session, GROK_AGENT: _agent, ...env } = agentSeatEnv(isolated);
     const spawnImpl = this.options.spawnOrchestrator ?? defaultSpawnOrchestrator;
+    const isolationMode = this.options.isolationMode;
+    const isolatedEnv =
+      isolationMode === "strong" || isolationMode === "collaborative"
+        ? stripCredentialEnv(env)
+        : env;
+    let spawnExecutable = orchExe;
+    let spawnArgv = argv;
+    if (isolationMode === "strong" && !this.options.spawnOrchestrator) {
+      const capability = detectIsolationCapability(isolatedEnv);
+      const wrapped = wrapIsolatedSpawn({
+        mode: "strong",
+        capability,
+        executable: orchExe,
+        argv,
+        worktree: identity.workspaceCwd,
+        outputDir: join(identity.taskDir, "isolation-out"),
+        tmpDir: join(identity.taskDir, "isolation-tmp"),
+        extraWritePaths: [grokLeaderSocketDir()],
+        allowNetwork: true,
+        credentialHome: isolatedEnv.HOME,
+      });
+      spawnExecutable = wrapped.executable;
+      spawnArgv = wrapped.argv;
+      isolatedEnv.TMPDIR = join(identity.taskDir, "isolation-tmp");
+    }
     const spawned = spawnImpl({
-      executable: orchExe,
-      argv,
+      executable: spawnExecutable,
+      argv: spawnArgv,
       cwd: identity.workspaceCwd,
-      env,
+      env: isolatedEnv,
       logPath,
       requestedSession: requested,
     });
@@ -1240,11 +1277,24 @@ export class SquadctlBridge implements SquadBridge {
     }
     const run = this.options.runCommand ?? defaultRunCommand;
     const baseEnv = this.options.env ?? process.env;
-    const env = isRemoteIntegrate(argv) ? protectedGitEnv(baseEnv) : baseEnv;
+    const cwd = this.options.workspaceCwd ?? process.cwd();
+    if (isRemoteIntegrate(argv)) {
+      return run({
+        executable,
+        argv,
+        cwd,
+        env: disableCandidateGitHooksEnv(protectedGitEnv(baseEnv)),
+      });
+    }
+    const isolationMode = this.options.isolationMode;
+    const env =
+      isolationMode === "strong" || isolationMode === "collaborative"
+        ? stripCredentialEnv(baseEnv)
+        : baseEnv;
     return run({
       executable,
       argv,
-      cwd: this.options.workspaceCwd ?? process.cwd(),
+      cwd,
       env,
     });
   }

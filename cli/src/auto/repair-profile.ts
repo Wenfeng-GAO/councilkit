@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { V2_TRIAL_DEFAULTS } from "@shared/runtime/repair-chain";
 import { isRepairProfileName } from "@shared/runtime/repair-lease";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import { z } from "zod";
@@ -26,6 +27,19 @@ const repairProfileSchema = z
     expiresAt: z.string().min(1).max(40).nullable(),
     revokedAt: z.string().min(1).max(40).nullable(),
     createdAt: z.string().min(1).max(40),
+    protocolVersion: z.enum(["v1", "v2"]).optional(),
+    isolationMode: z.enum(["strong", "collaborative"]).optional(),
+    sourceFixMax: z.number().int().positive().max(10).optional(),
+    deadlineMs: z.number().int().positive().optional(),
+    diagnoseMs: z.number().int().positive().optional(),
+    expectedGatePolicyHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    protocolHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .strict();
 export type RepairProfile = z.infer<typeof repairProfileSchema>;
@@ -65,6 +79,26 @@ export function profileIntegrityHash(input: {
   );
 }
 
+export function protocolIntegrityHash(input: {
+  protocolVersion?: "v1" | "v2";
+  isolationMode?: "strong" | "collaborative";
+  sourceFixMax?: number;
+  deadlineMs?: number;
+  diagnoseMs?: number;
+  expectedGatePolicyHash?: string;
+}): string {
+  return sha(
+    JSON.stringify({
+      protocolVersion: input.protocolVersion ?? "v2",
+      isolationMode: input.isolationMode,
+      sourceFixMax: input.sourceFixMax ?? null,
+      deadlineMs: input.deadlineMs ?? null,
+      diagnoseMs: input.diagnoseMs ?? null,
+      expectedGatePolicyHash: input.expectedGatePolicyHash ?? null,
+    }),
+  );
+}
+
 export function saveRepairProfile(input: {
   name: string;
   prUrl: string;
@@ -73,6 +107,12 @@ export function saveRepairProfile(input: {
   base: string;
   capabilities: RepairCapability[];
   expiresAt?: string | null;
+  protocolVersion?: "v1" | "v2";
+  isolationMode?: "strong" | "collaborative";
+  sourceFixMax?: number;
+  deadlineMs?: number;
+  diagnoseMs?: number;
+  expectedGatePolicyHash?: string;
 }): RepairProfile {
   const name = assertProfileName(input.name);
   const prUrl = normalizeReviewPr(input.prUrl);
@@ -92,6 +132,18 @@ export function saveRepairProfile(input: {
     revokedAt: null,
     createdAt,
   };
+  if (input.protocolVersion === "v2") {
+    if (!input.isolationMode) {
+      throw errors.usage("v2 repair profile requires an explicit isolation mode");
+    }
+    profile.protocolVersion = "v2";
+    profile.isolationMode = input.isolationMode;
+    profile.sourceFixMax = input.sourceFixMax ?? V2_TRIAL_DEFAULTS.sourceFixMax;
+    profile.deadlineMs = input.deadlineMs ?? V2_TRIAL_DEFAULTS.deadlineMs;
+    profile.diagnoseMs = input.diagnoseMs ?? V2_TRIAL_DEFAULTS.diagnoseMs;
+    profile.expectedGatePolicyHash = input.expectedGatePolicyHash;
+    profile.protocolHash = protocolIntegrityHash(profile);
+  }
   profile.integrityHash = profileIntegrityHash(profile);
   writeProfile(profile);
   return profile;
@@ -106,6 +158,14 @@ export function loadRepairProfile(name: string): RepairProfile {
   const expected = profileIntegrityHash(parsed.data);
   if (parsed.data.integrityHash !== expected) {
     throw errors.usage(`repair profile "${name}" integrity hash mismatch`);
+  }
+  if (parsed.data.protocolVersion === "v2") {
+    if (parsed.data.isolationMode !== "strong" && parsed.data.isolationMode !== "collaborative") {
+      throw errors.usage(`repair profile "${name}" v2 requires an explicit isolation mode`);
+    }
+    if (parsed.data.protocolHash !== protocolIntegrityHash(parsed.data)) {
+      throw errors.usage(`repair profile "${name}" protocol hash mismatch`);
+    }
   }
   return parsed.data;
 }

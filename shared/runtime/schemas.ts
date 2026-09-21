@@ -677,6 +677,12 @@ export const cliRunSummarySchema = z
     outerUsed: z.number().int().nonnegative().optional(),
     outerMax: z.number().int().positive().optional(),
     resumeEligible: z.boolean().optional(),
+    protocolVersion: z.enum(["v1", "v2"]).optional(),
+    isolationMode: z.enum(["strong", "collaborative"]).nullable().optional(),
+    goalSummary: z.string().max(400).nullable().optional(),
+    acceptanceCoverage: z.string().max(200).nullable().optional(),
+    remainingBudget: z.string().max(200).nullable().optional(),
+    recoveryAction: z.string().max(400).nullable().optional(),
   })
   .strict();
 export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;

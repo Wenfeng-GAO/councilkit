@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
 import {
   type FrozenIntegrateIdentity,
   SQUAD_BRIDGE_CONTRACT_VERSION,
@@ -158,7 +159,7 @@ export class FakeSquadBridge implements SquadBridge {
         independentReview: true,
         independentVerify: true,
         requiredGatesPassed: true,
-        gatePolicyHash: "gate-policy-1",
+        gatePolicyHash: frozenRepairGatePolicyHash(),
       }),
       ...(this.options.observeClosed === undefined
         ? {}

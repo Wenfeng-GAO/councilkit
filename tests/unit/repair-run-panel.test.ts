@@ -196,6 +196,30 @@ describe("RepairRunPanel", () => {
     expect(html).toContain("从 identity_mismatch 恢复");
   });
 
+  it("shows original goal, remaining budget, and keeps interrupted off the business axis", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: {
+          runId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+          kind: "repair",
+          status: "interrupted",
+          progress: { phase: "repair-squad-repair", attempts: [], updatedAt: "t" },
+          businessResult: null,
+          reasonCode: null,
+          sourceRunId: review.runId,
+          goalSummary: "Ready stays Ready",
+          remainingBudget: "2 source-fix left",
+          isolationMode: "collaborative",
+        },
+      }),
+    );
+    expect(html).toContain("原目标：Ready stays Ready");
+    expect(html).toContain("剩余预算 2 source-fix left");
+    expect(html).toContain("执行中断（未作出业务裁决）");
+    expect(html).toContain("协作约定");
+    expect(html).not.toContain("已停止");
+  });
+
   it("hides resume when the parent is not eligible", () => {
     const html = render(
       createElement(RepairRunPanel, {

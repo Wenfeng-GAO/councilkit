@@ -65,6 +65,12 @@ export function RepairRunPanel({
     | "sourceRunId"
     | "lastError"
     | "resumeEligible"
+    | "protocolVersion"
+    | "isolationMode"
+    | "goalSummary"
+    | "acceptanceCoverage"
+    | "remainingBudget"
+    | "recoveryAction"
   >;
   profiles?: RepairProfileSummary[];
   activeRepair?: Pick<
@@ -90,12 +96,25 @@ export function RepairRunPanel({
   if (run.kind === "repair") {
     const used = `第 ${outerUsed} / ${outerMax} 次外循环`;
     const budgetOut = run.businessResult === "needs_attention" && outerUsed >= outerMax;
+    const executionInterrupted = run.status === "interrupted" && run.businessResult !== "stopped";
     return (
       <section className="border border-edge bg-surface px-4 py-4" aria-label="Squad 自动修复">
         <p className="font-command text-[0.68rem] uppercase tracking-[0.16em] text-brass">
           Squad 自动修复
         </p>
+        {run.goalSummary ? <p className="mt-2 text-sm text-fg">原目标：{run.goalSummary}</p> : null}
         <p className="mt-2 text-sm text-fg">{used}</p>
+        {run.acceptanceCoverage ? (
+          <p className="mt-1 text-sm text-muted">验收覆盖 {run.acceptanceCoverage}</p>
+        ) : null}
+        {run.remainingBudget ? (
+          <p className="mt-1 text-sm text-muted">剩余预算 {run.remainingBudget}</p>
+        ) : null}
+        {run.isolationMode ? (
+          <p className="mt-1 text-sm text-muted">
+            {run.isolationMode === "strong" ? "强隔离（OS sandbox）" : "协作约定（非 OS 隔离）"}
+          </p>
+        ) : null}
         <p className="mt-1 text-sm text-muted">
           {run.businessResult === "approved"
             ? "已准出"
@@ -103,8 +122,13 @@ export function RepairRunPanel({
               ? "已停止"
               : run.businessResult === "needs_attention"
                 ? `需要处理${run.reasonCode ? ` · ${run.reasonCode}` : ""}`
-                : "进行中"}
+                : executionInterrupted
+                  ? "执行中断（未作出业务裁决）"
+                  : "进行中"}
         </p>
+        {run.recoveryAction ? (
+          <p className="mt-1 text-sm text-muted">{run.recoveryAction}</p>
+        ) : null}
         {run.status === "running" ? (
           <Button className="mt-3" variant="ghost" onClick={() => onStop?.()} disabled={pending}>
             停止

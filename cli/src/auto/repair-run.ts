@@ -3,11 +3,39 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import {
+  type AdjudicationProjection,
+  assertionIdFor,
+  gateAcceptanceView,
+  projectAdjudication,
+} from "@shared/runtime/repair-adjudication";
+import {
+  V2_TRIAL_DEFAULTS,
+  canOpenSourceFix,
+  consumeSourceFix,
+  newRepairBudget,
+  writeCutoffMs,
+} from "@shared/runtime/repair-chain";
+import { buildGoalContract, contractFingerprint, generateTaskCard } from "@shared/runtime/repair-contract";
+import {
+  canStartWriter,
+  createExecutionIntent,
+  markExecutionStarted,
+} from "@shared/runtime/repair-execution";
+import {
+  type RepairGateResult,
   type RepairGateReview,
   evaluateRepairGate,
   extractAggregatorVerdict,
 } from "@shared/runtime/repair-gate";
+import { assertIsolationMode } from "@shared/runtime/repair-isolation";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
+import { frozenRepairGatePolicyHash } from "@shared/runtime/repair-policy";
+import {
+  recordRootCauseFailure,
+  recoveryActionFor,
+  shouldEnterDiagnosis,
+} from "@shared/runtime/repair-progress";
+import { recoverPublishReceipt } from "@shared/runtime/repair-publish";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
 import {
   type FrozenIntegrateIdentity,
@@ -30,7 +58,20 @@ import { atomicWriteFile, atomicWriteJson } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import { type CheckedOutPr, defaultRunCommand, inspectPullRequest } from "./checkout-pr";
 import { loadFindingGroups } from "./finding-groups";
+import {
+  loadOrCreateChain,
+  readRepairChain,
+  withChainLock,
+  writeRepairChain,
+} from "./repair-chain-store";
+import {
+  executionRecordPath,
+  readExecutionRecord,
+  spawnDeadlineSupervisor,
+  writeExecutionRecord,
+} from "./repair-deadline-supervisor";
 import { ensureRepairHandoff } from "./repair-handoff";
+import { detectIsolationCapability } from "./repair-isolated-run";
 import { acquireWriterLease, releaseWriterLease } from "./repair-lease";
 import {
   type RepairCycle,
@@ -42,6 +83,7 @@ import {
 } from "./repair-persist";
 import { runRepairPreflight, sourceNeedsSupplementReview } from "./repair-preflight";
 import { type RepairProfile, loadRepairProfile, loadReusableRepairGrant } from "./repair-profile";
+import { assembleProductionGate, isV2Protocol } from "./repair-protocol";
 import {
   inspectCwdForRepair,
   materializeRepairWorkspace,
@@ -79,9 +121,10 @@ export interface RepairLoopDeps {
   abortSignal?: AbortSignal;
   pollIntervalMs?: number;
   workspaceCwd?: string;
+  pinShaReview?: boolean;
 }
 
-const POLICY = "gate-policy-1";
+const DEFAULT_FROZEN_POLICY = frozenRepairGatePolicyHash();
 
 export async function defaultRepairReviewImpl(
   argv: string[],
@@ -179,7 +222,13 @@ export async function executeRepairLoop(input: {
       message: error instanceof Error ? error.message : "workspace rejected",
     });
   }
-  const bridge = deps.bridge ?? new SquadctlBridge({ workspaceCwd });
+  const bridge =
+    deps.bridge ??
+    new SquadctlBridge({
+      workspaceCwd,
+      isolationMode: state.isolationMode ?? profile.isolationMode ?? null,
+      home: resolvePaths().home,
+    });
   const source = readCliRun(input.sourceRunId);
   const prUrl = source?.reviewEvidence?.prUrl ?? profile.prUrl;
   const inspectCwd = inspectCwdForRepair({ workspaceCwd, sourceRunId: input.sourceRunId });
@@ -214,7 +263,126 @@ export async function executeRepairLoop(input: {
     profileHash: profile.integrityHash,
     frozenBaseSha: state.frozenBaseSha ?? pr.baseSha ?? null,
     priorCompleteReviewId: state.priorCompleteReviewId ?? input.sourceRunId,
+    protocolVersion: state.protocolVersion ?? profile.protocolVersion ?? "v1",
+    isolationMode: state.isolationMode ?? profile.isolationMode ?? null,
+    frozenPolicyHash:
+      state.frozenPolicyHash ?? profile.expectedGatePolicyHash ?? DEFAULT_FROZEN_POLICY,
   });
+  if (isV2Protocol(state.protocolVersion)) {
+    const isolationMode = state.isolationMode;
+    if (isolationMode !== "strong" && isolationMode !== "collaborative") {
+      return finish(input, {
+        businessResult: "needs_attention",
+        reasonCode: "isolation_required",
+        message: "v2 repair requires an explicit isolation mode (strong or collaborative)",
+      });
+    }
+    const isolation = assertIsolationMode(isolationMode, detectIsolationCapability());
+    if (!isolation.ok) {
+      return finish(input, {
+        businessResult: "needs_attention",
+        reasonCode: "isolation_unavailable",
+        message: isolation.reason,
+      });
+    }
+    const nowMs = (deps.nowMs ?? Date.now)();
+    try {
+      const sourceRun = readCliRun(input.sourceRunId);
+      const acceptance = (sourceRun?.findings ?? [])
+        .filter((row) => row.status !== "accepted")
+        .map((row) => ({
+          assertionId: assertionIdFor(row.id, 1),
+          precondition: "immutable candidate snapshot under test",
+          trigger: row.title,
+          allowedStimuli: ["observe"],
+          observation: row.verification?.evidence ?? row.text ?? row.title,
+          environment: "isolated candidate worktree",
+          evidenceKind: "code_trace" as const,
+        }));
+      const draft = buildGoalContract({
+        sourceRunId: input.sourceRunId,
+        originalRequest: sourceRun?.title ?? `repair ${input.sourceRunId}`,
+        goal: sourceRun?.title ?? `repair ${input.sourceRunId}`,
+        invariants:
+          sourceRun?.findings && sourceRun.findings.length > 0
+            ? sourceRun.findings.map((row) => row.title).slice(0, 32)
+            : ["keep the original review contract"],
+        allowedScope: ["."],
+        acceptance,
+        chainId: state.chainId ?? "pending",
+        frozenPolicyHash: state.frozenPolicyHash ?? DEFAULT_FROZEN_POLICY,
+      });
+      const loaded = loadOrCreateChain({
+        repo: profile.repo,
+        prUrl,
+        goalFingerprint: contractFingerprint(draft),
+        parentRunId: input.runId,
+        budget:
+          state.budget ??
+          newRepairBudget(
+            {
+              sourceFixMax: profile.sourceFixMax ?? V2_TRIAL_DEFAULTS.sourceFixMax,
+              deadlineMs: profile.deadlineMs ?? V2_TRIAL_DEFAULTS.deadlineMs,
+              diagnoseMs: profile.diagnoseMs ?? V2_TRIAL_DEFAULTS.diagnoseMs,
+              startedAtMs: nowMs,
+            },
+            nowMs,
+          ),
+        nowMs,
+      });
+      const budget = loaded.chain.budget;
+      const contract = buildGoalContract({
+        sourceRunId: draft.sourceRunId,
+        originalRequest: draft.originalRequest,
+        goal: draft.goal,
+        invariants: draft.invariants,
+        allowedScope: draft.allowedScope,
+        acceptance: draft.acceptance,
+        chainId: loaded.chain.chainId,
+        frozenPolicyHash: draft.frozenPolicyHash,
+        version: draft.version,
+      });
+      atomicWriteJson(join(input.runDir, "goal-contract.json"), contract);
+      atomicWriteJson(
+        join(input.runDir, "task-card.json"),
+        generateTaskCard({
+          contract,
+          candidateSha: state.candidateSha ?? null,
+          responsibleAssertions: contract.acceptance.map((row) => row.assertionId),
+          originalCounterexamples: contract.acceptance.map((row) => row.trigger),
+          rejectedApproaches: [],
+          missingEvidence: [],
+          remainingBudget: `${budget.sourceFixMax - budget.sourceFixUsed} source-fix left`,
+        }),
+      );
+      state = patchState(input.runDir, {
+        ...state,
+        chainId: loaded.chain.chainId,
+        goalFingerprint: loaded.chain.goalFingerprint,
+        budget,
+        deadlineAtMs: state.deadlineAtMs ?? budget.startedAtMs + budget.deadlineMs,
+        writeCutoffAtMs: state.writeCutoffAtMs ?? writeCutoffMs(budget),
+        contractVersion: contract.version,
+        goalSummary: contract.goal,
+        remainingBudget: `${budget.sourceFixMax - budget.sourceFixUsed} source-fix left`,
+      });
+    } catch (error) {
+      return finish(input, {
+        businessResult: "needs_attention",
+        reasonCode: "councilkit_incomplete",
+        message: error instanceof Error ? error.message : "failed to inherit repair chain",
+      });
+    }
+  } else if (
+    state.timeoutMs !== null &&
+    (state.deadlineAtMs === null || state.deadlineAtMs === undefined)
+  ) {
+    const nowMs = (deps.nowMs ?? Date.now)();
+    state = patchState(input.runDir, {
+      ...state,
+      deadlineAtMs: nowMs + state.timeoutMs,
+    });
+  }
   const published = Boolean(state.publishedSha);
   const preflight = runRepairPreflight({
     sourceRunId: state.packageSourceRunId ?? input.sourceRunId,
@@ -252,7 +420,14 @@ export async function executeRepairLoop(input: {
     packageSource?.findings.filter((row) => row.status !== "accepted").length ??
     preflight.openFindingIds.length;
   if (openCount === 0) {
-    const gate = gateFromSource(packageSourceId, preflight.sourceSha, pr);
+    const gate = gateFromSource(
+      packageSourceId,
+      preflight.sourceSha,
+      pr,
+      profile.base,
+      state.frozenPolicyHash,
+      state.frozenBaseSha,
+    );
     if (gate.passed) {
       return finish(input, {
         businessResult: "approved",
@@ -300,6 +475,22 @@ export async function executeRepairLoop(input: {
       });
     }
     if (!resumeSlot) {
+      if (isV2Protocol(state.protocolVersion) && state.budget) {
+        const allowed = canOpenSourceFix(state.budget, (deps.nowMs ?? Date.now)());
+        if (!allowed.ok) {
+          return finish(input, {
+            businessResult: "needs_attention",
+            reasonCode: allowed.reason,
+            message:
+              allowed.reason === "write_cutoff"
+                ? "write cutoff reached; remaining budget is reserved for final review"
+                : allowed.reason === "deadline"
+                  ? "chain deadline reached"
+                  : "source-fix budget exhausted",
+            outerUsed: state.outerUsed,
+          });
+        }
+      }
       if (cycleN > 1 && bridge.prepare && !bridge.exportHistory) {
         return finish(input, {
           businessResult: "needs_attention",
@@ -310,11 +501,64 @@ export async function executeRepairLoop(input: {
       }
       appendRepairJournal(input.runDir, { kind: "outer_cycle.intent", n: cycleN, at: now() });
       const cycles = [...(state.cycles ?? []), { n: cycleN, phase: "reserved" as const }];
+      const executionId = executionIdFor(input.runId, cycleN);
+      const v2Budget =
+        isV2Protocol(state.protocolVersion) && state.budget
+          ? consumeSourceFix(state.budget)
+          : state.budget;
+      const chainId = state.chainId;
+      if (isV2Protocol(state.protocolVersion) && chainId && v2Budget) {
+        withChainLock(chainId, () => {
+          const current = readRepairChain(chainId);
+          if (current) {
+            writeRepairChain({
+              ...current,
+              budget: v2Budget,
+              casVersion: current.casVersion + 1,
+            });
+          }
+        });
+        const execution = createExecutionIntent({
+          executionId,
+          kind: "source_fix",
+          chainId,
+          parentRunId: input.runId,
+          inputSha: preflight.sourceSha,
+          contractVersion: state.contractVersion ?? 1,
+          deadlineAtMs: state.deadlineAtMs ?? Date.now() + V2_TRIAL_DEFAULTS.deadlineMs,
+        });
+        writeExecutionRecord(executionRecordPath(input.runDir, executionId), execution);
+        spawnDeadlineSupervisor({
+          cliBin: process.argv[1] ?? "councilkit",
+          executionPath: executionRecordPath(input.runDir, executionId),
+          logPath: join(input.runDir, "deadline-supervisor.log"),
+        });
+      }
       state = patchState(input.runDir, {
         ...state,
         casVersion: state.casVersion + 1,
         outerUsed: state.outerUsed + 1,
         cycles,
+        budget: v2Budget,
+        executions: [
+          ...(state.executions ?? []),
+          ...(executionId && isV2Protocol(state.protocolVersion)
+            ? [
+                createExecutionIntent({
+                  executionId,
+                  kind: "source_fix",
+                  chainId: state.chainId ?? input.runId,
+                  parentRunId: input.runId,
+                  inputSha: preflight.sourceSha,
+                  contractVersion: state.contractVersion ?? 1,
+                  deadlineAtMs: state.deadlineAtMs ?? 0,
+                }),
+              ]
+            : []),
+        ],
+        remainingBudget: v2Budget
+          ? `${v2Budget.sourceFixMax - v2Budget.sourceFixUsed} source-fix left`
+          : state.remainingBudget,
       });
     }
     const cycle = state.cycles?.find((row) => row.n === cycleN);
@@ -386,25 +630,37 @@ export async function executeRepairLoop(input: {
           outerUsed: state.outerUsed,
         });
       }
+      if (bridge.writerPids) {
+        const pids = bridge.writerPids();
+        state = patchState(input.runDir, { ...state, writerPids: pids });
+        bindExecutionPids(
+          input.runDir,
+          executionIdFor(input.runId, cycleN),
+          pids,
+          nowMsOrNow(deps),
+        );
+      }
       snapshot = await waitForCandidate(bridge, taskId, snapshot, input.runDir, now, deps, state);
       const waited = terminalWaitOutcome(input, snapshot, state);
       if (waited) return waited;
-      const publishedOutcome = await publishIfNeeded({
-        input,
-        deps,
-        inspect,
-        prUrl,
-        profile,
-        state,
-        cycleN,
-        taskId,
-        snapshot,
-        preflightSha: preflight.sourceSha,
-        now,
-        bridge,
-      });
-      if (publishedOutcome.done) return publishedOutcome.outcome;
-      state = publishedOutcome.state;
+      if (!isV2Protocol(state.protocolVersion)) {
+        const publishedOutcome = await publishIfNeeded({
+          input,
+          deps,
+          inspect,
+          prUrl,
+          profile,
+          state,
+          cycleN,
+          taskId,
+          snapshot,
+          preflightSha: preflight.sourceSha,
+          now,
+          bridge,
+        });
+        if (publishedOutcome.done) return publishedOutcome.outcome;
+        state = publishedOutcome.state;
+      }
     } else {
       writeRepairLive(input.runDir, { status: "running", phase: "repair-squad-repair" });
       input.out.progress(`repair outer ${cycleN}/${state.outerMax}`);
@@ -516,7 +772,14 @@ export async function executeRepairLoop(input: {
         }
       }
       if (bridge.writerPids) {
-        state = patchState(input.runDir, { ...state, writerPids: bridge.writerPids() });
+        const pids = bridge.writerPids();
+        state = patchState(input.runDir, { ...state, writerPids: pids });
+        bindExecutionPids(
+          input.runDir,
+          executionIdFor(input.runId, cycleN),
+          pids,
+          nowMsOrNow(deps),
+        );
       }
       let snapshot = bridge.status({ taskId: started.taskId });
       snapshot = await waitForCandidate(
@@ -530,22 +793,24 @@ export async function executeRepairLoop(input: {
       );
       const waited = terminalWaitOutcome(input, snapshot, state);
       if (waited) return waited;
-      const publishedOutcome = await publishIfNeeded({
-        input,
-        deps,
-        inspect,
-        prUrl,
-        profile,
-        state,
-        cycleN,
-        taskId: started.taskId,
-        snapshot,
-        preflightSha: preflight.sourceSha,
-        now,
-        bridge,
-      });
-      if (publishedOutcome.done) return publishedOutcome.outcome;
-      state = publishedOutcome.state;
+      if (!isV2Protocol(state.protocolVersion)) {
+        const publishedOutcome = await publishIfNeeded({
+          input,
+          deps,
+          inspect,
+          prUrl,
+          profile,
+          state,
+          cycleN,
+          taskId: started.taskId,
+          snapshot,
+          preflightSha: preflight.sourceSha,
+          now,
+          bridge,
+        });
+        if (publishedOutcome.done) return publishedOutcome.outcome;
+        state = publishedOutcome.state;
+      }
     }
     if (!taskId) {
       return finish(input, {
@@ -571,6 +836,9 @@ export async function executeRepairLoop(input: {
       const review = deps.reviewImpl ?? defaultRepairReviewImpl;
       const childArgId = `ck-review-${randomUUID()}`;
       const argv = [prUrl, "--against", against, "--run-id", childArgId];
+      if (isV2Protocol(state.protocolVersion) && workspaceCwd) {
+        argv.push("--repo", workspaceCwd, "--pin-sha", identitySha);
+      }
       const result = await review(argv, input.out);
       childId = result.runId;
       if (result.incomplete) {
@@ -624,32 +892,125 @@ export async function executeRepairLoop(input: {
     }
     const snapshot = bridge.status({ taskId });
     const reviewGate = toGateReview(child, identitySha);
-    const gate = evaluateRepairGate({
-      source: { runId: input.sourceRunId, prUrl, sha: identitySha },
+    const projection = projectAdjudication({
+      sourceRunId: childId,
       candidateSha: identitySha,
-      publishedSha: state.publishedSha ?? identitySha,
-      remoteHead: remote.headSha?.toLowerCase() ?? null,
-      baseUnchanged:
-        remote.baseBranch === profile.base &&
-        (state.frozenBaseSha === null ||
-          state.frozenBaseSha === undefined ||
-          !remote.baseSha ||
-          remote.baseSha.toLowerCase() === state.frozenBaseSha.toLowerCase()),
-      prOpen: remote.prOpen !== false,
-      squad: {
-        taskId,
-        invalidated: snapshot.event.journal.invalidated,
-        independentReview: snapshot.event.journal.independentReview,
-        independentVerify: snapshot.event.journal.independentVerify,
-        requiredGatesPassed: snapshot.event.journal.requiredGatesPassed,
-        sha: snapshot.event.journal.candidateSha,
-        gatePolicyHash: snapshot.event.journal.gatePolicyHash,
-      },
-      review: reviewGate,
-      policyHash: POLICY,
-      checkedAt: now(),
+      findings: reviewGate.findings,
     });
+    const acceptance = gateAcceptanceView(projection);
+    const squadCandidate = {
+      taskId,
+      invalidated: snapshot.event.journal.invalidated,
+      independentReview: snapshot.event.journal.independentReview,
+      independentVerify: snapshot.event.journal.independentVerify,
+      requiredGatesPassed: snapshot.event.journal.requiredGatesPassed,
+      sha: snapshot.event.journal.candidateSha,
+      gatePolicyHash: snapshot.event.journal.gatePolicyHash,
+    };
+    if (isV2Protocol(state.protocolVersion) && (state.publishLadder ?? "none") !== "published") {
+      const localGate = evaluateRepairGate(
+        assembleProductionGate({
+          frozenPolicyHash: state.frozenPolicyHash,
+          candidateSha: identitySha,
+          publishedSha: null,
+          remote,
+          frozenBaseSha: state.frozenBaseSha,
+          expectedBaseBranch: profile.base,
+          source: { runId: input.sourceRunId, prUrl },
+          squad: squadCandidate,
+          review: reviewGate,
+          checkedAt: now(),
+          unpublished: true,
+          acceptance,
+        }),
+      );
+      if (!localGate.passed) {
+        const gated = handleFailedGate({
+          input,
+          state,
+          cycleN,
+          childId,
+          against,
+          reviewGate,
+          projection,
+          gate: localGate,
+          profile,
+        });
+        if (gated.done) return gated.outcome;
+        state = gated.state;
+        packageSourceId = childId;
+        continue;
+      }
+      const publishedOutcome = await publishIfNeeded({
+        input,
+        deps,
+        inspect,
+        prUrl,
+        profile,
+        state,
+        cycleN,
+        taskId,
+        snapshot,
+        preflightSha: preflight.sourceSha,
+        now,
+        bridge,
+      });
+      if (publishedOutcome.done) return publishedOutcome.outcome;
+      state = publishedOutcome.state;
+      try {
+        remote = await inspect(prUrl);
+      } catch (error) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "pr_drift",
+          message: error instanceof Error ? error.message : "post-publish inspect failed",
+          latestReviewId: childId,
+          outerUsed: state.outerUsed,
+        });
+      }
+    }
+    const adopted =
+      recoverPublishReceipt({
+        intendedSha: identitySha,
+        receiptSha: state.publishedSha ?? "unknown",
+        remoteHead: remote.headSha ?? "unknown",
+        inFlight: (state.publishLadder ?? "none") === "intent",
+      }).action === "record_verified";
+    if (adopted && !state.publishedSha) {
+      state = patchState(input.runDir, {
+        ...state,
+        adoptedExistingRemote: true,
+        publishedSha: identitySha,
+        lastRemoteHead: remote.headSha?.toLowerCase() ?? state.lastRemoteHead,
+      });
+    }
+    const gate = evaluateRepairGate(
+      assembleProductionGate({
+        frozenPolicyHash: state.frozenPolicyHash,
+        candidateSha: identitySha,
+        publishedSha: state.publishedSha,
+        remote,
+        frozenBaseSha: state.frozenBaseSha,
+        expectedBaseBranch: profile.base,
+        source: { runId: input.sourceRunId, prUrl },
+        squad: squadCandidate,
+        review: reviewGate,
+        checkedAt: now(),
+        adoptedExistingRemote: state.adoptedExistingRemote === true || adopted,
+        acceptance,
+      }),
+    );
     state = patchCycle(input.runDir, state, cycleN, { phase: "gated" });
+    state = patchState(input.runDir, {
+      ...state,
+      acceptanceCoverage: `${acceptance.verifiedClosedIds.length}/${projection.items.length}`,
+      remainingBudget: state.budget
+        ? `${state.budget.sourceFixMax - state.budget.sourceFixUsed} source-fix left`
+        : `${state.outerMax - state.outerUsed} outer left`,
+      recoveryAction: gate.passed
+        ? null
+        : recoveryActionFor(gate.reasons[0]?.code ?? "findings_open"),
+    });
     if (gate.passed) {
       releaseWriterQuietly(profile, input.runId);
       return finish(input, {
@@ -660,37 +1021,19 @@ export async function executeRepairLoop(input: {
         outerUsed: state.outerUsed,
       });
     }
-    const stillOpen = reviewGate.findings.filter((row) => row.status !== "accepted").length;
-    const publishedFixes = (state.cycles ?? []).filter((row) => row.phase !== "reserved").length;
-    if (publishedFixes >= 2 && stillOpen > 0 && sameAgainstStillOpen(child, against)) {
-      writeRepairLive(input.runDir, { status: "running", phase: "repair-diagnosing" });
-      return finish(input, {
-        businessResult: "needs_attention",
-        reasonCode: "findings_open",
-        message: "same against-id still open after two published fixes",
-        latestReviewId: childId,
-        outerUsed: state.outerUsed,
-      });
-    }
-    const canRetry =
-      stillOpen > 0 &&
-      gate.reasons.every((reason) => reason.code === "findings_open") &&
-      state.outerUsed < state.outerMax;
-    if (!canRetry) {
-      return finish(input, {
-        businessResult: "needs_attention",
-        reasonCode: gate.reasons[0]?.code ?? "findings_open",
-        message: gate.reasons[0]?.evidence ?? "repair gate failed",
-        latestReviewId: childId,
-        outerUsed: state.outerUsed,
-      });
-    }
-    state = patchCycle(input.runDir, state, cycleN, { phase: "closed" });
-    state = patchState(input.runDir, {
-      ...state,
-      publishLadder: "none",
-      packageSourceRunId: childId,
+    const gated = handleFailedGate({
+      input,
+      state,
+      cycleN,
+      childId,
+      against,
+      reviewGate,
+      projection,
+      gate,
+      profile,
     });
+    if (gated.done) return gated.outcome;
+    state = gated.state;
     packageSourceId = childId;
   }
   return finish(input, {
@@ -700,6 +1043,123 @@ export async function executeRepairLoop(input: {
     outerUsed: state.outerUsed,
     latestReviewId: state.latestReviewId ?? null,
   });
+}
+
+function handleFailedGate(input: {
+  input: { runId: string; runDir: string; sourceRunId: string; out: OutputSink };
+  state: RepairState;
+  cycleN: number;
+  childId: string;
+  against: string;
+  reviewGate: RepairGateReview;
+  projection: AdjudicationProjection;
+  gate: RepairGateResult;
+  profile: RepairProfile;
+}): { done: true; outcome: RepairLoopOutcome } | { done: false; state: RepairState } {
+  const stillOpen = input.reviewGate.findings.filter((row) => row.status !== "accepted").length;
+  if (isV2Protocol(input.state.protocolVersion)) {
+    const openRoot = input.projection.items.find((item) => item.disposition === "still_open");
+    let failures = input.state.rootCauseFailures ?? [];
+    if (openRoot && input.gate.reasons.every((reason) => reason.code === "findings_open")) {
+      failures = recordRootCauseFailure(
+        failures,
+        openRoot.rootCauseId,
+        input.gate.reasons[0]?.evidence ?? "still open",
+      );
+    }
+    const next = patchState(input.input.runDir, {
+      ...input.state,
+      rootCauseFailures: failures,
+      recoveryAction: recoveryActionFor(
+        openRoot && shouldEnterDiagnosis(failures, openRoot.rootCauseId)
+          ? "same_root_cause"
+          : (input.gate.reasons[0]?.code ?? "findings_open"),
+      ),
+    });
+    if (openRoot && shouldEnterDiagnosis(failures, openRoot.rootCauseId)) {
+      writeRepairLive(input.input.runDir, { status: "running", phase: "repair-diagnosing" });
+      return {
+        done: true,
+        outcome: finish(input.input, {
+          businessResult: "needs_attention",
+          reasonCode: "same_root_cause",
+          message: "same root cause still open after two valid source-fix attempts",
+          latestReviewId: input.childId,
+          outerUsed: next.outerUsed,
+        }),
+      };
+    }
+    const canRetry =
+      stillOpen > 0 &&
+      input.gate.reasons.every((reason) => reason.code === "findings_open") &&
+      (next.budget
+        ? next.budget.sourceFixUsed < next.budget.sourceFixMax
+        : next.outerUsed < next.outerMax);
+    if (!canRetry) {
+      return {
+        done: true,
+        outcome: finish(input.input, {
+          businessResult: "needs_attention",
+          reasonCode: input.gate.reasons[0]?.code ?? "findings_open",
+          message: input.gate.reasons[0]?.evidence ?? "repair gate failed",
+          latestReviewId: input.childId,
+          outerUsed: next.outerUsed,
+        }),
+      };
+    }
+    const afterCycle = patchCycle(input.input.runDir, next, input.cycleN, { phase: "closed" });
+    const closed = patchState(input.input.runDir, {
+      ...afterCycle,
+      publishLadder: "none",
+      packageSourceRunId: input.childId,
+    });
+    return { done: false, state: closed };
+  }
+  const publishedFixes = (input.state.cycles ?? []).filter(
+    (row) => row.phase !== "reserved",
+  ).length;
+  const child = readCliRun(input.childId);
+  if (
+    publishedFixes >= 2 &&
+    stillOpen > 0 &&
+    child !== null &&
+    child.reviewEvidence?.againstRunId === input.against
+  ) {
+    writeRepairLive(input.input.runDir, { status: "running", phase: "repair-diagnosing" });
+    return {
+      done: true,
+      outcome: finish(input.input, {
+        businessResult: "needs_attention",
+        reasonCode: "findings_open",
+        message: "same against-id still open after two published fixes",
+        latestReviewId: input.childId,
+        outerUsed: input.state.outerUsed,
+      }),
+    };
+  }
+  const canRetry =
+    stillOpen > 0 &&
+    input.gate.reasons.every((reason) => reason.code === "findings_open") &&
+    input.state.outerUsed < input.state.outerMax;
+  if (!canRetry) {
+    return {
+      done: true,
+      outcome: finish(input.input, {
+        businessResult: "needs_attention",
+        reasonCode: input.gate.reasons[0]?.code ?? "findings_open",
+        message: input.gate.reasons[0]?.evidence ?? "repair gate failed",
+        latestReviewId: input.childId,
+        outerUsed: input.state.outerUsed,
+      }),
+    };
+  }
+  const afterCycle = patchCycle(input.input.runDir, input.state, input.cycleN, { phase: "closed" });
+  const closed = patchState(input.input.runDir, {
+    ...afterCycle,
+    publishLadder: "none",
+    packageSourceRunId: input.childId,
+  });
+  return { done: false, state: closed };
 }
 
 async function runSupplementReview(input: {
@@ -806,7 +1266,14 @@ async function waitForCandidate(
       });
       return current;
     }
-    if (state.timeoutMs !== null && nowMs() - startedAt >= state.timeoutMs) {
+    if (
+      (state.deadlineAtMs !== null &&
+        state.deadlineAtMs !== undefined &&
+        nowMs() >= state.deadlineAtMs) ||
+      (state.deadlineAtMs == null &&
+        state.timeoutMs !== null &&
+        nowMs() - startedAt >= state.timeoutMs)
+    ) {
       appendRepairJournal(runDir, { kind: "squad.wait.timeout", taskId, at: now() });
       try {
         bridge.stop({ taskId });
@@ -936,6 +1403,46 @@ async function publishIfNeeded(input: {
     state = patchState(input.input.runDir, { ...state, publishLadder: "receipt" });
   }
   const remote = await input.inspect(input.prUrl);
+  const recovery = recoverPublishReceipt({
+    intendedSha: identity.candidateSha,
+    receiptSha:
+      state.publishLadder === "receipt" ? identity.candidateSha : (state.publishedSha ?? "unknown"),
+    remoteHead: remote.headSha ?? "unknown",
+    inFlight: state.publishLadder === "intent",
+  });
+  if (recovery.action === "record_verified") {
+    state = patchState(input.input.runDir, {
+      ...state,
+      publishLadder: "published",
+      publishedSha: identity.candidateSha,
+      lastRemoteHead: identity.candidateSha,
+      adoptedExistingRemote: true,
+    });
+    state = patchCycle(input.input.runDir, state, input.cycleN, { phase: "published" });
+    return { done: false, state };
+  }
+  if (recovery.action === "wait_in_flight") {
+    return {
+      done: true,
+      outcome: finish(input.input, {
+        businessResult: "needs_attention",
+        reasonCode: "pr_drift",
+        message: recovery.reason,
+        outerUsed: state.outerUsed,
+      }),
+    };
+  }
+  if (recovery.action === "block_drift") {
+    return {
+      done: true,
+      outcome: finish(input.input, {
+        businessResult: "needs_attention",
+        reasonCode: "pr_drift",
+        message: recovery.reason,
+        outerUsed: state.outerUsed,
+      }),
+    };
+  }
   if (remote.headSha?.toLowerCase() !== identity.candidateSha) {
     return {
       done: true,
@@ -976,6 +1483,9 @@ function finish(
       reasonCode: result.reasonCode,
       lastError: result.message,
       latestReviewId: result.latestReviewId ?? state.latestReviewId ?? null,
+      recoveryAction: result.reasonCode
+        ? recoveryActionFor(result.reasonCode)
+        : state.recoveryAction,
     });
   }
   writeRepairLive(input.runDir, {
@@ -1053,33 +1563,43 @@ function readChildReport(runId: string): string | null {
   }
 }
 
-function gateFromSource(sourceRunId: string, sha: string, pr: CheckedOutPr) {
+function gateFromSource(
+  sourceRunId: string,
+  sha: string,
+  pr: CheckedOutPr,
+  profileBase: string,
+  frozenPolicyHash: string | null | undefined,
+  frozenBaseSha: string | null | undefined,
+) {
   const source = readCliRun(sourceRunId);
-  return evaluateRepairGate({
-    source: { runId: sourceRunId, prUrl: pr.prUrl, sha },
-    candidateSha: sha,
-    publishedSha: sha,
-    remoteHead: pr.headSha ?? sha,
-    baseUnchanged: true,
-    prOpen: pr.prOpen !== false,
-    squad: null,
-    review: source
-      ? toGateReview(source, sha)
-      : {
-          runId: sourceRunId,
-          incomplete: true,
-          seatsAllSuccess: false,
-          aggregatorComplete: false,
-          artifactsOk: false,
-          sha,
-          evidenceComplete: false,
-          uncoveredIds: [],
-          aggregatorVerdict: null,
-          findings: [],
-        },
-    policyHash: POLICY,
-    checkedAt: new Date().toISOString(),
-  });
+  return evaluateRepairGate(
+    assembleProductionGate({
+      frozenPolicyHash,
+      candidateSha: sha,
+      publishedSha: sha,
+      remote: pr,
+      frozenBaseSha,
+      expectedBaseBranch: profileBase,
+      source: { runId: sourceRunId, prUrl: pr.prUrl },
+      squad: null,
+      review: source
+        ? toGateReview(source, sha)
+        : {
+            runId: sourceRunId,
+            incomplete: true,
+            seatsAllSuccess: false,
+            aggregatorComplete: false,
+            artifactsOk: false,
+            sha,
+            evidenceComplete: false,
+            uncoveredIds: [],
+            aggregatorVerdict: null,
+            findings: [],
+          },
+      checkedAt: new Date().toISOString(),
+      adoptedExistingRemote: true,
+    }),
+  );
 }
 
 function findCompleteChild(against: string, sha: string): string | null {
@@ -1099,13 +1619,6 @@ function findCompleteChild(against: string, sha: string): string | null {
     return null;
   }
   return null;
-}
-
-function sameAgainstStillOpen(
-  child: NonNullable<ReturnType<typeof readCliRun>>,
-  against: string,
-): boolean {
-  return child.reviewEvidence?.againstRunId === against;
 }
 
 function releaseWriterQuietly(profile: RepairProfile, holderRunId: string): void {
@@ -1306,6 +1819,37 @@ function startedTaskDir(state: RepairState): string | null {
     if (dir) return dir;
   }
   return null;
+}
+
+function executionIdFor(runId: string, cycleN: number): string {
+  return `exec-${runId}-${cycleN}`;
+}
+
+function nowMsOrNow(deps: RepairLoopDeps): number {
+  return (deps.nowMs ?? Date.now)();
+}
+
+function bindExecutionPids(
+  runDir: string,
+  executionId: string,
+  pids: number[],
+  nowMs: number,
+): void {
+  const path = executionRecordPath(runDir, executionId);
+  const existing = readExecutionRecord(path);
+  if (existing === null) return;
+  const allowed = canStartWriter({
+    existing,
+    writerKnown: pids.length > 0 || existing.pids.length === 0,
+    writerAlive: false,
+  });
+  if (!allowed.ok && allowed.reason === "unknown_writer") {
+    throw errors.runFailed("refusing a new writer while a previous writer is unknown");
+  }
+  writeExecutionRecord(
+    path,
+    markExecutionStarted(existing, pids.length > 0 ? pids : existing.pids, nowMs),
+  );
 }
 
 function runIdFromArgv(argv: string[]): string | null {

@@ -35,6 +35,26 @@ if (forced === "grand" || process.env.CANARY) {
   if (process.env.GRAND_FILE && grand.pid) writeFileSync(process.env.GRAND_FILE, String(grand.pid));
   if (process.env.PIDFILE && grand.pid) writeFileSync(process.env.PIDFILE, String(grand.pid));
 }
+if (process.env.HIJACK_PATH) {
+  try {
+    writeFileSync(process.env.HIJACK_PATH, "hijacked\n");
+  } catch {
+    // denied by OS sandbox
+  }
+}
+if (process.env.WORKTREE_MARK) {
+  try {
+    writeFileSync(process.env.WORKTREE_MARK, "ok\n");
+  } catch {
+    // denied
+  }
+}
+if (process.env.CANDIDATE_TEST_SCRIPT) {
+  spawn("/bin/sh", [process.env.CANDIDATE_TEST_SCRIPT], {
+    stdio: "ignore",
+    env: process.env,
+  });
+}
 process.stdout.write(
   `${JSON.stringify({ type: "system", subtype: "init", session_id: session })}\n`,
 );
