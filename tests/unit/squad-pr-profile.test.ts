@@ -4,6 +4,7 @@ import {
   headsRef,
   squadPrProfileSchema,
   withCandidateSha,
+  withPinnedCandidateSource,
 } from "@shared/runtime/squad-pr-profile";
 import { describe, expect, it } from "vitest";
 
@@ -40,6 +41,17 @@ describe("frozen pr-profile", () => {
     expect(published.authorization.authority_ref).toBe(AUTH);
     expect(published.target.sha).toBe(SHA);
     expect(squadPrProfileSchema.parse(published).source.ref).toBe(headsRef("feat-x"));
+    const privateRef = `refs/heads/councilkit/bridge/squad-task-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/${CAND}`;
+    const pinned = withPinnedCandidateSource(profile, { ref: privateRef, sha: CAND });
+    expect(pinned.source.ref).toBe(privateRef);
+    expect(pinned.source.sha).toBe(CAND);
+    expect(pinned.integration.base_ref).toBe(headsRef("feat-x"));
+    expect(pinned.integration.base_sha).toBe(SHA);
+    expect(pinned.target.remote).toBe("origin");
+    expect(pinned.target.ref).toBe(headsRef("feat-x"));
+    expect(pinned.target.sha).toBe(SHA);
+    expect(pinned.authorization.authority_ref).toBe(AUTH);
+    expect(pinned.delivery.mode).toBe("source-branch-ready");
   });
 
   it("rejects a profile that omits a supported mode", () => {

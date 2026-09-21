@@ -127,6 +127,17 @@ export function withCandidateSha(profile: SquadPrProfile, candidateSha: string):
   });
 }
 
+/** Bind source.ref and source.sha together; leave target/integration/grant/mode untouched. */
+export function withPinnedCandidateSource(
+  profile: SquadPrProfile,
+  input: { ref: string; sha: string },
+): SquadPrProfile {
+  return squadPrProfileSchema.parse({
+    ...profile,
+    source: { ref: input.ref, sha: input.sha.toLowerCase() },
+  });
+}
+
 export function deliveryAuthorityFromProfile(profile: SquadPrProfile): FrozenDeliveryAuthority {
   return deliveryAuthoritySchema.parse({
     push: profile.authorization.push,

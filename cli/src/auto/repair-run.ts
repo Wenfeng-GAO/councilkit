@@ -922,12 +922,13 @@ async function publishIfNeeded(input: {
       identity,
     });
     if (!published.ok) {
+      const detail = [published.stage, published.message].filter(Boolean).join(": ");
       return {
         done: true,
         outcome: finish(input.input, {
           businessResult: "needs_attention",
           reasonCode: published.code,
-          message: published.code,
+          message: detail ? `${published.code}: ${detail}` : published.code,
           outerUsed: state.outerUsed,
         }),
       };

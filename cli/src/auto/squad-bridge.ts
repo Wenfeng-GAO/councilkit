@@ -64,7 +64,13 @@ export type SquadBridgePublishResult =
         ref: string;
       };
     }
-  | { ok: false; code: SquadBridgeFailureCode };
+  | {
+      ok: false;
+      code: SquadBridgeFailureCode;
+      stage?: string;
+      exitCode?: number | null;
+      message?: string;
+    };
 
 export interface SquadBridge {
   start(request: SquadBridgeStartRequest): SquadBridgeStartResult;

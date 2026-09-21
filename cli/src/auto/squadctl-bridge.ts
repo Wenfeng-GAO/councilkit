@@ -5,13 +5,14 @@ import { basename, dirname, join } from "node:path";
 import {
   type FrozenIntegrateIdentity,
   SQUAD_BRIDGE_CONTRACT_VERSION,
+  type SquadBridgeFailureCode,
   agentSeatEnv,
   assertSquadBridgeVersion,
   canRequestPublish,
-  canonicalSha256,
   frozenIntegrateCommand,
   inheritRepairHistory,
   isTrustedSquadctlIntegrateReceipt,
+  sanitizePublishDiagnostic,
 } from "@shared/runtime/squad-bridge-contract";
 import { type SquadBridgeProbe, discoverSquadBridge } from "@shared/runtime/squad-bridge-discovery";
 import {
@@ -28,11 +29,13 @@ import {
   buildFrozenPrProfile,
   deliveryAuthorityFromProfile,
   headsRef,
-  withCandidateSha,
+  squadPrProfileSchema,
 } from "@shared/runtime/squad-pr-profile";
 import { errors } from "../errors";
+import { redact } from "../redact";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
+import { bindPublishableCandidateProfile } from "./candidate-source-ref";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
 import { GROK_SESSION_WAIT_MS, grokLeaderSocket, spawnEnvForDriver } from "./driver-commands";
 import {
@@ -380,17 +383,41 @@ export class SquadctlBridge implements SquadBridge {
     identity: FrozenIntegrateIdentity;
   }): Promise<SquadBridgePublishResult> {
     const snapshot = this.status(request);
-    if (!canRequestPublish(snapshot.event)) {
-      return { ok: false, code: "JOURNAL_GATES_INCOMPLETE" };
+    if (
+      !canRequestPublish(snapshot.event) ||
+      snapshot.event.journal.candidateSha.toLowerCase() !==
+        request.identity.candidateSha.toLowerCase()
+    ) {
+      return publishRefuse("JOURNAL_GATES_INCOMPLETE", {
+        stage: "journal",
+        message: "publishable journal does not bind the requested candidate SHA",
+      });
     }
     const cmd = frozenIntegrateCommand({
       verb: "push-remote",
       identity: request.identity,
     });
-    if (!cmd.ok) return { ok: false, code: "UNTRUSTED_RECEIPT" };
+    if (!cmd.ok) {
+      return publishRefuse("UNTRUSTED_RECEIPT", {
+        stage: "identity",
+        message: "frozen integrate identity is not a usable push-remote command",
+      });
+    }
     const stored = this.readIdentity(request.taskId);
     const taskDir = stored?.taskDir ?? this.tasks.get(request.taskId);
-    if (!taskDir || !stored?.delivery) return { ok: false, code: "UNTRUSTED_RECEIPT" };
+    if (!taskDir || !stored?.delivery) {
+      return publishRefuse("UNTRUSTED_RECEIPT", {
+        stage: "identity",
+        message: "missing frozen delivery identity for this controller task",
+      });
+    }
+    const frozen = this.readFrozenProfile(taskDir);
+    if (!frozen) {
+      return publishRefuse("UNTRUSTED_RECEIPT", {
+        stage: "identity",
+        message: "frozen pr-profile is missing or invalid",
+      });
+    }
     const workspace = stored.workspaceCwd;
     const expectedFetch = stored.delivery.originUrl;
     const expectedPush = stored.delivery.pushUrl ?? stored.delivery.originUrl;
@@ -404,18 +431,31 @@ export class SquadctlBridge implements SquadBridge {
           this.options.env ?? process.env,
         );
       } catch {
-        return { ok: false, code: "UNTRUSTED_RECEIPT" };
+        return publishRefuse("UNTRUSTED_RECEIPT", {
+          stage: "remote-url",
+          message: "isolated workspace remote URL drifted from the frozen fetch/push URLs",
+        });
       }
     }
-    const frozen = this.readFrozenProfile(taskDir);
-    if (!frozen) return { ok: false, code: "UNTRUSTED_RECEIPT" };
-    const profile = withCandidateSha(frozen, request.identity.candidateSha);
-    const profilePath = this.writeProfile(taskDir, profile);
+    const bound = await bindPublishableCandidateProfile({
+      event: snapshot.event,
+      identity: request.identity,
+      delivery: stored.delivery,
+      frozenProfile: frozen,
+      workspaceCwd: workspace,
+      taskId: request.taskId,
+      runCommand: this.options.runCommand,
+      env: this.options.env,
+    });
+    if (!bound.ok) {
+      return publishRefuse(bound.code, { stage: bound.stage, message: bound.message });
+    }
+    const profilePath = this.writeProfile(taskDir, bound.profile);
     const expected = {
       ...request.identity,
       remote: stored.delivery.remote,
       remoteRef: headsRef(request.identity.sourceBranch),
-      profileHash: canonicalSha256(profile),
+      profileHash: bound.profileHash,
     };
     const check = await this.runSquadctl([
       "integrate",
@@ -436,7 +476,13 @@ export class SquadctlBridge implements SquadBridge {
       check.exitCode !== 0 ||
       !isTrustedSquadctlIntegrateReceipt(parseJson(check.stdout), expected, "check-remote")
     ) {
-      return { ok: false, code: "UNTRUSTED_RECEIPT" };
+      return publishRefuse("UNTRUSTED_RECEIPT", {
+        stage: "check-remote",
+        exitCode: check.exitCode,
+        stdout: check.stdout,
+        stderr: check.stderr,
+        message: "check-remote refused before target update",
+      });
     }
     const push = await this.runSquadctl([
       "integrate",
@@ -457,7 +503,13 @@ export class SquadctlBridge implements SquadBridge {
       push.exitCode !== 0 ||
       !isTrustedSquadctlIntegrateReceipt(parseJson(push.stdout), expected, "push-remote")
     ) {
-      return { ok: false, code: "UNTRUSTED_RECEIPT" };
+      return publishRefuse("UNTRUSTED_RECEIPT", {
+        stage: "push-remote",
+        exitCode: push.exitCode,
+        stdout: push.stdout,
+        stderr: push.stderr,
+        message: "push-remote refused before or during target update",
+      });
     }
     return {
       ok: true,
@@ -1253,7 +1305,8 @@ export class SquadctlBridge implements SquadBridge {
     const text = readFileText(join(taskDir, PROFILE_FILE));
     if (text === null) return null;
     try {
-      return JSON.parse(text) as SquadPrProfile;
+      const parsed = squadPrProfileSchema.safeParse(JSON.parse(text));
+      return parsed.success ? parsed.data : null;
     } catch {
       return null;
     }
@@ -1541,4 +1594,25 @@ function readEpoch(view: unknown): number | null {
   if (view === null || typeof view !== "object" || Array.isArray(view)) return null;
   const epoch = (view as { epoch?: unknown }).epoch;
   return typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0 ? epoch : null;
+}
+
+function publishRefuse(
+  code: SquadBridgeFailureCode,
+  input: {
+    stage: string;
+    message?: string;
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number | null;
+  },
+): SquadBridgePublishResult {
+  const sanitized = sanitizePublishDiagnostic(input);
+  const message = String(redact(sanitized.message));
+  return {
+    ok: false,
+    code,
+    stage: sanitized.stage,
+    exitCode: sanitized.exitCode,
+    message,
+  };
 }

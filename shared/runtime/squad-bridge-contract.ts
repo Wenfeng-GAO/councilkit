@@ -21,6 +21,22 @@ export type SquadBridgeFailureCode =
   | "JOURNAL_GATES_INCOMPLETE"
   | "UNTRUSTED_RECEIPT";
 
+export const PUBLISH_DIAGNOSTIC_LIMIT = 512;
+export const PUBLISH_DIAGNOSTIC_STAGES = [
+  "journal",
+  "identity",
+  "remote-url",
+  "pin-candidate",
+  "check-remote",
+  "push-remote",
+] as const;
+export type PublishDiagnosticStage = (typeof PUBLISH_DIAGNOSTIC_STAGES)[number];
+
+const CREDENTIAL_ASSIGNMENT =
+  /\b(authorization|token|password|secret|credential|api[_-]?key|GH_TOKEN|GITHUB_TOKEN|GIT_ASKPASS|ANTCODE_TOKEN)[=:][^\n]*/gi;
+const CREDENTIAL_LIKE =
+  /ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|BEGIN [A-Z ]+PRIVATE KEY[\s\S]*?END [A-Z ]+PRIVATE KEY/gi;
+
 export const squadJournalRefsSchema = z
   .object({
     candidateSha: z.string().regex(FULL_COMMIT_SHA),
@@ -110,6 +126,43 @@ export function receiptContainsSecret(receipt: unknown): boolean {
   return /GH_TOKEN|GITHUB_TOKEN|GIT_ASKPASS|ANTCODE_TOKEN|ghp_|gho_|github_pat_|BEGIN [A-Z ]+PRIVATE KEY/i.test(
     text,
   );
+}
+
+export function sanitizePublishDiagnostic(input: {
+  stage: string;
+  exitCode?: number | null;
+  message?: string;
+  stdout?: string;
+  stderr?: string;
+}): {
+  stage: PublishDiagnosticStage | "publish";
+  exitCode: number | null;
+  message: string;
+} {
+  const stage = (PUBLISH_DIAGNOSTIC_STAGES as readonly string[]).includes(input.stage)
+    ? (input.stage as PublishDiagnosticStage)
+    : "publish";
+  const raw = [input.message, input.stderr, input.stdout]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .join("\n");
+  const message = sanitizePublishMessage(raw);
+  return {
+    stage,
+    exitCode: typeof input.exitCode === "number" ? input.exitCode : null,
+    message,
+  };
+}
+
+export function sanitizePublishMessage(
+  text: string,
+  limit: number = PUBLISH_DIAGNOSTIC_LIMIT,
+): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  const redacted = collapsed
+    .replace(CREDENTIAL_ASSIGNMENT, "$1=[redacted]")
+    .replace(CREDENTIAL_LIKE, "[redacted]");
+  if (redacted.length <= limit) return redacted;
+  return redacted.slice(0, limit);
 }
 
 export function isTrustedIntegrateReceipt(receipt: unknown): boolean {

@@ -1,4 +1,5 @@
 import {
+  PUBLISH_DIAGNOSTIC_LIMIT,
   SQUAD_BRIDGE_CONTRACT_VERSION,
   agentSeatEnv,
   assertSquadBridgeVersion,
@@ -11,6 +12,8 @@ import {
   isTrustedIntegrateReceipt,
   isTrustedSquadctlIntegrateReceipt,
   parentOuterCycleDelta,
+  sanitizePublishDiagnostic,
+  sanitizePublishMessage,
 } from "@shared/runtime/squad-bridge-contract";
 import { buildFrozenPrProfile } from "@shared/runtime/squad-pr-profile";
 import { describe, expect, it } from "vitest";
@@ -348,6 +351,31 @@ describe("squad bridge contract", () => {
     expect(live.status({ taskId }).event.kind).toBe("stopped");
     const published = live.requestPublish({ taskId, identity: IDENTITY });
     expect(published.ok).toBe(false);
+  });
+
+  it("sanitizes publish diagnostics with truncation and credential-like text", () => {
+    const long = `${"x".repeat(PUBLISH_DIAGNOSTIC_LIMIT + 80)} GH_TOKEN=super-secret ghp_notarealtoken`;
+    const message = sanitizePublishMessage(long);
+    expect(message.length).toBe(PUBLISH_DIAGNOSTIC_LIMIT);
+    expect(message).not.toContain("super-secret");
+    expect(message).not.toContain("ghp_notarealtoken");
+    const diagnostic = sanitizePublishDiagnostic({
+      stage: "check-remote",
+      exitCode: 4,
+      stderr:
+        "integration refused before target update Authorization: Bearer abc.def\nGIT_ASKPASS=/tmp/askpass",
+      stdout: "token=ghp_notarealtoken",
+    });
+    expect(diagnostic.stage).toBe("check-remote");
+    expect(diagnostic.exitCode).toBe(4);
+    expect(diagnostic.message).toMatch(/integration refused before target update/);
+    expect(diagnostic.message).toContain("[redacted]");
+    expect(diagnostic.message).not.toContain("abc.def");
+    expect(diagnostic.message).not.toContain("ghp_notarealtoken");
+    expect(diagnostic.message).not.toMatch(/GIT_ASKPASS=\/tmp\/askpass/);
+    expect(sanitizePublishDiagnostic({ stage: "evil-stage", message: "nope" }).stage).toBe(
+      "publish",
+    );
   });
 
   it("probes unavailable when squadctl is not on PATH or skill installs", () => {
