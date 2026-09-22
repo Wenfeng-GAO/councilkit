@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "reviewer": "/root/fixed_candidate_acceptance",
+  "independentOfBuilders": true,
+  "candidate": "f9c5abd83a3f357f3f35bbb71e50a7a6004f40ad",
+  "checkedAt": "2026-09-22T18:42:39.642430+00:00",
+  "productionClean": true,
+  "productionEquivalentToCounterexampleVerification": "f5497cfe2667b4a4c006bc8ffcfa8fa13b265aba",
+  "status": "verified",
+  "matrix": {
+    "A01": "verified",
+    "A02": "verified",
+    "A03": "verified",
+    "A04": "verified",
+    "A05": "verified",
+    "A06": "verified",
+    "A07": "verified",
+    "A08": "verified",
+    "A09": "verified",
+    "A10": "verified",
+    "A11": "verified",
+    "A12": "verified"
+  },
+  "originalCandidate": {
+    "sha": "fa5b70dfe29f4940c5b5b332bef4f9130f238a4e",
+    "status": "failed",
+    "failures": [
+      "A02 renamed old-side comment omitted",
+      "A05 appended new mechanism incorrectly skipped"
+    ],
+    "evidencePreserved": true
+  },
+  "tests": {
+    "total": 353,
+    "passed": 353,
+    "failed": 0,
+    "skipped": 0,
+    "newCases": 79,
+    "relatedExistingCases": 274,
+    "e2e": {
+      "passed": 20,
+      "failed": 0,
+      "retries": 0,
+      "exitCode": 0
+    },
+    "typecheckExitCode": 0,
+    "fullProductionBuildExitCode": 0,
+    "lintExitCode": 0
+  },
+  "counterexamples": {
+    "R1": "verified resolved by independent replay",
+    "R2": "verified resolved by independent replay"
+  },
+  "live": {
+    "originalRealModelCalls": 2,
+    "newCandidateModelCallsAdded": 0,
+    "sameSyntheticHome": true,
+    "checks": [
+      {
+        "findingId": "F-live-style",
+        "executionId": "explain-d57ce387-1da3-4a05-a019-17fb084d640e",
+        "apiAndCachePayloadUnchanged": true,
+        "pageContainsExactAssertionAndExecutionId": true,
+        "quality": "verified"
+      },
+      {
+        "findingId": "F-live-interleaving",
+        "executionId": "explain-b37f7d43-98c4-46f4-a4e8-8dab246ae94f",
+        "apiAndCachePayloadUnchanged": true,
+        "pageContainsExactAssertionAndExecutionId": true,
+        "quality": "verified"
+      }
+    ]
+  },
+  "scope": [
+    "read-only code and evidence inspection",
+    "two bounded synthetic independent counterexamples",
+    "no real PR repair/push/merge",
+    "no daily 43127 or real decisions mutated"
+  ],
+  "evidenceSha256": {
+    "tests-final-candidate.json": "fc00e95e50360fb739ed08e901edda46cbf486139191356891f9fe4a4b0488f8",
+    "moved-assertion-b664eba.json": "202bd40bb12b41523e1a57cddc14376b6b1b7df39f7780b50590863a4d7798a9",
+    "e2e-b664eba.log": "9eb74a3da3623c650d3074f2031c924d70bb50f2809f17fa159eb79d4202d976",
+    "typecheck-b664eba.log": "b99e327c97e0951cdd39f8d17934f43821ef345e5c05088a1a9a3a5955a40699",
+    "lint-final-patch.log": "6e769721f736e3d8cb98ff2617ad2c0826f21bf839bf11b04d7de7e6073ff3c1",
+    "live-current/api-receipt.json": "3c0e236c1901a5d71b13693c5cc3858bf5b796e9559437e7a7f512bbafa55a95",
+    "independent-skip-repro-candidate2.json": "65bd5865fb308e8c7bf30be2a0b3d4565af7479189b4fc86fda2c5a4c1e37d49",
+    "independent-rename-repro-candidate2.json": "41c4cf4cb2410d55eb5695e8d4e343da74312252d14e54ea7f52a556b7b2dca4",
+    "fixture-format-receipt.json": "2589934225d0cfced44e634f60c74f60e7ae5496709fafa9b947dabcf62033ca",
+    "lint-final.log": "ef0b3bd1681631431982f7a46202f9211458fb96daa8c284409366f1e258c01b",
+    "lint-final.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "testedCandidate": "b664eba266929f3f7f28287e5cec91110360cc68",
+  "deliveryRevision": "f9c5abd83a3f357f3f35bbb71e50a7a6004f40ad",
+  "equivalence": {
+    "productionCodeUnchangedSinceTestedCandidate": true,
+    "fixtureValueUnchanged": true,
+    "onlyChanges": "equivalent quote formatting and amendment documentation",
+    "evidence": "fixture-format-receipt.json",
+    "businessTestsOrModelRepeated": false
+  },
+  "lintFinal": {
+    "log": "lint-final.log",
+    "exitLog": "lint-final.exit",
+    "exitCode": 0,
+    "files": 69,
+    "previousFailureHistory": "lint-before-fixture-format.log"
+  }
+}
