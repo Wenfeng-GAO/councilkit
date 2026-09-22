@@ -46,11 +46,13 @@ describe("repair chain store identity and locked budget", () => {
       prUrl: "https://github.com/acme/repo/pull/1",
       goalFingerprint: goalIdentityFingerprint("Keep the same PR goal"),
       parentRunId: "ck-repair-2",
+      budget: newRepairBudget({ sourceFixMax: 3 }, 12),
       nowMs: 12,
     });
     expect(second.inherited).toBe(true);
     expect(second.chain.chainId).toBe(first.chain.chainId);
     expect(second.chain.budget.sourceFixUsed).toBe(1);
+    expect(second.chain.parentRunIds).toContain("ck-repair-2");
   });
 
   it("does not let a lock-outside stale budget overwrite the chain", () => {

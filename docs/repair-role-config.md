@@ -33,32 +33,20 @@ pnpm exec councilkit repair roles reset
 
 ## 额度耗尽后换席
 
-`repair roles set` 只改 `squad-bridge.json`。它不删 `repair.json`，不改 `sourceFixUsed`，也不把 `remainingBudget` 清零。已有 Squad 任务的 `councilkit-bridge.json` 仍记下原来的 `model` 和 `nativeSession`。
+`repair roles set` 只改 `COUNCILKIT_HOME/squad-bridge.json`。它不删 `repair.json`，也不改持久 chain 里的 `sourceFixUsed`。
 
-先记下预算：
-
-```bash
-pnpm exec councilkit repair status --run <ck-repair-id> --json
-```
-
-记下输出里的 `remainingBudget`。
-
-停掉当前 writer，再改席位，然后核对预算没变：
+旧 repair run 的 `repair resume` 仍续接该 run 已冻结的 Squad session 和旧模型。额度已经耗尽的那个 cycle 不必先做完才能换席。换席用同 PR、同目标上的新 parent run。`loadOrCreateChain` 会按 repo 和 PR 找到已有 chain，把新的 `parentRunId` 加进去，并保留原来的 `sourceFixUsed`。这不是一条新 chain，预算也不会因此从 0 开始。
 
 ```bash
-pnpm exec councilkit repair stop --run <ck-repair-id>
+pnpm exec councilkit repair status --run <old-ck-repair-id> --json
+pnpm exec councilkit repair stop --run <old-ck-repair-id>
 pnpm exec councilkit repair roles set --reviewer cursor:composer-2.5
-pnpm exec councilkit repair status --run <ck-repair-id> --json
+pnpm exec councilkit repair run --from <ck-review-id> --profile <name> --run-id <new-ck-repair-id>
+pnpm exec councilkit repair status --run <new-ck-repair-id> --json
 ```
 
-第二次 status 的 `remainingBudget` 必须和改席位之前相同。
+新 run 的 `remainingBudget` 来自同一条 chain，应与 stop 之前已经用掉的 source-fix 次数一致，而不是一份全新的零用量预算。旧 run 不要再 `repair resume`。
 
-恢复同一条 repair run 时，当前 cycle 如果已经有 native session，会继续那个旧 Squad 任务，启动参数仍是冻结的旧模型，不会读取新的 reviewer 配置：
+旧 Squad 任务目录和它的 builder worktree 留在原地，这条命令不会覆盖它们。新 Squad 任务是新的 task 目录，候选从 repair package 里的可信 SHA 重新取出，不把旧 worktree 里未提交的改动带过去。那些未提交改动只留在旧 worktree 里；当前命令没有把它们自动应用到新候选。
 
-```bash
-pnpm exec councilkit repair resume --run <ck-repair-id>
-```
-
-新的席位配置要等这条 run 把当前 cycle 做完、并且 `sourceFix` 预算还允许下一轮时，由同一次 `repair resume --run <ck-repair-id>` 打开下一个 outer cycle。那一轮的 squad init 使用 `--contract`，并且 `newRepairChain` 为 false，会带上上一轮导出的 history。不要省略 `--run-id` 去另起一条 repair run 来换模型。不要删除 `repair.json` 或 chain 里的已用预算。
-
-同一次 native session 里原地换模型不受支持。`repair resume` 不会把旧 Grok 或旧 Cursor session 交给另一个模型。
+新 parent run 的第一轮 squad init 使用 `--new-repair-chain`。CouncilKit 的 source-fix 预算仍在上面的持久 chain 里。Squad 任务内部的 repair-history 计数从这次新任务开始，不会自动导入旧 Squad 任务的 history。旧任务的 history 文件还在旧 task 目录里。
