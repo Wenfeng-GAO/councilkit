@@ -1,7 +1,34 @@
-/* Squad repair observation workspace — ck-repair-* namespace, uses --ck-* tokens */
-
+/* Repair workspace: a reading surface, not a report card nested in another report. */
+.ck-repair-page {
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--ck-ui-font);
+  background: var(--ck-content);
+  color: var(--ck-text);
+}
+.ck-repair-breadcrumb {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 32px;
+  border-bottom: 1px solid var(--ck-divider);
+  font-size: 13px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-breadcrumb a:hover {
+  color: var(--ck-text);
+}
+.ck-repair-baseline-link {
+  margin-left: auto;
+}
 .ck-repair-workspace {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
@@ -10,189 +37,620 @@
   font-family: var(--ck-ui-font);
   font-synthesis: none;
 }
-
 .ck-repair-context {
-  padding: 18px 24px 0;
+  flex-shrink: 0;
+  padding: 22px 32px 0;
+  border-bottom: 1px solid var(--ck-divider);
 }
-
-.ck-repair-run-details-wrap {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
+.ck-repair-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
 }
-
+.ck-repair-heading {
+  min-width: 0;
+}
+.ck-repair-eyebrow {
+  margin: 0 0 6px;
+  color: var(--ck-accent);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: .12em;
+}
+.ck-repair-eyebrow span {
+  margin-left: 8px;
+  letter-spacing: normal;
+  color: var(--ck-tertiary);
+}
 .ck-repair-goal {
   margin: 0;
-  font-size: 26px;
+  font-size: 25px;
   line-height: 34px;
   font-weight: 600;
+  overflow-wrap: anywhere;
+  letter-spacing: -.02em;
 }
-
-.ck-repair-phase {
-  margin: 8px 0 0;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 600;
-}
-
-.ck-repair-last,
-.ck-repair-meta {
-  margin: 8px 0 0;
+.ck-repair-source-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 5px;
   font-size: 13px;
   line-height: 20px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-source-line a {
   color: var(--ck-secondary);
+}
+.ck-repair-source-line a:hover {
+  color: var(--ck-accent);
+}
+.ck-repair-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.ck-repair-statusline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 11px 14px;
+  border: 1px solid var(--ck-divider);
+  border-left: 2px solid var(--ck-running);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--ck-running) 4%, var(--ck-content));
+}
+.ck-repair-statusline.is-warning {
+  border-left-color: var(--ck-warning);
+  background: color-mix(in srgb, var(--ck-warning) 4%, var(--ck-content));
+}
+.ck-repair-statusline.is-success {
+  border-left-color: var(--ck-success);
+}
+.ck-repair-statusline.is-neutral {
+  border-left-color: var(--ck-tertiary);
+}
+.ck-repair-status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--ck-running);
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.is-warning > .ck-repair-status-dot {
+  background: var(--ck-warning);
+}
+.is-success > .ck-repair-status-dot {
+  background: var(--ck-success);
+}
+.is-neutral > .ck-repair-status-dot {
+  background: var(--ck-tertiary);
+}
+.ck-repair-status-copy {
+  flex: 1;
+  min-width: 0;
+}
+.ck-repair-status-copy h2 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
+}
+.ck-repair-status-copy p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-observation-bar {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ck-tertiary);
   font-variant-numeric: tabular-nums;
 }
-
-.ck-repair-attention {
-  margin: 12px 0 0;
-  padding: 8px 12px;
-  border-left: 2px solid var(--ck-warning);
-  background: var(--ck-raised);
-  font-size: 14px;
-  line-height: 22px;
+.ck-repair-observation-bar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
-
-.ck-repair-banner {
-  margin: 8px 0 0;
-  padding: 6px 10px;
-  border: 1px solid var(--ck-divider);
-  border-radius: 8px;
+.ck-repair-observation-bar strong {
+  font-weight: 400;
+  color: var(--ck-secondary);
+}
+.ck-repair-budget {
+  margin-left: auto;
+}
+.ck-repair-indicator {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ck-tertiary);
+}
+.ck-repair-indicator.is-alive {
+  background: var(--ck-success);
+}
+.ck-repair-indicator.is-offline {
+  background: var(--ck-warning);
+}
+.ck-repair-inline-action {
+  color: var(--ck-running);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ck-repair-stages {
+  height: 43px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
   color: var(--ck-tertiary);
   font-size: 13px;
 }
-
+.ck-repair-stages li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.ck-repair-stages li:not(:last-child)::after {
+  content: "";
+  width: 28px;
+  height: 1px;
+  margin: 0 14px 0 8px;
+  background: var(--ck-divider);
+}
+.ck-repair-stages li > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border: 1px solid var(--ck-divider);
+  border-radius: 50%;
+  font-size: 13px;
+}
+.ck-repair-stages .is-current {
+  color: var(--ck-accent);
+}
+.ck-repair-stages .is-current > span {
+  border-color: var(--ck-accent);
+  background: var(--ck-selected);
+}
+.ck-repair-stages .is-complete > span {
+  color: var(--ck-secondary);
+}
 .ck-repair-body {
   display: flex;
   flex: 1;
   min-height: 0;
   min-width: 0;
-  margin-top: 16px;
+  overflow: hidden;
 }
-
 .ck-repair-roles {
   width: 232px;
   flex-shrink: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
   background: var(--ck-seats);
   border-right: 1px solid var(--ck-divider);
-  padding: 8px;
+  padding: 16px 10px;
 }
-
-.ck-repair-role {
-  display: grid;
-  grid-template-columns: 18px 1fr auto;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  min-height: 36px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ck-text);
-  text-align: left;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.ck-repair-role:hover {
-  background: var(--ck-raised);
-  transition: background 120ms ease;
-}
-
-.ck-repair-role.is-selected {
-  background: var(--ck-selected);
-}
-
-.ck-repair-role-status {
+.ck-repair-section-label {
+  margin: 0 12px 12px;
   font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
   color: var(--ck-tertiary);
+  letter-spacing: .08em;
 }
-
-.ck-repair-main {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  padding: 0 24px 24px;
-}
-
-.ck-repair-tabs {
+.ck-repair-role {
   display: flex;
-  gap: 8px;
-  margin: 16px 0 12px;
-}
-
-.ck-repair-tabs button {
-  min-height: 32px;
-  padding: 6px 12px;
-  border: 1px solid var(--ck-controlBorder);
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 12px;
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--ck-secondary);
+  text-align: left;
   cursor: pointer;
-  font-size: 14px;
 }
-
-.ck-repair-tabs button.is-selected {
+.ck-repair-role > .ck-repair-icon {
+  margin-top: 2px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-role:hover {
+  background: var(--ck-raised);
+}
+.ck-repair-role.is-selected {
   background: var(--ck-selected);
   color: var(--ck-text);
+  box-shadow: inset 2px 0 var(--ck-accent);
 }
-
+.ck-repair-role.is-selected > .ck-repair-icon {
+  color: var(--ck-accent);
+}
+.ck-repair-role-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.ck-repair-role-label {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+.ck-repair-role-status {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-role.is-failed .ck-repair-role-status {
+  color: var(--ck-error);
+}
+.ck-repair-role.is-active .ck-repair-role-status {
+  color: var(--ck-running);
+}
+.ck-repair-role-divider {
+  height: 1px;
+  background: var(--ck-divider);
+  margin: 12px;
+}
+.ck-repair-role-foot {
+  margin: auto 12px 0;
+  padding-top: 24px;
+  color: var(--ck-tertiary);
+  font-size: 13px;
+  line-height: 20px;
+}
+.ck-repair-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 28px;
+}
+.ck-repair-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+  min-height: 52px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--ck-divider);
+}
+.ck-repair-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font-size: 14px;
+  color: var(--ck-tertiary);
+  cursor: pointer;
+}
+.ck-repair-tabs button.is-selected {
+  border-bottom-color: var(--ck-accent);
+  color: var(--ck-text);
+}
+.ck-repair-tabs button span {
+  font-size: 13px;
+  color: var(--ck-tertiary);
+  background: var(--ck-raised);
+  padding: 0 5px;
+  border-radius: 4px;
+  line-height: 18px;
+}
+.ck-repair-activity {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
 .ck-repair-toolbar {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+  padding: 16px 0 10px;
+  flex-shrink: 0;
 }
-
 .ck-repair-filter {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
-
 .ck-repair-filter select,
-.ck-repair-filter input,
 .ck-repair-round select {
   min-height: 32px;
-  border: 1px solid var(--ck-controlBorder);
+  max-width: 100%;
+  border: 1px solid var(--ck-divider);
   border-radius: 6px;
-  background: var(--ck-raised);
-  color: var(--ck-text);
-  padding: 4px 8px;
-  font-size: 14px;
-}
-
-.ck-repair-btn {
-  min-height: 32px;
-  padding: 6px 12px;
-  border: 1px solid var(--ck-controlBorder);
-  border-radius: 6px;
-  background: var(--ck-raised);
-  color: var(--ck-text);
+  background: var(--ck-content);
+  color: var(--ck-secondary);
+  padding: 4px 9px;
+  font-size: 13px;
   cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
 }
-
-.ck-repair-btn.accent {
-  color: #8cb4e8;
+.ck-repair-filter-query {
+  flex: 1;
+  min-width: 150px;
+  border: 1px solid var(--ck-divider);
+  border-radius: 6px;
+  padding-left: 10px;
+  color: var(--ck-tertiary);
+  background: var(--ck-raised);
 }
-
+.ck-repair-filter input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ck-text);
+  padding: 4px 8px 4px 0;
+  font-size: 13px;
+}
+.ck-repair-filter-query:focus-within {
+  outline: 2px solid var(--ck-focus);
+  outline-offset: 2px;
+}
+.ck-repair-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--ck-divider);
+  border-radius: 6px;
+  background: var(--ck-raised);
+  color: var(--ck-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ck-repair-btn:hover:not(:disabled) {
+  background: var(--ck-selected);
+  color: var(--ck-text);
+}
+.ck-repair-btn.quiet {
+  background: transparent;
+  border-color: transparent;
+}
+.ck-repair-btn.quiet:hover:not(:disabled) {
+  background: var(--ck-raised);
+}
 .ck-repair-btn.danger {
   color: var(--ck-error);
 }
-
+.ck-repair-btn.accent {
+  color: var(--ck-running);
+}
 .ck-repair-btn:disabled {
-  color: var(--ck-disabled);
+  opacity: 0.65;
   cursor: not-allowed;
 }
-
+.ck-repair-follow {
+  margin-left: auto;
+}
+.ck-repair-follow.is-following::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  background: var(--ck-success);
+  border-radius: 50%;
+  margin-right: 2px;
+}
+.ck-repair-list-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 30px;
+  flex-shrink: 0;
+  color: var(--ck-tertiary);
+}
+.ck-repair-list-meta .ck-repair-btn {
+  padding: 0;
+  min-height: 24px;
+  border: 0;
+  background: none;
+  color: var(--ck-tertiary);
+}
+.ck-repair-list-meta .ck-repair-icon {
+  width: 13px;
+  height: 13px;
+  transform: rotate(180deg);
+}
+.ck-repair-meta {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-activity-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 8px -10px 0;
+  padding: 0 10px 16px;
+  scrollbar-gutter: stable;
+}
+.ck-repair-activity-row {
+  display: grid;
+  grid-template-columns: 64px 18px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+  padding: 15px 0;
+  border: 0;
+  border-bottom: 1px solid var(--ck-divider);
+  background: transparent;
+  color: var(--ck-text);
+  text-align: left;
+  cursor: pointer;
+  min-height: 76px;
+}
+.ck-repair-activity-row:hover {
+  background: color-mix(in srgb, var(--ck-raised) 55%, transparent);
+}
+.ck-repair-row-time {
+  font-family: var(--ck-mono-font);
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--ck-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ck-repair-row-icon {
+  color: var(--ck-tertiary);
+  padding-top: 2px;
+}
+.ck-repair-row-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ck-repair-row-title {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ck-repair-row-context {
+  font-family: var(--ck-mono-font);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ck-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ck-repair-row-meta {
+  display: flex;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ck-tertiary);
+}
+.ck-repair-row-status {
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--ck-tertiary);
+  white-space: nowrap;
+}
+.ck-repair-row-status > span {
+  margin-left: 6px;
+}
+.ck-repair-activity-row.is-failed .ck-repair-row-status {
+  color: var(--ck-error);
+}
+.ck-repair-activity-row.is-started .ck-repair-row-status {
+  color: var(--ck-running);
+}
+.ck-repair-empty {
+  margin: 40px auto;
+  color: var(--ck-secondary);
+  font-size: 14px;
+  line-height: 24px;
+}
+.ck-repair-history-banner {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 -32px;
+  padding: 10px 32px;
+  background: var(--ck-selected);
+  color: var(--ck-accent);
+  font-size: 13px;
+}
+.ck-repair-history-banner button {
+  text-decoration: underline;
+}
+.ck-repair-run-details-wrap {
+  position: relative;
+}
+.ck-repair-run-details {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 15;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: 60vh;
+  overflow: auto;
+  padding: 18px;
+  background: var(--ck-raised);
+  border: 1px solid var(--ck-divider);
+  border-radius: 8px;
+  box-shadow: 0 14px 40px #0005;
+}
+.ck-repair-run-details .ck-repair-section-label {
+  margin-left: 0;
+}
+.ck-repair-run-details dl {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 9px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  margin: 0;
+}
+.ck-repair-run-details dt {
+  color: var(--ck-tertiary);
+}
+.ck-repair-run-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ck-repair-model-detail {
+  border-top: 1px solid var(--ck-divider);
+  margin-top: 14px;
+  padding-top: 14px;
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ck-repair-model-detail strong {
+  font-weight: 500;
+}
+.ck-repair-model-detail p {
+  margin: 4px 0 0;
+  color: var(--ck-secondary);
+}
+.ck-repair-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
 .ck-repair-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -205,65 +663,9 @@
   color: var(--ck-secondary);
   cursor: pointer;
 }
-
-.ck-repair-icon {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
+.ck-repair-icon-btn:hover {
+  background: var(--ck-raised);
 }
-
-.ck-repair-activity-list {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  max-height: 200px;
-  overflow: auto;
-}
-
-.ck-repair-activity-row {
-  display: grid;
-  grid-template-columns: 18px auto auto 1fr auto auto;
-  gap: 8px;
-  width: 100%;
-  align-items: start;
-  padding: 10px 8px;
-  border: 0;
-  border-bottom: 1px solid var(--ck-divider);
-  background: transparent;
-  color: var(--ck-text);
-  text-align: left;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 22px;
-}
-
-.ck-repair-row-summary {
-  overflow-wrap: anywhere;
-}
-
-.ck-repair-row-time,
-.ck-repair-row-kind,
-.ck-repair-row-status {
-  color: var(--ck-tertiary);
-  font-size: 13px;
-  line-height: 20px;
-  white-space: nowrap;
-}
-
-.ck-repair-empty {
-  margin: 24px 0;
-  color: var(--ck-secondary);
-  font-size: 14px;
-}
-
-.ck-repair-controls {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 24px 20px;
-  border-top: 1px solid var(--ck-divider);
-}
-
 .ck-repair-drawer {
   position: fixed;
   top: 0;
@@ -272,37 +674,30 @@
   left: auto;
   width: 430px;
   max-width: 430px;
-  height: 100vh;
+  height: 100dvh;
   max-height: none;
-  margin: 0 0 0 auto;
+  margin: 0;
   padding: 0;
   border: 0;
-  background: transparent;
+  background: var(--ck-content);
+  color: var(--ck-text);
 }
-
-.ck-repair-drawer:not([open]) {
+.ck-repair-drawer:not([open]),
+.ck-repair-confirm:not([open]) {
   display: none;
 }
-
-.ck-repair-drawer::backdrop {
-  background: rgb(0 0 0 / 35%);
+.ck-repair-drawer::backdrop,
+.ck-repair-confirm::backdrop {
+  background: #0006;
 }
-
 .ck-repair-drawer-panel {
-  position: relative;
-  top: auto;
-  right: auto;
-  bottom: auto;
-  left: auto;
   width: 100%;
   height: 100%;
   background: var(--ck-content);
   border-left: 1px solid var(--ck-divider);
   display: flex;
   flex-direction: column;
-  transition: transform 160ms ease;
 }
-
 .ck-repair-drawer-header {
   display: flex;
   align-items: center;
@@ -310,160 +705,426 @@
   gap: 12px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--ck-divider);
+  flex-shrink: 0;
 }
-
 .ck-repair-drawer-title {
   margin: 0;
+  min-width: 0;
   font-size: 16px;
   line-height: 24px;
-  font-weight: 600;
+  font-weight: 500;
+  overflow-wrap: anywhere;
 }
-
 .ck-repair-drawer-body {
-  padding: 16px 20px;
+  padding: 20px;
   overflow: auto;
+  font-size: 14px;
+  line-height: 24px;
+  overflow-wrap: anywhere;
 }
-
+.ck-repair-drawer-body > p {
+  margin: 0 0 14px;
+}
 .ck-repair-code {
-  margin: 12px 0;
-  padding: 12px;
-  background: var(--ck-raised);
-  border-radius: 8px;
-  font-family: var(--ck-mono-font);
-  font-size: 13px;
-  line-height: 22px;
-  white-space: pre-wrap;
-  overflow-x: auto;
-}
-
-.ck-repair-confirm {
-  position: fixed;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: min(440px, calc(100vw - 32px));
-  padding: 20px 22px;
-  border-radius: 12px;
+  margin: 16px 0;
+  padding: 14px;
   background: var(--ck-raised);
   border: 1px solid var(--ck-divider);
-  z-index: 40;
-  box-shadow: 0 8px 32px rgb(0 0 0 / 40%);
+  border-radius: 6px;
+  font-family: var(--ck-mono-font);
+  font-size: 13px;
+  line-height: 21px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  overflow-wrap: anywhere;
 }
-
+.ck-repair-confirm {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(440px, calc(100vw - 32px));
+  height: fit-content;
+  padding: 24px;
+  border-radius: 10px;
+  background: var(--ck-content);
+  color: var(--ck-text);
+  border: 1px solid var(--ck-divider);
+}
+.ck-repair-confirm h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.ck-repair-confirm p {
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--ck-secondary);
+}
 .ck-repair-confirm-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 22px;
 }
-
 .ck-repair-evidence-list {
   list-style: none;
-  margin: 12px 0;
   padding: 0;
+  margin: 16px 0;
 }
-
 .ck-repair-evidence-item {
-  padding: 10px 0;
+  padding: 16px 0;
   border-bottom: 1px solid var(--ck-divider);
   font-size: 14px;
-  line-height: 22px;
+  line-height: 24px;
 }
-
 .ck-repair-evidence-status.is-passed {
   color: var(--ck-success);
 }
-
 .ck-repair-evidence-status.is-failed,
 .ck-repair-evidence-status.is-insufficient {
   color: var(--ck-error);
 }
-
 .ck-repair-evidence-status.is-pending {
   color: var(--ck-warning);
 }
-
-.ck-repair-source-link {
-  display: inline-block;
-  margin-left: 12px;
-  font-size: 14px;
-  color: #8cb4e8;
+.ck-repair-main > [aria-label="验收与改动"] {
+  overflow: auto;
 }
-
+.ck-repair-source-link {
+  font-size: 13px;
+  color: var(--ck-running);
+}
+.ck-repair-error {
+  color: var(--ck-error);
+  font-size: 13px;
+  line-height: 22px;
+}
 .ck-repair-sr {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
-
-.ck-repair-error {
-  color: var(--ck-error);
-  font-size: 13px;
-}
-
 .ck-repair-workspace :focus-visible {
   outline: 2px solid var(--ck-focus);
   outline-offset: 2px;
 }
-
-@media (max-width: 720px) {
+@media (max-width: 1120px) {
   .ck-repair-context {
-    padding: 14px 16px 0;
+    padding: 18px 24px 0;
   }
-
+  .ck-repair-main {
+    padding: 0 20px;
+  }
+  .ck-repair-roles {
+    width: 200px;
+  }
+  .ck-repair-header-actions {
+    gap: 2px;
+  }
+  .ck-repair-row-time {
+    font-size: 13px;
+  }
+  .ck-repair-activity-row {
+    grid-template-columns: 64px 16px minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .ck-repair-filter-query {
+    min-width: 130px;
+  }
+}
+@media (max-width: 720px) {
+  .ck-repair-page {
+    overflow: auto;
+  }
+  .ck-repair-breadcrumb {
+    height: 44px;
+    padding: 0 16px;
+  }
+  .ck-repair-context {
+    padding: 18px 16px 0;
+  }
+  .ck-repair-heading-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
   .ck-repair-goal {
-    font-size: 20px;
+    font-size: 21px;
     line-height: 28px;
   }
-
+  .ck-repair-header-actions {
+    width: 100%;
+    gap: 5px;
+  }
+  .ck-repair-header-actions > .ck-repair-btn {
+    margin-left: auto;
+  }
+  .ck-repair-statusline {
+    padding: 10px;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .ck-repair-statusline > .ck-repair-btn {
+    font-size: 13px;
+    padding: 4px;
+  }
+  .ck-repair-observation-bar {
+    gap: 6px 14px;
+    padding-top: 10px;
+    font-size: 13px;
+  }
+  .ck-repair-budget {
+    margin-left: 0;
+  }
+  .ck-repair-stages {
+    font-size: 13px;
+    height: 38px;
+  }
+  .ck-repair-stages li:not(:last-child)::after {
+    width: 4px;
+    margin: 0 4px 0 0;
+  }
   .ck-repair-body {
     flex-direction: column;
   }
-
   .ck-repair-roles {
     width: 100%;
-    display: flex;
+    flex-direction: row;
+    flex-shrink: 0;
     overflow-x: auto;
     overflow-y: hidden;
     border-right: 0;
     border-bottom: 1px solid var(--ck-divider);
+    padding: 8px;
+    gap: 4px;
   }
-
+  .ck-repair-section-label,
+  .ck-repair-role-divider,
+  .ck-repair-role-foot {
+    display: none;
+  }
   .ck-repair-role {
+    width: auto;
     flex: 0 0 auto;
     min-width: 140px;
+    padding: 8px;
+    gap: 8px;
   }
-
-  .ck-repair-main,
-  .ck-repair-controls {
-    padding-left: 16px;
-    padding-right: 16px;
+  .ck-repair-role-label {
+    font-size: 13px;
   }
-
+  .ck-repair-role-status {
+    font-size: 13px;
+    line-height: 16px;
+  }
+  .ck-repair-role.is-selected {
+    box-shadow: inset 0 -2px var(--ck-accent);
+  }
+  .ck-repair-main {
+    padding: 0 16px;
+  }
+  .ck-repair-tabs {
+    min-height: 44px;
+    gap: 20px;
+  }
+  .ck-repair-toolbar {
+    padding: 10px 0 6px;
+    gap: 6px;
+  }
+  .ck-repair-filter select {
+    min-height: 34px;
+    max-width: 130px;
+  }
+  .ck-repair-filter-query {
+    order: 5;
+    flex-basis: 100%;
+    min-width: 0;
+  }
+  .ck-repair-follow {
+    margin-left: auto;
+  }
+  .ck-repair-btn {
+    font-size: 13px;
+    min-height: 34px;
+    padding: 4px 8px;
+  }
+  .ck-repair-list-meta {
+    font-size: 13px;
+    min-height: 26px;
+  }
+  .ck-repair-meta {
+    font-size: 13px;
+  }
+  .ck-repair-activity-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    padding: 12px 0;
+    min-height: 70px;
+  }
+  .ck-repair-row-time {
+    display: none;
+  }
+  .ck-repair-row-title {
+    font-size: 13px;
+    line-height: 21px;
+  }
+  .ck-repair-row-status {
+    font-size: 13px;
+  }
+  .ck-repair-row-meta {
+    font-size: 13px;
+  }
+  .ck-repair-row-context {
+    font-size: 13px;
+  }
+  .ck-repair-history-banner {
+    margin: 0 -16px;
+    padding: 8px 16px;
+  }
   .ck-repair-drawer {
     width: 100%;
-    max-width: none;
-    left: 0;
-    margin: 0;
+    max-width: 100%;
   }
-
-  .ck-repair-drawer-panel {
-    width: 100%;
+  .ck-repair-run-details {
+    right: auto;
     left: 0;
-    right: 0;
+    width: min(330px, calc(100vw - 32px));
   }
-
-  .ck-repair-activity-row {
-    grid-template-columns: 18px 1fr;
-    grid-auto-rows: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ck-repair-workspace * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+.ck-repair-activity-row.is-unfinished .ck-repair-row-status {
+  color: var(--ck-warning);
+}
+.ck-repair-evidence {
+  flex: 1;
+  min-height: 0;
+  padding: 24px 0;
+  overflow: auto;
+}
+.ck-repair-evidence-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.ck-repair-evidence-heading h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 26px;
+}
+.ck-repair-evidence-heading p {
+  margin: 5px 0 0;
+  color: var(--ck-tertiary);
+  font-size: 13px;
+}
+.ck-repair-evidence-identity {
+  margin: 20px 0;
+  color: var(--ck-secondary);
+  font-size: 13px;
+}
+.ck-repair-evidence-identity summary {
+  cursor: pointer;
+  padding: 10px 0;
+}
+.ck-repair-evidence-identity summary span {
+  margin-left: 8px;
+  font-family: var(--ck-mono-font);
+  color: var(--ck-tertiary);
+}
+.ck-repair-evidence-identity dl {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 8px;
+  margin: 8px 0 16px;
+  padding: 14px;
+  background: var(--ck-raised);
+  border-radius: 6px;
+}
+.ck-repair-evidence-identity dt {
+  color: var(--ck-tertiary);
+}
+.ck-repair-evidence-identity dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ck-repair-evidence-warning {
+  padding: 10px 12px;
+  border-left: 2px solid var(--ck-warning);
+  color: var(--ck-warning);
+  font-size: 13px;
+  background: var(--ck-raised);
+}
+.ck-repair-evidence-item {
+  padding: 0;
+}
+.ck-repair-evidence-item summary {
+  display: grid;
+  grid-template-columns: 100px 1fr 16px;
+  gap: 12px;
+  padding: 18px 0;
+  cursor: pointer;
+  list-style: none;
+}
+.ck-repair-evidence-item summary::-webkit-details-marker {
+  display: none;
+}
+.ck-repair-evidence-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.ck-repair-evidence-content {
+  padding: 0 0 8px 112px;
+  color: var(--ck-secondary);
+  font-size: 13px;
+}
+.ck-repair-evidence-empty {
+  max-width: 400px;
+  margin: 44px auto;
+  text-align: center;
+  color: var(--ck-tertiary);
+}
+.ck-repair-evidence-empty > .ck-repair-icon {
+  margin: 0 auto 16px;
+  width: 26px;
+  height: 26px;
+}
+.ck-repair-evidence-empty h2 {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ck-secondary);
+}
+.ck-repair-evidence-empty p {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 24px;
+}
+@media (max-width: 720px) {
+  .ck-repair-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .ck-repair-evidence-item summary {
+    grid-template-columns: 84px 1fr 12px;
+    gap: 8px;
+  }
+  .ck-repair-evidence-content {
+    padding-left: 0;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .ck-repair-role,
-  .ck-repair-drawer-panel {
-    transition: none;
-  }
+.ck-repair-status-copy p {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
