@@ -33,6 +33,7 @@ import {
   parsePlanLockFile,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
+import type { DecisionsFile } from "@shared/runtime/review-explainer/contracts";
 import {
   ASSESSMENT_DIAGNOSTICS_FILE,
   type AssessmentDiagnosticsFile,
@@ -48,6 +49,11 @@ import {
   loadFindingGroups,
   writeFindingGroups,
 } from "./finding-groups";
+import {
+  matchDecisionIdentity,
+  projectPrDecisions,
+  separateChangedAssertions,
+} from "./pr-decisions";
 import type { AttemptResult } from "./runner";
 
 export {
@@ -151,6 +157,7 @@ export function classifyAgainstPrior(
 export function classifyAgainstPriorWithAliases(
   prior: readonly LedgerFinding[],
   next: readonly LedgerFinding[],
+  decisions?: DecisionsFile,
 ): {
   findings: LedgerFinding[];
   aliases: { originalId: string; aliasId: string; basis: string }[];
@@ -160,10 +167,13 @@ export function classifyAgainstPriorWithAliases(
   const aliases: { originalId: string; aliasId: string; basis: string }[] = [];
   for (const old of prior) {
     if (old.status === "accepted") {
+      const repeated = matchFinding(old, next, used, decisions);
+      if (repeated && matchDecisionIdentity(decisions, old, repeated) === true)
+        used.add(repeated.id);
       out.push({ ...old });
       continue;
     }
-    const match = matchFinding(old, next, used);
+    const match = matchFinding(old, next, used, decisions);
     if (match === null) {
       // Absence is missing coverage, never a closure receipt (including failed runs).
       out.push({ ...old });
@@ -378,6 +388,7 @@ export function persistFindingsFromReport(input: {
   reviewComplete?: boolean;
   verifiedAttemptShas?: Readonly<Record<string, string>>;
   extraAssessments?: readonly DiagnosedAssessment[];
+  prDecisions?: DecisionsFile;
 }): FindingsFile {
   const extracted = extractFindingsFromReport({
     markdown: input.markdown,
@@ -399,9 +410,12 @@ export function persistFindingsFromReport(input: {
       extractedAt: extracted.extractedAt,
     });
     for (const row of independent.findings) {
-      const matched = matchFinding(row, extracted.findings, new Set());
+      const matched = matchFinding(row, extracted.findings, new Set(), input.prDecisions);
       if (!matched) {
-        extracted.findings.push({ ...row, source: "unique", reviewer: attempt.agentName });
+        const [distinct] = separateChangedAssertions(extracted.findings, [row], input.prDecisions);
+        if (distinct && !extracted.findings.some((item) => item.id === distinct.id)) {
+          extracted.findings.push({ ...distinct, source: "unique", reviewer: attempt.agentName });
+        }
       } else {
         const stronger =
           FINDING_SEVERITIES.indexOf(row.severity) < FINDING_SEVERITIES.indexOf(matched.severity);
@@ -422,6 +436,11 @@ export function persistFindingsFromReport(input: {
       }
     }
   }
+  extracted.findings = separateChangedAssertions(
+    input.prior?.findings ?? [],
+    extracted.findings,
+    input.prDecisions,
+  );
   let aliases: { originalId: string; aliasId: string; basis: string }[] = [];
   const file: FindingsFile =
     input.prior && input.againstRunId
@@ -429,11 +448,13 @@ export function persistFindingsFromReport(input: {
           const classified = classifyAgainstPriorWithAliases(
             input.prior.findings,
             extracted.findings,
+            input.prDecisions,
           );
           aliases = classified.aliases;
           return { ...extracted, findings: classified.findings };
         })()
       : extracted;
+  if (input.prDecisions) file.findings = projectPrDecisions(file, input.prDecisions).findings;
   const requiredFindingIds = (input.prior?.findings ?? [])
     .filter((row) => row.status !== "accepted")
     .map((row) => row.id);
@@ -526,7 +547,7 @@ export function loadAgainstContext(
   const landings = readLandings(againstRunDir);
   const range = lastLandingRange(landings);
   const existing = readFindings(againstRunDir);
-  if (existing) return { findings: existing, range };
+  if (existing) return { findings: projectLandingClaims(existing, landings), range };
   let markdown = "";
   try {
     markdown = readFileSync(join(againstRunDir, "report.md"), "utf8");
@@ -541,7 +562,34 @@ export function loadAgainstContext(
     againstRunId: null,
     againstRange: range,
   });
-  return { findings: extracted, range };
+  return { findings: projectLandingClaims(extracted, landings), range };
+}
+
+/** A durable Builder receipt is input to review even if a producer stopped before updating
+ * findings.json. Reading it never rewrites history or turns the claim into closure evidence. */
+function projectLandingClaims(
+  file: FindingsFile,
+  landings: readonly LandingRecord[],
+): FindingsFile {
+  let projected = file;
+  for (const landing of landings) {
+    const ids = (landing.claimed ?? landing.closed).filter((id) => {
+      const row = projected.findings.find((finding) => finding.id === id);
+      if (!row) return false;
+      if (landing.candidateSha && isFindingVerifiedClosed(row, landing.candidateSha)) return false;
+      return (
+        row.repairClaim?.candidateSha !== landing.candidateSha ||
+        row.repairClaim?.runId !== landing.runId
+      );
+    });
+    if (ids.length)
+      projected = markFindingsRepairClaimed(projected, ids, {
+        candidateSha: landing.candidateSha,
+        runId: landing.runId,
+        at: landing.at,
+      });
+  }
+  return projected;
 }
 
 const FINDING_STATUS_ORDER: FindingStatus[] = ["open", "regress", "closed", "accepted"];
@@ -658,11 +706,17 @@ function matchFinding(
   prior: LedgerFinding,
   next: readonly LedgerFinding[],
   used: Set<string>,
+  decisions?: DecisionsFile,
 ): LedgerFinding | null {
-  const byId = next.find((row) => row.id === prior.id && !used.has(row.id));
+  const eligible = next.filter(
+    (row) => !used.has(row.id) && matchDecisionIdentity(decisions, prior, row) !== false,
+  );
+  const strict = eligible.find((row) => matchDecisionIdentity(decisions, prior, row) === true);
+  if (strict) return strict;
+  const byId = eligible.find((row) => row.id === prior.id);
   if (byId) return byId;
   // Reports often quote an existing ID; never slugify that quote into misc--misc--… .
-  const byReference = next.find(
+  const byReference = eligible.find(
     (row) =>
       !used.has(row.id) &&
       (explicitFindingIds(row.text).includes(prior.id) ||
@@ -671,7 +725,7 @@ function matchFinding(
   if (byReference) return byReference;
   let best: { row: LedgerFinding; score: number } | null = null;
   const priorTokens = tokens(prior.title);
-  for (const row of next) {
+  for (const row of eligible) {
     if (used.has(row.id)) continue;
     if (row.severity !== prior.severity) continue;
     const sameFile = prior.files.length > 0 && row.files.some((file) => prior.files.includes(file));

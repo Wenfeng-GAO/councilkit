@@ -397,7 +397,10 @@ describe("A01/A02 legacy frozen Run without explainer sidecars", () => {
     });
     classifyExplainerStatus(response.status, ROUTES.workspace(RUN_ID));
     expect(response.status).toBe(200);
-    const workspace = (await response.json()).data;
+    const responseBody = (await response.json()) as {
+      data: { identity: { headSha: string; diffHash: string } };
+    };
+    const workspace = responseBody.data;
     expect(workspace.identity.headSha).toBe(seeded.repo.headSha);
     expect(workspace.identity.diffHash).toBe(seeded.repo.diffHash);
     expect(JSON.stringify(workspace)).toContain(FINDING.busy);

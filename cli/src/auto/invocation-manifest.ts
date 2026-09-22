@@ -27,6 +27,10 @@ export const invocationManifestSchema = z
         task: z.string().max(8000).optional(),
         focus: z.string().max(8000).optional(),
         against: z.string().max(160).optional(),
+        repairPackageHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
         councilTopic: z.string().max(8000).optional(),
         councilBackground: z
           .string()
@@ -244,6 +248,7 @@ export function buildInvocationManifest(input: {
       ...(input.task.task ? { task: input.task.task } : {}),
       ...(input.task.focus ? { focus: input.task.focus } : {}),
       ...(input.task.against ? { against: input.task.against } : {}),
+      ...(input.task.repairPackageHash ? { repairPackageHash: input.task.repairPackageHash } : {}),
       ...(input.task.councilTopic ? { councilTopic: input.task.councilTopic } : {}),
       ...(input.councilBackground ? { councilBackground: input.councilBackground } : {}),
       ...(input.councilTargetOutput ? { councilTargetOutput: input.councilTargetOutput } : {}),
@@ -472,6 +477,7 @@ export function taskFromManifest(manifest: InvocationManifest): ReviewTask {
     task: manifest.task.task,
     focus: manifest.task.focus,
     against: manifest.task.against,
+    repairPackageHash: manifest.task.repairPackageHash,
     councilTopic: manifest.task.councilTopic,
   };
 }

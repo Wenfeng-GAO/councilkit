@@ -111,8 +111,8 @@ test("[A07/A08] on-demand model output crosses the real Host, appears on screen,
   expect(await calls(page)).toBe(1);
 
   await page.reload();
-  // Re-enter through the report's real UI rather than directly fabricating a cached pane.
-  await page.getByRole("button", { name: "理解评审", exact: true }).click();
+  // A04 keeps the real reader in the URL across reload; its data still comes from Host.
+  await expect(page.getByTestId(UI.root)).toBeVisible();
   await openFinding(page, FINDING.busy);
   await expect(page.getByTestId(UI.drawer)).toContainText(FLOW.evidence[0]);
   expect(await calls(page)).toBe(1);

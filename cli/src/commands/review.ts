@@ -12,6 +12,9 @@ import {
   liveStateFromRecords,
   withLiveHeartbeats,
 } from "@shared/runtime/cli-run-progress";
+import { readCliRun } from "@shared/runtime/cli-runs-index";
+import { normalizeReviewPr } from "@shared/runtime/review-case";
+import { skipListForPr } from "@shared/runtime/review-explainer/pr-decisions";
 import {
   type DiagnosedAssessment,
   diagnoseAttemptAssessments,
@@ -91,12 +94,20 @@ import {
 } from "../auto/ledger";
 import { LiveEventWriter, type RawLiveEvent } from "../auto/live-events";
 import { type LocalRepo, projectKeyFromPr, resolveLocalRepo } from "../auto/local-repo";
+import { loadReviewPrDecisions, projectPrDecisions } from "../auto/pr-decisions";
+import {
+  REVIEW_REPAIR_PACKAGE_FILE,
+  formatRepairAcceptance,
+  readReviewRepairPackage,
+  repairPackageHash,
+} from "../auto/repair-acceptance";
 import {
   copyFrozenContextIntoWorkspace,
   freezeReviewContext,
   persistFrozenContext,
 } from "../auto/review-context";
 import { reviewModelAgents } from "../auto/review-models";
+import { formatSkipListForPrompt } from "../auto/review-skip";
 import {
   type AttemptResult,
   type RunAttemptsOutcome,
@@ -199,6 +210,7 @@ export async function runReview(
         "run-id": { type: "string" },
         repo: { type: "string" },
         against: { type: "string" },
+        "repair-package": { type: "string" },
         "pin-sha": { type: "string" },
       },
       allowPositionals: 1,
@@ -379,6 +391,13 @@ export async function runReview(
     }
   }
 
+  const prDecisions = loadReviewPrDecisions(task.pr, paths.home);
+  if (task.pr && prDecisions) {
+    task.skipList = formatSkipListForPrompt({
+      prUrl: task.pr,
+      ...skipListForPr({ prUrl: task.pr, items: prDecisions.items }),
+    });
+  }
   const againstRaw = values.against as string | undefined;
   let againstFindings: FindingsFile | null = null;
   if (againstRaw !== undefined) {
@@ -390,10 +409,45 @@ export async function runReview(
       throw errors.usage(`--against ${againstId} has no report.md or findings.json`);
     }
     task.against = againstId;
+    const againstPr = readCliRun(againstId)?.reviewEvidence?.prUrl;
+    if (task.pr && againstPr && normalizeReviewPr(task.pr) !== againstPr) {
+      throw errors.usage("--against belongs to a different PR");
+    }
     const againstCtx = loadAgainstContext(paths.runDir(againstId), againstId);
-    againstFindings = againstCtx.findings;
+    againstFindings = prDecisions
+      ? projectPrDecisions(againstCtx.findings, prDecisions)
+      : againstCtx.findings;
     task.againstRange = againstCtx.range ?? undefined;
-    task.againstLedger = formatLedgerForPrompt(againstCtx.findings, againstCtx.range);
+    task.againstLedger = formatLedgerForPrompt(againstFindings, againstCtx.range);
+  }
+  const repairPackagePath = values["repair-package"] as string | undefined;
+  if (repairPackagePath !== undefined && !repairPackagePath.trim()) {
+    throw errors.usage("--repair-package requires a file path");
+  }
+  const packageSourcePath =
+    repairPackagePath ??
+    (resumeRaw && frozenManifest?.task.repairPackageHash
+      ? join(paths.runDir(resumeRaw.trim()), REVIEW_REPAIR_PACKAGE_FILE)
+      : undefined);
+  const repairPackage = packageSourcePath
+    ? readReviewRepairPackage({
+        path: packageSourcePath,
+        prUrl: task.pr,
+        against: task.against,
+        sourceSha: againstFindings?.sha,
+        findings: againstFindings?.findings ?? [],
+      })
+    : undefined;
+  if (repairPackage) {
+    task.repairPackageHash = repairPackageHash(repairPackage);
+    task.repairAcceptance = formatRepairAcceptance(repairPackage);
+  }
+  if (
+    resumeRaw &&
+    frozenManifest &&
+    frozenManifest.task.repairPackageHash !== task.repairPackageHash
+  ) {
+    throw errors.usage("--repair-package must match the resumed run's immutable task");
   }
 
   // --- options ------------------------------------------------------------
@@ -532,6 +586,9 @@ export async function runReview(
     if ((started.task.against ?? undefined) !== task.against) {
       throw errors.usage("--against must match the resumed run");
     }
+    if (started.task.repairPackageHash !== task.repairPackageHash) {
+      throw errors.usage("--repair-package must match the resumed run's immutable task");
+    }
     priorStartedAt = started.startedAt;
     // The LAST terminal record per attempt wins (a later resume may have
     // re-failed an attempt an earlier run had succeeded).
@@ -598,6 +655,12 @@ export async function runReview(
   // `workspaces/` is created only AFTER probing, for attempts that will
   // actually spawn (a probe must be able to prove no workspace existed yet).
   createWorkspace(runDir);
+  if (repairPackage && resumeRaw === undefined) {
+    atomicWriteFile(
+      join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
+      `${JSON.stringify(repairPackage, null, 2)}\n`,
+    );
+  }
 
   const isReused = (attemptId: string): boolean => reusedByAttemptId.has(attemptId);
 
@@ -813,6 +876,7 @@ export async function runReview(
         focus: task.focus,
         councilTopic,
         against: task.against,
+        ...(task.repairPackageHash ? { repairPackageHash: task.repairPackageHash } : {}),
       },
       attempts: attemptMetas,
       aggregator: {
@@ -1722,6 +1786,14 @@ async function finalize(
     );
   }
   try {
+    const currentDecisions = loadReviewPrDecisions(p.task.pr);
+    const historicalPrior = p.task.against
+      ? loadAgainstContext(join(dirname(p.runDir), p.task.against), p.task.against).findings
+      : null;
+    const prior =
+      historicalPrior && currentDecisions
+        ? projectPrDecisions(historicalPrior, currentDecisions)
+        : historicalPrior;
     persistFindingsFromReport({
       runDir: p.runDir,
       runId: p.runId,
@@ -1729,9 +1801,8 @@ async function finalize(
       sha: p.reviewedSha,
       againstRunId: p.task.against ?? null,
       againstRange: p.task.againstRange ?? null,
-      prior: p.task.against
-        ? loadAgainstContext(join(dirname(p.runDir), p.task.against), p.task.against).findings
-        : null,
+      prior,
+      prDecisions: currentDecisions,
       attempts: results,
       verifiedAttemptShas,
       extraAssessments: p.extraAssessments,

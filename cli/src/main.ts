@@ -49,9 +49,10 @@ Commands:
       [--repo <path>]                 Local clone of the PR repo (remembered).
       [--timeout 45m] [--codex-timeout 90m] [--concurrency 10]
       [--against <run-id>]            Incremental jury vs that run's findings.json.
+      [--repair-package <file>]       Verify the immutable selected repair task with --against.
   review --review-models '<json>'      Per-run {models, aggregatorIndex}; does not change saved agents.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
-  repair export --run <id> --out <file> [--cluster <id>]
+  repair export --run <id> --out <file> [--cluster <id>|--selected]
                                       Export a bounded repair package for an external Squad.
   repair run --from <ck-review-id> --profile <name>
       [--run-id <ck-repair-id>] [--max-outer-cycles 10] [--timeout 30m]
@@ -64,6 +65,8 @@ Commands:
       [--cluster <id>|--all-clusters]
   fix --run <ck-review-id>            Plan-jury a repair, apply one cluster, then re-review vs the ledger.
   findings accept --run <id> --id <finding-id> --reason <text>
+  findings decide --run <id> --id <finding-id> --decision undecided|will_fix|wont_fix
+                                      Save the same PR decision used by the report page.
                                       Mark a ledger item accepted (won't fix) with a reason.
   runs list                           List CLI runs (report.md + transcript).
   runs open <run-id>                  Print the in-app URL for a run report.

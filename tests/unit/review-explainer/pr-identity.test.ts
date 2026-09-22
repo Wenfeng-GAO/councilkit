@@ -137,3 +137,79 @@ describe("A05 skipped identity is a frozen assertion, not a file or title", () =
     ]);
   });
 });
+
+describe("A05 confirmed aliases normalize only leading ID metadata", () => {
+  const alias = "h-111111111111";
+  const decorate = (id: string, body: string) => `\`${id}\` — ${body}`;
+  // Exact production ledger shape: the severity/list prefix has been parsed away;
+  // the unchanged source citation is part of the saved assertion body.
+  const assertionWithLocation = `${ASSERTION.busy} src/busy.go:23`;
+  const original = decorate(FINDING.busy, assertionWithLocation);
+  const decoratedDecision = {
+    ...skipped,
+    originalAssertion: original,
+    assertionHash: hash(original),
+  };
+  const observed = (text: string, id = alias) => ({
+    id,
+    text,
+    prUrl: PR_URL,
+    assertionVersion: 1,
+  });
+
+  it.each(["", "- [major] "])(
+    "continues one unchanged assertion when the confirmed leading ID changes (%s)",
+    async (prefix) => {
+      const { matches } = await api();
+      const stored = `${prefix}${original}`;
+      expect(
+        matches({
+          skipped: { ...decoratedDecision, originalAssertion: stored, assertionHash: hash(stored) },
+          candidate: observed(`${prefix}${decorate(alias, assertionWithLocation)}`),
+        }).skip,
+      ).toBe(true);
+    },
+  );
+
+  it("does not normalize an ID quoted inside the actual assertion body", async () => {
+    const { matches } = await api();
+    const body = `The stored key \`${FINDING.busy}\` is sent to the wrong request.`;
+    const originalWithBodyId = decorate(FINDING.busy, body);
+    expect(
+      matches({
+        skipped: {
+          ...decoratedDecision,
+          originalAssertion: originalWithBodyId,
+          assertionHash: hash(originalWithBodyId),
+        },
+        candidate: observed(
+          decorate(alias, `The stored key \`${alias}\` is sent to the wrong request.`),
+        ),
+      }).skip,
+    ).toBe(false);
+  });
+
+  it.each([
+    [decorate("h-999999999999", assertionWithLocation), alias],
+    [decorate("h-999999999999", assertionWithLocation), "h-999999999999"],
+    [decorate(alias, ASSERTION.newBusyMechanism), alias],
+    [
+      decorate(FINDING.busy, `${assertionWithLocation} ${ASSERTION.newBusyMechanism}`),
+      FINDING.busy,
+    ],
+    [`The review mentioned ${decorate(alias, assertionWithLocation)}`, alias],
+  ])("keeps unconfirmed metadata and changed body distinct: %s", async (text, id) => {
+    const { matches } = await api();
+    expect(matches({ skipped: decoratedDecision, candidate: observed(text, id) }).skip).toBe(false);
+  });
+
+  it("does not erase a different assertion version while normalizing the leading ID", async () => {
+    const { matches } = await api();
+    expect(
+      matches({
+        skipped: decoratedDecision,
+        candidate: { ...observed(decorate(alias, assertionWithLocation)), assertionVersion: 2 },
+      }).skip,
+    ).toBe(false);
+  });
+});

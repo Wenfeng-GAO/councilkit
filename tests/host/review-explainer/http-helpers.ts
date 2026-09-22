@@ -49,6 +49,8 @@ export async function tryExplainerRoutes(
 
 export async function createExplainerHttpHost(opts: {
   home: string;
+  /** Additive live-smoke option: serve the actual built UI without replacing it. */
+  uiDistDir?: string;
   extraRoutes?: Route[];
   extraServices?: Record<string, unknown>;
 }): Promise<ExplainerHttpHost> {
@@ -66,7 +68,7 @@ export async function createExplainerHttpHost(opts: {
     hostname: "127.0.0.1",
     port: 0,
     hostHeader: "127.0.0.1:0",
-    distDir,
+    distDir: opts.uiDistDir ?? distDir,
     watchdogProgram: join(tempRoot, "watchdog-child.mjs"),
     driverWorkRoot: join(tempRoot, "work"),
   };

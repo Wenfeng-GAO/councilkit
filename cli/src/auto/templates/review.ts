@@ -49,6 +49,11 @@ export interface ReviewTask {
   againstRange?: string;
   /** Prompt-only ledger dump; not persisted on the transcript. */
   againstLedger?: string;
+  /** Current PR authority, rendered separately from historical verification. */
+  skipList?: string;
+  /** Immutable selected repair task; PR-wide observations remain separate. */
+  repairAcceptance?: string;
+  repairPackageHash?: string;
 }
 
 export interface FrozenAttemptContext {
@@ -186,6 +191,8 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
   if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
     lines.push("", "## Finding 账本", "", input.task.againstLedger.trim());
   }
+  if (input.task.skipList) lines.push("", input.task.skipList);
+  if (input.task.repairAcceptance) lines.push("", input.task.repairAcceptance);
   if (input.task.councilTopic && input.task.councilTopic.trim().length > 0) {
     lines.push("", "上下文议题：", input.task.councilTopic.trim());
   }
@@ -297,6 +304,8 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
   if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
     taskLines.push("", "## Finding 账本", "", input.task.againstLedger.trim());
   }
+  if (input.task.skipList) taskLines.push("", input.task.skipList);
+  if (input.task.repairAcceptance) taskLines.push("", input.task.repairAcceptance);
   if (input.task.councilTopic && input.task.councilTopic.trim().length > 0) {
     taskLines.push("", "上下文议题：", input.task.councilTopic.trim());
   }

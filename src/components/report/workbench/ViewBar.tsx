@@ -24,6 +24,7 @@ interface ViewBarProps {
   };
   /** 返回 null 表示当前视图没有可复制内容（按钮禁用）。 */
   getCopyText: () => string | null;
+  onExplain?: () => void;
 }
 
 /**
@@ -37,6 +38,7 @@ export function ViewBar({
   onTabChange,
   mobileSelect,
   getCopyText,
+  onExplain,
 }: ViewBarProps) {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [copied, setCopied] = useState(false);
@@ -123,17 +125,24 @@ export function ViewBar({
           </div>
         ) : null}
       </div>
-      <button
-        type="button"
-        className="ck-wb-ghost"
-        aria-label="复制当前内容"
-        disabled={copyText === null}
-        title={copyText === null ? "当前没有可复制的内容" : undefined}
-        onClick={() => void copy()}
-      >
-        <CopyIcon className="ck-wb-icon" />
-        <span className="ck-wb-copy-label">{copied ? "已复制" : "复制"}</span>
-      </button>
+      <div className="ck-wb-view-actions">
+        {onExplain ? (
+          <button type="button" className="ck-wb-ghost" onClick={onExplain}>
+            理解评审
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="ck-wb-ghost"
+          aria-label="复制当前内容"
+          disabled={copyText === null}
+          title={copyText === null ? "当前没有可复制的内容" : undefined}
+          onClick={() => void copy()}
+        >
+          <CopyIcon className="ck-wb-icon" />
+          <span className="ck-wb-copy-label">{copied ? "已复制" : "复制"}</span>
+        </button>
+      </div>
     </div>
   );
 }

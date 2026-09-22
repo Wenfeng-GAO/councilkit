@@ -64,6 +64,7 @@ export interface ReviewTaskRecord {
   focus?: string;
   councilTopic?: string;
   against?: string;
+  repairPackageHash?: string;
 }
 
 export const reviewStartedRecordSchema = z
@@ -80,6 +81,10 @@ export const reviewStartedRecordSchema = z
         focus: z.string().optional(),
         councilTopic: z.string().optional(),
         against: z.string().optional(),
+        repairPackageHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
       })
       .strict(),
     attempts: z.array(

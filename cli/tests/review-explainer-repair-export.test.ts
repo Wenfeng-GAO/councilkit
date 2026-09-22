@@ -100,7 +100,8 @@ describe("A06 selected export and candidate verification through production CLI"
       headers: host.headers(),
     });
     expect(httpPackage.status).toBe(200);
-    expect((await httpPackage.json()).data).toEqual(pkg);
+    const httpPackageBody = (await httpPackage.json()) as { data: unknown };
+    expect(httpPackageBody.data).toEqual(pkg);
 
     // Production handoff persistence creates actual task input, not an in-memory helper assertion.
     const handoff = createRepairHandoff({
@@ -123,6 +124,7 @@ describe("A06 selected export and candidate verification through production CLI"
     writeFileSync(receiptPath, JSON.stringify(receipt));
     const consumed = JSON.parse(readFileSync(receiptPath, "utf8"));
     appendLanding(seeded.runDir, {
+      runId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee01",
       at: new Date().toISOString(),
       clusterId: "user-selection",
       parentSha: seeded.repo.headSha,
@@ -132,7 +134,7 @@ describe("A06 selected export and candidate verification through production CLI"
       pushed: false,
     });
     const claimed = required(
-      loadAgainstContext(seeded.runDir, seeded.runId).findings.find(
+      loadAgainstContext(seeded.runDir, seeded.runId).findings.findings.find(
         (row) => row.id === FINDING.busy,
       ),
     );

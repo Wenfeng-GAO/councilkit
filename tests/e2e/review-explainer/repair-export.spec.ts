@@ -60,8 +60,12 @@ test("[A06] UI choices export only the selected repair and its original acceptan
   await page.getByTestId(UI.comment(FINDING.busy)).getByTestId(UI.undecided).click();
   expect((await withdrawal).status()).toBe(200);
   await expect(page.getByTestId(UI.listFix)).not.toContainText(FINDING.busy);
+  await expect(
+    page.getByTestId(UI.root).getByRole("button", { name: "导出修复清单", exact: true }),
+  ).toBeDisabled();
   const empty = await page.request.get(ROUTES.repairPackage(RUN_ID));
-  expect(empty.status()).toBe(200);
-  const emptyBody = (await empty.json()) as { data: { findings: Array<{ id: string }> } };
-  expect(emptyBody.data.findings).toEqual([]);
+  expect(empty.status()).toBe(400);
+  const emptyBody = (await empty.json()) as { error: { message: string }; data?: unknown };
+  expect(emptyBody.error.message).toMatch(/选择.*修复|no.*selected/i);
+  expect(emptyBody.data).toBeUndefined();
 });

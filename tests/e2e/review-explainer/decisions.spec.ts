@@ -88,6 +88,7 @@ test("[A03/A04] the two inline decisions and explanation decisions update the sa
 
   // Keyboard activation must perform the action, not merely put focus somewhere visible.
   const skipStale = page.getByTestId(UI.comment(FINDING.stale)).getByTestId(UI.wontFix);
+  await expect(skipStale).toBeEnabled();
   await skipStale.focus();
   await expect(skipStale).toBeFocused();
   const keyboardSave = page.waitForResponse(

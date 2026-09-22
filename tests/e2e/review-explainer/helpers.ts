@@ -121,6 +121,7 @@ export async function openExplainer(page: Page, runId: string = RUN_ID): Promise
     missing("review-explainer entry", "理解评审 button is not available");
   await entry.click();
   await expect(page.getByTestId(UI.root)).toBeVisible();
+  await expect(page.getByTestId(UI.identity)).toContainText(/[0-9a-f]{7,40}/);
 }
 
 export async function getCsrf(page: Page): Promise<string> {

@@ -1,0 +1,1112 @@
+/* Review explanation extends the existing CouncilKit workbench tokens. */
+.ck-wb-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ck-explainer,
+.ck-explainer * {
+  box-sizing: border-box;
+}
+.ck-explainer {
+  height: 100dvh;
+  min-height: 500px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ck-content);
+  color: var(--ck-text);
+  font: 13px / 1.65 var(--ck-ui-font);
+}
+.ck-explainer [hidden] {
+  display: none !important;
+}
+.ck-explainer button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--ck-divider);
+  background: var(--ck-raised);
+  color: var(--ck-secondary);
+  border-radius: 5px;
+  padding: 5px 10px;
+}
+.ck-explainer button:hover {
+  border-color: #655a49;
+  color: var(--ck-text);
+}
+.ck-explainer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ck-explainer :focus-visible {
+  outline: 2px solid var(--ck-focus);
+  outline-offset: 2px;
+}
+.ck-explainer h1,
+.ck-explainer h2,
+.ck-explainer h3,
+.ck-explainer h4,
+.ck-explainer p {
+  margin: 0;
+}
+.ck-explainer code,
+.ck-explainer pre {
+  font-family: var(--ck-mono-font);
+}
+.ck-explainer .added {
+  color: var(--ck-success);
+}
+.ck-explainer .removed {
+  color: var(--ck-error);
+}
+.ck-ex-muted {
+  color: var(--ck-tertiary);
+  font-size: 11px;
+  line-height: 1.75;
+}
+.ck-ex-header {
+  flex: 0 0 auto;
+  padding: 12px 22px 13px;
+  border-bottom: 1px solid var(--ck-divider);
+  background: var(--ck-seats);
+}
+.ck-ex-crumb {
+  display: flex;
+  gap: 17px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--ck-tertiary);
+}
+.ck-ex-crumb button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ck-secondary);
+}
+.ck-ex-title {
+  display: flex;
+  gap: 15px;
+  align-items: baseline;
+  margin: 7px 0 5px;
+}
+.ck-ex-title h1 {
+  font-size: 19px;
+  font-weight: 550;
+  letter-spacing: -.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ck-ex-title > span {
+  color: var(--ck-accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ck-ex-header > p {
+  display: flex;
+  gap: 12px;
+  color: var(--ck-tertiary);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.ck-ex-header > p code {
+  color: var(--ck-secondary);
+}
+.ck-ex-workspace {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 225px minmax(0, 1fr);
+}
+.ck-explainer.with-pane .ck-ex-workspace {
+  grid-template-columns: 225px minmax(0, 1fr) 390px;
+}
+.ck-ex-navigation {
+  background: var(--ck-nav);
+  border-right: 1px solid var(--ck-divider);
+  overflow: auto;
+  min-width: 0;
+}
+.ck-ex-file-nav {
+  padding: 13px 8px 7px;
+}
+.ck-ex-file-nav h2 {
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  color: var(--ck-secondary);
+  padding: 0 8px 10px;
+}
+.ck-ex-file-nav h2 span {
+  color: var(--ck-tertiary);
+}
+.ck-ex-file-buttons button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-left: 2px solid transparent;
+  padding: 7px 8px;
+  margin-bottom: 3px;
+  background: transparent;
+  border-radius: 0 4px 4px 0;
+}
+.ck-ex-file-buttons button[aria-current="true"] {
+  background: var(--ck-selected);
+  border-left-color: var(--ck-accent);
+}
+.ck-ex-file-buttons button > span {
+  display: block;
+  font: 11px / 1.6 var(--ck-mono-font);
+  overflow-wrap: anywhere;
+  color: var(--ck-text);
+}
+.ck-ex-file-buttons small {
+  display: flex;
+  gap: 7px;
+  margin-top: 3px;
+  font-size: 10px;
+}
+.ck-ex-file-buttons small span:last-child {
+  margin-left: auto;
+  color: var(--ck-tertiary);
+}
+.ck-ex-lists {
+  border-top: 1px solid var(--ck-divider);
+  padding: 11px 14px 20px;
+}
+.ck-ex-decision-list {
+  margin-bottom: 17px;
+}
+.ck-ex-decision-list h3 {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ck-accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+.ck-ex-decision-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+}
+.ck-ex-decision-list > p {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.ck-ex-decision-list button {
+  background: transparent;
+  border: 0;
+  width: 100%;
+  padding: 5px 0;
+  text-align: left;
+  font-size: 11px;
+}
+.ck-ex-decision-list button span {
+  display: block;
+}
+.ck-ex-decision-list code {
+  display: block;
+  color: var(--ck-tertiary);
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.ck-ex-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ck-ex-toolbar {
+  flex: 0 0 auto;
+  min-height: 52px;
+  border-bottom: 1px solid var(--ck-divider);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 18px;
+}
+.ck-ex-toolbar > div:first-child {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.ck-ex-toolbar strong {
+  font-weight: 550;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.ck-ex-toolbar span {
+  font-size: 10px;
+  color: var(--ck-tertiary);
+}
+.ck-ex-toolbar-actions {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+.ck-ex-toolbar-actions > button {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.ck-ex-layout {
+  display: flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--ck-divider);
+  border-radius: 5px;
+  background: var(--ck-nav);
+}
+.ck-ex-layout button {
+  border: 0;
+  padding: 3px 7px;
+  font-size: 11px;
+  background: transparent;
+  white-space: nowrap;
+}
+.ck-ex-layout button[aria-pressed="true"] {
+  background: var(--ck-raised);
+  color: var(--ck-text);
+}
+.ck-ex-diff-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px 80px;
+  scroll-behavior: auto;
+  scroll-padding-top: 80px;
+  overflow-anchor: none;
+}
+.ck-ex-diff-intro {
+  color: var(--ck-tertiary);
+  font-size: 11px;
+  padding-bottom: 13px;
+}
+.ck-ex-file {
+  border: 1px solid var(--ck-divider);
+  border-radius: 6px;
+  margin-bottom: 20px;
+  background: var(--ck-seats);
+  overflow: clip;
+}
+.ck-ex-file > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  background: #22252b;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  cursor: pointer;
+  list-style: none;
+  border-bottom: 1px solid var(--ck-divider);
+  min-height: 39px;
+}
+.ck-ex-file > summary::-webkit-details-marker {
+  display: none;
+}
+.ck-ex-file > summary::before {
+  content: "▸";
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-file[open] > summary::before {
+  content: "▾";
+}
+.ck-ex-filename {
+  font: 11px / 1.6 var(--ck-mono-font);
+  overflow-wrap: anywhere;
+}
+.ck-ex-rename {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-file-stats {
+  margin-left: auto;
+  display: flex;
+  gap: 7px;
+  font: 10px var(--ck-mono-font);
+  white-space: nowrap;
+}
+.ck-ex-file-notice {
+  padding: 9px 13px;
+  font-size: 11px;
+  color: var(--ck-secondary);
+  border-bottom: 1px solid var(--ck-divider);
+}
+.ck-ex-file-notice.added {
+  background: #1c2923;
+}
+.ck-ex-file-note {
+  font-size: 10px;
+  color: var(--ck-tertiary);
+  padding: 5px 12px;
+}
+.ck-ex-diff-labels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  font-size: 10px;
+  color: var(--ck-tertiary);
+  background: #202228;
+}
+.ck-ex-diff-labels.single {
+  grid-template-columns: 1fr;
+}
+.ck-ex-diff-labels span {
+  padding: 5px 12px;
+}
+.ck-ex-diff-labels span + span {
+  border-left: 1px solid var(--ck-divider);
+}
+.ck-ex-hunk-header {
+  background: #202936;
+  color: #95acc4;
+  font: 10px / 1.6 var(--ck-mono-font);
+  padding: 5px 12px;
+  overflow-wrap: anywhere;
+  border-block: 1px solid #2e3a49;
+}
+.ck-ex-code-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.ck-ex-code {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font: 11px / 25px var(--ck-mono-font);
+  tab-size: 4;
+  min-width: 370px;
+}
+.ck-ex-code.split {
+  min-width: 580px;
+}
+.ck-ex-code col.number {
+  width: 39px;
+}
+.ck-ex-code col.sign {
+  width: 17px;
+}
+.ck-ex-code td {
+  padding: 0;
+  vertical-align: top;
+}
+.ck-ex-code td.ln {
+  text-align: right;
+  padding-right: 7px;
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  user-select: none;
+}
+.ck-ex-code td.sign {
+  text-align: center;
+  color: var(--ck-tertiary);
+  user-select: none;
+}
+.ck-ex-code .source {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 9px;
+  color: #c7ced9;
+}
+.ck-ex-code .add {
+  background: rgba(69, 133, 94, 0.13);
+}
+.ck-ex-code .delete {
+  background: rgba(178, 78, 89, 0.13);
+}
+.ck-ex-code .absent {
+  background: #191b1f;
+}
+.ck-ex-code .new-side.ln {
+  border-left: 1px solid var(--ck-divider);
+}
+.ck-ex-code .focused {
+  background: rgba(201, 177, 138, 0.24);
+}
+.ck-ex-code .source-context {
+  background: #20252c;
+}
+.ck-ex-finding {
+  padding: 12px 15px;
+  border-block: 1px solid #4c4336;
+  background: #25231f;
+  outline-offset: -2px;
+  cursor: pointer;
+}
+.ck-ex-finding.selected {
+  background: #302a21;
+  border-color: #796449;
+}
+.ck-ex-finding-meta {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-finding-meta > span:first-child {
+  color: var(--ck-accent);
+  border: 1px solid #5b4c35;
+  border-radius: 3px;
+  padding: 0 5px;
+}
+.ck-ex-finding-meta code {
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.ck-ex-finding h3 {
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 550;
+  margin: 6px 0;
+}
+.ck-ex-original-excerpt {
+  font-size: 11px;
+  color: var(--ck-secondary);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 920px;
+}
+.ck-ex-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ck-ex-card-actions > button {
+  font-size: 11px;
+}
+.ck-ex-card-actions .ck-ex-explain-link {
+  border: 0;
+  background: none;
+  padding: 3px 0;
+  color: var(--ck-accent);
+}
+.ck-ex-decisions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.ck-ex-decisions button {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.ck-ex-decisions button[aria-pressed="true"] {
+  color: var(--ck-accent);
+  border-color: #97805b;
+  background: #373022;
+}
+.ck-ex-card-actions .ck-ex-decisions {
+  margin-left: auto;
+}
+.ck-ex-decisions .ck-ex-withdraw {
+  background: none;
+  border-color: transparent;
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-source-context > h3 {
+  font-size: 12px;
+  padding: 9px 12px 2px;
+  color: var(--ck-running);
+  font-weight: 500;
+}
+.ck-ex-source-context > p {
+  padding: 0 12px 8px;
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-unanchored > h2 {
+  font-size: 16px;
+  font-weight: 500;
+}
+.ck-ex-unanchored > p {
+  color: var(--ck-tertiary);
+  font-size: 11px;
+  margin: 7px 0 12px;
+}
+.ck-ex-unresolved-ref {
+  overflow-wrap: anywhere;
+}
+.ck-ex-end {
+  text-align: center;
+  color: var(--ck-tertiary);
+  font-size: 11px;
+  padding: 20px 0;
+}
+.ck-ex-pane {
+  border-left: 1px solid var(--ck-divider);
+  background: var(--ck-seats);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ck-ex-pane-header {
+  padding: 13px 18px 0;
+  flex: 0 0 auto;
+}
+.ck-ex-pane-top {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-pane-top code {
+  overflow-wrap: anywhere;
+}
+.ck-ex-pane-top button {
+  white-space: nowrap;
+  font-size: 10px;
+}
+.ck-ex-pane-header h2 {
+  font-size: 18px;
+  line-height: 1.5;
+  font-weight: 550;
+  margin: 10px 0 8px;
+  overflow-wrap: anywhere;
+}
+.ck-ex-tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid var(--ck-divider);
+}
+.ck-ex-tabs button {
+  border: 0;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 8px 0;
+  font-size: 12px;
+}
+.ck-ex-tabs button[aria-selected="true"] {
+  border-color: var(--ck-accent);
+  color: var(--ck-text);
+}
+.ck-ex-pane-body {
+  flex: 1;
+  overflow: auto;
+  padding: 18px;
+  min-height: 0;
+}
+.ck-ex-kicker {
+  color: var(--ck-accent);
+  font-size: 11px;
+  margin-bottom: 10px !important;
+}
+.ck-ex-lead {
+  font-size: 17px;
+  line-height: 1.75;
+  margin-bottom: 16px !important;
+  overflow-wrap: anywhere;
+}
+.ck-ex-prose {
+  font-size: 13px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ck-ex-source-ref {
+  color: var(--ck-tertiary);
+  font: 11px / 1.8 var(--ck-mono-font);
+  margin: 10px 0 !important;
+  overflow-wrap: anywhere;
+}
+.ck-ex-explanation-section {
+  margin: 17px 0;
+}
+.ck-ex-explanation-section h3,
+.ck-ex-diagram-heading h3,
+.ck-ex-suggestion h3 {
+  font-size: 12px;
+  color: var(--ck-accent);
+  font-weight: 500;
+  margin-bottom: 7px;
+}
+.ck-ex-explanation-section ul {
+  padding-left: 17px;
+  margin: 5px 0;
+  color: var(--ck-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ck-ex-explanation-section li {
+  margin-bottom: 5px;
+}
+.ck-ex-diagram-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 15px 0 7px;
+}
+.ck-ex-diagram-heading button {
+  font-size: 10px;
+}
+.ck-ex-canvas-scroll {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid var(--ck-divider);
+  background: var(--ck-nav);
+  border-radius: 5px;
+}
+.ck-ex-canvas-scroll canvas {
+  display: block;
+  margin: 0 auto;
+}
+.ck-ex-diagram > p {
+  margin: 7px 0;
+}
+.ck-ex-graph-text {
+  padding-left: 20px;
+  margin: 9px 0 16px;
+  font-size: 12px;
+  color: var(--ck-secondary);
+}
+.ck-ex-graph-text li {
+  margin: 8px 0;
+}
+.ck-ex-evidence-label {
+  font-size: 10px;
+  display: inline-block;
+  margin-right: 7px;
+  color: var(--ck-running);
+}
+.ck-ex-evidence-label.inference {
+  color: var(--ck-accent);
+}
+.ck-ex-graph-text button {
+  display: block;
+  font-size: 10px;
+  margin: 4px 0;
+}
+.ck-ex-suggestion > div {
+  margin: 8px 0;
+  background: var(--ck-nav);
+  border: 1px solid var(--ck-divider);
+  border-radius: 5px;
+  padding: 10px;
+}
+.ck-ex-suggestion > div.after {
+  border-color: #3e5d48;
+}
+.ck-ex-suggestion h4 {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  font-weight: 400;
+  margin-bottom: 7px;
+}
+.ck-ex-suggestion h3 span {
+  font-size: 10px;
+  color: var(--ck-tertiary);
+}
+.ck-ex-suggestion pre {
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  line-height: 1.9;
+}
+.ck-ex-suggestion > button {
+  font-size: 11px;
+  margin: 5px 0;
+}
+.ck-ex-context-action {
+  width: 100%;
+  margin: 7px 0;
+}
+.ck-ex-provenance {
+  margin-top: 15px;
+  padding-top: 11px;
+  border-top: 1px solid var(--ck-divider);
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.ck-ex-provenance summary {
+  cursor: pointer;
+  color: var(--ck-secondary);
+}
+.ck-ex-provenance p {
+  margin-top: 5px;
+}
+.ck-ex-generation-state {
+  font-size: 12px;
+  color: var(--ck-secondary);
+}
+.ck-ex-generation-state h3 {
+  font-size: 15px;
+  color: var(--ck-text);
+  font-weight: 500;
+  margin-bottom: 9px;
+}
+.ck-ex-generation-state > p {
+  margin-bottom: 14px;
+  overflow-wrap: anywhere;
+}
+.ck-explainer .ck-ex-primary {
+  background: var(--ck-accent);
+  color: #252119;
+  border-color: var(--ck-accent);
+}
+.ck-ex-original-fallback {
+  margin-top: 23px;
+  padding-top: 13px;
+  border-top: 1px solid var(--ck-divider);
+}
+.ck-ex-original-fallback h4 {
+  font-size: 11px;
+  color: var(--ck-tertiary);
+  font-weight: 400;
+  margin-bottom: 7px;
+}
+.ck-ex-original-fallback p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ck-ex-pane-footer {
+  padding: 11px 18px;
+  border-top: 1px solid var(--ck-divider);
+  flex: 0 0 auto;
+}
+.ck-ex-pane-footer p {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  margin-top: 6px;
+}
+.ck-ex-dialog {
+  width: min(760px, calc(100vw - 28px));
+  max-height: 88dvh;
+  overflow: auto;
+  background: var(--ck-seats);
+  color: var(--ck-text);
+  padding: 19px;
+  border: 1px solid #65563e;
+  border-radius: 9px;
+}
+.ck-ex-dialog::backdrop {
+  background: #08090bc9;
+}
+.ck-ex-dialog > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+  gap: 10px;
+}
+.ck-ex-dialog h2 {
+  font-size: 17px;
+  font-weight: 500;
+}
+.ck-ex-dialog header button {
+  white-space: nowrap;
+  font-size: 11px;
+}
+.ck-ex-notification {
+  min-height: 27px;
+  flex: 0 0 auto;
+  padding: 4px 18px;
+  border-top: 1px solid var(--ck-divider);
+  color: var(--ck-accent);
+  background: var(--ck-seats);
+  font-size: 10px;
+}
+.ck-ex-error {
+  padding: 9px 16px;
+  font-size: 12px;
+  color: var(--ck-error);
+  background: #382428;
+  border-bottom: 1px solid #59353a;
+}
+.ck-ex-load-state {
+  padding: 32px;
+}
+.ck-ex-load-state h2 {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+.ck-ex-load-state button {
+  margin-top: 12px;
+}
+@media (max-width: 1200px) {
+  .ck-ex-workspace {
+    grid-template-columns: 205px minmax(0, 1fr);
+  }
+  .ck-explainer.with-pane .ck-ex-workspace {
+    grid-template-columns: 205px minmax(0, 1fr) 350px;
+  }
+  .ck-ex-toolbar > div:first-child > span {
+    display: none;
+  }
+  .ck-ex-diff-scroll {
+    padding: 13px 12px 80px;
+  }
+  .ck-ex-toolbar {
+    padding: 9px 12px;
+  }
+  .ck-ex-pane-header,
+  .ck-ex-pane-body {
+    padding-inline: 15px;
+  }
+}
+@media (max-width: 950px) {
+  .ck-ex-workspace,
+  .ck-explainer.with-pane .ck-ex-workspace {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  .ck-ex-pane {
+    position: fixed;
+    bottom: 27px;
+    right: 0;
+    width: calc(100% - 200px);
+    height: 38dvh;
+    max-height: 38dvh;
+    z-index: 10;
+    border: 1px solid #68563c;
+    border-radius: 8px 0 0 0;
+    box-shadow: 0 -8px 25px #0005;
+  }
+  .ck-explainer.with-pane .ck-ex-diff-scroll {
+    padding-bottom: 43dvh;
+  }
+  .ck-ex-pane-header {
+    padding: 9px 14px 0;
+  }
+  .ck-ex-pane-header h2 {
+    font-size: 15px;
+    margin: 5px 0;
+  }
+  .ck-ex-tabs button {
+    padding: 6px 0;
+  }
+  .ck-ex-pane-body {
+    padding: 13px;
+  }
+  .ck-ex-pane-footer {
+    padding: 8px 14px;
+  }
+  .ck-ex-pane-footer p {
+    display: none;
+  }
+  .ck-ex-title h1 {
+    font-size: 17px;
+  }
+  .ck-ex-header {
+    padding: 10px 16px;
+  }
+  .ck-ex-toolbar strong {
+    font-size: 12px;
+  }
+  .ck-ex-toolbar-actions {
+    gap: 6px;
+  }
+  .ck-ex-toolbar-actions > button {
+    font-size: 10px;
+  }
+  .ck-ex-code {
+    font-size: 10px;
+    line-height: 24px;
+  }
+  .ck-ex-finding {
+    padding: 10px 12px;
+  }
+  .ck-ex-finding h3 {
+    font-size: 12px;
+  }
+  .ck-ex-original-excerpt {
+    font-size: 10px;
+  }
+  .ck-ex-card-actions .ck-ex-decisions {
+    margin-left: 0;
+  }
+  .ck-ex-file > summary {
+    padding: 8px 10px;
+  }
+  .ck-ex-filename {
+    font-size: 10px;
+  }
+}
+@media (max-width: 650px) {
+  .ck-ex-workspace,
+  .ck-explainer.with-pane .ck-ex-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: 135px minmax(0, 1fr);
+  }
+  .ck-ex-navigation {
+    border-right: 0;
+    border-bottom: 1px solid var(--ck-divider);
+    display: flex;
+    overflow: auto;
+  }
+  .ck-ex-file-nav {
+    width: 60%;
+    min-width: 60%;
+    padding: 6px;
+  }
+  .ck-ex-file-nav h2 {
+    padding: 0 4px 3px;
+    font-size: 10px;
+  }
+  .ck-ex-file-buttons {
+    max-height: 100px;
+    overflow: auto;
+  }
+  .ck-ex-file-buttons button {
+    padding: 3px 5px;
+    margin-bottom: 2px;
+  }
+  .ck-ex-file-buttons button > span {
+    font-size: 10px;
+  }
+  .ck-ex-file-buttons small {
+    font-size: 9px;
+    margin-top: 0;
+  }
+  .ck-ex-lists {
+    padding: 6px 8px;
+    border-top: 0;
+    border-left: 1px solid var(--ck-divider);
+    width: 40%;
+    min-width: 40%;
+    overflow: auto;
+  }
+  .ck-ex-decision-list {
+    margin-bottom: 7px;
+  }
+  .ck-ex-decision-list h3 {
+    font-size: 10px;
+  }
+  .ck-ex-decision-list button {
+    font-size: 9px;
+    padding: 2px 0;
+  }
+  .ck-ex-decision-list code {
+    font-size: 8px;
+  }
+  .ck-ex-pane {
+    width: 100%;
+    height: 34dvh;
+    max-height: 34dvh;
+    border-radius: 9px 9px 0 0;
+  }
+  .ck-ex-header {
+    padding: 8px 12px;
+  }
+  .ck-ex-title {
+    gap: 7px;
+    margin: 5px 0 4px;
+  }
+  .ck-ex-title h1 {
+    font-size: 15px;
+  }
+  .ck-ex-title > span {
+    font-size: 10px;
+  }
+  .ck-ex-header > p {
+    gap: 5px;
+    font-size: 9px;
+  }
+  .ck-ex-header > p span:last-child {
+    display: none;
+  }
+  .ck-ex-crumb {
+    font-size: 10px;
+  }
+  .ck-ex-toolbar {
+    min-height: 43px;
+    padding: 6px 8px;
+    gap: 4px;
+  }
+  .ck-ex-toolbar strong {
+    font-size: 11px;
+  }
+  .ck-ex-toolbar-actions > button {
+    padding: 4px 6px;
+  }
+  .ck-ex-layout button {
+    padding: 3px 5px;
+    font-size: 10px;
+  }
+  .ck-ex-diff-scroll {
+    padding: 9px 7px 80px;
+  }
+  .ck-ex-diff-intro {
+    font-size: 9px;
+    padding-bottom: 8px;
+  }
+  .ck-ex-file {
+    margin-bottom: 13px;
+  }
+  .ck-ex-code {
+    min-width: 355px;
+    font-size: 10px;
+    line-height: 23px;
+  }
+  .ck-ex-code col.number {
+    width: 31px;
+  }
+  .ck-ex-code col.sign {
+    width: 13px;
+  }
+  .ck-ex-code td.ln {
+    padding-right: 5px;
+    font-size: 9px;
+  }
+  .ck-ex-file > summary {
+    padding: 7px 8px;
+    min-height: 35px;
+  }
+  .ck-ex-finding-meta {
+    gap: 5px;
+    font-size: 9px;
+  }
+  .ck-ex-finding-meta code {
+    font-size: 8px;
+  }
+  .ck-ex-finding {
+    padding: 9px 10px;
+  }
+  .ck-ex-decisions button {
+    padding: 4px 7px;
+    font-size: 10px;
+  }
+  .ck-ex-notification {
+    font-size: 9px;
+    line-height: 19px;
+    padding: 4px 10px;
+    height: 27px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ck-ex-rename {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ck-explainer *,
+  .ck-explainer {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+.ck-ex-finding .ck-ex-finding-title {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}

@@ -19,15 +19,16 @@ import { createInstallationRegistry } from "./installations/registry";
 import { createLogger } from "./logging";
 import { createProcessSupervisor } from "./process/process-supervisor";
 import { createProfileProbe } from "./profiles/probe";
+import { repairObservationRoutes } from "./repair-observation/routes";
 import { cliRunsRoutes } from "./routes/cli-runs";
 import { diagnosticsRoutes } from "./routes/diagnostics";
 import { healthRoutes } from "./routes/health";
 import { installationRoutes } from "./routes/installations";
 import { modelRoutes } from "./routes/models";
 import { productJuryRoutes } from "./routes/product-jury";
+import { reviewExplainerRoutes } from "./routes/review-explainer";
 import { reviewJuryRoutes } from "./routes/review-jury";
 import { scopeRoutes } from "./routes/scopes";
-import { repairObservationRoutes } from "./repair-observation/routes";
 import { createScopeManager } from "./scopes/scope-manager";
 import { createSessionReconciler } from "./scopes/session-reconciler";
 import { createSessionCapability } from "./security/session-capability";
@@ -161,6 +162,7 @@ async function main(): Promise<void> {
     ...scopeRoutes(services),
     ...diagnosticsRoutes(services),
     ...cliRunsRoutes(services),
+    ...reviewExplainerRoutes(services),
     ...repairObservationRoutes(),
     ...reviewJuryRoutes(),
     ...productJuryRoutes(),

@@ -4,6 +4,8 @@ import { dirname, join, resolve, sep } from "node:path";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
+import { decisionForFinding, loadPrDecisions } from "@shared/runtime/review-explainer/pr-decisions";
+import { buildRepairPackageFromSelection } from "@shared/runtime/review-explainer/repair-selection";
 import { loadFindingGroups } from "../auto/finding-groups";
 import { runDeadlineSupervisorLoop } from "../auto/repair-deadline-supervisor";
 import {
@@ -73,6 +75,7 @@ async function runRepairExport(argv: string[], out: OutputSink): Promise<void> {
         run: { type: "string" },
         out: { type: "string" },
         cluster: { type: "string" },
+        selected: { type: "boolean" },
         json: { type: "boolean" },
       },
       allowPositionals: 0,
@@ -84,6 +87,8 @@ async function runRepairExport(argv: string[], out: OutputSink): Promise<void> {
   if (!isCliRunId(runId) || !runId.startsWith("ck-review-"))
     throw errors.usage("--run must identify a review run");
   if (!output) throw errors.usage("--out is required");
+  if (values.selected && values.cluster !== undefined)
+    throw errors.usage("--selected and --cluster are mutually exclusive");
   const run = readCliRun(runId);
   if (!run) throw errors.usage("review run not found");
   if (run.hasPlanLock && !run.planLock)
@@ -112,7 +117,7 @@ async function runRepairExport(argv: string[], out: OutputSink): Promise<void> {
   }
   let task: RepairPackage;
   try {
-    task = buildRepairPackage({
+    const source = {
       runId,
       complete: canExportRepairPackage(run),
       prUrl: run.reviewEvidence?.prUrl ?? null,
@@ -125,7 +130,20 @@ async function runRepairExport(argv: string[], out: OutputSink): Promise<void> {
       planLock: run.planLock,
       clusterId: typeof values.cluster === "string" ? values.cluster : undefined,
       findingGroups,
-    });
+    };
+    if (values.selected) {
+      if (!source.prUrl) throw errors.usage("--selected requires a PR review");
+      const stored = loadPrDecisions(source.prUrl);
+      const decisions = Object.fromEntries(
+        run.findings.flatMap((row) => {
+          const decision = decisionForFinding(stored, row);
+          return decision ? [[row.id, decision]] : [];
+        }),
+      );
+      task = buildRepairPackageFromSelection({ ...source, decisions });
+    } else {
+      task = buildRepairPackage(source);
+    }
   } catch (error) {
     throw errors.usage(error instanceof Error ? error.message : "invalid repair source");
   }

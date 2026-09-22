@@ -3,6 +3,8 @@ import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { type Ref, useCallback, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ReviewExplainer } from "../explainer/ReviewExplainer";
 import { ContextBar } from "./ContextBar";
 import { OverviewView } from "./OverviewView";
 import { RepairView, type WorkbenchPipelineProps, type WorkbenchRepairProps } from "./RepairView";
@@ -49,6 +51,16 @@ export function ReviewWorkbench({
   backTo: WorkbenchBackLink;
   againstState?: AgainstLedgerState;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showExplainer = searchParams.get("view") === "explainer";
+  const setShowExplainer = (visible: boolean) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      if (visible) next.set("view", "explainer");
+      else next.delete("view");
+      return next;
+    });
+  };
   const hostStatus = useWorkbenchHostStatus();
   const { selected, select, tabs, setTab, getOrInitTab } = useWorkbenchSelection();
 
@@ -135,6 +147,7 @@ export function ReviewWorkbench({
 
   // scroll 时 rAF 节流记录当前位置（视图切换过渡期间不写，见上）。
   useEffect(() => {
+    if (showExplainer) return;
     const el = readerRef.current;
     if (!el) return;
     let raf = 0;
@@ -151,9 +164,10 @@ export function ReviewWorkbench({
       el.removeEventListener("scroll", onScroll);
       if (raf !== 0) window.cancelAnimationFrame(raf);
     };
-  }, []);
+  }, [showExplainer]);
 
   useEffect(() => {
+    if (showExplainer) return;
     const saved = scrollMemoryRef.current.get(viewKey);
     const el = readerRef.current;
     if (saved === undefined || !el) {
@@ -188,7 +202,7 @@ export function ReviewWorkbench({
       window.cancelAnimationFrame(raf);
       suppressScrollMemoryRef.current = false;
     };
-  }, [viewKey]);
+  }, [viewKey, showExplainer]);
 
   const copyText = () => {
     if (selectedAttempt && selectedAttemptId) {
@@ -202,6 +216,11 @@ export function ReviewWorkbench({
     }
     return null;
   };
+
+  if (showExplainer)
+    return (
+      <ReviewExplainer runId={run.runId} title={run.title} onBack={() => setShowExplainer(false)} />
+    );
 
   return (
     <div className="ck-wb ck-wb-app">
@@ -224,6 +243,11 @@ export function ReviewWorkbench({
             hasRepair: repairAvailable,
           }}
           getCopyText={copyText}
+          onExplain={() => {
+            if (readerRef.current)
+              scrollMemoryRef.current.set(viewKey, readerRef.current.scrollTop);
+            setShowExplainer(true);
+          }}
         />
         <div className="ck-wb-reader" ref={readerRef as Ref<HTMLDivElement>}>
           {effectiveSelection === "overview" ? (
