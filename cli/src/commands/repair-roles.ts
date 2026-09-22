@@ -88,7 +88,8 @@ async function setRepairRoles(argv: string[], out: OutputSink): Promise<void> {
   }
   mkdirSync(resolveCouncilkitHome(process.env), { recursive: true, mode: 0o700 });
   const current = readSquadBridgeObject(process.env);
-  const applied = applyRepairRoleUpdates(current, updates);
+  if (!current.ok) throw errors.usage(current.reason);
+  const applied = applyRepairRoleUpdates(current.value, updates);
   if (!applied.ok) throw errors.usage(applied.reason);
   const path = writeSquadBridgeFile(process.env, applied.file);
   await out.finish(
@@ -104,9 +105,10 @@ async function setRepairRoles(argv: string[], out: OutputSink): Promise<void> {
 async function resetRepairRoles(out: OutputSink): Promise<void> {
   mkdirSync(resolveCouncilkitHome(process.env), { recursive: true, mode: 0o700 });
   const current = readSquadBridgeObject(process.env);
-  delete current.roles;
-  delete current.model;
-  const path = writeSquadBridgeFile(process.env, current);
+  if (!current.ok) throw errors.usage(current.reason);
+  delete current.value.roles;
+  delete current.value.model;
+  const path = writeSquadBridgeFile(process.env, current.value);
   const loaded = readSquadBridgeFile(process.env);
   const resolved = resolveRepairRoles({
     orchestratorRuntime: loaded.file.orchestratorRuntime,

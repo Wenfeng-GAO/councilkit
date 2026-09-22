@@ -72,4 +72,20 @@ describe("repair roles", () => {
     expect(cleared.roles).toBeUndefined();
     expect(readFileSync(budget, "utf8")).toBe("{\"used\":3}\n");
   });
+
+  it("show and set refuse damaged config and leave the file unchanged", async () => {
+    const home = homeDir();
+    const configPath = join(home, "squad-bridge.json");
+    writeFileSync(configPath, "{not json\n");
+    const out = sink();
+    await expect(runRepair(["roles", "show"], out)).rejects.toThrow(/JSON/);
+    await expect(runRepair(["roles", "set", "--reviewer", "codex:gpt-5.6-sol"], out)).rejects.toThrow(
+      /JSON/,
+    );
+    expect(readFileSync(configPath, "utf8")).toBe("{not json\n");
+    writeFileSync(configPath, `${JSON.stringify({ roles: { reviewer: { runtime: "cursor", model: "composer-2.5" } } })}\n`);
+    await runRepair(["roles", "show"], out);
+    const shown = out.last() as { roles: { reviewer: { model: string } } };
+    expect(shown.roles.reviewer.model).toBe("composer-2.5");
+  });
 });

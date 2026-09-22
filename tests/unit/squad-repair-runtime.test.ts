@@ -1,5 +1,6 @@
 import {
   CURSOR_REPAIR_MODEL,
+  type RepairSeat,
   applyRepairRoleUpdates,
   cursorRepairModelPin,
   cursorRepairModelReceiptMatches,
@@ -48,9 +49,17 @@ describe("cursor repair model pin", () => {
 
   it("binds every squad role to cursor and keeps review and verify off the builder session", () => {
     const roles = cursorRepairRoles();
-    for (const role of ["orchestrator", "planner_a", "planner_b", "coder", "reviewer", "verifier"]) {
-      expect(roles[role]?.runtime).toBe("cursor");
-      expect(roles[role]?.model).toBe(CURSOR_REPAIR_MODEL);
+    const seats: RepairSeat[] = [
+      "orchestrator",
+      "planner_a",
+      "planner_b",
+      "coder",
+      "reviewer",
+      "verifier",
+    ];
+    for (const role of seats) {
+      expect(roles[role].runtime).toBe("cursor");
+      expect(roles[role].model).toBe(CURSOR_REPAIR_MODEL);
     }
     expect(roles.planner_a?.mode).toBe("main-session");
     expect(roles.coder?.mode).toBe("main-session");

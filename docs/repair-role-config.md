@@ -33,11 +33,32 @@ pnpm exec councilkit repair roles reset
 
 ## 额度耗尽后换席
 
-`repair roles set` 不改正在跑的 session，不改修复链，也不把已用预算清零。已冻结的 native session 不能用另一个模型 `--resume`。
+`repair roles set` 只改 `squad-bridge.json`。它不删 `repair.json`，不改 `sourceFixUsed`，也不把 `remainingBudget` 清零。已有 Squad 任务的 `councilkit-bridge.json` 仍记下原来的 `model` 和 `nativeSession`。
 
-1. `pnpm exec councilkit repair stop --run <ck-repair-id>` 停掉当前 writer。
-2. `pnpm exec councilkit repair roles set --reviewer <runtime>:<model>`。
-3. 让同链的下一次任务重新 init。它会导入 history，已用预算保留。
-4. 不要新开 repair chain。新链会把预算从 0 算起。
+先记下预算：
 
-同一次执行里原地换模型不受支持。
+```bash
+pnpm exec councilkit repair status --run <ck-repair-id> --json
+```
+
+记下输出里的 `remainingBudget`。
+
+停掉当前 writer，再改席位，然后核对预算没变：
+
+```bash
+pnpm exec councilkit repair stop --run <ck-repair-id>
+pnpm exec councilkit repair roles set --reviewer cursor:composer-2.5
+pnpm exec councilkit repair status --run <ck-repair-id> --json
+```
+
+第二次 status 的 `remainingBudget` 必须和改席位之前相同。
+
+恢复同一条 repair run 时，当前 cycle 如果已经有 native session，会继续那个旧 Squad 任务，启动参数仍是冻结的旧模型，不会读取新的 reviewer 配置：
+
+```bash
+pnpm exec councilkit repair resume --run <ck-repair-id>
+```
+
+新的席位配置要等这条 run 把当前 cycle 做完、并且 `sourceFix` 预算还允许下一轮时，由同一次 `repair resume --run <ck-repair-id>` 打开下一个 outer cycle。那一轮的 squad init 使用 `--contract`，并且 `newRepairChain` 为 false，会带上上一轮导出的 history。不要省略 `--run-id` 去另起一条 repair run 来换模型。不要删除 `repair.json` 或 chain 里的已用预算。
+
+同一次 native session 里原地换模型不受支持。`repair resume` 不会把旧 Grok 或旧 Cursor session 交给另一个模型。

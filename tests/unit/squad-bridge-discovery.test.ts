@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
@@ -278,5 +278,27 @@ describe("squad bridge discovery", () => {
     const probe = probeSquadBridge(isolatedEnv({ HOME: home }));
     expect(probe.available).toBe(false);
     expect(probe.reason).toMatch(/不可执行|executable/i);
+  });
+
+  it("refuses a damaged squad-bridge.json instead of using the default model", () => {
+    const home = tempDir("ck-bad-json-");
+    seedSkill(join(home, ".codex"));
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeExecutable(join(bin, "cursor-agent"), "#!/bin/sh\necho cursor\n");
+    const ckHome = join(home, "ck");
+    mkdirSync(ckHome, { recursive: true });
+    const configPath = join(ckHome, "squad-bridge.json");
+    writeFileSync(configPath, "{not json\n");
+    const probe = probeSquadBridge(isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }));
+    expect(probe.available).toBe(false);
+    expect(probe.reason).toMatch(/JSON/);
+    expect(probe.orchestrator).toBeNull();
+    expect(readFileSync(configPath, "utf8")).toBe("{not json\n");
+    chmodSync(configPath, 0o000);
+    const denied = probeSquadBridge(isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }));
+    expect(denied.available).toBe(false);
+    expect(denied.reason).toMatch(/无法读取/);
+    chmodSync(configPath, 0o600);
   });
 });

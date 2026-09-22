@@ -1,7 +1,17 @@
 /** CouncilKit repair role defaults. Not a general runtime platform. */
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "./cli-home";
 
 export const CURSOR_REPAIR_MODEL =
@@ -274,31 +284,11 @@ export function readSquadBridgeFile(env: NodeJS.ProcessEnv = process.env): {
   file: SquadBridgeFile;
   reason: string | null;
 } {
-  try {
-    const raw = readFileSync(join(resolveCouncilkitHome(env), "squad-bridge.json"), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { file: {}, reason: "squad-bridge.json 必须是对象。" };
-    }
-    const row = parsed as Record<string, unknown>;
-    const roles = parseRoleOverrides(row.roles);
-    if (!roles.ok) return { file: {}, reason: roles.reason };
-    return {
-      file: {
-        executable: typeof row.executable === "string" ? row.executable : undefined,
-        skillDir: typeof row.skillDir === "string" ? row.skillDir : undefined,
-        grokb: typeof row.grokb === "string" ? row.grokb : undefined,
-        cursor: typeof row.cursor === "string" ? row.cursor : undefined,
-        orchestratorRuntime:
-          typeof row.orchestratorRuntime === "string" ? row.orchestratorRuntime : undefined,
-        model: typeof row.model === "string" ? row.model : undefined,
-        roles: roles.roles,
-      },
-      reason: null,
-    };
-  } catch {
-    return { file: {}, reason: null };
+  const loaded = readSquadBridgeText(env);
+  if (!loaded.ok) {
+    return loaded.missing ? { file: {}, reason: null } : { file: {}, reason: loaded.reason };
   }
+  return parseSquadBridgeText(loaded.text);
 }
 
 export function writeSquadBridgeFile(
@@ -306,21 +296,97 @@ export function writeSquadBridgeFile(
   file: Record<string, unknown>,
 ): string {
   const path = join(resolveCouncilkitHome(env), "squad-bridge.json");
-  writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  atomicWritePrivateText(path, `${JSON.stringify(file, null, 2)}\n`);
   return path;
 }
 
-export function readSquadBridgeObject(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> {
+export function readSquadBridgeObject(
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true; value: Record<string, unknown> } | { ok: false; reason: string } {
+  const loaded = readSquadBridgeText(env);
+  if (!loaded.ok) {
+    return loaded.missing ? { ok: true, value: {} } : { ok: false, reason: loaded.reason };
+  }
   try {
-    const raw = readFileSync(join(resolveCouncilkitHome(env), "squad-bridge.json"), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(loaded.text) as unknown;
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
+      return { ok: true, value: parsed as Record<string, unknown> };
     }
   } catch {
-    // missing config uses defaults
+    return { ok: false, reason: "squad-bridge.json 不是合法 JSON，已拒绝，不会改用默认模型。" };
   }
-  return {};
+  return { ok: false, reason: "squad-bridge.json 必须是对象，已拒绝，不会改用默认模型。" };
+}
+
+function readSquadBridgeText(
+  env: NodeJS.ProcessEnv,
+): { ok: true; text: string } | { ok: false; missing: true } | { ok: false; missing: false; reason: string } {
+  try {
+    return {
+      ok: true,
+      text: readFileSync(join(resolveCouncilkitHome(env), "squad-bridge.json"), "utf8"),
+    };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { ok: false, missing: true };
+    return {
+      ok: false,
+      missing: false,
+      reason: `squad-bridge.json 无法读取（${code ?? "error"}），已拒绝，不会改用默认模型。`,
+    };
+  }
+}
+
+function parseSquadBridgeText(raw: string): { file: SquadBridgeFile; reason: string | null } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { file: {}, reason: "squad-bridge.json 不是合法 JSON，已拒绝，不会改用默认模型。" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { file: {}, reason: "squad-bridge.json 必须是对象，已拒绝，不会改用默认模型。" };
+  }
+  const row = parsed as Record<string, unknown>;
+  const roles = parseRoleOverrides(row.roles);
+  if (!roles.ok) return { file: {}, reason: roles.reason };
+  return {
+    file: {
+      executable: typeof row.executable === "string" ? row.executable : undefined,
+      skillDir: typeof row.skillDir === "string" ? row.skillDir : undefined,
+      grokb: typeof row.grokb === "string" ? row.grokb : undefined,
+      cursor: typeof row.cursor === "string" ? row.cursor : undefined,
+      orchestratorRuntime:
+        typeof row.orchestratorRuntime === "string" ? row.orchestratorRuntime : undefined,
+      model: typeof row.model === "string" ? row.model : undefined,
+      roles: roles.roles,
+    },
+    reason: null,
+  };
+}
+
+function atomicWritePrivateText(path: string, data: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = join(dirname(path), `.${path.split("/").pop() ?? "file"}.${randomBytes(6).toString("hex")}.tmp`);
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, data);
+    fsyncSync(fd);
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {
+      // close after a failed write
+    }
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // tmp may already be gone
+    }
+    throw error;
+  }
+  closeSync(fd);
+  renameSync(tmp, path);
 }
 
 export function applyRepairRoleUpdates(
