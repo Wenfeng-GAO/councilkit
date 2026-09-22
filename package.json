@@ -12,14 +12,15 @@
     "build:cli": "node cli/scripts/build.mjs",
     "start": "node dist-host/main.mjs",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.host.json && tsc --noEmit -p tsconfig.integration.json && tsc --noEmit -p cli/tsconfig.json",
-    "lint": "biome check src shared runtime-host tests scripts cli playwright.config.ts",
+    "lint": "biome check src shared runtime-host tests scripts cli playwright.config.ts playwright.review-explainer.config.ts",
     "format": "biome format --write src shared runtime-host tests scripts cli",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit cli/tests",
     "test:host": "vitest run tests/host",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "playwright test",
-    "test:e2e:repair-observability": "playwright test -c playwright.repair-observability.config.ts"
+    "test:e2e:repair-observability": "playwright test -c playwright.repair-observability.config.ts",
+    "test:e2e:review-explainer": "playwright test -c playwright.review-explainer.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",

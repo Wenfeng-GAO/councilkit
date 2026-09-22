@@ -1,0 +1,163 @@
+{
+  "version": 3,
+  "frozenAt": "2026-09-22T17:25:52.203336+00:00",
+  "baseSha": "e0ec16d4accfa7c09bc6a1021ed001c2c7b3eaa7",
+  "reason": "Test infrastructure only: reuse immutable synthetic Git corpus and create per-case empty commit identity; own-case reset has a bounded setup-only timeout. Previously corrected hidden-context fixture is now loaded by new Host. No business assertion weakened.",
+  "node": "22.17.0",
+  "files": [
+    {
+      "path": "tests/review-explainer/cli-harness.ts",
+      "sha256": "7ce94dba66a40e555485756edec663a3e18795bb1a696779d8f9e18d3a0cbeec"
+    },
+    {
+      "path": "tests/review-explainer/contract.ts",
+      "sha256": "376a9c2306cb95b7915aaf044a0785cd170ae1ca2e6c9644687fefdca8a9ba23"
+    },
+    {
+      "path": "tests/review-explainer/fixtures/sample-diff.ts",
+      "sha256": "1f4a1031ad68c5f5c7fc572ebd127cc12de07f5bbcef47000cb4ea0a0fa1a8af"
+    },
+    {
+      "path": "tests/review-explainer/fixtures/seed-run.ts",
+      "sha256": "5b3da0e150529521c05fe0fcb4ed75965e67ac914c44542af0862cf927c666d4"
+    },
+    {
+      "path": "tests/review-explainer/fixtures/synthetic-repo.ts",
+      "sha256": "361df49c9c49712dc06552a95a7efba5841e6bb62d85201c6990e415e88e455b"
+    },
+    {
+      "path": "tests/review-explainer/load-feature.ts",
+      "sha256": "90908fa4567ba94c7acdc21a802a750def47016e34d330c794bb357e37029b56"
+    },
+    {
+      "path": "tests/unit/review-explainer/anchors.test.ts",
+      "sha256": "8073d87520ad3fe6da38dd21fd5f233da6d4d57729ecad337e93b7b4defdf4ce"
+    },
+    {
+      "path": "tests/unit/review-explainer/decisions.test.ts",
+      "sha256": "9088660845fe6f7cfedd3c042aef02715076f7b866c47a4ac2259c9949a796c4"
+    },
+    {
+      "path": "tests/unit/review-explainer/diff-parse.test.ts",
+      "sha256": "d5706871a8bd6c7080af31cb8e365a233dfc178a99082b71bda20ba4a818a2a1"
+    },
+    {
+      "path": "tests/unit/review-explainer/explanation-cache.test.ts",
+      "sha256": "5a4d2bf735f07f436b0134d29b30bdfc194d8787f71a2f3f30f6ae900a51c307"
+    },
+    {
+      "path": "tests/unit/review-explainer/explanation-schema.test.ts",
+      "sha256": "b809afe8dc5116279c8111083a7795b339a2ecd68c92b827e704d370ba8261dc"
+    },
+    {
+      "path": "tests/unit/review-explainer/pr-identity.test.ts",
+      "sha256": "8f8ddbb2405a256beb0968aaecf5f1e902e01a6eeb79b9669a991c33013a629d"
+    },
+    {
+      "path": "tests/unit/review-explainer/repair-selection.test.ts",
+      "sha256": "7e497ff547639821ee2ebc4739293d00449a03002bea419aff459627c93baec9"
+    },
+    {
+      "path": "tests/unit/review-explainer/security-bounds.test.ts",
+      "sha256": "b1db01ff4648fe8ee201e5ed7a152d7dfaf3aebe8f5b9b4016940446632c6236"
+    },
+    {
+      "path": "tests/host/review-explainer/http-helpers.ts",
+      "sha256": "d6be85069c0fe8f15003da73b615c62b846a80acff5cb2272211d9d974f71621"
+    },
+    {
+      "path": "tests/host/review-explainer/routes.test.ts",
+      "sha256": "328d23a969e05bf25c7e98b4dd61b2dd2dbf8c6d471a710ce2586b2ea8aec414"
+    },
+    {
+      "path": "tests/e2e/review-explainer/constants.ts",
+      "sha256": "c1a0519ca09ea664b6b799ba0acd25c99229b8f58a0326ba00114120a3bcf6dc"
+    },
+    {
+      "path": "tests/e2e/review-explainer/decisions.spec.ts",
+      "sha256": "0fa57ed210a23f97fabe4dd2fc7dfbdba578a8c511d205f0b3948a279fc0727b"
+    },
+    {
+      "path": "tests/e2e/review-explainer/diff-workspace.spec.ts",
+      "sha256": "901028d79a93e86666a772430049d398bdf97829edac3da6c6d307733ea70fe9"
+    },
+    {
+      "path": "tests/e2e/review-explainer/explanation.spec.ts",
+      "sha256": "1f2d59c47950d95c5ae6a8d62d5bc6708b7db02312b04b5663afb481b13c1e07"
+    },
+    {
+      "path": "tests/e2e/review-explainer/harness.spec.ts",
+      "sha256": "f2884d70b2a2c13fd209ddcdc98ee1e35a22759e39b2a27b5b77273241fef262"
+    },
+    {
+      "path": "tests/e2e/review-explainer/helpers.ts",
+      "sha256": "451e385811f37f3e9c4c442794afafbed962db3724e46b765e5b8bd6bac2d83f"
+    },
+    {
+      "path": "tests/e2e/review-explainer/host-entry.mts",
+      "sha256": "cee41135826591a9e74513f1a814b6d6f144b8d6ab17a47c4c3debb011ec2f93"
+    },
+    {
+      "path": "tests/e2e/review-explainer/repair-export.spec.ts",
+      "sha256": "0a1341c9f2df6dea33adc3b1a801d27b41be27cd6a35c4e00e347a0321d648f0"
+    },
+    {
+      "path": "tests/e2e/review-explainer/security.spec.ts",
+      "sha256": "3dd561d155962af75833d43d4fa6e282fba133214fd9eb9d9fccf7b89ad3e700"
+    },
+    {
+      "path": "cli/tests/review-explainer-explain-spawn.test.ts",
+      "sha256": "2f27a8f897d0a47fad65d0d78db00a87a76a581658a8dade67784cff19fcd23d"
+    },
+    {
+      "path": "cli/tests/review-explainer-repair-export.test.ts",
+      "sha256": "5ea6f2042212a5bc3d3bd9c68894e6d7598dd1b1be908b67a551100e10da00a4"
+    },
+    {
+      "path": "cli/tests/review-explainer-skip.test.ts",
+      "sha256": "7c8b138e7da7c64203041ebb7665d14d1bdb5162e81e1d0809813417b348e6ee"
+    },
+    {
+      "path": "playwright.review-explainer.config.ts",
+      "sha256": "82ba7045c18e20793ddeebad91588e83569310ca40323996781e21c7518ab2e2"
+    },
+    {
+      "path": "docs/verification/2026-09-23-review-explainer-acceptance.md",
+      "sha256": "54446b4abbac5d7652386ce1fb41f67797e537ef5e5779f3d83d68a9c9a09693"
+    },
+    {
+      "path": "docs/verification/2026-09-23-review-explainer-live-cases.md",
+      "sha256": "38f9db5678cbeee71ab7ad6e153f18befc159227e60f0f2833f1e34cd0a61a5d"
+    },
+    {
+      "path": "docs/plans/2026-09-23-review-explainer-implementation.md",
+      "sha256": "132ba58c5e45d31ef14f0f5909c3eb60210971bcee87babbdd8d3ae94e510833"
+    }
+  ],
+  "red": {
+    "utHttpCli": {
+      "tests": 59,
+      "failed": 52,
+      "passed": 7,
+      "skipped": 0
+    },
+    "httpAfterFixtureCorrection": {
+      "tests": 9,
+      "failed": 8,
+      "passed": 1
+    },
+    "e2eHarness": {
+      "passed": 1
+    },
+    "e2eBusiness": {
+      "fullSuiteDiscovered": 20,
+      "missingEntryReproduced": true,
+      "initialFullRun": "20 failed: business missing plus setup failures recorded separately",
+      "correctedTargetedRun": {
+        "passed": 1,
+        "expectedFeatureMissing": 1
+      },
+      "command": "pnpm exec playwright test -c playwright.review-explainer.config.ts harness.spec.ts diff-workspace.spec.ts --grep \"INFRA|opening associated context\""
+    }
+  }
+}

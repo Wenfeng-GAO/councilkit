@@ -1,0 +1,113 @@
+/**
+ * Hand-written unified diff for parser UT. Hunk headers match line counts.
+ * Unique snippets are asserted by tests; this is not PR #128 data.
+ */
+
+export const BUSY_SNIPPET = "return ErrBusy";
+export const STALE_SNIPPET = "if check.StillValid() {";
+export const DUP_SNIPPET = 'return errors.New("session already exists")';
+export const DELETED_SNIPPET = "func leftoverCleanup() {";
+export const README_SNIPPET = "Added overview line.";
+export const JAVA_SNIPPET = "public void coversUncommentedFile() {";
+export const RENAME_SNIPPET = "func RenamedHelper() {";
+export const CONTEXT_SNIPPET = "func Handle(req Request) error {";
+export const HIDDEN_CONTEXT_SNIPPET = '// Hidden recovery contract: serialize-before-submit';
+
+export const SAMPLE_DIFF = [
+  "diff --git a/README.md b/README.md",
+  "index 1111111..2222222 100644",
+  "--- a/README.md",
+  "+++ b/README.md",
+  "@@ -1,3 +1,4 @@",
+  " # Fixture",
+  `+${README_SNIPPET}`,
+  " Keep this file without a review comment.",
+  "diff --git a/assets/icon.bin b/assets/icon.bin",
+  "new file mode 100644",
+  "index 0000000..abcdef0",
+  "Binary files /dev/null and b/assets/icon.bin differ",
+  "diff --git a/src/busy.go b/src/busy.go",
+  "index 3333333..4444444 100644",
+  "--- a/src/busy.go",
+  "+++ b/src/busy.go",
+  "@@ -1,8 +1,12 @@",
+  " package session",
+  " ",
+  ` ${CONTEXT_SNIPPET}`,
+  '     if req.Kind == "prompt" {',
+  "+        state.Accept(req)",
+  "+        if manager.Busy() {",
+  `+            ${BUSY_SNIPPET}`,
+  "+        }",
+  "         return nil",
+  "     }",
+  "     return nil",
+  " }",
+  "diff --git a/src/deleted.go b/src/deleted.go",
+  "deleted file mode 100644",
+  "--- a/src/deleted.go",
+  "+++ /dev/null",
+  "@@ -1,6 +0,0 @@",
+  "-package deleted",
+  "-",
+  `-${DELETED_SNIPPET}`,
+  "-    return nil",
+  "-}",
+  "-",
+  "diff --git a/src/old_name.go b/src/renamed.go",
+  "similarity index 88%",
+  "rename from src/old_name.go",
+  "rename to src/renamed.go",
+  "index 5555555..6666666 100644",
+  "--- a/src/old_name.go",
+  "+++ b/src/renamed.go",
+  "@@ -1,4 +1,5 @@",
+  " package renamed",
+  " ",
+  `+${RENAME_SNIPPET}`,
+  " func Helper() {}",
+  "diff --git a/src/recovery.go b/src/recovery.go",
+  "new file mode 100644",
+  "index 0000000..7777777",
+  "--- /dev/null",
+  "+++ b/src/recovery.go",
+  "@@ -0,0 +1,12 @@",
+  "+package recovery",
+  "+",
+  "+func Restore() error {",
+  `+    ${STALE_SNIPPET}`,
+  "+        return commitLate()",
+  "+    }",
+  "+    return nil",
+  "+}",
+  "+",
+  "+func Dup() error {",
+  `+    ${DUP_SNIPPET}`,
+  "+}",
+  "diff --git a/tests/WideCoverage.java b/tests/WideCoverage.java",
+  "index 8888888..9999999 100644",
+  "--- a/tests/WideCoverage.java",
+  "+++ b/tests/WideCoverage.java",
+  "@@ -1,4 +1,5 @@",
+  " class WideCoverage {",
+  `+    ${JAVA_SNIPPET}`,
+  "     void existing() {}",
+  " }",
+  "",
+].join("\n");
+
+export const SAMPLE_EXPECT = {
+  files: [
+    { path: "README.md", status: "modified", commented: false },
+    { path: "assets/icon.bin", status: "added", binary: true },
+    { path: "src/busy.go", status: "modified", commented: true },
+    { path: "src/deleted.go", status: "deleted", commented: true },
+    { path: "src/renamed.go", status: "renamed", oldPath: "src/old_name.go" },
+    { path: "src/recovery.go", status: "added", commented: true },
+    { path: "tests/WideCoverage.java", status: "modified", commented: false },
+  ],
+  busyNewLine: 7,
+  staleNewLine: 4,
+  dupNewLine: 11,
+  deletedOldLine: 3,
+} as const;
