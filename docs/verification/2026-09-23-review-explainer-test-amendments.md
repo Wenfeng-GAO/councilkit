@@ -47,3 +47,7 @@ A05 追加 9 个用例，覆盖生产账本实际保存的 `` `root-id` — 原�
 - A02：重命名文件的旧路径 resolved 意见未归入新文件 diff，整条意见消失。新增生产 DiffDocument 的 React SSR 用例，覆盖 split/unified 的意见呈现和旧侧源码 DOM 身份；4 例先全部 RED。随后按旧/新侧映射文件归属，保留真实旧路径供定位。
 
 新增用例不修改或放宽原冻结断言；先前 GREEN 和独立反例日志均保留。最终候选需覆盖新增用例及原完整测试集。
+
+## 8. CLI 集成反例放入对应运行环境
+
+第二候选全量 typecheck 发现：新增 A05 实际 CLI 提取用例位于 `tests/unit`，会让浏览器 ES2020 配置传递编译 Node 22 CLI，触发既有 `replaceAll` / `Error.cause` 的 lib 错误。将这一例的原始测试体逐字迁至 `cli/tests/review-explainer-assertion-identity.test.ts`，使用项目已有 CLI ES2022 配置；保留所有提取、持久化与未豁免断言，不修改生产代码、不扩大浏览器 target、不排除测试。最终命令显式包含此文件。构建失败时 E2E 未启动，保留失败退出码，不计通过。
