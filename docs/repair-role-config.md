@@ -31,7 +31,9 @@ pnpm exec councilkit repair roles reset
 
 整条修复改回 Grok Orchestrator（不加载这份 Cursor 合同）时，在 `squad-bridge.json` 写 `"orchestratorRuntime": "grokb"`。没有 `roles` 覆盖时，init 不再传自定义 contract。
 
-## 额度耗尽后换席
+## 额度耗尽后换席（v2）
+
+以下同链预算继承步骤要求使用 v2 repair profile。v1 的预算仅保存在各自 Run 中，新建 parent Run 不具备这里的跨 Run 预算保证；不要把 v1 新 Run 当作同链续接。
 
 `repair roles set` 只改 `COUNCILKIT_HOME/squad-bridge.json`。它不删 `repair.json`，也不改持久 chain 里的 `sourceFixUsed`。
 
