@@ -77,9 +77,11 @@ export function ReviewExplainer({
   }, []);
   const requestLocation = (location: CodeLocation) => {
     const canonical =
-      workspace?.files.find((file) => file.path === location.path || file.oldPath === location.path)
-        ?.path ?? location.path;
-    const target = { ...location, path: canonical };
+      workspace?.files.find(
+        (file) => (location.side === "old" ? file.oldPath : file.newPath) === location.path,
+      )?.path ?? location.path;
+    // Expand the display file without rewriting the frozen source reference.
+    const target = location;
     setActivePath(canonical);
     setFocus(target);
     onToggleFile(canonical, false);
@@ -309,9 +311,13 @@ export function ReviewExplainer({
               </h2>
               <div className="ck-ex-file-buttons">
                 {workspace.files.map((file) => {
-                  const count = workspace.findings.filter(
-                    (finding) => primaryLocation(finding)?.path === file.path,
-                  ).length;
+                  const count = workspace.findings.filter((finding) => {
+                    const location = primaryLocation(finding);
+                    return (
+                      location !== null &&
+                      location.path === (location.side === "old" ? file.oldPath : file.newPath)
+                    );
+                  }).length;
                   return (
                     <button
                       type="button"

@@ -165,6 +165,27 @@ pnpm exec councilkit ideate "一句话创意" --background "用户、约束、�
 - **Finding 账本**：每次 review 产生 `findings.json`，`--against <prior-run>` 优先保留原问题 ID，并保留独立审查者报告的发现。失败、未覆盖、聚合报告未再提及都不会关闭旧问题。`fix` 的复审默认带 `--against`。
 - **关闭证据**：`apply` 只记录 `repairClaim`。关闭需要成功的独立审查者提交结构化验证，绑定本次完整候选 SHA，并提供测试命令或代码位置；控制器核对审查 worktree 的 HEAD 与受跟踪文件没有变化。聚合器不能代写关闭凭据，仍成立的发现优先于关闭声明。旧 `closed` 没有验证凭据时显示“历史未验证”，重大项仍待处理。证据来自独立模型审查，不能理解为控制器已经重跑并认证了其所有测试。
 
+#### 理解评审：完整 diff、解释与修复决定
+
+打开 `/reports/<ck-review-id>`，点击「理解评审」。页面展示本次冻结区间的全部文件与变更片段，并在可信的旧/新侧源码位置插入意见；无意见的 diff 仍保留。缺失或无法确认的位置单独说明，不拿当前工作区代码冒充审查版本。
+
+每条意见只有「打算修复」「不修复」两个选择，可再次点击撤回为待决定，无需填写理由。决定存于同一 PR 的权威记录：打算修复用于导出修复与验收范围；不修复在后续普通 review 和 `--against` 中跳过已确认的同一断言。未知别名、新失败机制或不同 PR 不继承跳过。选择修复、Builder 声称完成和已验证关闭是不同状态。
+
+「看懂问题」保留原评审，按需调用一个已配置模型生成解释；默认使用 `pr-jury` Reporter，无可用配置时显示错误。解释区分已有证据与条件推演；简单项显示建议代码，复杂项用固定 Canvas 流程/时序模板与等价文字。相同源码、断言、模型及解释版本复用缓存，不重跑整个 Council。模型建议不会直接修改代码，也不作为修复完成证明。
+
+```bash
+# 与页面使用同一决定记录，无须 reason；undecided 可撤回
+pnpm exec councilkit findings decide --run <ck-review-id> --id <finding-id> --decision will_fix --json
+pnpm exec councilkit findings decide --run <ck-review-id> --id <finding-id> --decision wont_fix --json
+pnpm exec councilkit findings decide --run <ck-review-id> --id <finding-id> --decision undecided --json
+# 只导出打算修复的选择集合及其原断言、反例、验收依据
+pnpm exec councilkit repair export --run <ck-review-id> --selected --out /tmp/selected-repair.json
+# 候选修复后，保持同一任务范围与来源断言进行验收
+pnpm exec councilkit review <pr-url> --against <ck-review-id> --repair-package /tmp/selected-repair.json --json
+```
+
+未选择任何修复项时不能导出空任务包。任务范围外的观察单独保留；选中项通过不代表整个 PR 通过。已有显式 `repair export`、`fix`、`apply` 用法保持兼容。新增 Host 路由需构建并重启同 checkout 的 Host 后使用。
+
 #### `councilkit repair` — Squad 自动修复直到机器准出
 
 ```bash

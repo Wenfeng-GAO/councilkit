@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { upsertPrDecision } from "@shared/runtime/review-explainer/pr-decisions";
 import { describe, expect, it } from "vitest";
+import { extractFindingsFromReport } from "../../../cli/src/auto/ledger";
+import { projectPrDecisions } from "../../../cli/src/auto/pr-decisions";
 import {
   ANTCODE_PR_URL,
   ASSERTION,
@@ -211,5 +217,86 @@ describe("A05 confirmed aliases normalize only leading ID metadata", () => {
         candidate: { ...observed(decorate(alias, assertionWithLocation)), assertionVersion: 2 },
       }).skip,
     ).toBe(false);
+  });
+});
+
+describe("A05 undecorated assertions cannot hide a new mechanism through containment", () => {
+  it.each([
+    `${ASSERTION.busy} ${ASSERTION.newBusyMechanism}`,
+    `A different failure quotes an old finding: ${ASSERTION.busy}`,
+    `\`${FINDING.busy}\` — ${ASSERTION.busy} src/busy.go:23 ${ASSERTION.newBusyMechanism}`,
+    `${ASSERTION.busy} \`src/busy.go:23\` New failure: cancellation bypasses ownership.`,
+  ])("keeps prose outside the frozen original assertion open: %s", async (text) => {
+    const { matches } = await api();
+    expect(matches({ skipped, candidate: { id: FINDING.busy, prUrl: PR_URL, text } }).skip).toBe(
+      false,
+    );
+  });
+
+  it.each(["src/busy.go:23", "`src/busy.go:23-27`"])(
+    "preserves only explicit same-body location metadata compatibility: %s",
+    async (location) => {
+      const { matches } = await api();
+      expect(
+        matches({
+          skipped,
+          candidate: {
+            id: FINDING.busy,
+            prUrl: PR_URL,
+            text: `\`${FINDING.busy}\` — ${ASSERTION.busy} ${location}`,
+          },
+        }).skip,
+      ).toBe(true);
+    },
+  );
+
+  it("real extraction → persisted skip → same-ID successor with another mechanism remains open", () => {
+    const home = mkdtempSync(join(tmpdir(), "ck-skip-new-mechanism-"));
+    try {
+      const extract = (text: string) =>
+        extractFindingsFromReport({
+          markdown: [
+            "# Autonomous Review Report",
+            "",
+            "---",
+            "## Overview",
+            "fixture",
+            "## Consensus findings",
+            `- [major] ${text}`,
+            "## Unique findings",
+            "",
+            "## Disagreements",
+            "",
+            "## Verdict",
+            "comment",
+          ].join("\n"),
+          runId: "ck-review-11111111-1111-4111-8111-111111111111",
+          extractedAt: "2026-09-23T00:00:00.000Z",
+          sha: "a".repeat(40),
+        });
+      const original = extract("Shutdown may return before releasing a lease. src/session.ts:12");
+      expect(original.findings).toHaveLength(1);
+      const finding = original.findings[0];
+      if (!finding) throw new Error("Missing original fixture finding");
+      const decision = upsertPrDecision({
+        home,
+        prUrl: PR_URL,
+        finding,
+        decision: "wont_fix",
+        expectedRevision: 0,
+      });
+      const successor = extract(
+        `\`${finding.id}\` — ${finding.text} New mechanism: after restart, an unrelated session can delete the active lease.`,
+      );
+      expect(successor.findings).toHaveLength(1);
+      expect(successor.findings[0]?.id).toBe(finding.id);
+      const projected = projectPrDecisions(successor, decision);
+      expect(projected.findings[0]?.text).toContain("New mechanism: after restart");
+      expect(projected.findings[0]?.status).toBe("open");
+      expect(projected.findings[0]?.acceptedReason).toBeUndefined();
+      expect(projected.findings[0]?.acceptedAt).toBeUndefined();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

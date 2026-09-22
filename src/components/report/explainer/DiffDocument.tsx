@@ -37,23 +37,27 @@ function pairLines(lines: DiffLine[]): Row[] {
 
 function CodeRows({
   lines,
-  path,
+  file,
   layout,
   focus,
   contextSide,
   known,
 }: {
   lines: DiffLine[];
-  path: string;
+  file: DiffFile;
   layout: DiffLayout;
   focus: CodeLocation | null;
   contextSide?: "old" | "new";
   known?: Set<string>;
 }) {
+  const sidePath = (side: "old" | "new") =>
+    (side === "old" ? file.oldPath : file.newPath) ?? file.path;
   const lineId = (side: "old" | "new", number: number | null) =>
-    number === null || known?.has(`${side}:${number}`) ? undefined : UI.line(side, path, number);
+    number === null || known?.has(`${side}:${number}`)
+      ? undefined
+      : UI.line(side, sidePath(side), number);
   const highlighted = (line: DiffLine | null, side: "old" | "new") =>
-    focus?.path === path &&
+    focus?.path === sidePath(side) &&
     focus.side === side &&
     (side === "old" ? line?.oldLine : line?.newLine) === focus.line;
   const split = layout === "split" && !contextSide;
@@ -173,7 +177,8 @@ export function DiffDocument(props: Props) {
       const attached = props.findings.filter((finding) => {
         const anchor = finding.anchors.find((candidate) => candidate.status === "resolved");
         return (
-          anchor?.path === file.path &&
+          anchor?.side !== undefined &&
+          anchor.path === (anchor.side === "old" ? file.oldPath : file.newPath) &&
           anchor.line !== undefined &&
           (anchor.side === "old" ? line.oldLine : line.newLine) === anchor.line
         );
@@ -183,7 +188,7 @@ export function DiffDocument(props: Props) {
           <CodeRows
             key={`rows:${contents.length}`}
             lines={chunk}
-            path={file.path}
+            file={file}
             layout={file.status === "added" ? "unified" : props.layout}
             focus={props.focus}
           />,
@@ -197,7 +202,7 @@ export function DiffDocument(props: Props) {
         <CodeRows
           key={`rows:${contents.length}`}
           lines={chunk}
-          path={file.path}
+          file={file}
           layout={file.status === "added" ? "unified" : props.layout}
           focus={props.focus}
         />,
@@ -218,9 +223,13 @@ export function DiffDocument(props: Props) {
   return (
     <>
       {props.files.map((file) => {
-        const matching = props.findings.filter(
-          (finding) => primaryLocation(finding)?.path === file.path,
-        );
+        const matching = props.findings.filter((finding) => {
+          const location = primaryLocation(finding);
+          return (
+            location !== null &&
+            location.path === (location.side === "old" ? file.oldPath : file.newPath)
+          );
+        });
         const known = new Set(
           file.hunks.flatMap((hunk) =>
             hunk.lines.flatMap((line) => [
@@ -286,7 +295,10 @@ export function DiffDocument(props: Props) {
               .filter((finding) => !finding.anchors.some((anchor) => anchor.status === "resolved"))
               .map(renderCard)}
             {props.contexts
-              .filter((content) => content.path === file.path || content.path === file.oldPath)
+              .filter(
+                (content) =>
+                  content.path === (content.side === "old" ? file.oldPath : file.newPath),
+              )
               .map((content) => (
                 <section
                   className="ck-ex-source-context"
@@ -300,7 +312,7 @@ export function DiffDocument(props: Props) {
                   <p>来自同一冻结版本，不计入 diff 新增行数。</p>
                   {content.availability === "available" ? (
                     <CodeRows
-                      path={file.path}
+                      file={file}
                       lines={content.lines.map((line) => ({
                         type: "context",
                         text: line.text,

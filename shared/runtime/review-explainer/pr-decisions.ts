@@ -108,13 +108,23 @@ function sameAssertion(skipped: DecisionItem, candidate: Candidate): boolean {
     return false;
   const text = candidate.originalAssertion ?? candidate.text;
   const original = leadingIdentityBody(skipped.originalAssertion, skipped);
-  if (original.marked) {
-    // A recorded full assertion cannot acquire another mechanism or lose body IDs.
-    return leadingIdentityBody(text, skipped).body === original.body;
-  }
+  const body = leadingIdentityBody(text, skipped).body;
+  if (body === original.body) return true;
+  // Compatibility for an older bare assertion followed by one explicit source
+  // citation. Never match an assertion quoted inside prose or followed by a new
+  // mechanism; decorated/explicit assertions must match their entire body.
+  if (original.marked || candidate.originalAssertion || !body.startsWith(original.body))
+    return false;
+  const suffix = body.slice(original.body.length);
+  const location = /^[ \t]+(`?)([\w.-]+(?:\/[\w.-]+)*):([1-9]\d*)(?:-([1-9]\d*))?\1[ \t]*$/.exec(
+    suffix,
+  );
+  if (!location || location[2]?.split("/").some((part) => part === "." || part === ".."))
+    return false;
+  const start = Number(location[3]);
+  const end = Number(location[4] ?? location[3]);
   return (
-    text === skipped.originalAssertion ||
-    (!candidate.originalAssertion && text.includes(skipped.originalAssertion))
+    Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start && end <= 10_000_000
   );
 }
 function identityMatch(item: DecisionItem, candidate: Candidate): boolean {
