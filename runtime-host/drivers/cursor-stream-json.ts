@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
+import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { withDeadline } from "./ndjson";
@@ -83,7 +84,10 @@ export function isCursorDefaultModel(modelId: string): boolean {
   return id === "auto" || id === "default" || id === "configured";
 }
 
-export function parseCursorModelsText(text: string): { catalog: string[]; canonical: string | null } {
+export function parseCursorModelsText(text: string): {
+  catalog: string[];
+  canonical: string | null;
+} {
   const catalog: string[] = [];
   let canonical: string | null = null;
   for (const line of text.split("\n")) {
@@ -138,6 +142,9 @@ export function cursorModelVerdict(
   if (isCursorDefaultModel(requested)) return "match";
   if (effective === null || effective.length === 0) return "unknown";
   if (effective === requested) return "match";
+  if (requested === "grok-4.7-xhigh" && repairModelReceiptMatches(requested, effective)) {
+    return "match";
+  }
   return "mismatch";
 }
 

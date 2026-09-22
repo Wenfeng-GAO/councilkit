@@ -154,6 +154,21 @@ function terminalOf(events: DriverEvent[]): Terminal {
 }
 
 describe("cursor protocol parsers", () => {
+  it("matches current Grok receipts without treating 256K as the retired 500K pin", () => {
+    expect(cursorModelVerdict("grok-4.7-xhigh", "Grok 4.7 256K Extra High")).toBe("match");
+    expect(cursorModelVerdict("grok-4.7-xhigh", "Grok 4.7  Extra High")).toBe("match");
+    expect(cursorModelVerdict("grok-4.7-xhigh", "Grok 4.7 500K Extra High")).toBe("mismatch");
+    expect(cursorModelVerdict("grok-4.7-xhigh", "Grok 4.7 256K Extra High Fast")).toBe("mismatch");
+    expect(cursorModelVerdict("grok-4.7-xhigh", "Grok 4.7 256K High")).toBe("mismatch");
+    expect(cursorModelVerdict("grok-4.7-xhigh", null)).toBe("unknown");
+    expect(
+      cursorModelVerdict(
+        "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]",
+        "Grok 4.7 256K Extra High",
+      ),
+    ).toBe("mismatch");
+  });
+
   it("parses cursor-agent models text into catalog + default auto", () => {
     const parsed = parseCursorModelsText(
       "Available models\n\nauto - Auto (default)\ncomposer-2.5 - Composer 2.5\n",

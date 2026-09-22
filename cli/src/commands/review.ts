@@ -762,18 +762,33 @@ export async function runReview(
       if (!job) break;
       runningProbe.add(i);
       await preflightWriter.write(probeSeats());
-      const result = await spawnOnce(job.spec, {
+      const probeOptions = {
         timeoutMs: probeTimeoutMs(job.probeAgent.driverSelection.driverId),
         signal: controller.signal,
         spawnImpl: deps.spawnImpl,
         frozenTools,
         executionRevision,
-      });
+      };
+      let result = await spawnOnce(job.spec, probeOptions);
+      let probeDurationMs = result.durationMs;
+      // A slow Cursor startup is recoverable; invalid models and cancellation
+      // are not. spawnOnce has already reaped the timed-out process here.
+      if (
+        job.probeAgent.driverSelection.driverId === "cursor-stream-json" &&
+        result.failure?.code === "TIMEOUT" &&
+        !controller.signal.aborted
+      ) {
+        out.progress(
+          `  probe cursor-stream-json (${job.probeAgent.modelId}) timed out; retrying once`,
+        );
+        result = await spawnOnce(job.spec, probeOptions);
+        probeDurationMs += result.durationMs;
+      }
       const record: DriverProbeRecord = {
         driverId: job.probeAgent.driverSelection.driverId,
         modelId: job.probeAgent.modelId,
         status: result.status,
-        durationMs: result.durationMs,
+        durationMs: probeDurationMs,
         failure: persistableFailure(result.failure),
       };
       probeSlots[i] = record;
