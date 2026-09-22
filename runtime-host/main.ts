@@ -27,6 +27,7 @@ import { modelRoutes } from "./routes/models";
 import { productJuryRoutes } from "./routes/product-jury";
 import { reviewJuryRoutes } from "./routes/review-jury";
 import { scopeRoutes } from "./routes/scopes";
+import { repairObservationRoutes } from "./repair-observation/routes";
 import { createScopeManager } from "./scopes/scope-manager";
 import { createSessionReconciler } from "./scopes/session-reconciler";
 import { createSessionCapability } from "./security/session-capability";
@@ -160,6 +161,7 @@ async function main(): Promise<void> {
     ...scopeRoutes(services),
     ...diagnosticsRoutes(services),
     ...cliRunsRoutes(services),
+    ...repairObservationRoutes(),
     ...reviewJuryRoutes(),
     ...productJuryRoutes(),
   ];

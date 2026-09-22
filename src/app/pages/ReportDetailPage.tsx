@@ -6,7 +6,7 @@ import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
 import { RepairExportCard } from "@/components/report/RepairExportCard";
-import { RepairRunPanel } from "@/components/report/RepairRunPanel";
+import { RepairWorkspace } from "@/components/report/repair-workspace/RepairWorkspace";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { SeatInspector } from "@/components/report/SeatInspector";
 import { SquadWorkspace } from "@/components/report/SquadWorkspace";
@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import "@/styles/report.css";
 import "@/styles/review-live.css";
+import "@/styles/repair-workspace.css";
 
 type CopiedKind = "markdown" | "prompt" | "comment" | "apply" | "resume" | null;
 
@@ -360,28 +361,17 @@ export function ReportDetailPage() {
               />
             ) : null}
             {query.data.kind === "repair" ? (
-              <RepairRunPanel
-                run={query.data}
-                profiles={profilesQuery.data?.profiles ?? []}
-                sourceBranchDefault={profilesQuery.data?.sourceBranchHint ?? ""}
-                baseDefault={profilesQuery.data?.baseHint ?? ""}
-                hintSource={profilesQuery.data?.hintSource ?? null}
-                activeRepair={activeRepair}
-                bridgeAvailable={profilesQuery.data?.bridgeAvailable ?? false}
-                bridgeLoading={profilesQuery.isPending}
-                bridgeReason={profilesQuery.data?.bridgeReason ?? null}
-                outerUsed={query.data.outerUsed ?? 0}
-                outerMax={query.data.outerMax ?? 10}
-                error={
-                  actionError ??
-                  query.data.lastError ??
-                  (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null)
-                }
-                pending={repairMutation.isPending}
-                onStart={(profile) => repairMutation.mutate({ kind: "start", profile })}
-                onStop={() => repairMutation.mutate({ kind: "stop" })}
-                onResume={() => repairMutation.mutate({ kind: "resume" })}
-                onSaveProfile={(launch) => repairMutation.mutate({ kind: "save", launch })}
+              <RepairWorkspace
+                key={`repair-workspace:${query.data.runId}`}
+                runId={query.data.runId}
+                sourceRunId={query.data.sourceRunId}
+                stopPending={repairMutation.isPending}
+                onStop={async () => {
+                  await repairMutation.mutateAsync({ kind: "stop" });
+                }}
+                onResume={async () => {
+                  await repairMutation.mutateAsync({ kind: "resume" });
+                }}
               />
             ) : null}
             {!isSquad && showSeats && query.data.progress ? (

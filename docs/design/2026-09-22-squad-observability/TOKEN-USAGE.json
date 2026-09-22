@@ -1,0 +1,44 @@
+{
+  "scope": "PRD and fake-data interactive HTML prototype only",
+  "startedAt": "2026-09-22T06:49:28.474Z",
+  "finishedUsageAt": "2026-09-22T07:29:57.262Z",
+  "excludesCurrentAccountingTurn": true,
+  "codex": {
+    "noncachedInput": 373875,
+    "cachedInput": 15258880,
+    "output": 25653,
+    "total": 15658408,
+    "reasoningOutputIncluded": 11421,
+    "initialDesignNoncachedPlusOutput": 330221,
+    "afterCfuseDispatchNoncachedPlusOutput": 69307,
+    "toolCalls": 42,
+    "waitContainingToolCalls": 24
+  },
+  "cfuse": {
+    "model": "glink/GLM-5.3:glink_domestic[1m]",
+    "session": "f15fb990-be31-4485-b8dd-35d5e730ec68",
+    "noncachedInput": 477105,
+    "cachedInput": 5476096,
+    "cacheWrite": 0,
+    "output": 83761,
+    "knownTotal": 6036962,
+    "isLowerBound": true,
+    "requestsWithRecoverableUsage": 45,
+    "requestsMissingUsage": 2,
+    "syntheticMessagesExcluded": 2,
+    "dedupKey": "assistant.message.id",
+    "finalCallSupplement": {
+      "input_tokens": 6202,
+      "cache_read_input_tokens": 158976,
+      "output_tokens": 106
+    },
+    "method": "Deduplicate nonzero native-session usage by message id; replace matched final-call subtotal with complete CLI result usage. Do not count estimated thinking token deltas."
+  },
+  "knownCombinedTotal": 21695370,
+  "recordedShares": {
+    "codexIncludingCache": 0.7217396154,
+    "codexNoncachedInputPlusOutput": 0.4160042649,
+    "codexAfterDelegationNoncachedPlusOutput": 0.10998091000407824
+  },
+  "cost": "No full bill inferred; final cfuse CLI reports cost only for last invocation."
+}

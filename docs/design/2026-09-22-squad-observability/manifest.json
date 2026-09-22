@@ -1,0 +1,50 @@
+{
+  "status": "awaiting_user_design_confirmation",
+  "version": "0.1",
+  "createdAt": "2026-09-22T07:29:34.987659+00:00",
+  "productAndInteractionDesign": "Codex",
+  "htmlImplementation": {
+    "runtime": "cld cfuse",
+    "observedModel": "glink/GLM-5.3:glink_domestic[1m]",
+    "sessionId": "f15fb990-be31-4485-b8dd-35d5e730ec68"
+  },
+  "preview": "http://127.0.0.1:56299/prototype.html",
+  "artifacts": [
+    "PRD.md",
+    "INTERACTIONS.md",
+    "prototype.html",
+    "prototype-notes.md",
+    "verify-prototype.mjs",
+    "screens/overview.png",
+    "screens/quota.png",
+    "screens/mobile.png"
+  ],
+  "htmlSha256": "5ed1ee05601e50a00b520a59561c6bd546fe2611da2d69abc08626d4957777b8",
+  "verification": {
+    "functionalChecks": 77,
+    "failedChecks": 0,
+    "log": "/tmp/councilkit-cfuse-observability-20260922/codex-verify.log",
+    "postCssDrawerGeometry": {
+      "desktopDrawer": {
+        "x": 1010,
+        "y": 0,
+        "width": 430,
+        "height": 960
+      },
+      "mobileOverflow": false,
+      "pageErrors": []
+    }
+  },
+  "boundaries": {
+    "fakeDataOnly": true,
+    "productionFilesChanged": false,
+    "liveRunAccessedByPrototype": false,
+    "hostRestarted": false,
+    "committedOrPushed": false
+  },
+  "knownLimitations": [
+    "Relative times are fixed scenario labels",
+    "Simulation state resets on reload",
+    "No live API, real persistence, or actual stop/model-switch actions"
+  ]
+}

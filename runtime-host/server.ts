@@ -348,7 +348,12 @@ export function createRuntimeServer(options: RuntimeServerOptions): RuntimeServe
     }
 
     const auth: AuthLevel = matched?.auth ?? "session";
-    const guard = guardRequest(req, { auth, session });
+    const guard = guardRequest(req, {
+      auth,
+      session,
+      hostHeader: config.hostHeader,
+      expectedOrigin: `http://${config.hostHeader}`,
+    });
     if (!guard.ok) {
       sendRuntimeError(res, guard.status, guard.error);
       return;
@@ -433,7 +438,12 @@ export function createRuntimeServer(options: RuntimeServerOptions): RuntimeServe
       }
 
       // Document/static surface: exact Host header as well, GET/HEAD only.
-      const hostGuard = guardRequest(req, { auth: "public", session });
+      const hostGuard = guardRequest(req, {
+        auth: "public",
+        session,
+        hostHeader: config.hostHeader,
+        expectedOrigin: `http://${config.hostHeader}`,
+      });
       if (!hostGuard.ok) {
         sendRuntimeError(res, hostGuard.status, hostGuard.error);
         return;

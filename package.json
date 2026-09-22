@@ -18,7 +18,8 @@
     "test:unit": "vitest run tests/unit cli/tests",
     "test:host": "vitest run tests/host",
     "test:integration": "vitest run tests/integration",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:repair-observability": "playwright test -c playwright.repair-observability.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.59.0",
