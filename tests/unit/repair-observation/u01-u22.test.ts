@@ -386,7 +386,36 @@ describe("U10 time and liveness", () => {
       },
       nowMs: T0,
     });
-    expect(terminal.state).toBe("exited");
+    expect(terminal.state).toBe("alive");
+  });
+
+  it("does not infer an exit from business completion without independent process evidence", () => {
+    expect(
+      deriveProcessState({
+        authoritativeTerminal: true,
+        currentExecutionRef: "exec-a#1.1",
+        evidence: null,
+        nowMs: T0,
+      }),
+    ).toEqual({ state: "unknown", checkedAt: null });
+  });
+
+  it.each([false, true])("uses matching explicit exit evidence with business terminal=%s", (authoritativeTerminal) => {
+    const input = {
+      authoritativeTerminal,
+      currentExecutionRef: "exec-a#1.1",
+      evidence: {
+        executionRef: "exec-a#1.1",
+        pid: 42,
+        startKey: "start-1",
+        checkedAt: new Date(T0).toISOString(),
+        alive: false,
+      },
+      nowMs: T0,
+    };
+    expect(deriveProcessState(input).state).toBe("exited");
+    expect(deriveProcessState({ ...input, currentExecutionRef: "other#1.1" }).state).toBe("unknown");
+    expect(deriveProcessState({ ...input, currentExecutionRef: null }).state).toBe("unknown");
   });
 });
 
@@ -496,6 +525,25 @@ describe("U15 role display grouping", () => {
 });
 
 describe("U16 mutation presentation", () => {
+  it.each([
+    ["squad_failed", REPAIR_OBS_COPY.repairFailed],
+    ["source_fix_failed", REPAIR_OBS_COPY.repairFailed],
+    ["independent_review_quota", REPAIR_OBS_COPY.quotaAttention],
+    ["deadline", REPAIR_OBS_COPY.needsAttention],
+    [null, REPAIR_OBS_COPY.needsAttention],
+  ])("reports the actual attention reason %s", (reasonCode, expected) => {
+    expect(
+      resolveAttentionCopy({
+        connectionLost: false,
+        display: "needs_attention",
+        silence: null,
+        emptyActive: false,
+        stopAckPending: false,
+        reasonCode,
+      }),
+    ).toBe(expected);
+  });
+
   it("shows stopping until controller confirms stopped", () => {
     expect(
       resolveAttentionCopy({

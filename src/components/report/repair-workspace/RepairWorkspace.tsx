@@ -1,3 +1,5 @@
+import { activityPresentation, goalPresentation, phaseName } from "./presentation";
+import { IconInfo, IconX } from "./icons";
 import { filterOperations } from "@shared/runtime/repair-observation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RepairActivity } from "./RepairActivity";
@@ -41,6 +43,17 @@ export function RepairWorkspace({
   const [returnFocus, setReturnFocus] = useState<HTMLElement | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const stopOnceRef = useRef(false);
+  const stopDialogRef = useRef<HTMLDialogElement>(null);
+  const adviceRef = useRef<HTMLDialogElement>(null);
+  const stopButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const dialog = stopDialogRef.current;
+    if (confirmStop && dialog && !dialog.open) dialog.showModal();
+    if (!confirmStop && dialog?.open) {
+      dialog.close();
+      stopButtonRef.current?.focus();
+    }
+  }, [confirmStop]);
 
   const selectedOp = useMemo(() => {
     if (!obs.reading.selectedEventId || !obs.observation) return null;
@@ -87,125 +100,247 @@ export function RepairWorkspace({
     }
   };
 
+  const task = obs.observation?.task;
+  const goal = goalPresentation(task?.goalSummary);
+  const budget = task?.budget;
+  const remaining =
+    budget?.sourceFixMax != null && budget.sourceFixUsed != null
+      ? Math.max(0, budget.sourceFixMax - budget.sourceFixUsed)
+      : null;
+  const needsAttention = task?.businessResult === "needs_attention";
+  const ended = task?.businessResult != null;
+  const approvedConfirmed =
+    task?.businessResult === "approved" && obs.evidence?.gateConsistent === true;
+  const tone =
+    obs.connectionLost ||
+    needsAttention ||
+    (task?.businessResult === "approved" && obs.evidence?.gateConsistent === false)
+      ? "warning"
+      : approvedConfirmed
+        ? "success"
+        : task?.businessResult === "stopped"
+          ? "neutral"
+          : "running";
+  const headline = vm.attention ?? vm.phaseText;
+  const stage = approvedConfirmed
+    ? 4
+    : /review|audit/.test(task?.phase ?? "")
+      ? 2
+      : task?.businessResult === "approved" ||
+          task?.reasonCode === "candidate_ready_awaiting_gate" ||
+          /gated|integrating|finaliz/.test(task?.phase ?? "")
+        ? 3
+        : /active|implement|fix/.test(task?.phase ?? "")
+          ? 1
+          : 0;
+  const stages = ["准备", "执行", "独立核验", "终验", "准出"];
+  const isQuota = vm.attention?.includes("额度不足");
+  const latestActivity = obs.observation?.upserts.at(-1);
   return (
-    <div
-      className="ck-repair-workspace"
-      data-testid="repair-workspace"
-    >
+    <div className="ck-repair-workspace" data-testid="repair-workspace">
       <header className="ck-repair-context">
-        <h1 className="ck-repair-goal" data-testid="repair-goal" tabIndex={-1} ref={titleRef}>
-          {vm.goalText}
-          {vm.goalText === "目标未记录" && sourceRunId ? (
-            <a className="ck-repair-source-link" href={`/reports/${sourceRunId}`}>
-              查看源审查
-            </a>
-          ) : null}
-        </h1>
-        <p className="ck-repair-phase" data-testid="repair-phase">
-          {vm.phaseText}
-        </p>
-        <p className="ck-repair-last" data-testid="repair-last-activity">
-          最近活动 {vm.lastActivityLabel}
-        </p>
-        {obs.observation?.task.budget ? (
-          <p className="ck-repair-meta">
-            剩余{" "}
-            {Math.max(
-              0,
-              (obs.observation.task.budget.sourceFixMax ?? 0) -
-                (obs.observation.task.budget.sourceFixUsed ?? 0),
-            )}{" "}
-            次 · 暂无完整用量 · 上下文
-          </p>
-        ) : null}
-        <p className="ck-repair-attention" data-testid="repair-attention">
-          {vm.attention ?? "当前不需要处理"}
-        </p>
-        {vm.attention === "已准出" ? (
-          <p className="ck-repair-meta">
-            SHA {obs.evidence?.candidateSha ?? obs.observation?.task.candidateSha ?? "未记录"} · 核验{" "}
-            {obs.evidence?.verifiedAt ?? "未记录"}
-          </p>
-        ) : null}
-        {vm.attention?.includes("额度不足") ? (
-          <button type="button" className="ck-repair-btn" data-testid="repair-quota-steps">
-            查看换席步骤。旧 session 不能跨模型恢复；v2 可同链继承预算，未提交改动不会自动复制。
-          </button>
-        ) : null}
-        {obs.observation && obs.observation.reasons.length > 0 ? (
-          <p className="ck-repair-meta">{obs.observation.reasons.join("；")}</p>
-        ) : null}
-        <p data-testid="repair-process" className="ck-repair-meta">
-          {vm.processLabel}
-        </p>
-        <p data-testid="repair-connection" className="ck-repair-meta">
-          {vm.connectionLabel}
-          {obs.connectionLost ? (
-            <button type="button" className="ck-repair-btn" onClick={() => obs.retry()}>
-              重新连接
+        <div className="ck-repair-heading-row">
+          <div className="ck-repair-heading">
+            <p className="ck-repair-eyebrow">
+              SQUAD <span>自动修复</span>
+            </p>
+            <h1 className="ck-repair-goal" data-testid="repair-goal" tabIndex={-1} ref={titleRef}>
+              {goal.title}
+            </h1>
+            <div className="ck-repair-source-line">
+              {goal.url ? (
+                <a href={goal.url} target="_blank" rel="noreferrer">
+                  查看合并请求 ↗
+                </a>
+              ) : sourceRunId ? (
+                <a href={`/reports/${sourceRunId}`}>查看源审查 ↗</a>
+              ) : null}
+              {!goal.goal ? <span>具体修复目标未记录</span> : null}
+            </div>
+          </div>
+          <div className="ck-repair-header-actions">
+            <label className="ck-repair-round">
+              <span className="ck-repair-sr">轮次</span>
+              <select
+                data-testid="repair-round-select"
+                value={
+                  obs.reading.round === "current"
+                    ? String(obs.observation?.currentRound ?? 1)
+                    : String(obs.reading.round)
+                }
+                onChange={(e) => {
+                  const n = Number(e.currentTarget.value);
+                  if (Number.isInteger(n))
+                    obs.setFilter({ round: n === obs.observation?.currentRound ? "current" : n });
+                }}
+              >
+                {rounds.map((n) => (
+                  <option key={n} value={n}>
+                    第 {n} 轮{n === obs.observation?.currentRound ? "（当前）" : "（历史）"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="ck-repair-run-details-wrap" data-testid="repair-run-details">
+              <button
+                type="button"
+                className="ck-repair-btn quiet"
+                aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen((v) => !v)}
+              >
+                运行详情
+              </button>
+              {detailsOpen && obs.observation ? (
+                <div className="ck-repair-run-details">
+                  <p className="ck-repair-section-label">运行记录</p>
+                  <dl>
+                    <dt>任务</dt>
+                    <dd>{runId}</dd>
+                    <dt>协议</dt>
+                    <dd>{task?.protocolVersion ?? "未记录"}</dd>
+                    <dt>最后阶段</dt>
+                    <dd>{phaseName(task?.phase)}</dd>
+                    <dt>Token 用量</dt>
+                    <dd>暂无完整用量</dd>
+                    <dt>剩余派工</dt>
+                    <dd>{remaining == null ? "未记录" : `${remaining} 次`}</dd>
+                  </dl>
+                  {obs.observation.roles.map((role) => (
+                    <div className="ck-repair-model-detail" key={role.roleKey}>
+                      <strong>{role.label}</strong>
+                      <p>请求模型：{role.requestedModel ?? "未记录"}</p>
+                      <p>实际模型：{role.actualModel ?? "未记录"}</p>
+                    </div>
+                  ))}
+                  {obs.observation.reasons.length ? (
+                    <p className="ck-repair-meta">{obs.observation.reasons.join("；")}</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            {!vm.isHistorical && obs.observation && task?.businessResult === null ? (
+              <button
+                ref={stopButtonRef}
+                type="button"
+                className="ck-repair-btn quiet danger"
+                data-testid="repair-stop"
+                disabled={!vm.canStop || obs.stopAckPending || stopPending}
+                onClick={() => setConfirmStop(true)}
+              >
+                停止任务
+              </button>
+            ) : null}
+            {!vm.isHistorical && needsAttention ? (
+              <button
+                type="button"
+                className="ck-repair-btn"
+                data-testid="repair-resume"
+                disabled={!vm.canResume}
+                title={!vm.canResume ? "当前执行状态或恢复资格尚未确认" : "恢复当前执行"}
+                onClick={() => void onResume?.()}
+              >
+                恢复
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className={`ck-repair-statusline is-${tone}`}>
+          <span className="ck-repair-status-dot" aria-hidden="true" />
+          <div className="ck-repair-status-copy">
+            <h2 data-testid="repair-attention">{headline}</h2>
+            <p data-testid="repair-phase">
+              {needsAttention
+                ? "本轮未达到准出条件，活动与核验记录已保留"
+                : task?.businessResult === "stopped"
+                  ? "用户已停止本轮任务，历史与已用预算保留"
+                  : approvedConfirmed
+                    ? "候选与准出证据一致"
+                    : latestActivity
+                      ? `最近记录：${activityPresentation(latestActivity).title}`
+                      : "等待第一条执行记录"}
+            </p>
+          </div>
+          {needsAttention ? (
+            <button
+              type="button"
+              className="ck-repair-btn quiet"
+              data-testid={isQuota ? "repair-quota-steps" : "repair-failure-help"}
+              onClick={() => adviceRef.current?.showModal()}
+            >
+              {isQuota ? "查看换席步骤" : "查看处理建议"} <span aria-hidden="true">↗</span>
             </button>
           ) : null}
-        </p>
-        <label className="ck-repair-round">
-          轮次
-          <select
-            data-testid="repair-round-select"
-            value={obs.reading.round === "current" ? String(obs.observation?.currentRound ?? 1) : String(obs.reading.round)}
-            onChange={(e) => {
-              const n = Number(e.currentTarget.value);
-              if (!Number.isInteger(n)) return;
-              const current = obs.observation?.currentRound;
-              obs.setFilter({ round: current !== undefined && n === current ? "current" : n });
-            }}
-          >
-            {rounds.map((n) => (
-              <option key={n} value={n}>
-                第 {n} 轮{n === (obs.observation?.currentRound ?? 1) ? "（当前）" : "（历史）"}
-              </option>
-            ))}
-          </select>
-        </label>
+        </div>
+        <div className="ck-repair-observation-bar">
+          <span data-testid="repair-process">
+            <i className={`ck-repair-indicator is-${task?.process.state ?? "unknown"}`} />
+            {vm.processLabel}
+          </span>
+          <span data-testid="repair-connection">
+            <i
+              className={`ck-repair-indicator ${obs.connectionLost ? "is-offline" : "is-alive"}`}
+            />
+            {vm.connectionLabel}
+            {obs.connectionLost ? (
+              <button className="ck-repair-inline-action" type="button" onClick={() => obs.retry()}>
+                重新连接
+              </button>
+            ) : null}
+          </span>
+          <span data-testid="repair-last-activity">
+            {task?.lastActivityTimeSource === "observed_live" ? "最近收到记录" : "最近活动"}
+            <strong>{vm.lastActivityLabel}</strong>
+          </span>
+          {approvedConfirmed && task?.candidateSha ? (
+            <span>
+              候选 <code title={task.candidateSha}>{task.candidateSha.slice(0, 8)}</code> · 已核验
+            </span>
+          ) : null}
+          {remaining != null ? (
+            <span className="ck-repair-budget" data-testid="repair-budget">
+              剩余派工 <strong>{remaining} 次</strong>
+            </span>
+          ) : null}
+        </div>
+        <ol className="ck-repair-stages" aria-label="修复阶段">
+          {stages.map((label, i) => (
+            <li
+              key={label}
+              className={`${i < stage ? "is-complete" : ""} ${i === stage ? "is-current" : ""}`}
+              aria-current={i === stage ? "step" : undefined}
+            >
+              <span>{i < stage ? "✓" : i + 1}</span>
+              {label}
+            </li>
+          ))}
+        </ol>
         {vm.isHistorical ? (
-          <p className="ck-repair-banner" data-testid="repair-history-banner">
-            历史轮次只读
+          <p className="ck-repair-history-banner" data-testid="repair-history-banner">
+            历史轮次只读{" "}
+            <button type="button" onClick={() => obs.setFilter({ round: "current" })}>
+              返回当前轮 →
+            </button>
           </p>
         ) : null}
-        <div className="ck-repair-run-details-wrap" data-testid="repair-run-details">
-        <button
-          type="button"
-          className="ck-repair-btn"
-          onClick={() => setDetailsOpen((v) => !v)}
-        >
-          运行详情
-        </button>
-        {detailsOpen && obs.observation ? (
-          <div className="ck-repair-run-details">
-            <p>请求模型与实际模型以角色为准；未知不写默认。</p>
-            <p>协议 {obs.observation.task.protocolVersion ?? "未记录"}</p>
-            <p>
-              预算{" "}
-              {obs.observation.task.budget
-                ? `剩余 ${Math.max(0, (obs.observation.task.budget.sourceFixMax ?? 0) - (obs.observation.task.budget.sourceFixUsed ?? 0))} 次 · 暂无完整用量`
-                : "未记录"}
-            </p>
-            {obs.observation.roles.map((role) => (
-              <p key={role.roleKey}>
-                {role.label}: 请求 {role.requestedModel ?? "未记录"} / 实际 {role.actualModel ?? "未记录"}
-              </p>
-            ))}
-          </div>
+        {stopError || obs.error ? (
+          <p className="ck-repair-error" role="alert" data-testid="repair-action-error">
+            {stopError ?? obs.error}
+          </p>
         ) : null}
-        </div>
       </header>
-
       <div className="ck-repair-body">
         <RepairRoles
           roles={obs.observation?.roles ?? []}
           selected={obs.reading.roleKey}
           onSelect={(roleKey) => obs.setFilter({ roleKey })}
         />
-        <div className="ck-repair-main" ref={(node) => { scrollerRef.current = node; }}>
-          <div className="ck-repair-tabs" role="tablist">
+        <div
+          className="ck-repair-main"
+          ref={(node) => {
+            scrollerRef.current = node;
+          }}
+        >
+          <div className="ck-repair-tabs" role="tablist" aria-label="修复记录">
             <button
               type="button"
               role="tab"
@@ -214,7 +349,7 @@ export function RepairWorkspace({
               className={obs.reading.tab === "activity" ? "is-selected" : ""}
               onClick={() => obs.setFilter({ tab: "activity" })}
             >
-              活动
+              活动记录 <span>{obs.observation?.upserts.length ?? 0}</span>
             </button>
             <button
               type="button"
@@ -230,8 +365,12 @@ export function RepairWorkspace({
           {obs.reading.tab === "activity" ? (
             <RepairActivity
               operations={filteredWindow}
+              roles={obs.observation?.roles ?? []}
+              executionEnded={ended}
               hiddenCount={
-                obs.windowed.hiddenCount > 0 || obs.observation?.hasMore || obs.observation?.earlierCursor
+                obs.windowed.hiddenCount > 0 ||
+                obs.observation?.hasMore ||
+                obs.observation?.earlierCursor
                   ? Math.max(obs.windowed.hiddenCount, 1)
                   : 0
               }
@@ -262,56 +401,76 @@ export function RepairWorkspace({
           )}
         </div>
       </div>
-
-      <footer className="ck-repair-controls">
-        {obs.observation?.task.businessResult === "approved" ? null : (
+      <dialog
+        ref={stopDialogRef}
+        className="ck-repair-confirm"
+        aria-label="确认停止"
+        onCancel={(e) => {
+          e.preventDefault();
+          setConfirmStop(false);
+        }}
+        onClose={() => setConfirmStop(false)}
+      >
+        <h2>停止本次执行？</h2>
+        <p>已产生的活动、历史记录和已用预算都会保留。</p>
+        <div className="ck-repair-confirm-actions">
+          <button
+            type="button"
+            className="ck-repair-btn"
+            data-testid="repair-stop-cancel"
+            onClick={() => setConfirmStop(false)}
+          >
+            取消
+          </button>
           <button
             type="button"
             className="ck-repair-btn danger"
-            data-testid="repair-stop"
-            disabled={!vm.canStop || obs.stopAckPending || stopPending}
-            onClick={() => setConfirmStop(true)}
+            data-testid="repair-stop-confirm"
+            onClick={() => void confirmAndStop()}
           >
-            停止任务
+            确认停止
           </button>
-        )}
-        <button
-          type="button"
-          className="ck-repair-btn"
-          data-testid="repair-resume"
-          disabled={!vm.canResume}
-          onClick={() => void onResume?.()}
-        >
-          恢复
-        </button>
-        {stopError ? <p className="ck-repair-error">{stopError}</p> : null}
-        {obs.error ? <p className="ck-repair-error">{obs.error}</p> : null}
-      </footer>
-
-      {confirmStop ? (
-        <div className="ck-repair-confirm" role="dialog" aria-modal="true" aria-label="确认停止">
-          <p>停止当前执行。将保留历史记录和已用预算。</p>
-          <div className="ck-repair-confirm-actions">
+        </div>
+      </dialog>
+      <dialog ref={adviceRef} className="ck-repair-drawer ck-repair-advice" aria-label="处理建议">
+        <div className="ck-repair-drawer-panel">
+          <header className="ck-repair-drawer-header">
+            <h2 className="ck-repair-drawer-title">
+              {isQuota ? "额度不足 · 换席步骤" : "修复执行未完成"}
+            </h2>
             <button
               type="button"
-              className="ck-repair-btn"
-              data-testid="repair-stop-cancel"
-              onClick={() => setConfirmStop(false)}
+              className="ck-repair-icon-btn"
+              aria-label="关闭处理建议"
+              onClick={() => adviceRef.current?.close()}
             >
-              取消
+              <IconX />
             </button>
-            <button
-              type="button"
-              className="ck-repair-btn danger"
-              data-testid="repair-stop-confirm"
-              onClick={() => void confirmAndStop()}
-            >
-              确认停止
-            </button>
+          </header>
+          <div className="ck-repair-drawer-body">
+            <IconInfo />
+            {isQuota ? (
+              <>
+                <p>先停止旧执行，再明确选择新的模型与席位，并使用新的会话继续。</p>
+                <p>旧 session 不能跨模型恢复。v2 可同链继承预算，未提交改动不会自动复制。</p>
+                <p>不会自动切换付费模型，也不会清零已用预算。</p>
+              </>
+            ) : (
+              <>
+                <p>控制器记录本次修复未能完成，尚未产生可交付的结果。</p>
+                <p>请先查看最近的命令与文件活动；未记录的失败细节不会被推断成额度问题。</p>
+                <p>恢复资格由控制器确认，已用预算与记录会继续保留。</p>
+              </>
+            )}
+            <p className="ck-repair-meta">原因标识：{task?.reasonCode ?? "未记录"}</p>
+            {sourceRunId ? (
+              <a className="ck-repair-source-link" href={`/reports/${sourceRunId}`}>
+                查看源审查 →
+              </a>
+            ) : null}
           </div>
         </div>
-      ) : null}
-
+      </dialog>
       <RepairEventDrawer
         open={obs.reading.selectedEventId !== null}
         runId={runId}

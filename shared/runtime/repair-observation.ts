@@ -127,6 +127,8 @@ export const REPAIR_OBS_COPY = {
   processUnknown: "执行进程状态未知",
   connectionLost: "连接已断开",
   quotaAttention: "独立评审额度不足，需要处理",
+  needsAttention: "需要处理，请查看执行记录",
+  repairFailed: "修复执行失败，需要处理",
   candidatePendingGate: "本地候选完成，等待最终准出",
   approved: "已准出",
   stateEvidenceConflict: "状态与证据不一致",
@@ -675,14 +677,12 @@ export type ProcessEvidence = {
 };
 
 export function deriveProcessState(input: {
+  // Business completion is intentionally not process-liveness evidence.
   authoritativeTerminal: boolean;
   currentExecutionRef: string | null;
   evidence: ProcessEvidence | null;
   nowMs: number;
 }): { state: RepairProcessState; checkedAt: string | null } {
-  if (input.authoritativeTerminal) {
-    return { state: "exited", checkedAt: input.evidence?.checkedAt ?? null };
-  }
   const evidence = input.evidence;
   if (!evidence || !evidence.checkedAt) {
     return { state: "unknown", checkedAt: null };
@@ -692,8 +692,7 @@ export function deriveProcessState(input: {
     return { state: "unknown", checkedAt: evidence.checkedAt };
   }
   if (
-    input.currentExecutionRef &&
-    evidence.executionRef &&
+    !input.currentExecutionRef ||
     evidence.executionRef !== input.currentExecutionRef
   ) {
     return { state: "unknown", checkedAt: evidence.checkedAt };
@@ -857,7 +856,10 @@ export function resolveAttentionCopy(input: {
   if (input.display === "candidate_pending") return REPAIR_OBS_COPY.candidatePendingGate;
   if (input.display === "needs_attention") {
     if (input.reasonCode?.toLowerCase().includes("quota")) return REPAIR_OBS_COPY.quotaAttention;
-    return REPAIR_OBS_COPY.quotaAttention;
+    if (input.reasonCode === "squad_failed" || input.reasonCode === "source_fix_failed") {
+      return REPAIR_OBS_COPY.repairFailed;
+    }
+    return REPAIR_OBS_COPY.needsAttention;
   }
   if (input.silence === "silent_alive") return REPAIR_OBS_COPY.silentAlive;
   if (input.silence === "process_unknown") return REPAIR_OBS_COPY.processUnknown;

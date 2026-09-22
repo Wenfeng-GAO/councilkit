@@ -1,3 +1,5 @@
+import { activityPresentation, roleName } from "./presentation";
+import type { RepairRole } from "@shared/runtime/repair-observation";
 import type { RepairOperation } from "@shared/runtime/repair-observation";
 import { IconActivity, IconArrowDown, IconFiles, IconSearch } from "./icons";
 
@@ -11,6 +13,8 @@ const KIND_LABEL: Record<RepairOperation["kind"], string> = {
 
 export function RepairActivity({
   operations,
+  roles,
+  executionEnded = false,
   hiddenCount,
   newCount,
   pinned,
@@ -25,6 +29,8 @@ export function RepairActivity({
   listRef,
 }: {
   operations: RepairOperation[];
+  roles: RepairRole[];
+  executionEnded?: boolean;
   hiddenCount: number;
   newCount: number;
   pinned: boolean;
@@ -49,9 +55,11 @@ export function RepairActivity({
             onChange={(e) => onFilter({ roleKey: e.target.value })}
           >
             <option value="all">全部角色</option>
-            <option value="builder">编排与开发</option>
-            <option value="reviewer">独立评审</option>
-            <option value="verifier">独立验证</option>
+            {roles.map((role) => (
+              <option key={role.roleKey} value={role.roleKey}>
+                {roleName(role.roleKey, role.label)}
+              </option>
+            ))}
           </select>
         </label>
         <label className="ck-repair-filter">
@@ -73,37 +81,55 @@ export function RepairActivity({
           <input
             data-testid="repair-filter-query"
             value={filter.query}
-            placeholder="搜索已加载记录"
+            placeholder="搜索文件、命令或进展…"
             onChange={(e) => onFilter({ query: e.target.value })}
           />
         </label>
-        <button type="button" data-testid="repair-filter-clear" className="ck-repair-btn" onClick={onClearFilter}>
-          清除筛选
-        </button>
+        {filter.roleKey !== "all" || filter.kind !== "all" || filter.query ? (
+          <button
+            type="button"
+            data-testid="repair-filter-clear"
+            className="ck-repair-btn quiet"
+            onClick={onClearFilter}
+          >
+            清除筛选
+          </button>
+        ) : null}
         <button
           type="button"
           data-testid="repair-follow-toggle"
-          className="ck-repair-btn"
+          className={`ck-repair-btn ck-repair-follow${pinned ? " is-following" : ""}`}
           onClick={onToggleFollow}
         >
           {pinned ? "暂停跟随" : "恢复跟随"}
         </button>
         {newCount > 0 ? (
-          <button type="button" data-testid="repair-new-count" className="ck-repair-btn accent" onClick={onViewNew}>
+          <button
+            type="button"
+            data-testid="repair-new-count"
+            className="ck-repair-btn accent"
+            onClick={onViewNew}
+          >
             有{newCount}条新活动 · 查看
           </button>
         ) : null}
       </div>
-      <p className="ck-repair-meta">
-        已加载 {operations.length} 条
-        {hiddenCount > 0 ? ` · 有更早记录` : ""}
-        （仅搜索已加载范围）
-      </p>
-      {hiddenCount > 0 ? (
-        <button type="button" data-testid="repair-load-earlier" className="ck-repair-btn" onClick={onLoadEarlier}>
-          <IconArrowDown /> 加载更早
-        </button>
-      ) : null}
+      <div className="ck-repair-list-meta">
+        <p className="ck-repair-meta">
+          已加载 {operations.length} 条{hiddenCount > 0 ? ` · 有更早记录` : ""}
+          （仅搜索已加载范围）
+        </p>
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            data-testid="repair-load-earlier"
+            className="ck-repair-btn"
+            onClick={onLoadEarlier}
+          >
+            <IconArrowDown /> 较早记录
+          </button>
+        ) : null}
+      </div>
       {emptyReason === "waiting" ? (
         <p data-testid="repair-empty" className="ck-repair-empty">
           等待首条记录
@@ -121,24 +147,53 @@ export function RepairActivity({
           listRef.current = node;
         }}
       >
-        {operations.map((op) => (
-          <li key={op.eventId}>
-            <button
-              type="button"
-              className="ck-repair-activity-row"
-              data-testid={`repair-activity-row-${op.eventId}`}
-              data-event-id={op.eventId}
-              onClick={(e) => onOpen(op.eventId, e.currentTarget)}
-            >
-              {op.kind === "file" ? <IconFiles /> : <IconActivity />}
-              <span className="ck-repair-row-kind">{KIND_LABEL[op.kind]}</span>
-              <span className="ck-repair-row-role">{op.roleKey}</span>
-              <span className="ck-repair-row-summary">{op.summary}</span>
-              <span className="ck-repair-row-time">{op.occurredAt ?? "未记录"}</span>
-              <span className="ck-repair-row-status">{op.status}</span>
-            </button>
-          </li>
-        ))}
+        {operations.map((op) => {
+          const row = activityPresentation(op, executionEnded);
+          return (
+            <li key={op.eventId}>
+              <button
+                type="button"
+                className={`ck-repair-activity-row is-${executionEnded && op.status === "started" ? "unfinished" : op.status}`}
+                data-testid={`repair-activity-row-${op.eventId}`}
+                data-event-id={op.eventId}
+                onClick={(e) => onOpen(op.eventId, e.currentTarget)}
+              >
+                <time
+                  className="ck-repair-row-time"
+                  dateTime={op.occurredAt ?? undefined}
+                  title={op.occurredAt ?? "日志未记录发生时间"}
+                >
+                  {row.time === "—" ? (
+                    <>
+                      <span aria-hidden="true">—</span>
+                      <span className="ck-repair-sr">时间未记录</span>
+                    </>
+                  ) : (
+                    row.time
+                  )}
+                </time>
+                <span className="ck-repair-row-icon">
+                  {op.kind === "file" ? <IconFiles /> : <IconActivity />}
+                </span>
+                <span className="ck-repair-row-content">
+                  <span className="ck-repair-row-title">{row.title}</span>
+                  {row.context ? (
+                    <span className="ck-repair-row-context">{row.context}</span>
+                  ) : null}
+                  <span className="ck-repair-row-meta">
+                    {roleName(op.roleKey, roles.find((r) => r.roleKey === op.roleKey)?.label)}
+                    <span>·</span>
+                    {KIND_LABEL[op.kind]}
+                  </span>
+                </span>
+                <span className="ck-repair-row-status">
+                  {row.status}
+                  <span aria-hidden="true"> ›</span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
