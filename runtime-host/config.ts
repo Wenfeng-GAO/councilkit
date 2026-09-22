@@ -45,8 +45,35 @@ export interface HostConfig {
   idleScopeTtlMs?: number;
 }
 
+/**
+ * E2E/test escape hatch: bind an isolated port instead of the canonical one.
+ * The canonical origin (43127) is a product constraint — a `COUNCILKIT_PORT`
+ * override is therefore only honored inside E2E runs (COUNCILKIT_E2E=1, set
+ * by the Playwright webServer). Anywhere else the override is rejected loudly
+ * instead of silently moving the origin, and the value itself must be a
+ * strict integer string ("123abc" and friends never parse into a port).
+ */
+export function resolveHostPort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.COUNCILKIT_PORT;
+  if (raw === undefined || raw === "") return CANONICAL_PORT;
+  if (env.COUNCILKIT_E2E !== "1") {
+    throw new Error(
+      `COUNCILKIT_PORT override is only allowed for E2E hosts (COUNCILKIT_E2E=1); the canonical Host port stays ${CANONICAL_PORT}`,
+    );
+  }
+  if (!/^[0-9]+$/.test(raw)) {
+    throw new Error(`COUNCILKIT_PORT must be a valid TCP port, got "${raw}"`);
+  }
+  const port = Number(raw);
+  if (port < 1 || port > 65535) {
+    throw new Error(`COUNCILKIT_PORT must be a valid TCP port, got "${raw}"`);
+  }
+  return port;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): HostConfig {
   const mode = resolveHostMode(env);
+  const port = resolveHostPort(env);
   const watchdogProgram =
     mode === "production"
       ? fileURLToPath(new URL("./watchdog-child.mjs", import.meta.url))
@@ -56,8 +83,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HostConfig {
   return {
     mode,
     hostname: "127.0.0.1",
-    port: CANONICAL_PORT,
-    hostHeader: CANONICAL_HOST_HEADER,
+    port,
+    hostHeader: port === CANONICAL_PORT ? CANONICAL_HOST_HEADER : `127.0.0.1:${String(port)}`,
     distDir,
     watchdogProgram,
     driverWorkRoot,

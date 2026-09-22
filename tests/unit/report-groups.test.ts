@@ -1,11 +1,15 @@
 import {
   OTHER_SQUADS_KEY,
+  caseMatchesStatusFilter,
   caseNeedsAttention,
+  caseStatusAxis,
+  caseViewOf,
   diffFindings,
   flattenFindings,
   groupCliRuns,
   readableCaseTitle,
   runHistoryLabel,
+  runInKindScope,
   squadPrNumber,
 } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
@@ -162,6 +166,158 @@ describe("squadPrNumber / readableCaseTitle / history", () => {
         }),
       ]),
     ).toBe(true);
+  });
+});
+
+describe("caseStatusAxis / caseViewOf (representative semantics)", () => {
+  const PR = "https://github.com/acme/repo/pull/1";
+  const evidence = (blockingIds: string[] = []) => ({
+    complete: true,
+    sha: "a".repeat(40),
+    prUrl: PR,
+    againstRunId: null,
+    blockingIds,
+    unverifiedFixIds: [],
+    openIds: blockingIds,
+  });
+
+  it("judges by the latest run: an old failure does not pollute a new completion", () => {
+    const status = caseStatusAxis([
+      run({
+        runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        title: PR,
+        status: "failed",
+        startedAt: "2026-09-20T01:00:00.000Z",
+        reviewEvidence: evidence(),
+      }),
+      run({
+        runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        title: PR,
+        startedAt: "2026-09-21T02:00:00.000Z",
+        reviewEvidence: evidence(),
+      }),
+    ]);
+    expect(status).toEqual({ active: false, done: true, attention: false });
+  });
+
+  it("keeps an interrupted squad in attention and never done", () => {
+    const status = caseStatusAxis([
+      run({
+        runId: "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        kind: "squad",
+        title: "20260921-break",
+        status: "interrupted",
+        startedAt: "2026-09-21T02:00:00.000Z",
+      }),
+    ]);
+    expect(status).toEqual({ active: false, done: false, attention: true });
+  });
+
+  it("treats a finished-with-blocking review as done AND attention (dual axis)", () => {
+    const status = caseStatusAxis([
+      run({
+        runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        title: PR,
+        startedAt: "2026-09-21T02:00:00.000Z",
+        reviewEvidence: evidence(["f1"]),
+      }),
+    ]);
+    expect(status).toEqual({ active: false, done: true, attention: true });
+  });
+
+  it("never calls a needs_attention repair done, even though its run completed", () => {
+    const repair = (businessResult: "needs_attention" | null) =>
+      run({
+        runId: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+        kind: "repair",
+        title: "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+        startedAt: "2026-09-21T02:00:00.000Z",
+        businessResult,
+      });
+    expect(caseStatusAxis([repair("needs_attention")])).toEqual({
+      active: false,
+      done: false,
+      attention: true,
+    });
+    expect(caseStatusAxis([repair(null)])).toEqual({
+      active: false,
+      done: true,
+      attention: false,
+    });
+  });
+
+  it("scopes mixed cases by kind: repair stays in 工程班, review in 审查", () => {
+    expect(runInKindScope({ kind: "repair" }, "squad")).toBe(true);
+    expect(runInKindScope({ kind: "repair" }, "review")).toBe(false);
+    expect(runInKindScope({ kind: "squad" }, "review")).toBe(false);
+    expect(runInKindScope({ kind: "review" }, "review")).toBe(true);
+    const groups = groupCliRuns([
+      run({
+        runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        title: PR,
+        startedAt: "2026-09-20T01:00:00.000Z",
+        reviewEvidence: evidence(),
+      }),
+      run({
+        runId: "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        kind: "squad",
+        title: "20260921-pr1-fix",
+        status: "failed",
+        startedAt: "2026-09-21T02:00:00.000Z",
+      }),
+    ]);
+    const group = groups[0];
+    expect(group?.runs).toHaveLength(2);
+    const reviewView = caseViewOf(group, "review");
+    expect(reviewView?.kindLabels).toEqual(["审查"]);
+    expect(reviewView?.scopedRuns.map((item) => item.kind)).toEqual(["review"]);
+    expect(reviewView?.status.done).toBe(true);
+    const squadView = caseViewOf(group, "squad");
+    expect(squadView?.kindLabels).toEqual(["工程班"]);
+    expect(squadView?.representative.kind).toBe("squad");
+    expect(squadView?.status.attention).toBe(true);
+  });
+
+  it("lets a newer completed squad close the case over an older failed review", () => {
+    // 旧 review 失败后，新的 squad run 完成收尾：全部类型范围里代表是
+    // completed squad，历史审查失败不得把案件拖回“需要处理”。
+    const groups = groupCliRuns([
+      run({
+        runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        title: PR,
+        status: "failed",
+        startedAt: "2026-09-20T01:00:00.000Z",
+        reviewEvidence: evidence(),
+      }),
+      run({
+        runId: "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4",
+        kind: "squad",
+        title: "20260921-pr1-fix",
+        startedAt: "2026-09-21T02:00:00.000Z",
+      }),
+    ]);
+    const group = groups[0];
+    if (!group) throw new Error("expected one case group");
+    const allView = caseViewOf(group, "all");
+    expect(allView?.representative.kind).toBe("squad");
+    expect(allView?.status).toEqual({ active: false, done: true, attention: false });
+    // 审查范围里最新记录仍是那次失败 review，审查轴照常需要恢复。
+    const reviewView = caseViewOf(group, "review");
+    expect(reviewView?.representative.status).toBe("failed");
+    expect(reviewView?.status.attention).toBe(true);
+  });
+
+  it("maps status filters onto the case axis", () => {
+    expect(caseMatchesStatusFilter({ active: true, done: false, attention: true }, "active")).toBe(
+      true,
+    );
+    expect(caseMatchesStatusFilter({ active: true, done: false, attention: true }, "done")).toBe(
+      false,
+    );
+    expect(
+      caseMatchesStatusFilter({ active: false, done: true, attention: false }, "attention"),
+    ).toBe(false);
+    expect(caseMatchesStatusFilter(null, "all")).toBe(false);
   });
 });
 

@@ -75,6 +75,7 @@ import { createScopeManager } from "../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../runtime-host/scopes/session-reconciler";
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
+import { seedReportCaseFixtures } from "./cli-run-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
 // host must serve the built dist/ exactly like the shipped Host does.
@@ -186,6 +187,8 @@ if (process.env.COUNCILKIT_E2E === "1") {
       ],
     })}\n`,
   );
+  seedReportCaseFixtures(home, new Date().toISOString());
+
   const ideateDir = join(home, "runs", E2E_IDEATE_RUN_ID);
   mkdirSync(ideateDir, { recursive: true });
   writeFileSync(

@@ -7,10 +7,13 @@ import { TextInput } from "@/components/ui/TextInput";
 import { cliRunNeedsPoll, primaryRunStatus } from "@/lib/cli-run-status";
 import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/host-status";
 import {
-  caseNeedsAttention,
+  type CaseKindFilter,
+  type CaseStatusFilter,
+  type CaseView,
+  caseMatchesStatusFilter,
+  caseViewOf,
   groupCliRuns,
   isWorkspaceRun,
-  latestRun,
   readableCaseTitle,
   runHistoryLabel,
   seatProgress,
@@ -22,8 +25,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-type StatusFilter = "attention" | "active" | "done" | "all";
-type KindFilter = "all" | "review" | "squad";
+type StatusFilter = CaseStatusFilter;
+type KindFilter = CaseKindFilter;
 
 export function ReportsPage() {
   const { client } = getAppRuntime();
@@ -42,88 +45,70 @@ export function ReportsPage() {
   });
 
   const runs = query.data?.runs ?? [];
-  const catalog = useMemo(() => groupCliRuns(runs), [runs]);
   const queryText = search.trim().toLowerCase();
-  const workspaceCases = catalog.filter((group) => group.runs.some(isWorkspaceRun));
+  const workspaceCases = useMemo(() => groupCliRuns(runs.filter(isWorkspaceRun)), [runs]);
   const ideateCount = runs.filter((run) => run.kind === "ideate").length;
-  const filtered = workspaceCases
-    .filter((group) => {
-      if (kindFilter === "review" && !group.runs.some((run) => run.kind === "review")) return false;
-      if (kindFilter === "squad" && !group.runs.some((run) => run.kind === "squad")) return false;
-      if (queryText) {
-        const blob = `${group.label} ${group.runs.map((run) => `${run.title} ${run.runId} ${run.reviewEvidence?.prUrl ?? ""}`).join(" ")}`;
-        return blob.toLowerCase().includes(queryText);
-      }
-      if (statusFilter === "active") {
-        return group.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline));
-      }
-      if (statusFilter === "done") {
-        return group.runs.every(
-          (run) => !cliRunNeedsPoll(run.status, run.pipeline) && run.status !== "failed",
-        );
-      }
-      if (statusFilter === "attention") return caseNeedsAttention(group.runs);
-      return true;
-    })
+
+  // 案件视图先套类型范围，再由状态/搜索过滤——搜索永远不绕过筛选。
+  const scopedViews = useMemo(
+    () =>
+      workspaceCases
+        .map((group) => caseViewOf(group, kindFilter))
+        .filter((view): view is CaseView => view !== null),
+    [workspaceCases, kindFilter],
+  );
+  // 搜索先于状态过滤：facet 徽标数与点开后实际可见的卡片数必须一致。
+  const searchMatched = useMemo(
+    () =>
+      scopedViews.filter((view) => queryText.length === 0 || view.searchBlob.includes(queryText)),
+    [scopedViews, queryText],
+  );
+  const visible = searchMatched
+    .filter((view) => caseMatchesStatusFilter(view.status, statusFilter))
     .sort((a, b) => {
-      const aActive = a.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline));
-      const bActive = b.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline));
-      if (aActive !== bActive) return aActive ? -1 : 1;
-      const aTime = latestRun(a.runs)?.startedAt ?? "";
-      const bTime = latestRun(b.runs)?.startedAt ?? "";
+      if (a.status.active !== b.status.active) return a.status.active ? -1 : 1;
+      const aTime = a.representative.startedAt ?? "";
+      const bTime = b.representative.startedAt ?? "";
       return bTime.localeCompare(aTime);
     });
-  const searchedExtra =
-    queryText.length > 0
-      ? catalog.filter(
-          (group) =>
-            !group.runs.some(isWorkspaceRun) &&
-            `${group.label} ${group.runs.map((run) => `${run.title} ${run.runId}`).join(" ")}`
-              .toLowerCase()
-              .includes(queryText),
-        )
-      : [];
-  const visible = [...filtered, ...searchedExtra];
 
+  // 状态计数基于搜索+类型范围（忽略当前状态）；类型计数基于搜索+状态范围
+  // （忽略当前类型）——搜索任一维度时徽标反映的是“假如点开”的可见数。
   const statusFilters: { id: StatusFilter; label: string; count: number }[] = [
     {
       id: "attention",
       label: "需要处理",
-      count: workspaceCases.filter((group) => caseNeedsAttention(group.runs)).length,
+      count: searchMatched.filter((view) => view.status.attention).length,
     },
     {
       id: "active",
       label: "进行中",
-      count: workspaceCases.filter((group) =>
-        group.runs.some((run) => cliRunNeedsPoll(run.status, run.pipeline)),
-      ).length,
+      count: searchMatched.filter((view) => view.status.active).length,
     },
     {
       id: "done",
       label: "已完成",
-      count: workspaceCases.filter((group) =>
-        group.runs.every(
-          (run) => !cliRunNeedsPoll(run.status, run.pipeline) && run.status !== "failed",
-        ),
-      ).length,
+      count: searchMatched.filter((view) => view.status.done).length,
     },
-    { id: "all", label: "全部案件", count: workspaceCases.length },
+    { id: "all", label: "全部案件", count: searchMatched.length },
   ];
-  const kindFilters: { id: KindFilter; label: string; count: number }[] = [
-    { id: "all", label: "审查与工程班", count: workspaceCases.length },
-    {
-      id: "review",
-      label: "审查",
-      count: workspaceCases.filter((group) => group.runs.some((run) => run.kind === "review"))
-        .length,
-    },
-    {
-      id: "squad",
-      label: "工程班",
-      count: workspaceCases.filter((group) => group.runs.some((run) => run.kind === "squad"))
-        .length,
-    },
-  ];
+  const kindFilters: { id: KindFilter; label: string; count: number }[] = (
+    [
+      { id: "all" as const, label: "审查与工程班" },
+      { id: "review" as const, label: "审查" },
+      { id: "squad" as const, label: "工程班" },
+    ] satisfies { id: KindFilter; label: string }[]
+  ).map((item) => ({
+    ...item,
+    count: workspaceCases.filter((group) => {
+      const view = caseViewOf(group, item.id);
+      return (
+        view !== null &&
+        (queryText.length === 0 || view.searchBlob.includes(queryText)) &&
+        caseMatchesStatusFilter(view.status, statusFilter)
+      );
+    }).length,
+  }));
 
   return (
     <div className="ck-reports-workspace">
@@ -141,7 +126,7 @@ export function ReportsPage() {
       >
         <div className="ck-library-heading">
           <h2 id="report-library-heading">
-            案件 <span>{workspaceCases.length}</span>
+            案件 <span>{`${visible.length} / ${workspaceCases.length}`}</span>
           </h2>
           <button
             type="button"
@@ -219,18 +204,16 @@ export function ReportsPage() {
         ) : null}
         {query.isSuccess && visible.length > 0 ? (
           <div className="ck-report-groups">
-            {visible.map((group) => (
+            {visible.map((view) => (
               <CaseCard
-                key={group.key}
-                groupKey={group.key}
-                label={group.label}
-                runs={group.runs}
-                expanded={expanded.has(group.key)}
+                key={view.key}
+                view={view}
+                expanded={expanded.has(view.key)}
                 onToggle={() =>
                   setExpanded((previous) => {
                     const next = new Set(previous);
-                    if (next.has(group.key)) next.delete(group.key);
-                    else next.add(group.key);
+                    if (next.has(view.key)) next.delete(view.key);
+                    else next.add(view.key);
                     return next;
                   })
                 }
@@ -252,39 +235,29 @@ export function ReportsPage() {
 }
 
 function CaseCard({
-  groupKey,
-  label,
-  runs,
+  view,
   expanded,
   onToggle,
 }: {
-  groupKey: string;
-  label: string;
-  runs: readonly CliRunSummaryDto[];
+  view: CaseView;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const latest = latestRun(runs);
-  if (!latest) return null;
+  const latest = view.representative;
+  const runs = view.scopedRuns;
   const pill = primaryRunStatus(latest);
   const summary = summarizePrCase(runs);
-  const title = readableCaseTitle(label);
-  const kinds = [
-    runs.some((run) => run.kind === "review") ? "审查" : null,
-    runs.some((run) => run.kind === "squad") ? "工程班" : null,
-    runs.some((run) => run.kind === "ideate") ? "创意" : null,
-    runs.some((run) => run.kind === "discuss") ? "讨论" : null,
-  ].filter((item): item is string => item !== null);
+  const title = readableCaseTitle(view.label);
   const progress = seatProgress(latest);
 
   return (
     <article className="ck-case-card">
       <div className="ck-case-card-top">
         <div className="ck-case-card-title">
-          <h3 title={label}>
+          <h3 title={view.label}>
             <Link to={`/reports/${latest.runId}`}>{title}</Link>
           </h3>
-          <p className="ck-case-kinds">{kinds.join(" · ")}</p>
+          <p className="ck-case-kinds">{view.kindLabels.join(" · ")}</p>
         </div>
         <StatusPill tone={pill.tone} text={pill.text} />
       </div>
@@ -314,7 +287,7 @@ function CaseCard({
           <ul className="ck-run-list">
             {runs.map((run) => (
               <li key={run.runId}>
-                <HistoryRow run={run} groupKey={groupKey} />
+                <HistoryRow run={run} groupKey={view.key} />
               </li>
             ))}
           </ul>
