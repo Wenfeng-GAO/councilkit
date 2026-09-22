@@ -23,7 +23,9 @@ describe("review jury Cursor catalog validation", () => {
   it("does not accept a cached model or a different effort absent from the live catalog", () => {
     const old = seat("grok-4.7-high");
     expect(unavailableCursorSeats([old], ["grok-4.7-xhigh"])).toEqual([old]);
-    expect(unavailableCursorSeats([seat("auto")], [])).toHaveLength(1);
+    expect(unavailableCursorSeats([seat("auto"), seat("default"), seat("configured")], [])).toEqual(
+      [],
+    );
   });
 
   it("does not validate other drivers against the Cursor catalog", () => {

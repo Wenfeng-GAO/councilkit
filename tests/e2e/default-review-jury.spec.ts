@@ -29,6 +29,8 @@ test("Cursor 失效模型在启动前阻止提交，显式重选后恢复", asyn
   };
   let saves = 0;
   let reviews = 0;
+  let catalogAvailable = true;
+  let catalogReads = 0;
   await page.route("**/*", async (route) => {
     if (route.request().resourceType() !== "document") return route.fallback();
     const response = await route.fetch();
@@ -80,14 +82,16 @@ test("Cursor 失效模型在启动前阻止提交，显式重选后恢复", asyn
       },
     }),
   );
-  await page.route("**/api/v1/models/catalog?**", (route) =>
-    route.fulfill({
+  await page.route("**/api/v1/models/catalog?**", (route) => {
+    catalogReads++;
+    if (!catalogAvailable) return route.fulfill({ status: 503, body: "catalog unavailable" });
+    return route.fulfill({
       json: {
         ok: true,
         data: { catalog: ["auto", "grok-4.7-xhigh"], cachedAt: new Date().toISOString() },
       },
-    }),
-  );
+    });
+  });
   await page.route("**/api/v1/cli-runs", async (route) => {
     if (route.request().method() === "POST") reviews++;
     await route.fulfill({ json: { ok: true, data: { runs: [] } } });
@@ -107,6 +111,18 @@ test("Cursor 失效模型在启动前阻止提交，显式重选后恢复", asyn
   await expect(page.getByRole("button", { name: "开始审查", exact: true })).toBeEnabled();
   expect(saves).toBe(1);
   expect(data.seats[0].modelId).toBe("grok-4.7-xhigh");
+  expect(reviews).toBe(0);
+  await page.getByRole("button", { name: "调整席位", exact: true }).click();
+  await page.locator("#jury-a-model").selectOption("auto");
+  await page.getByRole("button", { name: "保存默认席位" }).click();
+  await expect(page.getByRole("button", { name: "开始审查", exact: true })).toBeEnabled();
+  catalogAvailable = false;
+  const priorReads = catalogReads;
+  await page.reload();
+  await page.getByLabel("PR URL").fill("https://github.com/acme/repo/pull/1");
+  await expect(page.getByRole("button", { name: "开始审查", exact: true })).toBeEnabled();
+  expect(catalogReads).toBe(priorReads);
+  expect(saves).toBe(2);
   expect(reviews).toBe(0);
 });
 

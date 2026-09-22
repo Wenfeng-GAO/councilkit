@@ -1,5 +1,9 @@
 import type { ReviewJurySeat } from "@shared/runtime/review-jury";
 
+export function isAutomaticCursorModel(modelId: string): boolean {
+  return ["auto", "default", "configured"].includes(modelId.trim().toLowerCase());
+}
+
 /** A saved binding is not evidence that Cursor still offers that model. */
 export function unavailableCursorSeats(
   seats: readonly ReviewJurySeat[],
@@ -7,7 +11,7 @@ export function unavailableCursorSeats(
 ): ReviewJurySeat[] {
   return seats.filter((seat) => {
     if (seat.driverSelection.driverId !== "cursor-stream-json") return false;
-    const isDefault = ["auto", "default", "configured"].includes(seat.modelId.trim().toLowerCase());
-    return !catalog.includes(isDefault ? "auto" : seat.modelId);
+    if (isAutomaticCursorModel(seat.modelId)) return false;
+    return !catalog.includes(seat.modelId);
   });
 }

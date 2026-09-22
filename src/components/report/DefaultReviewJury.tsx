@@ -1,6 +1,6 @@
 import { CLAUDE_ROUTE_LABELS } from "@/components/settings/view-model";
 import { Select } from "@/components/ui/Select";
-import { unavailableCursorSeats } from "@/lib/jury-model-validation";
+import { isAutomaticCursorModel, unavailableCursorSeats } from "@/lib/jury-model-validation";
 import { driverLabel, isPersonaSeat, reviewSeatTitle } from "@/lib/seat-label";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
@@ -61,7 +61,9 @@ export function DefaultReviewJury({
     enabled:
       draft !== null ||
       (query.data?.seats ?? []).some(
-        (seat) => seat.driverSelection.driverId === "cursor-stream-json",
+        (seat) =>
+          seat.driverSelection.driverId === "cursor-stream-json" &&
+          !isAutomaticCursorModel(seat.modelId),
       ),
     retry: false,
   });
@@ -75,7 +77,11 @@ export function DefaultReviewJury({
   });
   const data = query.data;
   const seats = draft?.seats ?? data?.seats ?? [];
-  const hasCursor = seats.some((seat) => seat.driverSelection.driverId === "cursor-stream-json");
+  const hasPinnedCursor = seats.some(
+    (seat) =>
+      seat.driverSelection.driverId === "cursor-stream-json" &&
+      !isAutomaticCursorModel(seat.modelId),
+  );
   const cursorInstallation = installations.data?.installations.find(
     (item) => item.driverId === "cursor-stream-json" && item.state === "trusted",
   );
@@ -88,7 +94,7 @@ export function DefaultReviewJury({
     ],
     queryFn: () =>
       client.modelCatalog("cursor-stream-json", cursorInstallation?.installationId ?? ""),
-    enabled: hasCursor && !!cursorInstallation,
+    enabled: hasPinnedCursor && !!cursorInstallation,
     retry: false,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
@@ -96,7 +102,7 @@ export function DefaultReviewJury({
   const invalidCursor = cursorCatalog.isSuccess
     ? unavailableCursorSeats(seats, cursorCatalog.data.catalog)
     : [];
-  const cursorProblem = !hasCursor
+  const cursorProblem = !hasPinnedCursor
     ? null
     : installations.isPending || (cursorInstallation && cursorCatalog.isPending)
       ? "正在核对 Cursor 实时模型目录…"
