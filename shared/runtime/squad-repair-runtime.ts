@@ -14,8 +14,7 @@ import {
 import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "./cli-home";
 
-export const CURSOR_REPAIR_MODEL =
-  "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]";
+export const CURSOR_REPAIR_MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]";
 
 /** Display name measured from Cursor for the exact 500K id. Receipt-only. */
 export const CURSOR_REPAIR_MODEL_DISPLAY = "Grok 4.7 500K Extra High";
@@ -130,7 +129,10 @@ export function repairModelReceiptMatches(requested: string, observed: string): 
   const collapsed = value.toLowerCase().replace(/\s+/g, " ");
   if (collapsed === requestedModel.toLowerCase().replace(/\s+/g, " ")) return true;
   if (modelKey(value) === modelKey(requestedModel)) return true;
-  if (requestedModel === "grok-4.7-xhigh" && collapsed === "grok 4.7 extra high") return true;
+  // This alias does not request the retired 500K capacity. Cursor currently
+  // includes 256K in fresh receipts and omits capacity in resume receipts.
+  if (requestedModel === "grok-4.7-xhigh" && /^grok 4\.7(?: 256k)? extra high$/.test(collapsed))
+    return true;
   return false;
 }
 
@@ -200,7 +202,7 @@ export function resolveRepairRoles(input: {
   orchestratorRuntime?: string | null;
   cursorModel?: string | null;
   roles?: unknown;
-}): { ok: true } & ResolvedRepairRoles | { ok: false; reason: string } {
+}): ({ ok: true } & ResolvedRepairRoles) | { ok: false; reason: string } {
   const runtimeRaw = input.orchestratorRuntime?.trim().toLowerCase() ?? "";
   let orchestratorRuntime: SquadOrchestratorRuntime = "cursor";
   if (runtimeRaw === "cursor" || runtimeRaw === "grokb" || runtimeRaw === "grok") {
@@ -213,7 +215,9 @@ export function resolveRepairRoles(input: {
   }
   const cursorModelExplicit =
     typeof input.cursorModel === "string" && input.cursorModel.trim().length > 0;
-  const cursorDefault = canonicalizeRepairModel(cursorModelExplicit ? input.cursorModel?.trim() : undefined);
+  const cursorDefault = canonicalizeRepairModel(
+    cursorModelExplicit ? input.cursorModel?.trim() : undefined,
+  );
   if (!cursorDefault.ok) return cursorDefault;
   const overrides = parseRoleOverrides(input.roles);
   if (!overrides.ok) return overrides;
@@ -232,7 +236,11 @@ export function resolveRepairRoles(input: {
     roles[seat] = parsed.role;
   }
   if (!overrides.roles.planner_a) {
-    roles.planner_a = decorateSeat("planner_a", roles.orchestrator.runtime, roles.orchestrator.model);
+    roles.planner_a = decorateSeat(
+      "planner_a",
+      roles.orchestrator.runtime,
+      roles.orchestrator.model,
+    );
   }
   if (!overrides.roles.coder) {
     roles.coder = decorateSeat("coder", roles.orchestrator.runtime, roles.orchestrator.model);
@@ -249,8 +257,15 @@ export function resolveRepairRoles(input: {
   if (roles.orchestrator.mode !== "main-session") {
     return { ok: false, reason: "Orchestrator 必须使用 main-session。" };
   }
-  if (roles.orchestrator.runtime !== "cursor" && roles.orchestrator.runtime !== "grokb" && roles.orchestrator.runtime !== "grok") {
-    return { ok: false, reason: "Orchestrator 只支持 cursor、grokb 或 grok。独立 Codex 席不能冒充 Orchestrator。" };
+  if (
+    roles.orchestrator.runtime !== "cursor" &&
+    roles.orchestrator.runtime !== "grokb" &&
+    roles.orchestrator.runtime !== "grok"
+  ) {
+    return {
+      ok: false,
+      reason: "Orchestrator 只支持 cursor、grokb 或 grok。独立 Codex 席不能冒充 Orchestrator。",
+    };
   }
   for (const seat of INDEPENDENT_SEATS) {
     if (roles[seat].mode === "main-session") {
@@ -264,7 +279,10 @@ export function resolveRepairRoles(input: {
     }
   }
   const family = roles.orchestrator.runtime === "cursor" ? "cursor" : roles.orchestrator.runtime;
-  if (family !== orchestratorRuntime && !(orchestratorRuntime !== "cursor" && family !== "cursor")) {
+  if (
+    family !== orchestratorRuntime &&
+    !(orchestratorRuntime !== "cursor" && family !== "cursor")
+  ) {
     return {
       ok: false,
       reason: "orchestrator 席位 runtime 与 orchestratorRuntime 不一致，已拒绝自动替换。",
@@ -274,7 +292,12 @@ export function resolveRepairRoles(input: {
     ok: true,
     roles,
     emitContract: orchestratorRuntime === "cursor" || hasRoleOverrides || cursorModelExplicit,
-    orchestratorRuntime: roles.orchestrator.runtime === "grok" ? "grok" : roles.orchestrator.runtime === "grokb" ? "grokb" : "cursor",
+    orchestratorRuntime:
+      roles.orchestrator.runtime === "grok"
+        ? "grok"
+        : roles.orchestrator.runtime === "grokb"
+          ? "grokb"
+          : "cursor",
     orchestratorModel: roles.orchestrator.model,
     hasRoleOverrides,
   };
@@ -320,7 +343,10 @@ export function readSquadBridgeObject(
 
 function readSquadBridgeText(
   env: NodeJS.ProcessEnv,
-): { ok: true; text: string } | { ok: false; missing: true } | { ok: false; missing: false; reason: string } {
+):
+  | { ok: true; text: string }
+  | { ok: false; missing: true }
+  | { ok: false; missing: false; reason: string } {
   try {
     return {
       ok: true,
@@ -367,7 +393,10 @@ function parseSquadBridgeText(raw: string): { file: SquadBridgeFile; reason: str
 
 function atomicWritePrivateText(path: string, data: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = join(dirname(path), `.${path.split("/").pop() ?? "file"}.${randomBytes(6).toString("hex")}.tmp`);
+  const tmp = join(
+    dirname(path),
+    `.${path.split("/").pop() ?? "file"}.${randomBytes(6).toString("hex")}.tmp`,
+  );
   const fd = openSync(tmp, "w", 0o600);
   try {
     writeSync(fd, data);
@@ -393,7 +422,9 @@ export function applyRepairRoleUpdates(
   current: Record<string, unknown>,
   updates: Partial<Record<RepairSeat, RepairRoleOverride>>,
   orchestratorRuntime?: string | null,
-): { ok: true; file: Record<string, unknown>; resolved: ResolvedRepairRoles } | { ok: false; reason: string } {
+):
+  | { ok: true; file: Record<string, unknown>; resolved: ResolvedRepairRoles }
+  | { ok: false; reason: string } {
   const roles = { ...(squadBridgeFileFromRow(current).roles ?? {}) };
   const builderUpdate = updates.orchestrator ?? updates.planner_a ?? updates.coder;
   if (builderUpdate) {
@@ -418,7 +449,9 @@ export function applyRepairRoleUpdates(
   }
   const file: Record<string, unknown> = { ...current, roles };
   const resolved = resolveRepairRoles({
-    orchestratorRuntime: orchestratorRuntime ?? (typeof file.orchestratorRuntime === "string" ? file.orchestratorRuntime : undefined),
+    orchestratorRuntime:
+      orchestratorRuntime ??
+      (typeof file.orchestratorRuntime === "string" ? file.orchestratorRuntime : undefined),
     cursorModel: typeof file.model === "string" ? file.model : undefined,
     roles,
   });
@@ -468,7 +501,11 @@ export function buildCursorRepairContract(input: {
   });
 }
 
-function decorateSeat(seat: RepairSeat, runtime: RepairRoleRuntime, model: string): RepairRoleBinding {
+function decorateSeat(
+  seat: RepairSeat,
+  runtime: RepairRoleRuntime,
+  model: string,
+): RepairRoleBinding {
   if (seat === "orchestrator") return { runtime, model, mode: "main-session" };
   if (seat === "planner_a") {
     return { runtime, model, mode: "main-session", sandbox: "read-only" };
@@ -490,10 +527,18 @@ function parseSeatOverride(
   let runtime: RepairRoleRuntime = "cursor";
   if (runtimeRaw.length === 0) {
     runtime = "cursor";
-  } else if (runtimeRaw === "cursor" || runtimeRaw === "codex" || runtimeRaw === "grokb" || runtimeRaw === "grok") {
+  } else if (
+    runtimeRaw === "cursor" ||
+    runtimeRaw === "codex" ||
+    runtimeRaw === "grokb" ||
+    runtimeRaw === "grok"
+  ) {
     runtime = runtimeRaw;
   } else {
-    return { ok: false, reason: `${seat} 不支持 runtime「${runtimeRaw}」。不会自动换成其他 runtime。` };
+    return {
+      ok: false,
+      reason: `${seat} 不支持 runtime「${runtimeRaw}」。不会自动换成其他 runtime。`,
+    };
   }
   if (!builder && runtime !== "cursor" && runtime !== "codex") {
     return {
@@ -525,7 +570,9 @@ function parseSeatOverride(
 
 function parseRoleOverrides(
   value: unknown,
-): { ok: true; roles: Partial<Record<RepairSeat, RepairRoleOverride>> } | { ok: false; reason: string } {
+):
+  | { ok: true; roles: Partial<Record<RepairSeat, RepairRoleOverride>> }
+  | { ok: false; reason: string } {
   if (value === undefined || value === null) return { ok: true, roles: {} };
   if (typeof value !== "object" || Array.isArray(value)) {
     return { ok: false, reason: "squad-bridge.json roles 必须是对象。" };

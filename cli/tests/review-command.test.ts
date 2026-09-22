@@ -1781,6 +1781,55 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(records.some((r) => r.kind === "aggregation.finished")).toBe(false);
   });
 
+  it.each(["recover", "timeout", "invalid-model"] as const)(
+    "Cursor probe has one bounded timeout retry: %s",
+    async (mode) => {
+      const cursor = join(home, "bin", "cursor-agent");
+      writeFileSync(cursor, "#!/bin/sh\nexit 0\n");
+      chmodSync(cursor, 0o755);
+      const store = new Store();
+      const agent = store.createAgent({
+        name: "Cursor",
+        personaPrompt: "p",
+        modelId: "grok-4.7-xhigh",
+        color: "#112233",
+        driverSelection: { driverId: "cursor-stream-json", options: {} },
+      });
+      const sink = makeSink();
+      let probes = 0;
+      const exit = await runCapturing(
+        ["--agents", JSON.stringify([agent.id]), "--aggregator", agent.id, "--task", "probe retry"],
+        sink,
+        {
+          spawnImpl: async (input) => {
+            if (classify(input) === "probe") {
+              probes++;
+              if (mode === "invalid-model") {
+                return {
+                  stdout: "",
+                  stderr: "Cannot use this model",
+                  exitCode: 1,
+                  timedOut: false,
+                  aborted: false,
+                };
+              }
+              if (probes === 1 || mode === "timeout") {
+                return { stdout: "", exitCode: null, timedOut: true, aborted: false };
+              }
+              return claudeEnvelope("ok");
+            }
+            return classify(input) === "aggregation"
+              ? claudeEnvelope(AGGREGATION_TEXT)
+              : attemptEnvelope("Cursor");
+          },
+        },
+      );
+      expect(probes).toBe(mode === "invalid-model" ? 1 : 2);
+      expect(exit).toBe(mode === "recover" ? 0 : 4);
+      expect(sink.finished).toMatchObject({ incomplete: mode !== "recover" });
+    },
+  );
+
   it("aggregator-only probe failure cancels attempts whose own driver is healthy (CANCELLED)", async () => {
     const store = new Store();
     const claude = {
