@@ -406,6 +406,7 @@ function SeatModelFields({
     .map((agent) => agent.modelId);
   const models = [
     ...new Set([
+      ...(driverId === "claude-stream-json" && route === "cfuse" ? ["auto"] : []),
       ...(catalog.data?.catalog ?? []),
       ...(driverId === "codex-app-server" ? data.codexModels : []),
       ...known,
@@ -425,7 +426,7 @@ function SeatModelFields({
           const next = event.target.value as DriverId;
           onChange({
             ...seat,
-            modelId: "",
+            modelId: next === "claude-stream-json" ? "auto" : "",
             driverSelection:
               next === "claude-stream-json"
                 ? { driverId: next, options: { route: "cfuse" } }
@@ -443,7 +444,7 @@ function SeatModelFields({
           onChange={(event) =>
             onChange({
               ...seat,
-              modelId: "",
+              modelId: event.target.value === "cfuse" ? "auto" : "",
               driverSelection: { driverId, options: { route: event.target.value as ClaudeRoute } },
             })
           }
@@ -462,11 +463,14 @@ function SeatModelFields({
           ...models.map((value) => ({
             value,
             label:
-              driverId === "cursor-stream-json" &&
-              catalog.isSuccess &&
-              unavailableCursorSeats([{ ...seat, modelId: value }], catalog.data.catalog).length > 0
-                ? `${value}（已不在实时目录）`
-                : value,
+              driverId === "claude-stream-json" && route === "cfuse" && value === "auto"
+                ? "auto（跟随 cfuse 当前默认配置）"
+                : driverId === "cursor-stream-json" &&
+                    catalog.isSuccess &&
+                    unavailableCursorSeats([{ ...seat, modelId: value }], catalog.data.catalog)
+                      .length > 0
+                  ? `${value}（已不在实时目录）`
+                  : value,
           })),
         ]}
         onChange={(event) => onChange({ ...seat, modelId: event.target.value })}
