@@ -11,7 +11,7 @@ export const README_SNIPPET = "Added overview line.";
 export const JAVA_SNIPPET = "public void coversUncommentedFile() {";
 export const RENAME_SNIPPET = "func RenamedHelper() {";
 export const CONTEXT_SNIPPET = "func Handle(req Request) error {";
-export const HIDDEN_CONTEXT_SNIPPET = '// Hidden recovery contract: serialize-before-submit';
+export const HIDDEN_CONTEXT_SNIPPET = "// Hidden recovery contract: serialize-before-submit";
 
 export const SAMPLE_DIFF = [
   "diff --git a/README.md b/README.md",

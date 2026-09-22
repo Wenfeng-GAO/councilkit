@@ -51,3 +51,7 @@ A05 追加 9 个用例，覆盖生产账本实际保存的 `` `root-id` — 原�
 ## 8. CLI 集成反例放入对应运行环境
 
 第二候选全量 typecheck 发现：新增 A05 实际 CLI 提取用例位于 `tests/unit`，会让浏览器 ES2020 配置传递编译 Node 22 CLI，触发既有 `replaceAll` / `Error.cause` 的 lib 错误。将这一例的原始测试体逐字迁至 `cli/tests/review-explainer-assertion-identity.test.ts`，使用项目已有 CLI ES2022 配置；保留所有提取、持久化与未豁免断言，不修改生产代码、不扩大浏览器 target、不排除测试。最终命令显式包含此文件。构建失败时 E2E 未启动，保留失败退出码，不计通过。
+
+## 9. 最终全变更文件格式检查
+
+对全部 69 个变更代码/测试文件运行 Biome，发现冻结 fixture 的 HIDDEN_CONTEXT_SNIPPET 使用单引号。只按格式器改为双引号；脚本解析提交前后字面量验证字符串值完全一致，未修改断言或测试数据。原始格式检查失败与等值回执均保留；无需为等值引号改动重跑模型或业务测试。
