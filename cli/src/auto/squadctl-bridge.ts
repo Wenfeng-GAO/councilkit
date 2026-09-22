@@ -64,9 +64,9 @@ import type {
   SquadBridgeStatus,
 } from "./squad-bridge";
 import {
-  defaultSupervisedPolicy,
   freezeOfficialGatePolicyWithSquadctl,
   persistFreezeRecord,
+  policyWithFrozenDelivery,
   readPersistedFreeze,
 } from "./squad-gate-policy";
 import { probeAndVerifySquadBridge } from "./squadctl-verify";
@@ -1133,8 +1133,8 @@ export class SquadctlBridge implements SquadBridge {
     }
   }
 
-  private policyFileForTask(_taskDir: string): OfficialGatePolicyFile {
-    return defaultSupervisedPolicy();
+  private policyFileForTask(taskDir: string): OfficialGatePolicyFile {
+    return policyWithFrozenDelivery(taskDir);
   }
 
   private persistInitIdentity(input: {

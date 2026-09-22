@@ -149,6 +149,14 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadct
     expect(identity.actualRuntime).toBe("fake-grokb.mjs");
     const freezePath = join(home, "squad-tasks", started.taskId, "councilkit-policy-freeze.json");
     expect(existsSync(freezePath)).toBe(true);
+    const policy = JSON.parse(
+      readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-gate-policy.json"), "utf8"),
+    ) as { delivery_authority?: { authority_ref?: string; push?: boolean; pr_mutation?: boolean } };
+    const authority = JSON.parse(
+      readFileSync(join(home, "squad-tasks", started.taskId, "delivery-authority.json"), "utf8"),
+    ) as { authority_ref: string; push: boolean; pr_mutation: boolean };
+    expect(policy.delivery_authority).toEqual(authority);
+    expect(authority).toMatchObject({ authority_ref: AUTH, push: true, pr_mutation: false });
     const freeze = JSON.parse(readFileSync(freezePath, "utf8")) as {
       policyHash: string;
       source: string;

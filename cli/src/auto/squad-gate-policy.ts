@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { canonicalJson } from "@shared/runtime/digest";
 import {
+  type OfficialDeliveryAuthority,
   type OfficialGatePolicyFile,
   type OfficialGatePolicyFreeze,
   type RegisteredPolicyIntent,
@@ -11,11 +13,18 @@ import {
   parseOfficialPolicyFreezeStdout,
   recoverOfficialPolicyFreeze,
 } from "@shared/runtime/squad-gate-policy";
+import {
+  deliveryAuthorityFromProfile,
+  deliveryAuthoritySchema,
+  squadPrProfileSchema,
+} from "@shared/runtime/squad-pr-profile";
 import { errors } from "../errors";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 
 export const CK_POLICY_FREEZE_FILE = "councilkit-policy-freeze.json";
 export const CK_POLICY_INTENT_FILE = "councilkit-policy-intent.json";
+export const CK_DELIVERY_AUTHORITY_FILE = "delivery-authority.json";
+export const CK_PR_PROFILE_FILE = "councilkit-pr-profile.json";
 
 export interface SquadctlExec {
   executable: string;
@@ -25,6 +34,32 @@ export interface SquadctlExec {
 
 export function defaultSupervisedPolicy(): OfficialGatePolicyFile {
   return structuredClone(SUPERVISED_REVIEW_VERIFY_POLICY);
+}
+
+/** Include delivery_authority only when the frozen profile and authority file match.
+ * Missing or drifted files are omitted; this never invents a push grant. */
+export function policyWithFrozenDelivery(taskDir: string): OfficialGatePolicyFile {
+  const policy = defaultSupervisedPolicy();
+  const authority = readMatchingFrozenDelivery(taskDir);
+  if (!authority) return policy;
+  return { ...policy, delivery_authority: authority };
+}
+
+export function readMatchingFrozenDelivery(taskDir: string): OfficialDeliveryAuthority | null {
+  const authority = deliveryAuthoritySchema.safeParse(
+    readJson(join(taskDir, CK_DELIVERY_AUTHORITY_FILE)),
+  );
+  const profile = squadPrProfileSchema.safeParse(readJson(join(taskDir, CK_PR_PROFILE_FILE)));
+  if (!authority.success || !profile.success) return null;
+  const derived = deliveryAuthorityFromProfile(profile.data);
+  if (canonicalJson(derived) !== canonicalJson(authority.data)) return null;
+  return {
+    push: derived.push,
+    pr_mutation: derived.pr_mutation,
+    remote: derived.remote,
+    target_ref: derived.target_ref,
+    authority_ref: derived.authority_ref,
+  };
 }
 
 export function writePolicyIntent(

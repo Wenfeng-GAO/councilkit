@@ -15,9 +15,15 @@ import { goalIdentityFingerprint } from "@shared/runtime/repair-contract";
 import { SQUAD_REQUIRED_GATES_V1, hashRepairGatePolicy } from "@shared/runtime/repair-policy";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { consumeLockedRetry, loadOrCreateChain } from "../src/auto/repair-chain-store";
+import {
+  consumeLockedRetry,
+  consumeLockedSourceFix,
+  loadOrCreateChain,
+  readRepairChain,
+} from "../src/auto/repair-chain-store";
 import { saveRepairProfile } from "../src/auto/repair-profile";
 import { FakeSquadBridge } from "../src/auto/squad-bridge";
+import { releaseWriterLease } from "../src/auto/repair-lease";
 import { type RepairCommandDeps, RepairExit, runRepair } from "../src/commands/repair";
 import type { OutputSink } from "../src/output";
 
@@ -509,6 +515,103 @@ describe("v2 closed loop with a temp repo", () => {
       reasonCode: "coverage_incomplete",
     });
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("invokes the writer once inside the source-fix budget and refuses the next run without resetting", async () => {
+    const { repo, sourceSha, candidateSha } = initRepo();
+    seedReview(SOURCE_ID, { sha: sourceSha, open: true, command: "test -f ready.txt" });
+    saveV2();
+    const created = loadOrCreateChain({
+      repo: "github.com/acme/repo",
+      prUrl: PR_URL,
+      goalFingerprint: goalIdentityFingerprint("review"),
+      parentRunId: "ck-repair-pre",
+      budget: newRepairBudget({ sourceFixMax: 1 }, Date.now()),
+    });
+    let starts = 0;
+    const fake = new FakeSquadBridge({
+      version: SQUAD_BRIDGE_CONTRACT_VERSION,
+      journal: {
+        candidateSha,
+        invalidated: false,
+        independentReview: true,
+        independentVerify: true,
+        requiredGatesPassed: true,
+        gatePolicyHash: "unknown",
+      },
+    });
+    fake.start = () => {
+      starts += 1;
+      return { ok: false, code: "HISTORY_INVALID" };
+    };
+    const out = makeSink();
+    await expect(
+      runRepair(
+        [
+          "run",
+          "--from",
+          SOURCE_ID,
+          "--profile",
+          "v2",
+          "--protocol",
+          "v2",
+          "--isolation",
+          "collaborative",
+          "--run-id",
+          REPAIR_ID,
+        ],
+        out,
+        loop(repo, {
+          inspectPr: async () => inspect(sourceSha, sourceSha),
+          bridge: fake,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(starts).toBe(1);
+    expect(readRepairChain(created.chain.chainId)?.budget.sourceFixUsed).toBe(1);
+    const inherited = loadOrCreateChain({
+      repo: "github.com/acme/repo",
+      prUrl: PR_URL,
+      goalFingerprint: goalIdentityFingerprint("review"),
+      parentRunId: "ck-repair-next",
+    });
+    expect(inherited.inherited).toBe(true);
+    expect(inherited.chain.budget.sourceFixUsed).toBe(1);
+    releaseWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderRunId: REPAIR_ID,
+    });
+    const again = makeSink();
+    await expect(
+      runRepair(
+        [
+          "run",
+          "--from",
+          SOURCE_ID,
+          "--profile",
+          "v2",
+          "--protocol",
+          "v2",
+          "--isolation",
+          "collaborative",
+          "--run-id",
+          "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3",
+        ],
+        again,
+        loop(repo, {
+          inspectPr: async () => inspect(sourceSha, sourceSha),
+          bridge: fake,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(again.finished).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "source_fix_exhausted",
+    });
+    expect(starts).toBe(1);
+    expect(readRepairChain(created.chain.chainId)?.budget.sourceFixUsed).toBe(1);
+    expect(consumeLockedSourceFix(created.chain.chainId, Date.now()).ok).toBe(false);
   });
 
   it("keeps required command verification unknown when the candidate snapshot cannot be measured", async () => {

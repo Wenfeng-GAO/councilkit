@@ -248,6 +248,8 @@ export function recoverOfficialPolicyFreeze(
         reason: "official projection was tampered relative to registered intent",
       };
     }
+    const projectedAuthority = deliveryAuthorityMismatch(projection, intent.delivery_authority);
+    if (projectedAuthority) return { ok: false, reason: projectedAuthority };
     return {
       ok: true,
       freeze: {
@@ -289,6 +291,8 @@ export function recoverOfficialPolicyFreeze(
       reason: "official projection hash does not match registered intent canonical freeze",
     };
   }
+  const projectedAuthority = deliveryAuthorityMismatch(projection, intent.delivery_authority);
+  if (projectedAuthority) return { ok: false, reason: projectedAuthority };
   return {
     ok: true,
     freeze: {
@@ -308,6 +312,29 @@ export function recoverOfficialPolicyFreeze(
 
 function gatesMatch(left: unknown, right: OfficialRequiredGate[]): boolean {
   return Array.isArray(left) && canonicalJson(left) === canonicalJson(right);
+}
+
+function deliveryAuthorityMismatch(
+  projection: Record<string, unknown>,
+  expected: OfficialDeliveryAuthority | undefined,
+): string | null {
+  if (!("delivery_authority" in projection) && !expected) return null;
+  if (!expected) {
+    return "official projection invented a delivery authority";
+  }
+  if (!("delivery_authority" in projection)) {
+    return projectionHasPolicyBody(projection)
+      ? "official projection dropped the registered delivery authority"
+      : null;
+  }
+  if (canonicalJson(projection.delivery_authority) !== canonicalJson(expected)) {
+    return "official projection delivery authority drifted from the registered grant";
+  }
+  return null;
+}
+
+function projectionHasPolicyBody(projection: Record<string, unknown>): boolean {
+  return "required_gates" in projection;
 }
 
 function independenceMatch(left: OfficialIndependence, right: OfficialIndependence): boolean {
