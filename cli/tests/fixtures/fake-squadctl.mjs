@@ -67,6 +67,19 @@ if (cmd === "pause") {
   process.stdout.write(`${JSON.stringify({ ok: true, epoch: 2, command: "pause" })}\n`);
   process.exit(0);
 }
+if (cmd === "planning") {
+  process.stdout.write(`${JSON.stringify({ ok: true, epoch: 1 })}\n`);
+  process.exit(0);
+}
+if (cmd === "gate") {
+  process.stdout.write(
+    `${JSON.stringify({
+      policy_hash: "c".repeat(64),
+      brief_hash: "d".repeat(64),
+    })}\n`,
+  );
+  process.exit(0);
+}
 if (cmd === "resume") {
   if (process.env.FAKE_SQUADCTL_RESUME_FAIL) {
     process.stderr.write("StateDriftError: bound repair history origins drifted\n");

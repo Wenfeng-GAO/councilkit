@@ -58,6 +58,8 @@ Commands:
                                       Start or reuse a parent repair run (handshake directory).
   repair status|stop|resume --run <ck-repair-id>
                                       Query, stop, or resume a parent repair run.
+  repair roles show|set|reset         Show or change Squad repair role runtime/model.
+                                      set --reviewer cursor:<model> | codex:<model>
   apply --run <ck-review-id>          Apply one locked cluster (default first unlanded), grok + push.
       [--cluster <id>|--all-clusters]
   fix --run <ck-review-id>            Plan-jury a repair, apply one cluster, then re-review vs the ledger.

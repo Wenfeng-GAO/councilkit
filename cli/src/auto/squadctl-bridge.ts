@@ -15,7 +15,24 @@ import {
   isTrustedSquadctlIntegrateReceipt,
   sanitizePublishDiagnostic,
 } from "@shared/runtime/squad-bridge-contract";
-import { type SquadBridgeProbe, discoverSquadBridge } from "@shared/runtime/squad-bridge-discovery";
+import {
+  type SquadBridgeProbe,
+  discoverSquadBridge,
+  findOrchestratorExecutable,
+} from "@shared/runtime/squad-bridge-discovery";
+import {
+  CURSOR_REPAIR_MODEL,
+  GROK_REPAIR_MODEL,
+  type SquadOrchestratorRuntime,
+  buildRepairContract,
+  canonicalizeRepairModel,
+  cursorOrchestratorArgv,
+  executableServesRuntime,
+  readSquadBridgeFile,
+  repairModelReceiptMatches,
+  resolveRepairRoles,
+  runtimeOfExecutable,
+} from "@shared/runtime/squad-repair-runtime";
 import type {
   OfficialGatePolicyFile,
   OfficialGatePolicyFreeze,
@@ -77,7 +94,7 @@ const IDENTITY_FILE = "councilkit-bridge.json";
 const PROMPT_FILE = "orchestrator-prompt.md";
 const PROFILE_FILE = "councilkit-pr-profile.json";
 const AUTHORITY_FILE = "delivery-authority.json";
-const DEFAULT_MODEL = "grok-4.6";
+const DEFAULT_MODEL = GROK_REPAIR_MODEL;
 
 export { GROK_SESSION_WAIT_MS };
 
@@ -92,6 +109,8 @@ export interface SpawnOrchestratorInput {
   env: NodeJS.ProcessEnv;
   logPath: string;
   requestedSession: string;
+  promptStdin?: boolean;
+  prompt?: string;
 }
 
 export type SpawnOrchestrator = (input: SpawnOrchestratorInput) => {
@@ -123,6 +142,7 @@ interface BridgeIdentity {
   requestedRuntime: string;
   actualRuntime: string | null;
   model: string | null;
+  observedModel: string | null;
   requestedSession: string | null;
   nativeSession: string | null;
   orchestratorPid: number | null;
@@ -571,6 +591,7 @@ export class SquadctlBridge implements SquadBridge {
       }
     } else {
       squadTaskId = existing?.squadTaskId ?? makeSquadTaskId();
+      const contractPath = this.writeRepairContract(taskDir, probe);
       const init = await this.runSquadctl(
         [
           "init",
@@ -588,6 +609,7 @@ export class SquadctlBridge implements SquadBridge {
           cwd,
           "--no-observe",
           "--allow-behind-origin",
+          ...(contractPath ? ["--contract", contractPath] : []),
           "--json",
         ],
         exe,
@@ -692,24 +714,44 @@ export class SquadctlBridge implements SquadBridge {
     fingerprint: ProcessFingerprint | null;
   } {
     const probe = this.probe();
-    const orchExe = this.orchestrator(probe).executable;
-    if (!orchExe) throw errors.usage("independent Orchestrator executable missing");
+    const runtime = canonicalRuntime(identity.requestedRuntime);
+    const orchExe = this.executableForRuntime(runtime, probe);
+    if (!orchExe) {
+      throw errors.runFailed(
+        runtime === "cursor"
+          ? "cursor-agent missing; refusing to fall back to grok, codex, or auto"
+          : `refusing to resume ${runtime} session with Cursor; grokb/grok executable is missing`,
+      );
+    }
     const promptPath = writeOrchestratorPrompt(identity, probe);
     const logPath = join(identity.taskDir, "orchestrator.log");
     const requested = identity.requestedSession ?? randomUUID();
-    const argv = grokOrchestratorArgv({
-      executable: orchExe,
-      workspace: identity.workspaceCwd,
-      model: identity.model ?? DEFAULT_MODEL,
-      promptPath,
-      resumeSession: identity.nativeSession,
-      sessionId: identity.nativeSession ? null : requested,
-    });
+    const model =
+      runtime === "cursor"
+        ? requiredCursorModel(identity.model)
+        : (identity.model ?? DEFAULT_MODEL);
+    const argv =
+      runtime === "cursor"
+        ? cursorOrchestratorArgv({
+            workspace: identity.workspaceCwd,
+            model,
+            resumeSession: identity.nativeSession,
+          })
+        : grokOrchestratorArgv({
+            executable: orchExe,
+            workspace: identity.workspaceCwd,
+            model,
+            promptPath,
+            resumeSession: identity.nativeSession,
+            sessionId: identity.nativeSession ? null : requested,
+          });
     const baseEnv = this.options.env ?? process.env;
     const isolated =
       this.options.executable || this.options.spawnOrchestrator
         ? baseEnv
-        : spawnEnvForDriver("grok-stream-json", identity.workspaceCwd, baseEnv);
+        : runtime === "cursor"
+          ? { ...baseEnv, PWD: identity.workspaceCwd }
+          : spawnEnvForDriver("grok-stream-json", identity.workspaceCwd, baseEnv);
     const { GROK_SESSION_ID: _session, GROK_AGENT: _agent, ...env } = agentSeatEnv(isolated);
     const spawnImpl = this.options.spawnOrchestrator ?? defaultSpawnOrchestrator;
     const isolationMode = this.options.isolationMode;
@@ -726,6 +768,8 @@ export class SquadctlBridge implements SquadBridge {
       env: isolatedEnv,
       logPath,
       requestedSession: requested,
+      promptStdin: runtime === "cursor",
+      prompt: runtime === "cursor" ? (readFileText(promptPath) ?? "") : undefined,
     });
     const executionId = randomUUID();
     const fingerprint = spawned.pid ? waitForLeaderFingerprint(spawned.pid) : null;
@@ -771,12 +815,15 @@ export class SquadctlBridge implements SquadBridge {
       child: spawned.child,
     };
     if (spawned.child) this.attachLifecycle(taskId, spawned.child, generation);
-    const expectedSession = identity.nativeSession ?? identity.requestedSession;
+    const runtime = canonicalRuntime(identity.requestedRuntime);
+    const expectedSession =
+      runtime === "cursor" ? identity.nativeSession : (identity.nativeSession ?? identity.requestedSession);
     const supervised = spawned.child
       ? await superviseOrchestrator(
           spawned.child,
           this.options.sessionWaitMs ?? GROK_SESSION_WAIT_MS,
           spawned.stdoutBuf,
+          runtime,
         )
       : { ok: false as const, reason: "orchestrator produced no child process", exitCode: null };
     if (!this.isCurrentGeneration(taskId, generation)) return;
@@ -784,32 +831,41 @@ export class SquadctlBridge implements SquadBridge {
       this.abortSpawn(taskId, spawned.pid, supervised.reason, generation);
       throw errors.runFailed(supervised.reason);
     }
-    if (!expectedSession || supervised.sessionId !== expectedSession) {
-      this.abortSpawn(
-        taskId,
-        spawned.pid,
-        expectedSession
-          ? "native session_id did not match the frozen session"
-          : "orchestrator produced no native session_id",
-        generation,
-      );
-      throw errors.runFailed(
-        expectedSession
-          ? "native session_id did not match the frozen session"
-          : "orchestrator produced no native session_id",
-      );
+    if (runtime === "cursor") {
+      const requestedModel = identity.model ?? CURSOR_REPAIR_MODEL;
+      if (!supervised.model || !repairModelReceiptMatches(requestedModel, supervised.model)) {
+        this.rememberObservedModel(taskId, supervised.model);
+        const reason = supervised.model
+          ? `cursor model receipt ${JSON.stringify(supervised.model)} is not ${requestedModel}`
+          : "cursor orchestrator produced no model receipt";
+        this.abortSpawn(taskId, spawned.pid, reason, generation);
+        throw errors.runFailed(reason);
+      }
+    }
+    if (expectedSession && supervised.sessionId !== expectedSession) {
+      this.abortSpawn(taskId, spawned.pid, "native session_id did not match the frozen session", generation);
+      throw errors.runFailed("native session_id did not match the frozen session");
+    }
+    if (!expectedSession && runtime !== "cursor") {
+      this.abortSpawn(taskId, spawned.pid, "orchestrator produced no native session_id", generation);
+      throw errors.runFailed("orchestrator produced no native session_id");
     }
     if (!this.isCurrentGeneration(taskId, generation)) return;
     const current = this.readIdentity(taskId) ?? identity;
     if (current.executionStatus === "failed" || current.stopped) {
       if (!current.nativeSession) {
-        this.writeIdentity(taskId, { ...current, nativeSession: supervised.sessionId });
+        this.writeIdentity(taskId, {
+          ...current,
+          nativeSession: supervised.sessionId,
+          observedModel: supervised.model ?? current.observedModel,
+        });
       }
       return;
     }
     this.writeIdentity(taskId, {
       ...current,
       nativeSession: supervised.sessionId,
+      observedModel: supervised.model ?? current.observedModel,
       executionStatus: "running",
       failReason: null,
     });
@@ -952,6 +1008,7 @@ export class SquadctlBridge implements SquadBridge {
         requestedRuntime: "grokb",
         actualRuntime: null,
         model: DEFAULT_MODEL,
+        observedModel: null,
         requestedSession: null,
         nativeSession: null,
         orchestratorPid: null,
@@ -1156,10 +1213,14 @@ export class SquadctlBridge implements SquadBridge {
       squadTaskId: input.squadTaskId,
       taskDir: input.taskDir,
       workspaceCwd: input.cwd,
-      requestedRuntime: orch.requestedRuntime,
+      requestedRuntime: previous?.requestedRuntime ?? orch.requestedRuntime,
       actualRuntime:
         previous?.actualRuntime ?? (orch.executable ? basename(orch.executable) : null),
-      model: previous?.model ?? DEFAULT_MODEL,
+      model:
+        previous?.model ??
+        orch.model ??
+        (orch.requestedRuntime === "cursor" ? CURSOR_REPAIR_MODEL : DEFAULT_MODEL),
+      observedModel: previous?.observedModel ?? null,
       requestedSession: previous?.requestedSession ?? randomUUID(),
       nativeSession: previous?.nativeSession ?? null,
       orchestratorPid: previous?.orchestratorPid ?? null,
@@ -1309,13 +1370,7 @@ export class SquadctlBridge implements SquadBridge {
         executable: this.options.executable,
         toolVersion: null,
         historyContract: this.readHistoryContract(this.options.executable, env),
-        orchestrator: {
-          requestedRuntime: "grokb",
-          actualRuntime: null,
-          model: DEFAULT_MODEL,
-          nativeSession: null,
-          executable: this.options.orchestratorExecutable ?? null,
-        },
+        orchestrator: injectedOrchestrator(this.options.orchestratorExecutable ?? null),
       };
     }
     if (this.options.skipCliVerify) return discoverSquadBridge(env);
@@ -1329,11 +1384,65 @@ export class SquadctlBridge implements SquadBridge {
   private orchestrator(probe: SquadBridgeProbe): {
     requestedRuntime: string;
     executable: string | null;
+    model: string | null;
   } {
     return {
       requestedRuntime: probe.orchestrator?.requestedRuntime ?? "grokb",
       executable: this.options.orchestratorExecutable ?? probe.orchestrator?.executable ?? null,
+      model: probe.orchestrator?.model ?? null,
     };
+  }
+
+  private executableForRuntime(
+    runtime: SquadOrchestratorRuntime,
+    probe: SquadBridgeProbe,
+  ): string | null {
+    const injected = this.options.orchestratorExecutable;
+    if (injected) return executableServesRuntime(injected, runtime) ? injected : null;
+    const probed = probe.orchestrator;
+    if (
+      probed?.executable &&
+      executableServesRuntime(probed.executable, runtime) &&
+      (probed.requestedRuntime === runtime ||
+        (probed.requestedRuntime !== "cursor" && runtime !== "cursor"))
+    ) {
+      return probed.executable;
+    }
+    return findOrchestratorExecutable(this.options.env ?? process.env, runtime);
+  }
+
+  private writeRepairContract(taskDir: string, probe: SquadBridgeProbe): string | null {
+    const env = this.options.env ?? process.env;
+    const loaded = readSquadBridgeFile(env);
+    if (loaded.reason) throw errors.runFailed(loaded.reason);
+    const resolved = resolveRepairRoles({
+      orchestratorRuntime: probe.orchestrator?.requestedRuntime ?? "cursor",
+      cursorModel: env.COUNCILKIT_CURSOR_MODEL ?? loaded.file.model,
+      roles: loaded.file.roles,
+    });
+    if (!resolved.ok) throw errors.runFailed(resolved.reason);
+    if (!resolved.emitContract) return null;
+    const contractPath = join(dirname(taskDir), `${basename(taskDir)}.runtime-contract.json`);
+    writeFileSync(
+      contractPath,
+      `${JSON.stringify(
+        buildRepairContract({
+          contractId: randomUUID(),
+          createdAt: new Date().toISOString(),
+          roles: resolved.roles,
+        }),
+        null,
+        2,
+      )}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    return contractPath;
+  }
+
+  private rememberObservedModel(taskId: string, observed: string | null): void {
+    const current = this.readIdentity(taskId);
+    if (!current || !observed) return;
+    this.writeIdentity(taskId, { ...current, observedModel: observed });
   }
 
   private async runSquadctl(
@@ -1448,6 +1557,7 @@ export class SquadctlBridge implements SquadBridge {
         this.tasks.set(taskId, parsed.taskDir);
         return {
           ...parsed,
+          observedModel: parsed.observedModel ?? null,
           processGroup: parsed.processGroup ?? [],
           observedExitCode: parsed.observedExitCode ?? null,
           observedSignal: parsed.observedSignal ?? null,
@@ -1477,6 +1587,87 @@ export class SquadctlBridge implements SquadBridge {
 
   private home(): string {
     return this.options.home ?? ensureHome();
+  }
+}
+
+function canonicalRuntime(value: string): SquadOrchestratorRuntime {
+  if (value === "cursor" || value === "grokb" || value === "grok") return value;
+  throw errors.runFailed(`unknown orchestrator runtime ${value}`);
+}
+
+function requiredCursorModel(model: string | null): string {
+  const pin = canonicalizeRepairModel(model ?? undefined);
+  if (!pin.ok) throw errors.runFailed(pin.reason);
+  return pin.model;
+}
+
+function injectedOrchestrator(executable: string | null): NonNullable<SquadBridgeProbe["orchestrator"]> {
+  const runtime = executable ? (runtimeOfExecutable(executable) ?? "grokb") : "grokb";
+  return {
+    requestedRuntime: runtime,
+    actualRuntime: null,
+    model: runtime === "cursor" ? CURSOR_REPAIR_MODEL : DEFAULT_MODEL,
+    nativeSession: null,
+    executable,
+  };
+}
+
+function roleLines(identity: BridgeIdentity): string[] {
+  const contractPath = join(
+    dirname(identity.taskDir),
+    `${basename(identity.taskDir)}.runtime-contract.json`,
+  );
+  const roles = readContractRoles(contractPath);
+  if (!roles) {
+    if (identity.requestedRuntime !== "cursor") {
+      return [
+        "Roles: Orchestrator=this grok session; Builder continues this session after the controller has frozen planning and gate policy; Reviewer and Verifier MUST be independent adapter runs.",
+      ];
+    }
+    return [
+      `Frozen runtime contract: ${contractPath}`,
+      `Orchestrator model: ${identity.model ?? CURSOR_REPAIR_MODEL}`,
+      "planner_a and coder continue this Cursor session and must use the same runtime and model.",
+      "reviewer and verifier are independent adapter runs, not this writer.",
+    ];
+  }
+  const lines = [
+    `Frozen runtime contract: ${contractPath}`,
+    "Dispatch each role from squadctl runtime show. Do not substitute another runtime or model, and do not resume a native session with a different model.",
+  ];
+  for (const [name, role] of Object.entries(roles)) {
+    const bits = [`runtime=${role.runtime ?? ""}`, `model=${role.model ?? ""}`];
+    if (role.mode) bits.push(`mode=${role.mode}`);
+    if (role.sandbox) bits.push(`sandbox=${role.sandbox}`);
+    if (role.permission_mode) bits.push(`permission_mode=${role.permission_mode}`);
+    lines.push(`${name}: ${bits.join(" ")}`);
+  }
+  lines.push(
+    "planner_a and coder share the orchestrator runtime, model, and native session. An independent Builder is rejected.",
+  );
+  lines.push(
+    "planner_b, reviewer, and verifier each use their own native session. reviewer and verifier are independent adapter runs, not this writer.",
+  );
+  return lines;
+}
+
+function readContractRoles(path: string): Record<
+  string,
+  { runtime?: string; model?: string; mode?: string; sandbox?: string; permission_mode?: string }
+> | null {
+  const text = readFileText(path);
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as { roles?: unknown };
+    if (parsed.roles === null || typeof parsed.roles !== "object" || Array.isArray(parsed.roles)) {
+      return null;
+    }
+    return parsed.roles as Record<
+      string,
+      { runtime?: string; model?: string; mode?: string; sandbox?: string; permission_mode?: string }
+    >;
+  } catch {
+    return null;
   }
 }
 
@@ -1528,8 +1719,14 @@ function defaultSpawnOrchestrator(input: SpawnOrchestratorInput): {
     env: input.env,
     shell: false,
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [input.promptStdin ? "pipe" : "ignore", "pipe", "pipe"],
   });
+  if (input.promptStdin) {
+    child.stdin?.on("error", () => {
+      // prompt consumer may exit before the pipe finishes
+    });
+    child.stdin?.end(input.prompt ?? "", "utf8");
+  }
   child.stdout?.on("data", (chunk: Buffer) => {
     stdoutBuf.text += chunk.toString("utf8");
     out.write(chunk);
@@ -1545,8 +1742,10 @@ export function superviseOrchestrator(
   child: ChildProcess,
   timeoutMs: number,
   stdoutBuf?: { text: string },
+  runtime: SquadOrchestratorRuntime = "grokb",
 ): Promise<
-  { ok: true; sessionId: string } | { ok: false; reason: string; exitCode: number | null }
+  | { ok: true; sessionId: string; model: string | null }
+  | { ok: false; reason: string; exitCode: number | null }
 > {
   return new Promise((resolve) => {
     const read = (): string => stdoutBuf?.text ?? "";
@@ -1554,7 +1753,7 @@ export function superviseOrchestrator(
     const timer: { id: ReturnType<typeof setTimeout> | undefined } = { id: undefined };
     const finish = (
       value:
-        | { ok: true; sessionId: string }
+        | { ok: true; sessionId: string; model: string | null }
         | { ok: false; reason: string; exitCode: number | null },
     ): void => {
       if (settled) return;
@@ -1565,17 +1764,26 @@ export function superviseOrchestrator(
       if (timer.id !== undefined) clearTimeout(timer.id);
       resolve(value);
     };
+    const ready = (): { sessionId: string; model: string | null } | null => {
+      const found = parseOrchestratorReceipt(read());
+      if (!found.sessionId) return null;
+      if (runtime === "cursor" && !found.model) return null;
+      return { sessionId: found.sessionId, model: found.model };
+    };
     const onData = (): void => {
-      const found = parseGrokSessionId(read());
-      if (found) finish({ ok: true, sessionId: found });
+      const found = ready();
+      if (found) finish({ ok: true, ...found });
     };
     const onExit = (code: number | null): void => {
-      const found = parseGrokSessionId(read());
-      if (found) finish({ ok: true, sessionId: found });
+      const found = ready();
+      if (found) finish({ ok: true, ...found });
       else
         finish({
           ok: false,
-          reason: `orchestrator exited before native session (${code ?? "null"})`,
+          reason:
+            runtime === "cursor" && parseOrchestratorReceipt(read()).sessionId
+              ? "cursor orchestrator produced no model receipt"
+              : `orchestrator exited before native session (${code ?? "null"})`,
           exitCode: code,
         });
     };
@@ -1586,45 +1794,71 @@ export function superviseOrchestrator(
     child.once("exit", onExit);
     child.once("error", onError);
     child.stdout?.resume();
-    const early = parseGrokSessionId(read());
+    const early = ready();
     if (early) {
-      finish({ ok: true, sessionId: early });
+      finish({ ok: true, ...early });
       return;
     }
     if (child.exitCode !== null || child.signalCode) {
+      const receipt = parseOrchestratorReceipt(read());
       finish({
         ok: false,
-        reason: `orchestrator exited before native session (${child.exitCode ?? child.signalCode})`,
+        reason:
+          runtime === "cursor" && receipt.sessionId
+            ? "cursor orchestrator produced no model receipt"
+            : `orchestrator exited before native session (${child.exitCode ?? child.signalCode})`,
         exitCode: child.exitCode,
       });
       return;
     }
     timer.id = setTimeout(() => {
-      const found = parseGrokSessionId(read());
-      if (found) finish({ ok: true, sessionId: found });
-      else
+      const found = ready();
+      if (found) finish({ ok: true, ...found });
+      else {
+        const receipt = parseOrchestratorReceipt(read());
         finish({
           ok: false,
-          reason: "orchestrator produced no native session_id",
+          reason:
+            runtime === "cursor" && receipt.sessionId
+              ? "cursor orchestrator produced no model receipt"
+              : "orchestrator produced no native session_id",
           exitCode: child.exitCode,
         });
+      }
     }, timeoutMs);
   });
 }
 
-export function parseGrokSessionId(text: string): string | null {
+export function parseOrchestratorReceipt(text: string): {
+  sessionId: string | null;
+  model: string | null;
+} {
+  let sessionId: string | null = null;
+  let model: string | null = null;
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("{")) continue;
     try {
       const obj = JSON.parse(trimmed) as Record<string, unknown>;
-      if (typeof obj.session_id === "string" && obj.session_id.length > 0) return obj.session_id;
-      if (typeof obj.sessionId === "string" && obj.sessionId.length > 0) return obj.sessionId;
+      if (sessionId === null) {
+        if (typeof obj.session_id === "string" && obj.session_id.length > 0) {
+          sessionId = obj.session_id;
+        } else if (typeof obj.sessionId === "string" && obj.sessionId.length > 0) {
+          sessionId = obj.sessionId;
+        }
+      }
+      if (model === null && typeof obj.model === "string" && obj.model.length > 0) {
+        model = obj.model;
+      }
     } catch {
       // ignore non-json
     }
   }
-  return null;
+  return { sessionId, model };
+}
+
+export function parseGrokSessionId(text: string): string | null {
+  return parseOrchestratorReceipt(text).sessionId;
 }
 
 function writeOrchestratorPrompt(identity: BridgeIdentity, probe: SquadBridgeProbe): string {
@@ -1643,11 +1877,12 @@ function writeOrchestratorPrompt(identity: BridgeIdentity, probe: SquadBridgePro
     `requested runtime: ${identity.requestedRuntime}`,
     `actual runtime: ${identity.actualRuntime ?? "pending"}`,
     `model: ${identity.model ?? DEFAULT_MODEL}`,
+    `observed model: ${identity.observedModel ?? "pending receipt"}`,
     `native session: ${identity.nativeSession ?? "pending capture"}`,
     delivery
       ? `frozen grant ${delivery.grantHash} repo ${delivery.repo} source ${delivery.sourceBranch} sha ${delivery.sourceSha} remote ${delivery.remote}`
       : "frozen grant missing",
-    "Roles: Orchestrator=this grok session; Builder continues this session after the controller has frozen planning and gate policy; Reviewer and Verifier MUST be independent adapter runs.",
+    ...roleLines(identity),
     "CouncilKit already froze planning and gate policy in this process. Do NOT run squadctl gate policy-freeze. Do not rewrite brief.md or plan.md.",
     "Do NOT run git push, squadctl integrate, or any remote update. CouncilKit will publish after you stop.",
     "Stop when candidate.status=completed, independent Review/Verify passed on the same SHA, and phase=integrating. Then wait; do not keep mutating.",

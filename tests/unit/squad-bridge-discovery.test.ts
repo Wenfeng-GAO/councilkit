@@ -82,6 +82,7 @@ describe("squad bridge discovery", () => {
       isolatedEnv({
         HOME: home,
         PATH: join(home, "missing-bin"),
+        COUNCILKIT_ORCHESTRATOR_RUNTIME: "grokb",
       }),
     );
     expect(probe.available).toBe(true);
@@ -91,6 +92,7 @@ describe("squad bridge discovery", () => {
     expect(probe.executable).toBe(join(skillDir, "scripts", "squadctl"));
     expect(probe.skillDir).toBe(skillDir);
     expect(probe.orchestrator?.requestedRuntime).toBe("grokb");
+    expect(probe.orchestrator?.model).toBe("grok-4.6");
     expect(probe.orchestrator?.actualRuntime).toBeNull();
     expect(probe.orchestrator?.nativeSession).toBeNull();
     expect(probe.orchestrator?.executable).toBe(grokb);
@@ -125,12 +127,78 @@ describe("squad bridge discovery", () => {
     expect(probe.reason).toMatch(/check-remote|push-remote/);
   });
 
-  it("does not mark ready when squadctl exists but grokb/grok does not", () => {
+  it("does not mark ready when squadctl exists but cursor-agent does not", () => {
     const home = tempDir("ck-no-orch-");
     seedSkill(join(home, ".codex"));
+    seedGrokb(join(home, "bin"));
     const probe = probeSquadBridge(isolatedEnv({ HOME: home }));
     expect(probe.available).toBe(false);
-    expect(probe.reason).toMatch(/grokb|Orchestrator/i);
+    expect(probe.reason).toMatch(/cursor-agent/);
+    expect(probe.reason).toMatch(/拒绝回退/);
+  });
+
+  it("discovers cursor-agent when grokb and grok are absent", () => {
+    const home = tempDir("ck-cursor-only-");
+    const skillDir = seedSkill(join(home, ".codex"));
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const cursor = join(bin, "cursor-agent");
+    writeExecutable(cursor, "#!/bin/sh\necho cursor\n");
+    const probe = probeSquadBridge(
+      isolatedEnv({
+        HOME: home,
+        PATH: bin,
+      }),
+    );
+    expect(probe.available).toBe(true);
+    expect(probe.skillDir).toBe(skillDir);
+    expect(probe.orchestrator?.requestedRuntime).toBe("cursor");
+    expect(probe.orchestrator?.executable).toBe(cursor);
+    expect(probe.orchestrator?.model).toBe(
+      "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]",
+    );
+  });
+
+  it("prefers cursor-agent over a PATH grokb unless runtime is explicitly grok", () => {
+    const home = tempDir("ck-both-runtimes-");
+    seedSkill(join(home, ".codex"));
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const cursor = join(bin, "cursor-agent");
+    writeExecutable(cursor, "#!/bin/sh\necho cursor\n");
+    seedGrokb(bin);
+    const probe = probeSquadBridge(isolatedEnv({ HOME: home, PATH: bin }));
+    expect(probe.available).toBe(true);
+    expect(probe.orchestrator?.requestedRuntime).toBe("cursor");
+    expect(probe.orchestrator?.executable).toBe(cursor);
+  });
+
+  it("keeps an explicit non-500k cursor model as itself and still refuses auto", () => {
+    const home = tempDir("ck-explicit-model-");
+    seedSkill(join(home, ".codex"));
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeExecutable(join(bin, "cursor-agent"), "#!/bin/sh\necho cursor\n");
+    const ckHome = join(home, "ck");
+    mkdirSync(ckHome, { recursive: true });
+    writeFileSync(
+      join(ckHome, "squad-bridge.json"),
+      `${JSON.stringify({
+        model: "grok-4.7-xhigh",
+        roles: { reviewer: { runtime: "codex", model: "gpt-5.6-sol" } },
+      })}\n`,
+    );
+    const probe = probeSquadBridge(
+      isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }),
+    );
+    expect(probe.available).toBe(true);
+    expect(probe.orchestrator?.model).toBe("grok-4.7-xhigh");
+    writeFileSync(join(ckHome, "squad-bridge.json"), `${JSON.stringify({ model: "auto" })}\n`);
+    const refused = probeSquadBridge(
+      isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }),
+    );
+    expect(refused.available).toBe(false);
+    expect(refused.reason).toMatch(/auto|拒绝/);
   });
 
   it("honors COUNCILKIT_SQUADCTL and COUNCILKIT_SQUAD_SKILL without a personal path constant", () => {

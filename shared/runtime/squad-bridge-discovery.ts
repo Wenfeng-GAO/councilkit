@@ -1,8 +1,14 @@
 import { constants, accessSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import { resolveCouncilkitHome } from "./cli-home";
 import { userCliBinDirs, vendorDriverBinDirs, vendorHome } from "./driver-bins";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "./squad-bridge-contract";
+import {
+  type SquadBridgeFile,
+  type SquadOrchestratorRuntime,
+  readSquadBridgeFile,
+  resolveRepairRoles,
+  runtimeOfExecutable,
+} from "./squad-repair-runtime";
 
 const REQUIRED_MARKERS = [
   "init",
@@ -17,7 +23,7 @@ const REQUIRED_MARKERS = [
 const SKILL_LAYOUT_NAMES = ["hengzhuo-engineering-squad"] as const;
 
 export interface SquadBridgeOrchestratorProbe {
-  requestedRuntime: "grokb" | "grok";
+  requestedRuntime: SquadOrchestratorRuntime;
   actualRuntime: string | null;
   model: string | null;
   nativeSession: string | null;
@@ -42,7 +48,9 @@ export function discoverSquadBridge(env: NodeJS.ProcessEnv = process.env): Squad
 
 export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBridgeProbe {
   const home = vendorHome(env);
-  const config = readBridgeConfig(env);
+  const loaded = readSquadBridgeFile(env);
+  if (loaded.reason) return unavailable(loaded.reason);
+  const config = loaded.file;
   const explicitExe = firstPath([env.COUNCILKIT_SQUADCTL, env.SQUADCTL, config.executable]);
   if (explicitExe) {
     if (!isExecutableFile(explicitExe)) {
@@ -61,6 +69,10 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
   if (explicitGrokb && !isExecutableFile(explicitGrokb)) {
     return unavailable("COUNCILKIT_GROKB 指向的文件不可执行，已停止继续扫描。");
   }
+  const explicitCursor = firstPath([env.COUNCILKIT_CURSOR, config.cursor]);
+  if (explicitCursor && !isExecutableFile(explicitCursor)) {
+    return unavailable("COUNCILKIT_CURSOR 指向的文件不可执行，已停止继续扫描。");
+  }
   const located = locateSquadctl(env, home, config, explicitExe);
   const executable = located.executable;
   const skillDir = resolveSkillDir(
@@ -70,8 +82,6 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
     executable ?? located.unexecutable,
     explicitSkill,
   );
-  const grokb = resolveOrchestratorExecutable(env, home, explicitGrokb);
-
   if (executable === null && located.unexecutable) {
     return unavailable("发现到的 squadctl 文件存在但不可执行。");
   }
@@ -90,12 +100,8 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
   if (missing.length > 0) {
     return unavailable(`已安装的 squadctl skill 未声明 ${missing.join("、")}，不能当作 Squad 桥。`);
   }
-  if (grokb === null) {
-    return unavailable(
-      "独立 Orchestrator 需要 grokb 或 grok，当前未找到。请安装 grokb，或设置 COUNCILKIT_GROKB。",
-    );
-  }
-  const requestedRuntime = grokb.endsWith("grokb") || grokb.endsWith("/grokb") ? "grokb" : "grok";
+  const orchestrator = selectOrchestrator(env, home, config, explicitCursor, explicitGrokb);
+  if (!orchestrator.ok) return unavailable(orchestrator.reason);
   return {
     available: true,
     version: SQUAD_BRIDGE_CONTRACT_VERSION,
@@ -106,13 +112,34 @@ export function probeSquadBridge(env: NodeJS.ProcessEnv = process.env): SquadBri
     capabilities: [...REQUIRED_MARKERS],
     historyContract: null,
     orchestrator: {
-      requestedRuntime,
+      requestedRuntime: orchestrator.runtime,
       actualRuntime: null,
-      model: null,
+      model: orchestrator.model,
       nativeSession: null,
-      executable: grokb,
+      executable: orchestrator.executable,
     },
   };
+}
+
+export function findOrchestratorExecutable(
+  env: NodeJS.ProcessEnv,
+  runtime: SquadOrchestratorRuntime,
+): string | null {
+  const home = vendorHome(env);
+  const config = readSquadBridgeFile(env).file;
+  if (runtime === "cursor") {
+    const explicit = firstPath([env.COUNCILKIT_CURSOR, config.cursor]);
+    if (explicit) return isExecutableFile(explicit) ? explicit : null;
+    return (
+      findOnPath("cursor-agent", env) ?? findInDirs("cursor-agent", wellKnownBinDirs(home, env))
+    );
+  }
+  const explicit = firstPath([env.COUNCILKIT_GROKB, config.grokb]);
+  if (explicit) return isExecutableFile(explicit) ? explicit : null;
+  const grokb = findOnPath("grokb", env) ?? findInDirs("grokb", wellKnownBinDirs(home, env));
+  const grok = findOnPath("grok", env) ?? findInDirs("grok", wellKnownBinDirs(home, env));
+  if (runtime === "grok") return grok ?? grokb;
+  return grokb ?? grok;
 }
 
 function unavailable(reason: string): SquadBridgeProbe {
@@ -147,15 +174,60 @@ function resolveSkillDir(
   return null;
 }
 
-function resolveOrchestratorExecutable(
+function selectOrchestrator(
   env: NodeJS.ProcessEnv,
   home: string,
-  explicit: string | null,
-): string | null {
-  if (explicit) return isExecutableFile(explicit) ? explicit : null;
-  const grokb = findOnPath("grokb", env) ?? findInDirs("grokb", wellKnownBinDirs(home, env));
-  if (grokb) return grokb;
-  return findOnPath("grok", env) ?? findInDirs("grok", wellKnownBinDirs(home, env));
+  config: BridgeConfig,
+  explicitCursor: string | null,
+  explicitGrokb: string | null,
+):
+  | { ok: true; runtime: SquadOrchestratorRuntime; executable: string; model: string }
+  | { ok: false; reason: string } {
+  const configured = configuredRuntime(env, config);
+  if (configured === "invalid") {
+    return {
+      ok: false,
+      reason:
+        "COUNCILKIT_ORCHESTRATOR_RUNTIME / squad-bridge.json orchestratorRuntime 只能是 cursor、grokb 或 grok。",
+    };
+  }
+  const runtime: SquadOrchestratorRuntime =
+    configured ?? (explicitCursor ? "cursor" : explicitGrokb ? "grokb" : "cursor");
+  const executable =
+    runtime === "cursor"
+      ? (explicitCursor ??
+        findOnPath("cursor-agent", env) ??
+        findInDirs("cursor-agent", wellKnownBinDirs(home, env)))
+      : findOrchestratorExecutable(env, runtime);
+  if (!executable) {
+    return {
+      ok: false,
+      reason:
+        runtime === "cursor"
+          ? "独立 Orchestrator 需要 cursor-agent，当前未找到。已拒绝回退到 grokb、grok、Codex 或 auto。请安装 cursor-agent，或设置 COUNCILKIT_CURSOR。若要回滚到 Grok，把 orchestratorRuntime 设为 grokb。"
+          : "已选择 Grok Orchestrator，但未找到 grokb 或 grok。不会改用 Cursor。",
+    };
+  }
+  const resolved = resolveRepairRoles({
+    orchestratorRuntime: runtime,
+    cursorModel: env.COUNCILKIT_CURSOR_MODEL ?? config.model,
+    roles: config.roles,
+  });
+  if (!resolved.ok) return resolved;
+  const found = runtimeOfExecutable(executable);
+  const requestedRuntime: SquadOrchestratorRuntime =
+    runtime === "cursor" ? "cursor" : found === "grok" ? "grok" : "grokb";
+  return { ok: true, runtime: requestedRuntime, executable, model: resolved.orchestratorModel };
+}
+
+function configuredRuntime(
+  env: NodeJS.ProcessEnv,
+  config: BridgeConfig,
+): SquadOrchestratorRuntime | "invalid" | null {
+  const raw = (env.COUNCILKIT_ORCHESTRATOR_RUNTIME ?? config.orchestratorRuntime)?.trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === "cursor" || raw === "grokb" || raw === "grok") return raw;
+  return "invalid";
 }
 
 function namedSkill(path: string): boolean {
@@ -236,28 +308,7 @@ function isSkillDir(path: string): boolean {
   return isFile(join(path, "SKILL.md")) && isFile(join(path, "references", "squadctl.md"));
 }
 
-interface BridgeConfig {
-  executable?: string;
-  skillDir?: string;
-  grokb?: string;
-}
-
-function readBridgeConfig(env: NodeJS.ProcessEnv): BridgeConfig {
-  const home = resolveCouncilkitHome(env);
-  try {
-    const raw = readFileSync(join(home, "squad-bridge.json"), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const row = parsed as Record<string, unknown>;
-    return {
-      executable: typeof row.executable === "string" ? row.executable : undefined,
-      skillDir: typeof row.skillDir === "string" ? row.skillDir : undefined,
-      grokb: typeof row.grokb === "string" ? row.grokb : undefined,
-    };
-  } catch {
-    return {};
-  }
-}
+type BridgeConfig = SquadBridgeFile;
 
 function resolvePath(value: string): string {
   return isAbsolute(value) ? value : resolve(value);

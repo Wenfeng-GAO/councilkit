@@ -26,6 +26,7 @@ import { EXIT, errors } from "../errors";
 import type { OutputSink } from "../output";
 import { resolvePaths } from "../store/paths";
 import { parseFlags, parseIntFlag, parseTimeoutMs } from "./parse";
+import { runRepairRoles } from "./repair-roles";
 
 export class RepairExit {
   constructor(readonly exitCode: number) {}
@@ -41,7 +42,7 @@ export interface RepairCommandDeps extends RepairLoopDeps {
   isPidAlive?: (pid: number) => boolean;
 }
 
-const SUBCOMMANDS = "export|run|status|stop|resume|probe|supervise-deadline";
+const SUBCOMMANDS = "export|run|status|stop|resume|probe|supervise-deadline|roles";
 
 /** `repair export` plus parent-run bootstrap. Unit 4 does not run the outer loop. */
 export async function runRepair(
@@ -57,6 +58,7 @@ export async function runRepair(
   if (sub === "resume") return runRepairResume(argv.slice(1), out, deps);
   if (sub === "probe") return runRepairProbe(argv.slice(1), out);
   if (sub === "supervise-deadline") return runRepairSuperviseDeadline(argv.slice(1), out);
+  if (sub === "roles") return runRepairRoles(argv.slice(1), out);
   throw errors.usage(
     sub === undefined
       ? `repair requires a subcommand: ${SUBCOMMANDS}`
