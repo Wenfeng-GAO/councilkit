@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AttemptSpec,
+  CURSOR_PROBE_TIMEOUT_MS,
   DRIVER_PROBE_PROMPT,
   DriverActivityCollector,
   FinalEventLineCollector,
@@ -548,6 +549,11 @@ describe("cli auto driver-commands", () => {
       expect(probeTimeoutMs("grok-stream-json")).toBe(GROK_PROBE_TIMEOUT_MS);
       expect(probeTimeoutMs("kimi-stream-json")).toBe(60_000);
       expect(probeTimeoutMs("kimi-stream-json", 90_000)).toBe(90_000);
+    });
+
+    it("cursor probes use a 2-minute budget", () => {
+      expect(probeTimeoutMs("cursor-stream-json")).toBe(CURSOR_PROBE_TIMEOUT_MS);
+      expect(probeTimeoutMs("cursor-stream-json", 150_000)).toBe(150_000);
     });
 
     it("grok spawn env keeps an existing HTTPS_PROXY", () => {

@@ -127,6 +127,14 @@ export const ISOLATED_GROK_CONFIG =
 export const DEFAULT_PROBE_TIMEOUT_MS = 60_000;
 /** grok 1.0 headless still bootstraps a full session; 60s false-negatives a live backend. */
 export const GROK_PROBE_TIMEOUT_MS = 180_000;
+/**
+ * cursor-agent cold start (rg indexing + ~17k-token system prompt + backend
+ * latency) measured ~22s solo and can exceed 60s under probe concurrency;
+ * 2026-09-23 run ck-review-53ef155e false-failed DRIVER_UNREACHABLE on a
+ * transient stall and cancelled 3 healthy seats. 120s per attempt (the
+ * TIMEOUT-retry-once in review.ts applies on top) matches grok's tolerance.
+ */
+export const CURSOR_PROBE_TIMEOUT_MS = 120_000;
 /** Native-session capture budget for Grok orchestrator spawn. Same bound as probe. */
 export const GROK_SESSION_WAIT_MS = GROK_PROBE_TIMEOUT_MS;
 /**
@@ -141,6 +149,7 @@ export function probeTimeoutMs(
   fallback: number = DEFAULT_PROBE_TIMEOUT_MS,
 ): number {
   if (driverId === "grok-stream-json") return Math.max(GROK_PROBE_TIMEOUT_MS, fallback);
+  if (driverId === "cursor-stream-json") return Math.max(CURSOR_PROBE_TIMEOUT_MS, fallback);
   return fallback;
 }
 
