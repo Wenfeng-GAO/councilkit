@@ -7,6 +7,7 @@ import {
   filterOperations,
   resolveAttentionCopy,
 } from "@shared/runtime/repair-observation";
+import { phaseName, relativeTime } from "./presentation";
 
 export type RepairViewModel = {
   goalText: string;
@@ -35,7 +36,9 @@ export function buildRepairViewModel(input: {
     return {
       goalText: REPAIR_OBS_COPY.goalMissing,
       phaseText: "—",
-      attention: input.connectionLost ? REPAIR_OBS_COPY.connectionLost : REPAIR_OBS_COPY.waitingFirst,
+      attention: input.connectionLost
+        ? REPAIR_OBS_COPY.connectionLost
+        : REPAIR_OBS_COPY.waitingFirst,
       lastActivityLabel: "未记录",
       processLabel: REPAIR_OBS_COPY.processUnknown,
       connectionLabel: input.connectionLost ? REPAIR_OBS_COPY.connectionLost : "已连接",
@@ -71,21 +74,26 @@ export function buildRepairViewModel(input: {
   const gateDisplay =
     obs.task.reasonCode === "candidate_ready_awaiting_gate" && obs.task.businessResult == null
       ? "candidate_pending"
-      : input.evidenceGateConsistent === false
+      : input.evidenceGateConsistent === false && obs.task.businessResult === "approved"
         ? "conflict"
         : judged.display;
-  const attention = resolveAttentionCopy({
-    connectionLost: input.connectionLost,
-    display: gateDisplay,
-    silence,
-    emptyActive,
-    stopAckPending:
-      obs.task.businessResult === "stopped"
-        ? false
-        : input.stopAckPending || Boolean(obs.task.stopAckPending),
-  });
+  const attention =
+    obs.task.businessResult === "approved" && input.evidenceGateConsistent === undefined
+      ? "正在核对准出证据"
+      : resolveAttentionCopy({
+          connectionLost: input.connectionLost,
+          display: gateDisplay,
+          silence,
+          emptyActive,
+          reasonCode: obs.task.reasonCode,
+          stopAckPending:
+            obs.task.businessResult === "stopped"
+              ? false
+              : input.stopAckPending || Boolean(obs.task.stopAckPending),
+        });
 
-  const isHistorical = input.selectedRound !== "current" && input.selectedRound !== obs.currentRound;
+  const isHistorical =
+    input.selectedRound !== "current" && input.selectedRound !== obs.currentRound;
   const canStop =
     !isHistorical &&
     !input.connectionLost &&
@@ -94,14 +102,15 @@ export function buildRepairViewModel(input: {
   const canResume =
     !isHistorical &&
     !input.connectionLost &&
+    obs.task.businessResult === "needs_attention" &&
     obs.task.resumeEligible === true &&
-    obs.task.process.state !== "unknown";
+    obs.task.process.state !== "alive";
 
   return {
     goalText: obs.task.goalSummary?.trim() || REPAIR_OBS_COPY.goalMissing,
-    phaseText: obs.task.phase ?? "—",
+    phaseText: phaseName(obs.task.phase),
     attention,
-    lastActivityLabel: obs.task.lastActivityAt ?? "未记录",
+    lastActivityLabel: relativeTime(obs.task.lastActivityAt, obs.serverTime),
     processLabel:
       obs.task.process.state === "alive"
         ? "进程仍在线"

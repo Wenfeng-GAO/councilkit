@@ -105,6 +105,7 @@ export function primaryRunStatus(run: {
     followUpRunId?: string | null;
   } | null;
   ideateIntegrity?: { incomplete: boolean } | null;
+  businessResult?: "approved" | "needs_attention" | "stopped" | null;
 }): { tone: "muted" | "info" | "success" | "error" | "warn"; text: string } {
   if (run.pipeline?.applyStatus === "failure") {
     const reReviewFailed =
@@ -131,6 +132,12 @@ export function primaryRunStatus(run: {
   }
   if (run.kind === "ideate" && run.ideateIntegrity?.incomplete && run.status === "completed") {
     return { tone: "warn", text: "降级" };
+  }
+  // Repair dual axis: execution finished is not business success. A repair
+  // whose run completed but still needs a human decision never shows 已完成.
+  if (run.kind === "repair" && run.status === "completed") {
+    if (run.businessResult === "needs_attention") return { tone: "warn", text: "需要处理" };
+    if (run.businessResult === "stopped") return { tone: "warn", text: "已停止" };
   }
   return cliRunStatusPill(run.kind, run.status);
 }

@@ -16,7 +16,7 @@ import {
 } from "./helpers";
 import { textProgress } from "./fixtures/cursor-events";
 
-test.describe.configure({ mode: "serial" });
+test.describe.configure({ mode: "default" });
 
 test.beforeEach(async ({ page }) => {
   await installOriginAllowlist(page);
@@ -174,7 +174,11 @@ test("[E31] @p0 stop ack is not stopped until controller terminal", async ({ pag
   await page.getByTestId("repair-stop-confirm").click();
   await expectChinese(page, "停止中，等待执行确认");
   await expect(page.getByText("已停止")).toHaveCount(0);
-  await finishCase(page, { businessResult: "stopped", reasonCode: "user_stop", status: "completed" });
+  await finishCase(page, {
+    businessResult: "stopped",
+    reasonCode: "user_stop",
+    status: "completed",
+  });
   await expectChinese(page, "已停止");
 });
 
@@ -186,7 +190,7 @@ test("[E32] @p0 stop failure does not claim success", async ({ page }) => {
   });
   await page.getByTestId("repair-stop").click();
   await page.getByTestId("repair-stop-confirm").click();
-  await expect(page.getByText(/失败|待确认|不确定/)).toBeVisible();
+  await expect(page.getByTestId("repair-action-error")).toHaveText("停止失败，结果待确认");
   await expect(page.getByText("已停止")).toHaveCount(0);
 });
 
@@ -195,8 +199,8 @@ test("[E33] @p0 historical round is readonly", async ({ page }) => {
   await openRepairWorkspace(page);
   await page.getByTestId("repair-round-select").selectOption({ value: "1" });
   await expect(page.getByTestId("repair-history-banner")).toBeVisible();
-  await expect(page.getByTestId("repair-stop")).toBeDisabled();
-  await expect(page.getByTestId("repair-resume")).toBeDisabled();
+  await expect(page.getByTestId("repair-stop")).toHaveCount(0);
+  await expect(page.getByTestId("repair-resume")).toHaveCount(0);
   await expect(page.getByTestId("repair-activity-list")).toContainText(/round1|archived|历史/);
 });
 
@@ -244,15 +248,18 @@ test("[E38] @p0 approved conflicting evidence", async ({ page }) => {
   await boot(page, "F6b");
   await openRepairWorkspace(page);
   await expectChinese(page, "状态与证据不一致");
-  await expect(page.locator(".text-green-500, [data-tone='success']").filter({ hasText: /已准出/ })).toHaveCount(0);
+  await expect(
+    page.locator(".text-green-500, [data-tone='success']").filter({ hasText: /已准出/ }),
+  ).toHaveCount(0);
 });
 
 test("[E39] @p0 budget remaining without fake token zero", async ({ page }) => {
   await boot(page, "F1");
   await openRepairWorkspace(page);
-  await expect(page.getByTestId("repair-workspace")).toContainText(/剩余\s*1|1\s*\/\s*3|还剩\s*1/);
+  await expect(page.getByTestId("repair-budget")).toHaveText(/剩余派工\s*1\s*次/);
   await expect(page.getByText(/0\s*消耗|估算.*%/)).toHaveCount(0);
-  await expect(page.getByText(/500K|上下文/)).toBeVisible();
+  await page.getByRole("button", { name: "运行详情", exact: true }).click();
+  await expect(page.getByTestId("repair-run-details")).toContainText("暂无完整用量");
 });
 
 test("[E68] @p0 terminal state drains final log before observationDone", async ({ page }) => {
@@ -265,7 +272,9 @@ test("[E68] @p0 terminal state drains final log before observationDone", async (
     appendFinalLog: false,
   });
   // Still observing until drain
-  await appendLines(page, [textProgress("终态后最后一条完整日志", { at: "2026-09-22T06:10:00.000Z" })]);
+  await appendLines(page, [
+    textProgress("终态后最后一条完整日志", { at: "2026-09-22T06:10:00.000Z" }),
+  ]);
   await expect(page.getByTestId("repair-activity-list")).toContainText("终态后最后一条完整日志", {
     timeout: 10_000,
   });

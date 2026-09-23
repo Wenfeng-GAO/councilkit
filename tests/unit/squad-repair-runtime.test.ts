@@ -40,6 +40,13 @@ describe("cursor repair model pin", () => {
     expect(cursorRepairModelReceiptMatches("Grok 4.7 500K Extra High Fast")).toBe(false);
     expect(cursorRepairModelReceiptMatches("auto")).toBe(false);
     expect(repairModelReceiptMatches("grok-4.7-xhigh", "Grok 4.7 Extra High")).toBe(true);
+    expect(repairModelReceiptMatches("grok-4.7-xhigh", "Grok 4.7 256K Extra High")).toBe(true);
+    expect(repairModelReceiptMatches("grok-4.7-xhigh", "Grok 4.7  Extra High")).toBe(true);
+    expect(repairModelReceiptMatches("grok-4.7-xhigh", "Grok 4.7 256K High")).toBe(false);
+    expect(repairModelReceiptMatches("grok-4.7-xhigh", "Grok 4.7 256K Extra High Fast")).toBe(
+      false,
+    );
+    expect(repairModelReceiptMatches(CURSOR_REPAIR_MODEL, "Grok 4.7 256K Extra High")).toBe(false);
     expect(repairModelReceiptMatches("grok-4.7-xhigh", "Grok 4.7 500K Extra High")).toBe(false);
     expect(repairModelReceiptMatches("composer-2.5", "Composer 2.5")).toBe(true);
     expect(repairModelReceiptMatches("composer-2.5", "Grok 4.7 500K Extra High")).toBe(false);

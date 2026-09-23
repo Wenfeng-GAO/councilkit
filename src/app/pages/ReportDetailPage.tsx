@@ -275,6 +275,37 @@ export function ReportDetailPage() {
     );
   }
 
+  if (query.data?.kind === "repair") {
+    return (
+      <AppShell>
+        <div className="ck-repair-page">
+          <nav className="ck-repair-breadcrumb" aria-label="当前位置">
+            <Link to="/reports">← 报告</Link>
+            <span>/</span>
+            <span>自动修复</span>
+            {query.data.sourceRunId ? (
+              <Link className="ck-repair-baseline-link" to={`/reports/${query.data.sourceRunId}`}>
+                查看源审查 ↗
+              </Link>
+            ) : null}
+          </nav>
+          <RepairWorkspace
+            key={`repair-workspace:${query.data.runId}`}
+            runId={query.data.runId}
+            sourceRunId={query.data.sourceRunId}
+            stopPending={repairMutation.isPending}
+            onStop={async () => {
+              await repairMutation.mutateAsync({ kind: "stop" });
+            }}
+            onResume={async () => {
+              await repairMutation.mutateAsync({ kind: "resume" });
+            }}
+          />
+        </div>
+      </AppShell>
+    );
+  }
+
   return (
     <AppShell>
       <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-8 sm:px-8">
@@ -358,20 +389,6 @@ export function ReportDetailPage() {
                 key={`workspace:${query.data.runId}`}
                 run={query.data}
                 onInspect={setInspectId}
-              />
-            ) : null}
-            {query.data.kind === "repair" ? (
-              <RepairWorkspace
-                key={`repair-workspace:${query.data.runId}`}
-                runId={query.data.runId}
-                sourceRunId={query.data.sourceRunId}
-                stopPending={repairMutation.isPending}
-                onStop={async () => {
-                  await repairMutation.mutateAsync({ kind: "stop" });
-                }}
-                onResume={async () => {
-                  await repairMutation.mutateAsync({ kind: "resume" });
-                }}
               />
             ) : null}
             {!isSquad && showSeats && query.data.progress ? (

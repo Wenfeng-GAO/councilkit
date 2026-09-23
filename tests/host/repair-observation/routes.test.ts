@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairObservationRoutes } from "@host/repair-observation/routes";
 import type { HostServices, RouteContext } from "@host/server";
+import type { RepairObservation } from "@shared/runtime/repair-observation";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const RUN_ID = "ck-repair-00000000-0000-4000-8000-000000000128";
@@ -105,6 +106,109 @@ function ctx(query: Record<string, string>, params: Record<string, string> = { r
 }
 
 describe("host repair observation routes (no listen)", () => {
+  async function observe() {
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    return (await route.handler(ctx({ round: "current" }))) as RepairObservation;
+  }
+
+  function patchRun(patch: Record<string, unknown>) {
+    const path = join(home, "runs", RUN_ID, "repair.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), ...patch }));
+  }
+
+  function writeMeta(meta: Record<string, unknown>) {
+    writeFileSync(join(home, "squad-tasks", "task-1", "adapter-meta.json"), JSON.stringify(meta));
+  }
+
+  it("does not portray a failed repair with only an intent and unfinished tool as active or exited", async () => {
+    patchRun({
+      businessResult: "needs_attention",
+      reasonCode: "squad_failed",
+      candidateSha: null,
+      executions: [{ kind: "source_fix", state: "intent", pids: [], startedAtMs: null, endedAtMs: null }],
+    });
+    writeMeta({
+      checkedAt: "2026-09-22T06:00:02Z",
+      roles: [{ roleKey: "builder", status: "active", planned: true }],
+    });
+    writeFileSync(join(home, "squad-tasks", "task-1", "orchestrator.log"), `${JSON.stringify({
+      type: "tool.started", callId: "old", name: "shell", role: "coder", at: "2026-09-22T05:00:00Z",
+    })}\n`);
+    const data = await observe();
+    expect(data.task).toMatchObject({ businessResult: "needs_attention", reasonCode: "squad_failed", phase: "active" });
+    expect(data.task.process.state).toBe("unknown");
+    expect(data.upserts[0]?.status).toBe("unfinished");
+    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
+  });
+
+  it.each(["completed", "failed", "unfinished"])("does not upgrade a %s tool record to a role outcome", async (status) => {
+    writeMeta({ roles: [{ roleKey: "builder", status: "active", planned: true }] });
+    writeFileSync(join(home, "squad-tasks", "task-1", "orchestrator.log"), `${JSON.stringify({
+      type: "tool", callId: "tool-1", name: "shell", role: "coder", status, at: "2026-09-22T06:00:01Z",
+    })}\n`);
+    const data = await observe();
+    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
+  });
+
+  it("does not infer activity from the existence of empty source files", async () => {
+    writeMeta({});
+    writeFileSync(join(home, "squad-tasks", "task-1", "orchestrator.log"), "");
+    const data = await observe();
+    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
+  });
+
+  it.each(["intent", "running"])("does not treat a %s journal entry as heartbeat evidence", async (state) => {
+    patchRun({
+      executions: [{ kind: "source_fix", state, pids: [1234], startedAtMs: Date.parse("2026-09-22T06:00:02Z"), endedAtMs: null }],
+    });
+    writeMeta({
+      executionRef: "squad:task-1#1.1", pid: 1234, startKey: "start-abc", checkedAt: "2026-09-22T06:00:02Z",
+    });
+    expect((await observe()).task.process.state).toBe("unknown");
+  });
+
+  it("keeps explicit role outcomes and fresh liveness when the business result is terminal", async () => {
+    patchRun({ businessResult: "needs_attention", reasonCode: "squad_failed" });
+    writeMeta({
+      executionRef: "squad:task-1#1.1", pid: 1234, startKey: "start-abc",
+      checkedAt: "2026-09-22T06:00:02Z", alive: true,
+      roles: [
+        { roleKey: "builder", status: "ended", planned: true },
+        { roleKey: "reviewer", status: "failed", planned: true },
+      ],
+    });
+    const data = await observe();
+    expect(data.task.process.state).toBe("alive");
+    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("ended");
+    expect(data.roles.find((r) => r.roleKey === "reviewer")?.status).toBe("failed");
+  });
+
+  it.each([true, false])("reads explicit nested process liveness=%s", async (alive) => {
+    writeMeta({
+      executionRef: "squad:task-1#1.1",
+      process: { pid: 1234, startKey: "start-abc", checkedAt: "2026-09-22T06:00:02Z", alive },
+    });
+    const data = await observe();
+    expect(data.task.process.state).toBe(alive ? "alive" : "exited");
+    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe(alive ? "active" : "unknown");
+  });
+
+  it("does not apply the builder's exit to independent review activity", async () => {
+    writeMeta({
+      executionRef: "squad:task-1#1.1", pid: 1234, startKey: "start-abc",
+      checkedAt: "2026-09-22T06:00:02Z", alive: false,
+      roles: [{ roleKey: "reviewer", status: "active", planned: true, executionRef: "reviewer#1.1" }],
+    });
+    writeFileSync(join(home, "squad-tasks", "task-1", "reviewer.jsonl"), `${JSON.stringify({
+      type: "tool.started", callId: "review-1", name: "shell", role: "reviewer", at: "2026-09-22T06:00:01Z",
+    })}\n`);
+    const data = await observe();
+    expect(data.task.process.state).toBe("exited");
+    expect(data.roles.find((r) => r.roleKey === "reviewer")?.status).toBe("active");
+  });
+
   it("exposes session auth on observation routes", () => {
     const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
     for (const route of routes) {

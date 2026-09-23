@@ -5,6 +5,9 @@ import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/ru
 import { normalizeReviewPr, summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 
+export type CaseStatusFilter = "attention" | "active" | "done" | "all";
+export type CaseKindFilter = "all" | "review" | "squad";
+
 export const OTHER_SQUADS_KEY = "__other-squads__";
 
 export interface RunGroup {
@@ -84,6 +87,116 @@ export function groupCliRuns(runs: readonly CliRunSummaryDto[]): RunGroup[] {
 
 export function latestRun(runs: readonly CliRunSummaryDto[]): CliRunSummaryDto | undefined {
   return sortRuns(runs)[0];
+}
+
+/**
+ * 案件类型范围：审查 = review 记录；工程班 = squad + repair 记录——
+ * 纯 repair 案件永远归工程班，不会凭空出现在审查清单里。
+ */
+export function runInKindScope(run: Pick<CliRunSummaryDto, "kind">, kind: CaseKindFilter): boolean {
+  if (kind === "all") return true;
+  if (kind === "review") return run.kind === "review";
+  return run.kind === "squad" || run.kind === "repair";
+}
+
+/** Repair 双轴：执行状态 completed 不等于业务过关，业务否决的 run 永远不算“已完成”。 */
+export function runBusinessNeedsAttention(
+  run: Pick<CliRunSummaryDto, "kind" | "status" | "businessResult">,
+): boolean {
+  return (
+    run.kind === "repair" &&
+    run.status !== "running" &&
+    (run.businessResult === "needs_attention" || run.businessResult === "stopped")
+  );
+}
+
+export interface CaseStatusAxis {
+  /** 代表 run 仍在执行（进行中/等待编排）。 */
+  active: boolean;
+  /** 执行轴：代表 run 干净收尾（含 repair 业务通过）。 */
+  done: boolean;
+  /** 业务轴：仍需人接手（进行中、失败/中断、repair 业务否决、blocking、需恢复）。 */
+  attention: boolean;
+}
+
+/**
+ * 案件状态以最新代表 run 判定：同一个 PR 的旧失败记录不污染新完成记录，
+ * 而已完成的 review 若仍有 blocking，会同时落在“已完成”与“需要处理”两条筛告里。
+ */
+export function caseStatusAxis(scopedRuns: readonly CliRunSummaryDto[]): CaseStatusAxis | null {
+  const representative = latestRun(scopedRuns);
+  if (!representative) return null;
+  const active = cliRunNeedsPoll(
+    representative.status,
+    representative.pipeline,
+    representative.kind,
+  );
+  const done =
+    !active &&
+    (representative.status === "completed" || representative.status === "closed") &&
+    representative.pipeline?.applyStatus !== "failure" &&
+    !runBusinessNeedsAttention(representative);
+  const summary = summarizePrCase(scopedRuns);
+  // 旧 review 的失败只在它仍是当前代表时才算需要恢复：更晚完成的
+  // squad/repair 已经接手并收尾，历史失败本身不能把案件拖回待处理。
+  const recoveryOnRepresentative =
+    summary.needsRecovery && summary.latest?.runId === representative.runId;
+  const attention = active || !done || (summary.blockingCount ?? 0) > 0 || recoveryOnRepresentative;
+  return { active, done, attention };
+}
+
+export function caseMatchesStatusFilter(
+  status: CaseStatusAxis | null,
+  filter: CaseStatusFilter,
+): boolean {
+  if (!status) return false;
+  if (filter === "all") return true;
+  if (filter === "active") return status.active;
+  if (filter === "done") return status.done;
+  return status.attention;
+}
+
+export interface CaseView {
+  key: string;
+  /** 原始分组标签（PR URL 或标题）。 */
+  label: string;
+  /** 案件全部记录（最新在前），用于历史展开。 */
+  runs: CliRunSummaryDto[];
+  /** 当前类型范围内的记录（最新在前）。 */
+  scopedRuns: CliRunSummaryDto[];
+  /** 类型范围内最新的代表记录，卡片标题、状态、跳转都以它为准。 */
+  representative: CliRunSummaryDto;
+  /** 范围内出现的类型标签（“审查”/“工程班”/…）。 */
+  kindLabels: string[];
+  /** 全量记录的搜索文本（搜索不因类型筛选而漏掉另一半记录）。 */
+  searchBlob: string;
+  status: CaseStatusAxis;
+}
+
+export function caseViewOf(group: RunGroup, kind: CaseKindFilter): CaseView | null {
+  const scopedRuns = group.runs.filter((run) => runInKindScope(run, kind));
+  const representative = latestRun(scopedRuns);
+  const status = caseStatusAxis(scopedRuns);
+  if (!representative || !status) return null;
+  const kindLabels = [
+    scopedRuns.some((run) => run.kind === "review") ? "审查" : null,
+    scopedRuns.some((run) => run.kind === "squad" || run.kind === "repair") ? "工程班" : null,
+    scopedRuns.some((run) => run.kind === "ideate") ? "创意" : null,
+    scopedRuns.some((run) => run.kind === "discuss") ? "讨论" : null,
+  ].filter((item): item is string => item !== null);
+  const searchBlob = `${readableCaseTitle(group.label)} ${group.label} ${group.runs
+    .map((run) => `${run.title} ${run.runId} ${run.reviewEvidence?.prUrl ?? ""}`)
+    .join(" ")}`;
+  return {
+    key: group.key,
+    label: group.label,
+    runs: group.runs,
+    scopedRuns,
+    representative,
+    kindLabels,
+    searchBlob: searchBlob.toLowerCase(),
+    status,
+  };
 }
 
 export function caseNeedsAttention(runs: readonly CliRunSummaryDto[]): boolean {

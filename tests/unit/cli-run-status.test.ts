@@ -99,6 +99,26 @@ describe("primaryRunStatus", () => {
       }),
     ).toEqual({ tone: "info", text: "正在汇总" });
   });
+  it("never says 已完成 for a repair whose business verdict is still open", () => {
+    expect(
+      primaryRunStatus({
+        kind: "repair",
+        status: "completed",
+        businessResult: "needs_attention",
+      }),
+    ).toEqual({ tone: "warn", text: "需要处理" });
+    expect(
+      primaryRunStatus({ kind: "repair", status: "completed", businessResult: "stopped" }),
+    ).toEqual({ tone: "warn", text: "已停止" });
+    // Legacy repairs without a repair.json verdict stay 已完成.
+    expect(primaryRunStatus({ kind: "repair", status: "completed" })).toEqual({
+      tone: "success",
+      text: "已完成",
+    });
+    expect(
+      primaryRunStatus({ kind: "repair", status: "completed", businessResult: "approved" }),
+    ).toEqual({ tone: "success", text: "已完成" });
+  });
 });
 
 describe("cliRunNeedsPoll", () => {

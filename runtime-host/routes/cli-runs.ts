@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { readArchivedRunIds } from "@shared/runtime/archived-runs";
 import {
   type AttemptLiveEvent,
   CLI_RUN_ATTEMPT_ID_RE,
@@ -92,7 +93,18 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
       pattern: "/api/v1/cli-runs",
       auth: "session",
       responseSchema: cliRunsListResponseSchema,
-      handler: (): CliRunsListResponse => ({ runs: listCliRuns(process.env) }),
+      // List view honors the operator's archived-runs.json marker set; the
+      // detail route below deliberately does not, so an archived run stays
+      // directly reachable by id.
+      handler: (): CliRunsListResponse => {
+        const archived = readArchivedRunIds(process.env);
+        return {
+          runs:
+            archived.size === 0
+              ? listCliRuns(process.env)
+              : listCliRuns(process.env).filter((run) => !archived.has(run.runId)),
+        };
+      },
     },
     {
       method: "POST",

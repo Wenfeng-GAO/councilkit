@@ -66,7 +66,6 @@ function tryWriteCache(env: NodeJS.ProcessEnv, key: string, value: unknown): voi
 
 function readProcessEvidence(
   sources: TrustedSource[],
-  state: ReturnType<typeof resolveTrustedSources>["state"],
 ): {
   evidence: {
     executionRef: string | null;
@@ -77,16 +76,16 @@ function readProcessEvidence(
   } | null;
   currentExecutionRef: string | null;
 } {
-  const currentExecutionRef = sources.find((s) => s.kind === "orchestrator_log")?.executionRef ?? null;
-  const exec = state?.executions?.find((e) => e.state === "running") ?? state?.executions?.at(-1);
+  const currentExecutionRef =
+    sources.find((s) => s.kind === "orchestrator_log" || s.kind === "adapter_meta")?.executionRef ?? null;
   const metaSource = sources.find((s) => s.kind === "adapter_meta");
-  if (!exec && !metaSource) {
+  if (!metaSource) {
     return { evidence: null, currentExecutionRef };
   }
   let startKey: string | null = null;
   let checkedAt: string | null = null;
-  let alive = exec?.state === "running";
-  let pid = exec?.pids[0] ?? null;
+  let alive: boolean | null = null;
+  let pid: number | null = null;
   let executionRef = currentExecutionRef;
   if (metaSource) {
     try {
@@ -100,6 +99,7 @@ function readProcessEvidence(
       if (typeof meta.checkedAt === "string") checkedAt = meta.checkedAt;
       else if (typeof nested?.checkedAt === "string") checkedAt = nested.checkedAt;
       if (typeof meta.alive === "boolean") alive = meta.alive;
+      else if (typeof nested?.alive === "boolean") alive = nested.alive;
       if (typeof meta.pid === "number") pid = meta.pid;
       else if (typeof nested?.pid === "number") pid = nested.pid;
       else if (typeof meta.orchestratorPid === "number") pid = meta.orchestratorPid;
@@ -109,12 +109,14 @@ function readProcessEvidence(
       // ignore
     }
   }
+  // An intent/running journal entry or adapter identity is not a heartbeat.
+  if (alive === null) return { evidence: null, currentExecutionRef };
   return {
     evidence: {
       executionRef,
       pid,
       startKey,
-      checkedAt: checkedAt ?? (exec?.startedAtMs ? new Date(exec.startedAtMs).toISOString() : null),
+      checkedAt,
       alive,
     },
     currentExecutionRef,
@@ -138,7 +140,7 @@ function plannedRoles(sources: TrustedSource[], adapterPath: string | null): Rep
       executionGroup: "builder",
       executionRef: sources.find((s) => executionGroupForRole(s.roleKey) === "builder")?.executionRef ?? null,
       planned: true,
-      status: "active",
+      status: "unknown",
       requestedModel: null,
       actualModel: null,
     });
@@ -152,7 +154,7 @@ function plannedRoles(sources: TrustedSource[], adapterPath: string | null): Rep
       executionGroup: executionGroupForRole(source.roleKey),
       executionRef: source.executionRef,
       planned: source.planned,
-      status: source.kind === "child_review_live" ? "active" : "pending",
+      status: "unknown",
       requestedModel: null,
       actualModel: null,
     });
@@ -282,7 +284,7 @@ export function createRepairObservationService(options: ObservationServiceOption
       }
     }
 
-    const { evidence, currentExecutionRef } = readProcessEvidence(resolved.sources, resolved.state);
+    const { evidence, currentExecutionRef } = readProcessEvidence(resolved.sources);
     const terminal = resolved.state?.businessResult !== null && resolved.state?.businessResult !== undefined;
     const process = deriveProcessState({
       authoritativeTerminal: Boolean(terminal),
@@ -301,16 +303,24 @@ export function createRepairObservationService(options: ObservationServiceOption
     const adapter = resolved.sources.find((s) => s.kind === "adapter_meta")?.path ?? null;
     const roles = plannedRoles(resolved.sources, adapter);
 
-    // Activity status from ops
+    // Preserve explicit role outcomes. Tool outcomes only describe that tool,
+    // and leftover starts do not prove a role is still executing after closure.
     for (const role of roles) {
+      if (role.status === "ended" || role.status === "failed") continue;
+      if (terminal || (role.executionGroup === "builder" && process.state === "exited")) {
+        role.status = "unknown";
+        continue;
+      }
       const roleOps = upserts.filter(
         (op) => op.roleKey === role.roleKey || executionGroupForRole(op.roleKey) === role.executionGroup,
       );
-      if (roleOps.some((op) => op.status === "failed")) role.status = "failed";
-      else if (roleOps.some((op) => op.status === "started" || op.status === "unfinished")) role.status = "active";
-      else if (roleOps.length > 0 && roleOps.every((op) => op.status === "completed" || op.status === "failed")) {
-        role.status = "ended";
-      }
+      role.status =
+        (role.executionGroup === "builder" && process.state === "alive") ||
+        roleOps.some((op) => op.status === "started")
+          ? "active"
+          : role.status === "pending"
+            ? "pending"
+            : "unknown";
     }
 
     const parentTerminal = terminal || false;

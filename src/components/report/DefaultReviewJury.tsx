@@ -1,5 +1,6 @@
 import { CLAUDE_ROUTE_LABELS } from "@/components/settings/view-model";
 import { Select } from "@/components/ui/Select";
+import { isAutomaticCursorModel, unavailableCursorSeats } from "@/lib/jury-model-validation";
 import { driverLabel, isPersonaSeat, reviewSeatTitle } from "@/lib/seat-label";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
@@ -57,7 +58,13 @@ export function DefaultReviewJury({
   const installations = useQuery({
     queryKey: ["host", "installations"],
     queryFn: () => client.listInstallations(),
-    enabled: draft !== null,
+    enabled:
+      draft !== null ||
+      (query.data?.seats ?? []).some(
+        (seat) =>
+          seat.driverSelection.driverId === "cursor-stream-json" &&
+          !isAutomaticCursorModel(seat.modelId),
+      ),
     retry: false,
   });
   const save = useMutation({
@@ -70,6 +77,40 @@ export function DefaultReviewJury({
   });
   const data = query.data;
   const seats = draft?.seats ?? data?.seats ?? [];
+  const hasPinnedCursor = seats.some(
+    (seat) =>
+      seat.driverSelection.driverId === "cursor-stream-json" &&
+      !isAutomaticCursorModel(seat.modelId),
+  );
+  const cursorInstallation = installations.data?.installations.find(
+    (item) => item.driverId === "cursor-stream-json" && item.state === "trusted",
+  );
+  const cursorCatalog = useQuery({
+    queryKey: [
+      "jury-model-catalog",
+      "cursor-stream-json",
+      cursorInstallation?.installationId,
+      undefined,
+    ],
+    queryFn: () =>
+      client.modelCatalog("cursor-stream-json", cursorInstallation?.installationId ?? ""),
+    enabled: hasPinnedCursor && !!cursorInstallation,
+    retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const invalidCursor = cursorCatalog.isSuccess
+    ? unavailableCursorSeats(seats, cursorCatalog.data.catalog)
+    : [];
+  const cursorProblem = !hasPinnedCursor
+    ? null
+    : installations.isPending || (cursorInstallation && cursorCatalog.isPending)
+      ? "正在核对 Cursor 实时模型目录…"
+      : !cursorInstallation || cursorCatalog.isError
+        ? "无法核对 Cursor 模型目录，请刷新后重试。"
+        : invalidCursor.length > 0
+          ? `Cursor 模型已不可用：${invalidCursor.map((seat) => seat.modelId).join("、")}。请打开「调整席位」，从实时目录重新选择；不会自动更换模型或上下文容量。`
+          : null;
   const reporter = draft?.reporterAgentId ?? data?.reporterAgentId;
   const reporterAgent = data?.agents.find((agent) => agent.agentId === reporter);
   const reporterSeat = seats.find((seat) => seat.agentId === reporter);
@@ -87,10 +128,10 @@ export function DefaultReviewJury({
           : "正在读取默认席位";
   useEffect(() => {
     onStatusChange({
-      ready: !!data && !query.isError && !draft && !save.isPending,
-      summary: draft ? "请先保存或取消席位调整" : summary,
+      ready: !!data && !query.isError && !draft && !save.isPending && !cursorProblem,
+      summary: draft ? "请先保存或取消席位调整" : (cursorProblem ?? summary),
     });
-  }, [data, draft, query.isError, save.isPending, summary, onStatusChange]);
+  }, [data, draft, query.isError, save.isPending, summary, cursorProblem, onStatusChange]);
   const editSeat = (index: number, next: ReviewJurySeat) =>
     setDraft((current) =>
       current
@@ -141,6 +182,22 @@ export function DefaultReviewJury({
           </div>
         ) : null}
       </div>
+      {cursorProblem ? (
+        <output className="ck-jury-error">
+          {cursorProblem}
+          <button
+            type="button"
+            className="ck-text-button"
+            disabled={locked || installations.isFetching || cursorCatalog.isFetching}
+            onClick={() => {
+              if (cursorInstallation) void cursorCatalog.refetch();
+              else void installations.refetch();
+            }}
+          >
+            刷新目录
+          </button>
+        </output>
+      ) : null}
       {query.isPending ? (
         <output className="ck-model-message">正在读取 pr-jury 默认席位…</output>
       ) : null}
@@ -288,7 +345,9 @@ export function DefaultReviewJury({
                 <button
                   type="button"
                   className="ck-jury-save"
-                  disabled={locked || !reviewJuryUpdateSchema.safeParse(draft).success}
+                  disabled={
+                    locked || !!cursorProblem || !reviewJuryUpdateSchema.safeParse(draft).success
+                  }
                   onClick={() => save.mutate(draft)}
                 >
                   {save.isPending ? "正在保存…" : "保存默认席位"}
@@ -347,6 +406,7 @@ function SeatModelFields({
     .map((agent) => agent.modelId);
   const models = [
     ...new Set([
+      ...(driverId === "claude-stream-json" && route === "cfuse" ? ["auto"] : []),
       ...(catalog.data?.catalog ?? []),
       ...(driverId === "codex-app-server" ? data.codexModels : []),
       ...known,
@@ -366,7 +426,7 @@ function SeatModelFields({
           const next = event.target.value as DriverId;
           onChange({
             ...seat,
-            modelId: "",
+            modelId: next === "claude-stream-json" ? "auto" : "",
             driverSelection:
               next === "claude-stream-json"
                 ? { driverId: next, options: { route: "cfuse" } }
@@ -384,7 +444,7 @@ function SeatModelFields({
           onChange={(event) =>
             onChange({
               ...seat,
-              modelId: "",
+              modelId: event.target.value === "cfuse" ? "auto" : "",
               driverSelection: { driverId, options: { route: event.target.value as ClaudeRoute } },
             })
           }
@@ -400,7 +460,18 @@ function SeatModelFields({
             value: "",
             label: catalog.isFetching && models.length === 0 ? "正在读取模型…" : "选择模型",
           },
-          ...models.map((value) => ({ value, label: value })),
+          ...models.map((value) => ({
+            value,
+            label:
+              driverId === "claude-stream-json" && route === "cfuse" && value === "auto"
+                ? "auto（跟随 cfuse 当前默认配置）"
+                : driverId === "cursor-stream-json" &&
+                    catalog.isSuccess &&
+                    unavailableCursorSeats([{ ...seat, modelId: value }], catalog.data.catalog)
+                      .length > 0
+                  ? `${value}（已不在实时目录）`
+                  : value,
+          })),
         ]}
         onChange={(event) => onChange({ ...seat, modelId: event.target.value })}
       />
