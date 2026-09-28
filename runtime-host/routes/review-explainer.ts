@@ -11,11 +11,38 @@ import {
 import { buildRepairPackageFromSelection } from "@shared/runtime/review-explainer/repair-selection";
 import { z } from "zod";
 import { reviewComparison } from "../review-explainer/comparison";
-import { createExplanationService } from "../review-explainer/explanations";
+import {
+  ExplanationExecutionError,
+  createExplanationService,
+  explanationAgents,
+} from "../review-explainer/explanations";
 import { readFrozenFile, readFrozenReview, reviewWorkspace } from "../review-explainer/workspace";
 import { type HostServices, type Route, httpError } from "../server";
 
 const base = "/api/v1/cli-runs/:runId/review-explainer";
+const expectedAgentSchema = z
+  .object({
+    modelId: z.string().min(1).max(256),
+    driverId: z.string().min(1).max(128),
+  })
+  .strict();
+const explanationRequestSchema = z
+  .object({
+    agentId: z.string().min(1).max(160).optional(),
+    expectedAgent: expectedAgentSchema.optional(),
+  })
+  .strict();
+const explanationQuerySchema = z
+  .object({
+    agentId: z.string().min(1).max(160).optional(),
+    expectedModelId: expectedAgentSchema.shape.modelId.optional(),
+    expectedDriverId: expectedAgentSchema.shape.driverId.optional(),
+  })
+  .strict()
+  .refine(
+    (query) => (query.expectedModelId === undefined) === (query.expectedDriverId === undefined),
+    "Expected model and driver must be supplied together",
+  );
 function guarded(action: Route["handler"]): Route["handler"] {
   return async (ctx) => {
     try {
@@ -26,13 +53,15 @@ function guarded(action: Route["handler"]): Route["handler"] {
       throw httpError(
         status,
         makeError(
-          status === 404
-            ? "NOT_FOUND"
-            : status === 403
-              ? "FORBIDDEN"
-              : status >= 500
-                ? "INTERNAL"
-                : "BAD_REQUEST",
+          error instanceof ExplanationExecutionError
+            ? error.code
+            : status === 404
+              ? "NOT_FOUND"
+              : status === 403
+                ? "FORBIDDEN"
+                : status >= 500
+                  ? "INTERNAL"
+                  : "BAD_REQUEST",
           "discovery",
           message,
           { retryable: status >= 500 || status === 409 },
@@ -133,30 +162,42 @@ export function reviewExplainerRoutes(services: HostServices): Route[] {
     },
     {
       method: "GET",
+      pattern: `${base}/explanation-agents`,
+      auth: "session",
+      handler: guarded((ctx) => explanationAgents(ctx.params.runId ?? "", services)),
+    },
+    {
+      method: "GET",
       pattern: `${base}/explanations/:findingId`,
       auth: "session",
-      handler: guarded((ctx) =>
-        explanation(
+      handler: guarded((ctx) => {
+        const query = explanationQuerySchema.parse(Object.fromEntries(ctx.query));
+        return explanation(
           ctx.params.runId ?? "",
           ctx.params.findingId ?? "",
           false,
-          ctx.query.get("agentId") ?? undefined,
-        ),
-      ),
+          query.agentId,
+          query.expectedModelId !== undefined && query.expectedDriverId !== undefined
+            ? { modelId: query.expectedModelId, driverId: query.expectedDriverId }
+            : undefined,
+        );
+      }),
     },
     {
       method: "POST",
       pattern: `${base}/explanations/:findingId`,
       auth: "mutation",
-      bodySchema: z.object({ agentId: z.string().min(1).max(160).optional() }).strict(),
-      handler: guarded((ctx) =>
-        explanation(
+      bodySchema: explanationRequestSchema,
+      handler: guarded((ctx) => {
+        const body = ctx.body as z.infer<typeof explanationRequestSchema>;
+        return explanation(
           ctx.params.runId ?? "",
           ctx.params.findingId ?? "",
           true,
-          (ctx.body as { agentId?: string }).agentId,
-        ),
-      ),
+          body.agentId,
+          body.expectedAgent,
+        );
+      }),
     },
   ];
 }

@@ -2,6 +2,8 @@ import { readCsrfToken } from "@/runtime/bootstrap";
 import { CSRF_HEADER_NAME } from "@shared/runtime/contracts";
 import type {
   DecisionsFile,
+  ExplanationAgentIdentity,
+  ExplanationAgents,
   ExplanationResult,
   FindingDecision,
   FrozenFileContent,
@@ -72,11 +74,28 @@ export const explainerApi = {
     }),
   file: (runId: string, path: string, side: "old" | "new") =>
     request<FrozenFileContent>(`${base(runId)}/files/${encodeURIComponent(path)}?side=${side}`),
-  explanation: (runId: string, findingId: string, generate = false) =>
-    request<ExplanationResult>(
-      `${base(runId)}/explanations/${encodeURIComponent(findingId)}`,
-      generate ? { method: "POST", body: {} } : {},
-    ),
+  explanationAgents: (runId: string, signal?: AbortSignal) =>
+    request<ExplanationAgents>(`${base(runId)}/explanation-agents`, { signal }),
+  explanation: (
+    runId: string,
+    findingId: string,
+    generate = false,
+    agentId?: string,
+    expectedAgent?: ExplanationAgentIdentity,
+  ) => {
+    const query = new URLSearchParams();
+    if (!generate) {
+      if (agentId) query.set("agentId", agentId);
+      if (expectedAgent) {
+        query.set("expectedModelId", expectedAgent.modelId);
+        query.set("expectedDriverId", expectedAgent.driverId);
+      }
+    }
+    return request<ExplanationResult>(
+      `${base(runId)}/explanations/${encodeURIComponent(findingId)}${query.size ? `?${query}` : ""}`,
+      generate ? { method: "POST", body: { agentId, expectedAgent } } : {},
+    );
+  },
   repairPackage: (runId: string) => request<unknown>(`${base(runId)}/repair-package`),
 };
 

@@ -41,6 +41,7 @@ function makeTree(files: DiffFile[]) {
   return root;
 }
 interface Props {
+  summaryTitles?: Record<string, string>;
   tab: "issues" | "files";
   onTab: (tab: "issues" | "files") => void;
   files: DiffFile[];
@@ -252,7 +253,7 @@ export function ReviewNavigation(props: Props) {
                 className="ck-ex-issue-row"
                 data-testid={`review-explainer-finding-${finding.id}`}
                 aria-current={props.selectedId === finding.id ? "true" : undefined}
-                title={findingDisplayTitle(finding)}
+                title={findingDisplayTitle(finding, props.summaryTitles?.[finding.id])}
                 onClick={() => props.onFinding(finding)}
               >
                 <span className="ck-ex-issue-meta">
@@ -262,7 +263,12 @@ export function ReviewNavigation(props: Props) {
                     {findingDisplayStatus(finding, props.sha)}
                   </span>
                 </span>
-                <span className="ck-ex-issue-title">{findingDisplayTitle(finding)}</span>
+                <span className="ck-ex-issue-title">
+                  {findingDisplayTitle(finding, props.summaryTitles?.[finding.id])}
+                </span>
+                {!props.summaryTitles?.[finding.id] && finding.title.length > 80 ? (
+                  <span className="ck-ex-title-source">原评审摘录</span>
+                ) : null}
                 <span className="ck-ex-issue-path" title={path}>
                   {path
                     ? `${path.split("/").slice(-2).join("/")}${anchor?.line ? `:${anchor.line}` : ""}`

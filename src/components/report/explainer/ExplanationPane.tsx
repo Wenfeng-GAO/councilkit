@@ -1,5 +1,6 @@
 import type {
   ExplainerFinding,
+  ExplanationAgents,
   ExplanationResult,
   FindingAnchor,
   FindingDecision,
@@ -8,14 +9,53 @@ import { useEffect, useRef, useState } from "react";
 import { DecisionButtons } from "./DecisionButtons";
 import { type CodeLocation, ExplanationDiagram } from "./ExplanationDiagram";
 import { ExplainerRequestError, errorMessage, explainerApi } from "./api";
-import { displayDecisionReason, displayFindingTitle } from "./finding-presentation";
+import {
+  displayDecisionReason,
+  displayFindingTitle,
+  explanationSummaryTitle,
+} from "./finding-presentation";
 import { explainerUi as UI } from "./ui";
 import { findingDisplayStatus } from "./view-model";
 import "@/styles/review-explainer-details.css";
 
 type PaneTab = "summary" | "explanation" | "original";
+class ExplanationAgentChangedError extends Error {
+  constructor() {
+    super("返回的解释与所选 Agent / 模型不一致，请重新加载配置后生成。");
+  }
+}
+function verifyExplanationAgent(
+  value: ExplanationResult,
+  agentId: string,
+  modelId: string,
+  driverId: string,
+) {
+  if (
+    value.provenance.agentId !== agentId ||
+    value.provenance.modelId !== modelId ||
+    value.provenance.driverId !== driverId
+  )
+    throw new ExplanationAgentChangedError();
+}
+function agentConfigurationChanged(error: unknown) {
+  return (
+    error instanceof ExplanationAgentChangedError ||
+    (error instanceof ExplainerRequestError &&
+      error.status === 409 &&
+      error.code === "EXECUTION_CONFLICT")
+  );
+}
+
 interface ExplanationPaneProps {
   runId: string;
+  explanationAgents: ExplanationAgents | null;
+  agentsLoading: boolean;
+  agentsError: string;
+  selectedAgentId: string | null;
+  onAgentChange: (agentId: string) => void;
+  onRetryAgents: () => void;
+  summaryTitle?: string;
+  onSummary: (findingId: string, agentKey: string, title: string | null) => void;
   finding: ExplainerFinding;
   decision: FindingDecision;
   saving: boolean;
@@ -41,6 +81,14 @@ export function ExplanationPane(props: ExplanationPaneProps) {
 
 function ExplanationPaneContent({
   runId,
+  explanationAgents,
+  agentsLoading,
+  agentsError,
+  selectedAgentId,
+  onAgentChange,
+  onRetryAgents,
+  summaryTitle,
+  onSummary,
   finding,
   decision,
   saving,
@@ -69,11 +117,16 @@ function ExplanationPaneContent({
     setNote((current) => (current === previous ? savedNote : current));
     priorSavedNote.current = savedNote;
   }, [savedNote]);
-  const [status, setStatus] = useState<"reading" | "empty" | "generating" | "ready" | "failed">(
-    "reading",
-  );
-  const [result, setResult] = useState<ExplanationResult | null>(null);
+  const [requestStatus, setStatus] = useState<
+    "blocked" | "reading" | "empty" | "generating" | "ready" | "failed"
+  >("blocked");
+  const [cacheReload, setCacheReload] = useState(0);
+  const [failurePhase, setFailurePhase] = useState<"cache" | "generate">("cache");
+  const [storedResult, setResult] = useState<ExplanationResult | null>(null);
+  const [resultAgentKey, setResultAgentKey] = useState("");
+  const [requestAgentKey, setRequestAgentKey] = useState("");
   const [failure, setFailure] = useState("");
+  const [configurationChanged, setConfigurationChanged] = useState(false);
   const [copied, setCopied] = useState(false);
   const [diagramOpen, setDiagramOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -86,45 +139,119 @@ function ExplanationPaneContent({
     dialog.current?.close();
     setDiagramOpen(false);
   };
+  const selectedAgent = explanationAgents?.agents.find((item) => item.id === selectedAgentId);
+  const agent = selectedAgent?.available ? selectedAgent : undefined;
+  const agentKey = agent ? JSON.stringify([agent.id, agent.driverId, agent.modelId]) : "";
+  const agentId = agent?.id;
+  const modelId = agent?.modelId;
+  const driverId = agent?.driverId;
+  const result = resultAgentKey === agentKey ? storedResult : null;
+  const status =
+    requestAgentKey === agentKey
+      ? requestStatus
+      : !agent || agentsLoading || agentsError
+        ? "blocked"
+        : "reading";
+  const modelLabel = agent
+    ? `${agent.name} · ${agent.modelId}`
+    : selectedAgent
+      ? `${selectedAgent.name} · ${selectedAgent.modelId}（不可用）`
+      : selectedAgentId
+        ? `${selectedAgentId}（已不可用）`
+        : "尚未选择解释 Agent";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agentKey contains driver/model identity and cacheReload explicitly rereads a failed cache lookup.
   useEffect(() => {
     let alive = true;
     const request = ++requestVersion.current;
+    generationRef.current = false;
+    setRequestAgentKey(agentKey);
+    setResult(null);
+    setFailure("");
+    setConfigurationChanged(false);
+    setCopied(false);
+    dialog.current?.close();
+    setDiagramOpen(false);
+    if (!agentId || !modelId || !driverId || agentsLoading || agentsError) {
+      setStatus("blocked");
+      return () => {
+        alive = false;
+        requestVersion.current++;
+      };
+    }
+    setStatus("reading");
     void explainerApi
-      .explanation(runId, finding.id)
+      .explanation(runId, finding.id, false, agentId, { modelId, driverId })
       .then((value) => {
         if (alive && request === requestVersion.current) {
+          verifyExplanationAgent(value, agentId, modelId, driverId);
           setResult(value);
+          setResultAgentKey(agentKey);
           setStatus("ready");
+          onSummary(finding.id, agentKey, explanationSummaryTitle(value.payload));
         }
       })
       .catch((error: unknown) => {
         if (!alive || request !== requestVersion.current) return;
-        if (error instanceof ExplainerRequestError && error.status === 404) setStatus("empty");
-        else {
+        if (error instanceof ExplainerRequestError && error.status === 404) {
+          setStatus("empty");
+          onSummary(finding.id, agentKey, null);
+        } else {
           setStatus("failed");
+          setFailurePhase("cache");
           setFailure(errorMessage(error));
+          setConfigurationChanged(agentConfigurationChanged(error));
+          if (agentConfigurationChanged(error)) onSummary(finding.id, agentKey, null);
         }
       });
     return () => {
       alive = false;
-      requestVersion.current += 1;
+      requestVersion.current++;
     };
-  }, [runId, finding.id]);
+  }, [
+    runId,
+    finding.id,
+    agentId,
+    modelId,
+    driverId,
+    agentKey,
+    agentsLoading,
+    agentsError,
+    cacheReload,
+    onSummary,
+  ]);
   const generate = async () => {
-    if (generationRef.current) return;
+    if (
+      generationRef.current ||
+      !agentId ||
+      !modelId ||
+      !driverId ||
+      agentsLoading ||
+      agentsError ||
+      configurationChanged
+    )
+      return;
     generationRef.current = true;
     const request = ++requestVersion.current;
     setStatus("generating");
     setFailure("");
+    setFailurePhase("generate");
     try {
-      const value = await explainerApi.explanation(runId, finding.id, true);
+      const value = await explainerApi.explanation(runId, finding.id, true, agentId, {
+        modelId,
+        driverId,
+      });
       if (request !== requestVersion.current) return;
+      verifyExplanationAgent(value, agentId, modelId, driverId);
       setResult(value);
+      setResultAgentKey(agentKey);
       setStatus("ready");
+      onSummary(finding.id, agentKey, explanationSummaryTitle(value.payload));
     } catch (error) {
       if (request !== requestVersion.current) return;
       setStatus("failed");
       setFailure(errorMessage(error));
+      setConfigurationChanged(agentConfigurationChanged(error));
+      if (agentConfigurationChanged(error)) onSummary(finding.id, agentKey, null);
     } finally {
       if (request === requestVersion.current) generationRef.current = false;
     }
@@ -145,15 +272,18 @@ function ExplanationPaneContent({
       onLocate({ path: anchor.path, side: anchor.side, line: anchor.line });
     }
   };
-  const title = displayFindingTitle(finding);
+  const generatedTitle = summaryTitle ?? (result ? explanationSummaryTitle(result.payload) : null);
+  const title = displayFindingTitle(finding, generatedTitle);
   const payload = result?.payload;
   const hasContext = finding.anchors.some((anchor) => anchor.status === "context");
   const copySuggestion = async () => {
     if (!payload?.suggestedCode) return;
+    const request = requestVersion.current;
     try {
       await navigator.clipboard.writeText(payload.suggestedCode.after);
-      setCopied(true);
+      if (request === requestVersion.current) setCopied(true);
     } catch {
+      if (request !== requestVersion.current) return;
       setCopied(false);
       setFailure("复制未成功，请手动选择建议代码。");
     }
@@ -193,6 +323,11 @@ function ExplanationPaneContent({
           <span className="ck-ex-summary-status">{findingDisplayStatus(finding, headSha)}</span>
         </div>
         <h2 title={finding.title}>{title}</h2>
+        {!generatedTitle && finding.title.length > 80 ? (
+          <p className="ck-ex-title-source">原评审摘录 · 生成解释后显示简明标题</p>
+        ) : generatedTitle ? (
+          <p className="ck-ex-title-source">解释摘要 · {agent?.name}</p>
+        ) : null}
         <div className="ck-ex-tabs" role="tablist" aria-label="评审解释">
           <button
             type="button"
@@ -222,6 +357,132 @@ function ExplanationPaneContent({
         </div>
       </header>
       <div className="ck-ex-pane-body">
+        {tab !== "original" ? (
+          <section
+            className={`ck-ex-agent-config${tab === "summary" ? " compact" : ""}`}
+            aria-label="解释模型配置"
+          >
+            <div className="ck-ex-agent-heading">
+              <label htmlFor={`explanation-agent-${finding.id}`}>解释 Agent</label>
+              <button type="button" onClick={onRetryAgents} disabled={agentsLoading}>
+                {agentsLoading ? "读取中…" : "重新加载配置"}
+              </button>
+            </div>
+            {agentsLoading ? (
+              <p className="ck-ex-muted">正在读取本次 Run 可用的解释 Agent…</p>
+            ) : agentsError ? (
+              <div className="ck-ex-agent-error" role="alert">
+                <p>解释配置读取失败：{agentsError}</p>
+                <button type="button" onClick={onRetryAgents}>
+                  重试配置
+                </button>
+              </div>
+            ) : (
+              <>
+                <select
+                  id={`explanation-agent-${finding.id}`}
+                  aria-label="解释 Agent"
+                  value={selectedAgentId ?? ""}
+                  onChange={(event) => onAgentChange(event.target.value)}
+                >
+                  <option value="" disabled>
+                    {explanationAgents?.defaultAgentId
+                      ? "请选择可用的解释 Agent"
+                      : "没有默认 Agent，请选择"}
+                  </option>
+                  {selectedAgentId && !selectedAgent ? (
+                    <option value={selectedAgentId} disabled>
+                      先前选择已不可用 · {selectedAgentId}
+                    </option>
+                  ) : null}
+                  {explanationAgents?.agents.map((item) => (
+                    <option key={item.id} value={item.id} disabled={!item.available}>
+                      {item.name} · {item.modelId}
+                      {item.available ? "" : "（不可用）"}
+                    </option>
+                  ))}
+                </select>
+                {agent ? (
+                  <p className="ck-ex-agent-model" data-testid="review-explainer-selected-model">
+                    <strong>{agent.name}</strong>
+                    <code>{agent.modelId}</code>
+                    <span>{agent.driverId}</span>
+                  </p>
+                ) : (
+                  <p className="ck-ex-agent-unavailable">
+                    {selectedAgentId
+                      ? `${selectedAgent?.name ?? selectedAgentId}：${selectedAgent?.reason ?? (selectedAgent ? "本地配置或执行器不可用" : "该 Agent 已被删除或不在当前配置中")}。请明确重新选择，不会自动切换到默认模型。`
+                      : "请明确选择一个可用的解释 Agent；不会自动替换为其他模型。"}
+                  </p>
+                )}
+                <p className="ck-ex-agent-source">
+                  默认来源：
+                  {explanationAgents?.defaultSource === "pr-jury-reporter"
+                    ? "pr-jury 的 Reporter"
+                    : explanationAgents?.defaultSource === "run-aggregator"
+                      ? "本次 Run 的 Aggregator"
+                      : explanationAgents?.defaultSource === "injected"
+                        ? "受控执行器"
+                        : "未配置"}
+                  {agent && agent.id !== explanationAgents?.defaultAgentId
+                    ? " · 当前为手动选择"
+                    : ""}
+                </p>
+                {explanationAgents?.notice ? (
+                  <p className="ck-ex-agent-unavailable">{explanationAgents.notice}</p>
+                ) : null}
+                {explanationAgents?.agents.some((item) => !item.available) ? (
+                  <details className="ck-ex-agent-unavailable-list">
+                    <summary>不可用 Agent 与原因</summary>
+                    <ul>
+                      {explanationAgents.agents
+                        .filter((item) => !item.available)
+                        .map((item) => (
+                          <li key={item.id}>
+                            <strong>{item.name}</strong> · {item.modelId}
+                            <br />
+                            {item.reason || "本地配置或执行器不可用"}
+                          </li>
+                        ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </>
+            )}
+            {tab === "summary" && agent && !agentsLoading && !agentsError ? (
+              <div className="ck-ex-agent-action">
+                <button
+                  type="button"
+                  disabled={status === "reading" || status === "generating"}
+                  onClick={() => {
+                    if (configurationChanged) {
+                      onRetryAgents();
+                      return;
+                    }
+                    setTab("explanation");
+                    if (status === "empty" || (status === "failed" && failurePhase === "generate"))
+                      void generate();
+                  }}
+                >
+                  {configurationChanged
+                    ? "重新加载配置"
+                    : status === "ready"
+                      ? "查看解释"
+                      : status === "generating"
+                        ? "正在生成解释…"
+                        : status === "reading"
+                          ? "读取已缓存的解释…"
+                          : status === "failed" && failurePhase === "cache"
+                            ? "查看读取错误"
+                            : status === "failed"
+                              ? "重试解释"
+                              : "生成解释"}
+                </button>
+                <span>{modelLabel}</span>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         {tab === "summary" ? (
           <FindingSummary
             finding={finding}
@@ -233,6 +494,7 @@ function ExplanationPaneContent({
         ) : tab === "original" ? (
           <section aria-label="原始评审">
             <p className="ck-ex-kicker">原始断言 · 保留完整上下文</p>
+            <h3 className="ck-ex-original-title">{finding.title}</h3>
             <p className="ck-ex-prose">{finding.text}</p>
             <p className="ck-ex-muted">
               {finding.reviewer ? `来源：${finding.reviewer} · ` : ""}
@@ -342,7 +604,8 @@ function ExplanationPaneContent({
             ) : null}
             <details className="ck-ex-provenance">
               <summary>
-                {result.cached ? "已缓存的解释" : "解释已生成"} · {result.provenance.modelId}
+                {result.cached ? "已缓存的解释" : "解释已生成"} ·{" "}
+                {result.provenance.agentName ?? agent?.name} · {result.provenance.modelId}
               </summary>
               <p>
                 {result.provenance.mode === "injected" ? "受控执行边界" : "模型执行"} ·{" "}
@@ -356,25 +619,48 @@ function ExplanationPaneContent({
           </>
         ) : (
           <section className="ck-ex-generation-state" aria-live="polite">
-            {status === "reading" ? (
-              <p>读取已缓存的解释…</p>
+            {status === "blocked" ? (
+              <>
+                <h3>解释模型尚未就绪</h3>
+                <p>
+                  {agentsLoading
+                    ? "读取配置后将自动检查所选 Agent 的缓存，不会自动生成。"
+                    : agentsError
+                      ? "请先重试读取上方的解释配置。"
+                      : "请先在上方明确选择一个可用的解释 Agent。"}
+                </p>
+              </>
+            ) : status === "reading" ? (
+              <p>读取 {modelLabel} 的缓存解释…</p>
             ) : status === "generating" ? (
               <>
                 <h3>正在生成解释…</h3>
-                <p>使用原始评审与冻结源码，仅调用解释模型。</p>
+                <p>正在调用 {modelLabel}，结合原始评审与冻结源码生成解释。</p>
               </>
             ) : status === "failed" ? (
               <>
-                <h3>解释生成失败</h3>
+                <h3>{failurePhase === "cache" ? "解释缓存读取失败" : "解释生成失败"}</h3>
                 <p role="alert">{failure || "解释输出不可用，请重试。"}</p>
                 <button
                   type="button"
                   className="ck-ex-primary"
                   data-testid={UI.retry}
-                  onClick={() => void generate()}
+                  disabled={!agent || agentsLoading || !!agentsError}
+                  onClick={() =>
+                    configurationChanged
+                      ? onRetryAgents()
+                      : failurePhase === "cache"
+                        ? setCacheReload((value) => value + 1)
+                        : void generate()
+                  }
                 >
-                  重试解释
+                  {configurationChanged
+                    ? "重新加载配置"
+                    : failurePhase === "cache"
+                      ? "重试读取缓存"
+                      : "重试解释"}
                 </button>
+                <p className="ck-ex-generation-model">{modelLabel}</p>
               </>
             ) : (
               <>
@@ -384,13 +670,15 @@ function ExplanationPaneContent({
                   type="button"
                   className="ck-ex-primary"
                   data-testid={UI.generate}
+                  disabled={!agent || agentsLoading || !!agentsError || configurationChanged}
                   onClick={() => void generate()}
                 >
                   生成解释
                 </button>
+                <p className="ck-ex-generation-model">{modelLabel}</p>
               </>
             )}
-            {status !== "reading" && status !== "generating" ? (
+            {status !== "blocked" && status !== "reading" && status !== "generating" ? (
               <div data-testid={UI.canvasFallback} className="ck-ex-original-fallback">
                 <h4>原始评审 · 尚未生成解释</h4>
                 <p>{finding.text}</p>

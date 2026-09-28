@@ -46,6 +46,7 @@ export const canvasModelSchema = z
 export const explanationPayloadSchema = z
   .object({
     kind: z.enum(["code", "flow", "sequence", "text"]),
+    title: z.string().trim().min(1).max(80).optional(),
     assertion: text,
     evidence: z.array(text).max(30),
     inference: z.array(text).max(30),

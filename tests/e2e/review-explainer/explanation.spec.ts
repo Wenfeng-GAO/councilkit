@@ -12,6 +12,7 @@ import {
 } from "./helpers";
 
 const FLOW = {
+  title: "请求已接收后返回繁忙，重试可能重复执行",
   kind: "flow",
   assertion: "The runtime accepts a request before the manager returns busy.",
   evidence: ["E2E_EVIDENCE_accepted_once_but_state_unmatched"],
@@ -85,13 +86,24 @@ test("[A07/A08] on-demand model output crosses the real Host, appears on screen,
   await openExplainer(page);
   expect(await calls(page)).toBe(0);
   await openFinding(page, FINDING.busy);
+  const selector = page.getByLabel("解释 Agent", { exact: true });
+  await expect(selector).toHaveValue("injected-explainer");
+  await expect(selector).toContainText("e2e-explainer");
   expect(await calls(page)).toBe(0);
   const response = await generate(page, FINDING.busy);
   expect(response.status()).toBe(200);
+  expect(response.request().postDataJSON()).toMatchObject({
+    agentId: "injected-explainer",
+    expectedAgent: { modelId: "e2e-explainer", driverId: "injected" },
+  });
   const payload = await response.text();
   expect(payload).toContain(FLOW.assertion);
   expect(payload).toContain(FLOW.evidence[0]);
   const pane = page.getByTestId(UI.drawer);
+  await expect(pane.locator(":scope > header > h2")).toHaveText(FLOW.title);
+  await expect(page.getByTestId(`review-explainer-finding-${FINDING.busy}`)).toContainText(
+    FLOW.title,
+  );
   await expect(pane).toContainText(FLOW.assertion);
   await expect(pane).toContainText(FLOW.evidence[0]);
   await expect(pane).toContainText(FLOW.inference[0]);
@@ -122,9 +134,47 @@ test("[A07/A08] on-demand model output crosses the real Host, appears on screen,
   await expect(page.getByTestId(UI.root)).toBeVisible();
   await openFinding(page, FINDING.busy);
   await expect(page.getByTestId(UI.drawer)).toContainText(FLOW.evidence[0]);
+  await expect(page.getByTestId(UI.drawer).locator(":scope > header > h2")).toHaveText(FLOW.title);
   expect(await calls(page)).toBe(1);
   await page.getByTestId(UI.drawer).getByTestId(UI.original).click();
   await expect(page.getByTestId(UI.drawer)).toContainText(ASSERTION.busy);
+  await expect(page.getByTestId(UI.drawer)).toContainText("prompt accepted then busy");
+});
+
+test("configuration failure is explicit and retry restores the selected model without generating", async ({
+  page,
+}) => {
+  await resetCase(page);
+  await page.route("**/review-explainer/explanation-agents", (route) => route.abort("failed"));
+  await openExplainer(page);
+  await openFinding(page, FINDING.busy);
+  const pane = page.getByTestId(UI.drawer);
+  await expect(pane).toContainText(/配置|Agent/);
+  const retry = page.getByRole("button", { name: "重试配置", exact: true });
+  await expect(retry).toBeVisible();
+  await page.unroute("**/review-explainer/explanation-agents");
+  await retry.click();
+  await expect(page.getByLabel("解释 Agent", { exact: true })).toHaveValue("injected-explainer");
+  await expect(pane.getByTestId(UI.generate)).toBeEnabled();
+  expect(await calls(page)).toBe(0);
+});
+
+test("a removed saved Agent does not silently fall back to the default model", async ({ page }) => {
+  await resetCase(page);
+  await page.evaluate(
+    (runId) => localStorage.setItem(`councilkit-explanation-agent:${runId}`, "removed-agent"),
+    RUN_ID,
+  );
+  await openExplainer(page);
+  await openFinding(page, FINDING.busy);
+  const selected = page.getByLabel("解释 Agent", { exact: true });
+  await expect(selected).toHaveValue("removed-agent");
+  await expect(page.getByTestId(UI.drawer)).toContainText(/不可用|失效|不存在/);
+  await expect(page.getByTestId(UI.generate)).toHaveCount(0);
+  expect(await calls(page)).toBe(0);
+  await selected.selectOption("injected-explainer");
+  await expect(page.getByTestId(UI.generate)).toBeEnabled();
+  expect(await calls(page)).toBe(0);
 });
 
 test("[A07/A08] a simple finding displays the exact generated suggestion without claiming a verified repair", async ({

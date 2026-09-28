@@ -110,6 +110,7 @@ export interface CanvasModel {
 }
 export interface ExplanationPayload {
   kind: "code" | "flow" | "sequence" | "text";
+  title?: string;
   assertion: string;
   evidence: string[];
   inference: string[];
@@ -129,6 +130,8 @@ export interface ExplanationResult {
     headSha: string;
     modelId: string;
     driverId: string;
+    agentId?: string;
+    agentName?: string;
     generatedAt: string;
     sourceHash: string;
     cacheKey: string;
@@ -136,6 +139,24 @@ export interface ExplanationResult {
     mode: "model" | "injected";
   };
   cached: boolean;
+}
+export interface ExplanationAgents {
+  agents: Array<{
+    id: string;
+    name: string;
+    driverId: string;
+    modelId: string;
+    /** Local configuration/executable availability, not remote model health. */
+    available: boolean;
+    reason?: string;
+  }>;
+  defaultAgentId: string | null;
+  defaultSource: "pr-jury-reporter" | "run-aggregator" | "injected" | null;
+  notice?: string;
+}
+export interface ExplanationAgentIdentity {
+  modelId: string;
+  driverId: string;
 }
 /** Inject only the external generation boundary; production uses the configured restricted CLI. */
 export interface ExplainerExecutorInput {

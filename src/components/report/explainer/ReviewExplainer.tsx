@@ -1,6 +1,7 @@
 import { isFindingVerifiedClosed } from "@shared/runtime/cli-ledger";
 import type {
   ExplainerFinding,
+  ExplanationAgents,
   FindingAnchor,
   FindingDecision,
   FrozenFileContent,
@@ -36,6 +37,7 @@ import "@/styles/review-explainer.css";
 
 type Props = { runId: string; title: string; onBack: () => void };
 type ComparisonMode = "full" | "last-commit";
+const EMPTY_SUMMARY_TITLES: Record<string, string> = {};
 /** A Run owns its entire UI and all pending requests; changing Runs remounts that boundary. */
 export function ReviewExplainer(props: Props) {
   return <ReviewExplainerRun key={props.runId} {...props} />;
@@ -50,6 +52,13 @@ function ReviewExplainerRun({ runId, title, onBack }: Props) {
   const [loadError, setLoadError] = useState("");
   const [reload, setReload] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [explanationAgents, setExplanationAgents] = useState<ExplanationAgents | null>(null);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState("");
+  const [agentsReload, setAgentsReload] = useState(0);
+  const [explanationAgentId, setExplanationAgentId] = useState<string | null>(null);
+  const [summaryTitles, setSummaryTitles] = useState<Record<string, Record<string, string>>>({});
+
   const [paneOpen, setPaneOpen] = useState(() => window.innerWidth > 1200);
   const [paneTab, setPaneTab] = useState<"summary" | "explanation" | "original">("summary");
   const [narrow, setNarrow] = useState(() => window.innerWidth <= 1200);
@@ -96,6 +105,74 @@ function ReviewExplainerRun({ runId, title, onBack }: Props) {
       contextSequence.current++;
     };
   }, []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: agentsReload explicitly rereads changed local Agent configuration.
+  useEffect(() => {
+    const controller = new AbortController();
+    setAgentsLoading(true);
+    setAgentsError("");
+    setExplanationAgents(null);
+    void explainerApi
+      .explanationAgents(runId, controller.signal)
+      .then((catalog) => {
+        if (controller.signal.aborted || !alive.current) return;
+        setExplanationAgents(catalog);
+        setExplanationAgentId((previous) => {
+          // A previously selected Agent must remain visible when it becomes unavailable.
+          // Choosing a different model always requires an explicit user action.
+          if (previous) return previous;
+          let stored: string | null = null;
+          try {
+            stored = localStorage.getItem(`councilkit-explanation-agent:${runId}`);
+          } catch {
+            /* In-memory selection still works. */
+          }
+          if (stored) return stored;
+          return catalog.defaultAgentId;
+        });
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && alive.current) setAgentsError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && alive.current) setAgentsLoading(false);
+      });
+    return () => controller.abort();
+  }, [runId, agentsReload]);
+  const selectExplanationAgent = (agentId: string) => {
+    if (!explanationAgents?.agents.some((agent) => agent.id === agentId && agent.available)) return;
+    setExplanationAgentId(agentId);
+    try {
+      localStorage.setItem(`councilkit-explanation-agent:${runId}`, agentId);
+    } catch {
+      /* A choice remains valid for this Run. */
+    }
+  };
+  const rememberSummary = useCallback(
+    (findingId: string, agentKey: string, summary: string | null) => {
+      if (!alive.current) return;
+      setSummaryTitles((previous) => {
+        if (previous[agentKey]?.[findingId] === (summary ?? undefined)) return previous;
+        const titles = { ...previous[agentKey] };
+        if (summary) titles[findingId] = summary;
+        else delete titles[findingId];
+        return { ...previous, [agentKey]: titles };
+      });
+    },
+    [],
+  );
+  const activeExplanationAgent = explanationAgents?.agents.find(
+    (agent) => agent.id === explanationAgentId && agent.available,
+  );
+  const explanationAgentKey = activeExplanationAgent
+    ? JSON.stringify([
+        activeExplanationAgent.id,
+        activeExplanationAgent.driverId,
+        activeExplanationAgent.modelId,
+      ])
+    : "";
+  const titlesForAgent = summaryTitles[explanationAgentKey] ?? EMPTY_SUMMARY_TITLES;
+  const findingTitle = (finding: ExplainerFinding) =>
+    findingDisplayTitle(finding, titlesForAgent[finding.id]);
   useEffect(() => {
     const media = window.matchMedia("(max-width: 1200px)");
     const change = () => {
@@ -189,10 +266,26 @@ function ReviewExplainerRun({ runId, title, onBack }: Props) {
   );
   const visibleFindings = useMemo(
     () =>
-      workspace?.findings.filter((finding, index) =>
-        matchesFinding(finding, index + 1, decision(finding), filters, workspace.identity.headSha),
-      ) ?? [],
-    [workspace, filters, decision],
+      workspace?.findings.filter((finding, index) => {
+        if (
+          matchesFinding(finding, index + 1, decision(finding), filters, workspace.identity.headSha)
+        )
+          return true;
+        const summary = titlesForAgent[finding.id];
+        return (
+          !!summary &&
+          !!filters.query.trim() &&
+          summary.toLocaleLowerCase().includes(filters.query.trim().toLocaleLowerCase()) &&
+          matchesFinding(
+            finding,
+            index + 1,
+            decision(finding),
+            { ...filters, query: "" },
+            workspace.identity.headSha,
+          )
+        );
+      }) ?? [],
+    [workspace, filters, decision, titlesForAgent],
   );
   const navigation = tab === "issues" ? visibleFindings : (workspace?.findings ?? []);
   const selected = navigation.find((finding) => finding.id === selectedId) ?? navigation[0] ?? null;
@@ -672,6 +765,7 @@ function ReviewExplainerRun({ runId, title, onBack }: Props) {
           </section>
           <div className="ck-ex-workspace">
             <ReviewNavigation
+              summaryTitles={titlesForAgent}
               tab={tab}
               onTab={(next) => {
                 setTab(next);
@@ -783,7 +877,7 @@ function ReviewExplainerRun({ runId, title, onBack }: Props) {
                       key={finding.id}
                       type="button"
                       aria-pressed={finding.id === selected?.id}
-                      title={findingDisplayTitle(finding)}
+                      title={findingTitle(finding)}
                       onClick={() => selectFinding(finding)}
                     >
                       <i className={finding.severity} />#{numbers.get(finding.id)}
@@ -914,6 +1008,14 @@ function ReviewExplainerRun({ runId, title, onBack }: Props) {
                 <ExplanationPane
                   key={`${runId}:${selected.id}:${paneTab}`}
                   runId={runId}
+                  explanationAgents={explanationAgents}
+                  agentsLoading={agentsLoading}
+                  agentsError={agentsError}
+                  selectedAgentId={explanationAgentId}
+                  onAgentChange={selectExplanationAgent}
+                  onRetryAgents={() => setAgentsReload((value) => value + 1)}
+                  summaryTitle={titlesForAgent[selected.id]}
+                  onSummary={rememberSummary}
                   finding={selected}
                   headSha={workspace.identity.headSha}
                   number={numbers.get(selected.id)}

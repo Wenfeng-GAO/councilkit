@@ -72,9 +72,20 @@ export interface AttemptPromptInput {
   frozenContext?: FrozenAttemptContext;
 }
 
+const FINDING_FORMAT = `每条发现使用一个顶层列表项，首行只写严重程度和 16–32 字中文短标题。
+标题概括「关键条件 + 实际后果」，让代码作者不读函数调用链也能理解；不要截取正文开头，不要以文件路径、函数名、Finding ID 或“本次新增”开头。
+标题用普通中文说明风险与影响，不堆叠函数名、内部状态名或缩写；技术细节放正文。
+后续正文缩进两个空格，完整保留文件与行号、触发前提、函数调用链、证据和建议；不要为缩短标题省略正文。
+格式如下（替换占位内容）：
+- [critical|major|minor|nit] 关键条件 + 实际后果
+  位置：\`file:location\`
+  触发与后果：完整描述触发条件、函数调用链和实际影响。
+  证据：已有验证及其结果；没有验证就写未验证。
+  建议：具体改法。
+引用已有 Finding 账本项时，在该项缩进正文另写 原 Finding ID：\`<原 ID>\`，逐字保留账本中的原 ID；新问题不要虚构原 ID。`;
+
 const ATTEMPT_CONTRACT = `## 发现
-List every issue you found, one per line:
-- [critical|major|minor|nit] file:location — description → suggested fix
+${FINDING_FORMAT}
 
 ## 验证
 The commands you actually ran and their results. If you did not verify, write "未验证".
@@ -330,6 +341,8 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "点名引用每位被保留的成功的审查者。对比他们的发现与验证过程，区分共识、独有发现、分歧。",
     "reviewer 可能使用 Findings/Verification/Verdict 等英文标题，请按语义理解，不要当作格式错误。",
     "必须保留有具体证据的严重独有发现；少数意见不能因无人重复而删除。逐项验证 JSON 来自独立 Attempt，你不能补造关闭证据。",
+    "「共识发现」与「独有发现」中的每条发现都遵守以下标题与正文格式：",
+    FINDING_FORMAT,
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
     "结论章节给出单行英文 verdict token：approve | changes-requested | comment。",
     input.task.against

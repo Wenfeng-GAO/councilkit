@@ -21,6 +21,16 @@ const malicious = {
 };
 
 describe("A07/A08 explanation schema and canvas", () => {
+  it("accepts a trimmed concise title, keeps legacy payloads valid, and rejects blank/oversized titles", async () => {
+    const { parse } = await api();
+    const payload = { kind: "text", assertion: "完整断言", evidence: [], inference: [] };
+    expect(parse(payload).ok).toBe(true);
+    expect(parse({ ...payload, title: "  连续写入失败后会话无法恢复  " }).value).toMatchObject({
+      title: "连续写入失败后会话无法恢复",
+    });
+    expect(parse({ ...payload, title: " " }).ok).toBe(false);
+    expect(parse({ ...payload, title: "字".repeat(81) }).ok).toBe(false);
+  });
   async function api() {
     const schemaMod = await importFeature<Record<string, unknown>>(MODULES.explanationSchema);
     const canvasMod = await importFeature<Record<string, unknown>>(MODULES.canvas);
