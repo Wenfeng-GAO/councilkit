@@ -5,6 +5,8 @@ import type {
   ExplanationResult,
   FindingDecision,
   FrozenFileContent,
+  ReviewComparison,
+  ReviewComparisonMode,
   ReviewExplainerWorkspace,
 } from "@shared/runtime/review-explainer/contracts";
 
@@ -55,10 +57,18 @@ function base(runId: string) {
 export const explainerApi = {
   workspace: (runId: string, signal?: AbortSignal) =>
     request<ReviewExplainerWorkspace>(base(runId), { signal }),
-  decide: (runId: string, findingId: string, decision: FindingDecision, expectedRevision: number) =>
+  comparison: (runId: string, mode: ReviewComparisonMode, signal?: AbortSignal) =>
+    request<ReviewComparison>(`${base(runId)}/comparison?mode=${mode}`, { signal }),
+  decide: (
+    runId: string,
+    findingId: string,
+    decision: FindingDecision,
+    expectedRevision: number,
+    reason?: string,
+  ) =>
     request<DecisionsFile>(`${base(runId)}/decisions`, {
       method: "POST",
-      body: { findingId, decision, expectedRevision },
+      body: { findingId, decision, expectedRevision, reason },
     }),
   file: (runId: string, path: string, side: "old" | "new") =>
     request<FrozenFileContent>(`${base(runId)}/files/${encodeURIComponent(path)}?side=${side}`),

@@ -255,13 +255,15 @@ export function reviewWorkspace(runId: string): ReviewExplainerWorkspace {
     runId,
     identity: frozen.identity,
     files: frozen.files,
-    findings: frozen.findings.map((row) => ({
-      ...row,
-      anchors: findingAnchors(frozen, row),
-      decision:
-        decisionForFinding(decisions, row)?.decision ??
-        (row.status === "accepted" ? "wont_fix" : "undecided"),
-    })),
+    findings: frozen.findings.map((row) => {
+      const stored = decisionForFinding(decisions, row);
+      return {
+        ...row,
+        anchors: findingAnchors(frozen, row),
+        decision: stored?.decision ?? (row.status === "accepted" ? "wont_fix" : "undecided"),
+        decisionReason: stored?.audit?.reason,
+      };
+    }),
     decisions,
     revision: decisions.revision,
     originalReport: frozen.originalReport,

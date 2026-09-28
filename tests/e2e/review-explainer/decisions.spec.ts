@@ -14,11 +14,13 @@ import { ORIGIN } from "./constants";
 import {
   diskSnapshot,
   envSentinel,
+  expectDecision,
   installOriginAllowlist,
   openExplainer,
   requireExplainer,
   resetCase,
   restartHost,
+  selectFinding,
 } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -48,7 +50,7 @@ function persisted(home: string) {
   };
 }
 
-test("[A03/A04] the two inline decisions and explanation decisions update the same persisted choice", async ({
+test("[A03/A04] summary and explanation decisions share the same persisted choice", async ({
   page,
 }) => {
   const seeded = await resetCase(page);
@@ -57,40 +59,24 @@ test("[A03/A04] the two inline decisions and explanation decisions update the sa
   await expect(root.getByRole("radiogroup")).toHaveCount(0);
   await expect(root.getByText(/场景问卷|理由必填|认可度/)).toHaveCount(0);
   await expect(root.locator("textarea[required], input[required]")).toHaveCount(0);
-  for (const id of Object.values(FINDING).filter((id) => id !== FINDING.freshSameFile)) {
-    await expect(page.getByTestId(UI.listUndecided)).toContainText(id);
-  }
-  await expect(page.getByTestId(UI.listFix)).not.toContainText(FINDING.busy);
-  await expect(page.getByTestId(UI.listSkip)).not.toContainText(FINDING.busy);
-
-  const inline = page.getByTestId(UI.comment(FINDING.busy));
-  await choose(page, inline.getByTestId(UI.willFix), FINDING.busy, DECISION.willFix);
-  expect(persisted(seeded.home).items[FINDING.busy]?.decision).toBe(DECISION.willFix);
-  await expect(page.getByTestId(UI.listFix)).toContainText(FINDING.busy);
-  await inline.getByTestId(UI.understand).click();
+  await selectFinding(page, FINDING.busy);
   const pane = page.getByTestId(UI.drawer);
+  await choose(page, pane.getByTestId(UI.willFix), FINDING.busy, DECISION.willFix);
+  expect(persisted(seeded.home).items[FINDING.busy]?.decision).toBe(DECISION.willFix);
   await expect(pane.getByTestId(UI.willFix)).toHaveAttribute("aria-pressed", "true");
+  await pane.getByRole("tab", { name: "看懂问题", exact: true }).click();
   await pane.getByTestId(UI.original).click();
   await expect(pane).toContainText(ASSERTION.busy);
-
   await choose(page, pane.getByTestId(UI.wontFix), FINDING.busy, DECISION.wontFix);
-  await expect(inline.getByTestId(UI.wontFix)).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId(UI.listSkip)).toContainText(FINDING.busy);
-  await expect(page.getByTestId(UI.listFix)).not.toContainText(FINDING.busy);
   expect(persisted(seeded.home).items[FINDING.busy]?.decision).toBe(DECISION.wontFix);
-
+  await expect(pane.getByTestId(UI.willFix)).toHaveAttribute("aria-pressed", "false");
   await choose(page, pane.getByTestId(UI.undecided), FINDING.busy, DECISION.undecided);
-  await expect(page.getByTestId(UI.listSkip)).not.toContainText(FINDING.busy);
-  await expect(page.getByTestId(UI.listUndecided)).toContainText(FINDING.busy);
-  expect(persisted(seeded.home).items[FINDING.busy]?.decision ?? DECISION.undecided).toBe(
-    DECISION.undecided,
-  );
-
-  // Keyboard activation must perform the action, not merely put focus somewhere visible.
-  const skipStale = page.getByTestId(UI.comment(FINDING.stale)).getByTestId(UI.wontFix);
-  await expect(skipStale).toBeEnabled();
-  await skipStale.focus();
-  await expect(skipStale).toBeFocused();
+  expect(persisted(seeded.home).items[FINDING.busy]?.decision).toBe(DECISION.undecided);
+  await selectFinding(page, FINDING.stale);
+  const skip = pane.getByTestId(UI.wontFix);
+  await expect(skip).toBeEnabled();
+  await skip.focus();
+  await expect(skip).toBeFocused();
   const keyboardSave = page.waitForResponse(
     (res) => res.url().endsWith(ROUTES.decisions(RUN_ID)) && res.request().method() === "POST",
   );
@@ -105,21 +91,23 @@ test("[A04] UI-saved decisions survive reload, a new browser context, and a real
 }) => {
   const seeded = await resetCase(page);
   await openExplainer(page);
+  await selectFinding(page, FINDING.busy);
   await choose(
     page,
-    page.getByTestId(UI.comment(FINDING.busy)).getByTestId(UI.willFix),
+    page.getByTestId(UI.drawer).getByTestId(UI.willFix),
     FINDING.busy,
     DECISION.willFix,
   );
+  await selectFinding(page, FINDING.stale);
   await choose(
     page,
-    page.getByTestId(UI.comment(FINDING.stale)).getByTestId(UI.wontFix),
+    page.getByTestId(UI.drawer).getByTestId(UI.wontFix),
     FINDING.stale,
     DECISION.wontFix,
   );
   await page.reload();
-  await expect(page.getByTestId(UI.listFix)).toContainText(FINDING.busy);
-  await expect(page.getByTestId(UI.listSkip)).toContainText(FINDING.stale);
+  await expectDecision(page, FINDING.busy, DECISION.willFix);
+  await expectDecision(page, FINDING.stale, DECISION.wontFix);
   const before = await envSentinel(page);
   const beforeDisk = await diskSnapshot(page);
   expect(before.councilkitHome).toBe(seeded.home);
@@ -138,9 +126,9 @@ test("[A04] UI-saved decisions survive reload, a new browser context, and a real
     const fresh = await freshContext.newPage();
     await installOriginAllowlist(fresh);
     await openExplainer(fresh);
-    await expect(fresh.getByTestId(UI.listFix)).toContainText(FINDING.busy);
-    await expect(fresh.getByTestId(UI.listSkip)).toContainText(FINDING.stale);
-    await expect(fresh.getByTestId(UI.listUndecided)).toContainText(FINDING.dup);
+    await expectDecision(fresh, FINDING.busy, DECISION.willFix);
+    await expectDecision(fresh, FINDING.stale, DECISION.wontFix);
+    await expectDecision(fresh, FINDING.dup, DECISION.undecided);
   } finally {
     await freshContext.close();
   }
@@ -151,7 +139,8 @@ test("[A04] a real filesystem failure is shown as unsaved and preserves the last
 }) => {
   const seeded = await resetCase(page);
   await openExplainer(page);
-  const comment = page.getByTestId(UI.comment(FINDING.busy));
+  await selectFinding(page, FINDING.busy);
+  const comment = page.getByTestId(UI.drawer);
   await choose(page, comment.getByTestId(UI.willFix), FINDING.busy, DECISION.willFix);
   const path = prDecisionsPath(seeded.home, PR_URL);
   const backup = `${path}.e2e-backup`;
@@ -167,14 +156,17 @@ test("[A04] a real filesystem failure is shown as unsaved and preserves the last
     await comment.getByTestId(UI.wontFix).click();
     expect((await failedSave).status()).toBeGreaterThanOrEqual(400);
     await expect(page.getByTestId(UI.saveError)).toBeVisible();
-    await expect(page.getByTestId(UI.listSkip)).not.toContainText(FINDING.busy);
-    await expect(page.getByTestId(UI.listFix)).toContainText(FINDING.busy);
+    await expect(comment.getByTestId(UI.wontFix)).toHaveAttribute("aria-pressed", "false");
+    await expectDecision(page, FINDING.busy, DECISION.willFix);
     expect(readFileSync(backup, "utf8")).toBe(previous);
   } finally {
     rmSync(path, { recursive: true, force: true });
     renameSync(backup, path);
   }
   await page.reload();
-  await expect(page.getByTestId(UI.listFix)).toContainText(FINDING.busy);
-  await expect(page.getByTestId(UI.listSkip)).not.toContainText(FINDING.busy);
+  await expectDecision(page, FINDING.busy, DECISION.willFix);
+  await expect(page.getByTestId(UI.drawer).getByTestId(UI.wontFix)).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 });

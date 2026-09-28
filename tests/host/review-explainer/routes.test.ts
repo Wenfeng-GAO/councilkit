@@ -9,6 +9,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { FindingsFile } from "@shared/runtime/cli-ledger";
+import type {
+  DecisionsFile,
+  ReviewExplainerWorkspace,
+} from "@shared/runtime/review-explainer/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ASSERTION,
@@ -140,6 +145,86 @@ describe("A01/A02 workspace and file content", () => {
 });
 
 describe("A04 decisions persistence", () => {
+  it("projects the canonical note with the decision for an explicitly confirmed finding alias", async () => {
+    const seeded = seedReviewRun(home);
+    const http = await boot();
+    const reason = "保留这条已确认断言的处理依据。";
+    const saved = await fetch(`${http.baseUrl}${ROUTES.decisions(RUN_ID)}`, {
+      method: "POST",
+      headers: http.headers(),
+      body: JSON.stringify({
+        findingId: FINDING.busy,
+        decision: "will_fix",
+        reason,
+        expectedRevision: 0,
+      }),
+    });
+    expect(saved.status).toBe(200);
+    const alias = "h-111111111111";
+    const decisionsPath = prDecisionsPath(home, PR_URL);
+    const stored = JSON.parse(readFileSync(decisionsPath, "utf8")) as DecisionsFile;
+    const canonical = required(stored.items[FINDING.busy]);
+    canonical.aliases = [{ id: alias, basis: "explicit" }];
+    writeFileSync(decisionsPath, JSON.stringify(stored));
+    const ledgerPath = join(seeded.runDir, "findings.json");
+    const ledger = JSON.parse(readFileSync(ledgerPath, "utf8")) as FindingsFile;
+    required(ledger.findings.find((finding) => finding.id === FINDING.busy)).id = alias;
+    writeFileSync(ledgerPath, JSON.stringify(ledger));
+
+    const response = await fetch(`${http.baseUrl}${ROUTES.workspace(RUN_ID)}`, {
+      headers: http.headers(),
+    });
+    expect(response.status).toBe(200);
+    const { data } = (await response.json()) as { data: ReviewExplainerWorkspace };
+    expect(data.findings.find((finding) => finding.id === alias)).toMatchObject({
+      decision: "will_fix",
+      decisionReason: reason,
+    });
+    expect(data.findings.find((finding) => finding.id === FINDING.stale)?.decisionReason).toBe(
+      undefined,
+    );
+    expect(data.decisions.items[alias]).toBeUndefined();
+    expect(data.decisions.items[FINDING.busy]).toMatchObject({
+      assertionHash: canonical.assertionHash,
+      originalAssertion: canonical.originalAssertion,
+      audit: { event: "user_clicked", reason },
+    });
+    expect(data.revision).toBe(1);
+  });
+
+  it("saves optional notes, preserves omitted notes, clears explicitly, and rejects oversized input", async () => {
+    seedReviewRun(home);
+    const http = await boot();
+    const url = `${http.baseUrl}${ROUTES.decisions(RUN_ID)}`;
+    const save = (expectedRevision: number, reason?: string) =>
+      fetch(url, {
+        method: "POST",
+        headers: http.headers(),
+        body: JSON.stringify({
+          findingId: FINDING.busy,
+          decision: "will_fix",
+          expectedRevision,
+          reason,
+        }),
+      });
+    expect((await save(0, "先补回归用例，再修复所有权检查。")).status).toBe(200);
+    const disk = prDecisionsPath(home, PR_URL);
+    const stored = () => JSON.parse(readFileSync(disk, "utf8"));
+    const first = stored().items[FINDING.busy];
+    expect(first.audit.reason).toBe("先补回归用例，再修复所有权检查。");
+    expect((await save(1)).status).toBe(200);
+    const retained = stored().items[FINDING.busy];
+    expect(retained.audit).toEqual(first.audit);
+    expect(retained.assertionHash).toBe(first.assertionHash);
+    expect(retained.originalAssertion).toBe(first.originalAssertion);
+    expect((await save(2, "")).status).toBe(200);
+    expect(stored().items[FINDING.busy].audit.reason).toBe("用户明确选择此处理决定");
+    expect((await save(3, "x".repeat(2001))).status).toBe(400);
+    expect(stored().revision).toBe(3);
+    expect((await save(2, "stale note")).status).toBe(409);
+    expect(stored().items[FINDING.busy].audit.reason).toBe("用户明确选择此处理决定");
+  });
+
   it("writes decisions to Host-managed disk and rejects a failed write as not saved", async () => {
     seedReviewRun(home);
     const http = await boot();

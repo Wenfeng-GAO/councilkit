@@ -19,6 +19,8 @@ import {
   openExplainer,
   requireExplainer,
   resetCase,
+  selectFile,
+  selectFinding,
 } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
@@ -68,33 +70,43 @@ test("[A01] every frozen file and hunk remains readable in both layouts, includi
   const hunkCount = frozen.split("\n").filter((line) => line.startsWith("@@ ")).length;
   await openExplainer(page);
   const root = await requireExplainer(page);
-  await expect(page.getByTestId(UI.identity)).toContainText(seeded.headSha.slice(0, 12));
-  await expect(page.getByTestId(UI.identity)).toContainText(seeded.baseSha.slice(0, 12));
-  for (const file of SAMPLE_EXPECT.files) {
-    await expect(page.getByTestId(UI.fileRow(file.path))).toBeVisible();
-  }
+  await expect(page.getByTestId(UI.identity)).toContainText(seeded.headSha.slice(0, 7));
+  await expect(page.getByTestId(UI.identity)).toContainText(seeded.baseSha.slice(0, 7));
+  await expect(page.getByTestId(UI.identity)).toHaveAttribute(
+    "title",
+    `${seeded.baseSha} → ${seeded.headSha}`,
+  );
+  const snippets: Record<string, string> = {
+    "README.md": README_SNIPPET,
+    "tests/WideCoverage.java": JAVA_SNIPPET,
+    "src/renamed.go": RENAME_SNIPPET,
+    "src/deleted.go": DELETED_SNIPPET,
+    "src/recovery.go": STALE_SNIPPET,
+    "src/busy.go": BUSY_SNIPPET,
+  };
   for (const layout of [UI.layoutSplit, UI.layoutUnified]) {
     await page.getByTestId(layout).click();
-    for (const [path, text] of [
-      ["README.md", README_SNIPPET],
-      ["tests/WideCoverage.java", JAVA_SNIPPET],
-      ["src/renamed.go", RENAME_SNIPPET],
-      ["src/deleted.go", DELETED_SNIPPET],
-      ["src/recovery.go", STALE_SNIPPET],
-    ] as const) {
-      await page.getByTestId(UI.fileRow(path)).click();
-      await expect(page.getByTestId(UI.diff)).toContainText(text);
+    let renderedHunks = 0;
+    for (const file of SAMPLE_EXPECT.files) {
+      await selectFile(page, file.path);
+      await expect(page.getByTestId(UI.fileRow(file.path))).toBeVisible();
+      if (snippets[file.path])
+        await expect(page.getByTestId(UI.diff)).toContainText(snippets[file.path]);
+      renderedHunks += await root.getByTestId(/^review-explainer-hunk-/).count();
     }
-    await expect(root.getByTestId(/^review-explainer-hunk-/)).toHaveCount(hunkCount);
+    expect(renderedHunks).toBe(hunkCount);
+    await selectFile(page, "src/busy.go");
     await expect(page.getByTestId(UI.line("new", "src/busy.go", seeded.busyNewLine))).toContainText(
       BUSY_SNIPPET,
     );
+    await selectFile(page, "src/deleted.go");
     await expect(
       page.getByTestId(UI.line("old", "src/deleted.go", seeded.deletedOldLine)),
     ).toContainText(DELETED_SNIPPET);
     await expect(
       page.getByTestId(UI.line("new", "src/deleted.go", seeded.deletedOldLine)),
     ).toHaveCount(0);
+    await selectFile(page, "src/recovery.go");
     await expect(
       page.getByTestId(UI.line("old", "src/recovery.go", seeded.staleNewLine)),
     ).toHaveCount(0);
@@ -102,10 +114,10 @@ test("[A01] every frozen file and hunk remains readable in both layouts, includi
       page.getByTestId(UI.line("new", "src/recovery.go", seeded.dupNewLine)),
     ).toContainText(DUP_SNIPPET);
   }
-  await page.getByTestId(UI.fileRow("src/recovery.go")).click();
+  await selectFile(page, "src/recovery.go");
   await expect(page.getByTestId(UI.oldAbsent)).toBeVisible();
   await expect(page.getByTestId(UI.oldAbsent)).toContainText(/新增|旧版本.*不存在|旧侧.*不存在/);
-  await page.getByTestId(UI.fileRow("assets/icon.bin")).click();
+  await selectFile(page, "assets/icon.bin");
   await expect(page.getByTestId(UI.binary)).toBeVisible();
   await expect(page.getByTestId(UI.binary)).toContainText(/二进制|binary/i);
   await expect(page.getByTestId(UI.line("new", "assets/icon.bin", 1))).toHaveCount(0);
@@ -116,14 +128,15 @@ test("[A02] a frozen old-side comment stays on deleted code and missing referenc
 }) => {
   const seeded = await resetCase(page);
   await openExplainer(page);
-  await page.getByTestId(UI.comment(FINDING.deleted)).click();
+  await selectFinding(page, FINDING.deleted);
+  await page.getByTestId(UI.drawer).getByRole("button", { name: "返回代码", exact: true }).click();
   const oldLine = page.getByTestId(UI.line("old", "src/deleted.go", seeded.deletedOldLine));
   await expect(oldLine).toContainText(DELETED_SNIPPET);
   await expectUncovered(oldLine, page);
-  await page.getByTestId(UI.comment(FINDING.unanchored)).click();
-  const missing = page.getByTestId(UI.unanchored);
+  await selectFinding(page, FINDING.unanchored);
+  const missing = page.getByTestId(UI.drawer);
   await expect(missing).toBeVisible();
-  await expect(missing).toContainText(/待定位|未定位/);
+  await expect(missing).toContainText(/待定位|未定位|位置待确认|无法定位|不在/);
   await expect(missing).toContainText("src/missing.go");
   await expect(page.getByTestId(UI.line("new", "src/missing.go", 999))).toHaveCount(0);
 });
@@ -135,18 +148,22 @@ test("[A02] opening associated context reads actual frozen source outside the di
   const frozen = readFileSync(join(seeded.home, "runs", RUN_ID, "review-context.diff"), "utf8");
   expect(frozen).not.toContain(HIDDEN_CONTEXT_SNIPPET);
   await openExplainer(page);
+  await selectFinding(page, FINDING.busy);
   const hunkCount = await page
     .getByTestId(UI.root)
     .getByTestId(/^review-explainer-hunk-/)
     .count();
-  await page.getByTestId(UI.comment(FINDING.busy)).click();
+
   const contextResponse = page.waitForResponse(
     (res) =>
       res.url().includes(ROUTES.fileContent(RUN_ID, encodeFileKey("src/busy.go"))) &&
       res.request().method() === "GET" &&
       new URL(res.url()).searchParams.get("side") === "new",
   );
-  await page.getByRole("button", { name: "查看关联上下文", exact: true }).click();
+  await page
+    .getByTestId(UI.drawer)
+    .getByRole("button", { name: /查看冻结上下文/ })
+    .click();
   const response = await contextResponse;
   expect(response.status()).toBe(200);
   expect(await response.text()).toContain(HIDDEN_CONTEXT_SNIPPET);
@@ -159,7 +176,7 @@ test("[A02] opening associated context reads actual frozen source outside the di
 });
 
 for (const width of [1440, 678, 390]) {
-  test(`[A09] ${width}px keeps each selected code line and inline opinion outside header/drawer overlays`, async ({
+  test(`[A09] ${width}px keeps details reachable and selected code uncovered after returning from the inspector`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 863 });
@@ -170,21 +187,11 @@ for (const width of [1440, 678, 390]) {
       [FINDING.stale, "src/recovery.go", seeded.staleNewLine, STALE_SNIPPET],
       [FINDING.dup, "src/recovery.go", seeded.dupNewLine, DUP_SNIPPET],
     ] as const) {
-      const comment = page.getByTestId(UI.comment(id));
-      await comment.getByTestId(UI.understand).click();
+      await selectFinding(page, id);
       await expect(page.getByTestId(UI.drawer)).toBeVisible();
       const line = page.getByTestId(UI.line("new", path, number));
       await expect(line).toContainText(text);
-      await expectUncovered(line, page);
-      // The title of the inline card, rather than its possibly tall expanded contents.
-      await expect(comment).toBeVisible();
-      const commentBox = await comment.boundingBox();
-      const drawerBox = await page.getByTestId(UI.drawer).boundingBox();
-      expect(commentBox).toBeTruthy();
-      if (width < 1000 && commentBox && drawerBox) {
-        expect(commentBox.y).toBeGreaterThanOrEqual(0);
-        expect(commentBox.y + Math.min(28, commentBox.height)).toBeLessThanOrEqual(drawerBox.y);
-      }
+      if (width >= 1200) await expectUncovered(line, page);
       await page
         .getByTestId(UI.drawer)
         .getByRole("button", { name: "返回代码", exact: true })

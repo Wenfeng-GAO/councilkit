@@ -44,6 +44,7 @@ export interface FindingAnchor {
 export interface ExplainerFinding extends LedgerFinding {
   anchors: FindingAnchor[];
   decision: FindingDecision;
+  decisionReason?: string;
 }
 export interface DecisionItem {
   findingId: string;
@@ -75,6 +76,17 @@ export interface ReviewExplainerWorkspace {
   totals: { files: number; hunks: number; additions: number; deletions: number };
   availability: "available" | "missing";
   notice?: string;
+}
+export type ReviewComparisonMode = "full" | "last-commit";
+export interface ReviewComparison {
+  mode: ReviewComparisonMode;
+  fromSha: string | null;
+  toSha: string;
+  availability: "available" | "unavailable";
+  reason?: "repository_missing" | "commit_missing" | "parent_missing" | "diff_unavailable";
+  notice?: string;
+  files: DiffFile[];
+  totals: ReviewExplainerWorkspace["totals"];
 }
 export interface FrozenFileContent {
   path: string;

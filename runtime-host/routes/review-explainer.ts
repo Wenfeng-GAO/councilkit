@@ -10,6 +10,7 @@ import {
 } from "@shared/runtime/review-explainer/pr-decisions";
 import { buildRepairPackageFromSelection } from "@shared/runtime/review-explainer/repair-selection";
 import { z } from "zod";
+import { reviewComparison } from "../review-explainer/comparison";
 import { createExplanationService } from "../review-explainer/explanations";
 import { readFrozenFile, readFrozenReview, reviewWorkspace } from "../review-explainer/workspace";
 import { type HostServices, type Route, httpError } from "../server";
@@ -51,6 +52,17 @@ export function reviewExplainerRoutes(services: HostServices): Route[] {
     },
     {
       method: "GET",
+      pattern: `${base}/comparison`,
+      auth: "session",
+      handler: guarded((ctx) => {
+        const mode = ctx.query.get("mode") ?? "full";
+        if (mode !== "full" && mode !== "last-commit")
+          throw new ExplainerError("Invalid comparison mode");
+        return reviewComparison(ctx.params.runId ?? "", mode);
+      }),
+    },
+    {
+      method: "GET",
       pattern: `${base}/files/:fileKey`,
       auth: "session",
       handler: guarded((ctx) => {
@@ -72,6 +84,7 @@ export function reviewExplainerRoutes(services: HostServices): Route[] {
           findingId: z.string().min(1).max(160),
           decision: decisionSchema,
           expectedRevision: z.number().int().nonnegative(),
+          reason: z.string().max(2000).optional(),
         })
         .strict(),
       handler: guarded((ctx) => {
@@ -79,6 +92,7 @@ export function reviewExplainerRoutes(services: HostServices): Route[] {
           findingId: string;
           decision: z.infer<typeof decisionSchema>;
           expectedRevision: number;
+          reason?: string;
         };
         const runId = ctx.params.runId ?? "";
         const frozen = readFrozenReview(runId);
@@ -90,6 +104,7 @@ export function reviewExplainerRoutes(services: HostServices): Route[] {
           decision: body.decision,
           expectedRevision: body.expectedRevision,
           sourceRunId: runId,
+          reason: body.reason,
         });
       }),
     },

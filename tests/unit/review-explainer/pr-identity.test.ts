@@ -1,4 +1,9 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { LedgerFinding } from "@shared/runtime/cli-ledger";
+import { prDecisionsPath, upsertPrDecision } from "@shared/runtime/review-explainer/pr-decisions";
 import { describe, expect, it } from "vitest";
 import {
   ANTCODE_PR_URL,
@@ -48,6 +53,53 @@ async function api() {
 }
 
 describe("A05 skipped identity is a frozen assertion, not a file or title", () => {
+  it("preserves the canonical note and assertion when an explicit alias changes its decision", () => {
+    const home = mkdtempSync(join(tmpdir(), "ck-alias-note-"));
+    try {
+      const finding: LedgerFinding = {
+        id: FINDING.busy,
+        title: "original finding",
+        text: ASSERTION.busy,
+        severity: "major",
+        status: "open",
+        source: "consensus",
+        reviewer: null,
+        files: ["src/busy.go"],
+      };
+      const first = upsertPrDecision({
+        home,
+        prUrl: PR_URL,
+        finding,
+        decision: "wont_fix",
+        expectedRevision: 0,
+        reason: "限定于旧兼容路径，保留人工决定。",
+      });
+      const item = first.items[FINDING.busy];
+      if (!item) throw new Error("missing original decision");
+      item.aliases = [{ id: "h-111111111111", basis: "explicit" }];
+      writeFileSync(prDecisionsPath(home, PR_URL), JSON.stringify(first));
+      const next = upsertPrDecision({
+        home,
+        prUrl: PR_URL,
+        finding: { ...finding, id: "h-111111111111" },
+        decision: "will_fix",
+        expectedRevision: 1,
+      });
+      expect(Object.keys(next.items)).toEqual([FINDING.busy]);
+      expect(next.items[FINDING.busy]).toMatchObject({
+        findingId: FINDING.busy,
+        decision: "will_fix",
+        originalAssertion: item.originalAssertion,
+        assertionHash: item.assertionHash,
+        assertionVersion: item.assertionVersion,
+        aliases: item.aliases,
+        audit: item.audit,
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("continues the same assertion across stable ID and explicitly confirmed alias", async () => {
     const { matches } = await api();
     expect(matches({ skipped, candidate }).skip).toBe(true);

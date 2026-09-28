@@ -1,0 +1,206 @@
+/* Detail content inherits the workbench's light/dark tokens and pane geometry. */
+.ck-ex-summary-number {
+  font-size: 12px;
+  color: var(--ck-text);
+  font-weight: 600;
+}
+.ck-ex-summary-number small {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  font-weight: 400;
+}
+.ck-ex-summary-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ck-ex-summary-badges {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+}
+.ck-ex-summary-badges > span {
+  border: 1px solid var(--ck-divider);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+.ck-ex-summary-severity {
+  text-transform: capitalize;
+}
+.ck-ex-summary-severity.critical,
+.ck-ex-summary-severity.major {
+  color: var(--ck-error);
+}
+.ck-ex-summary-severity.minor {
+  color: var(--ck-warning, var(--ck-secondary));
+}
+.ck-ex-summary-status {
+  color: var(--ck-secondary);
+}
+.ck-ex-summary-source {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.ck-ex-summary-section {
+  border-bottom: 1px solid var(--ck-divider);
+  padding: 0 0 18px;
+  margin: 18px 0;
+}
+.ck-ex-summary-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ck-ex-summary-heading h3 {
+  font-size: 12px;
+}
+.ck-ex-summary-heading > span {
+  font-size: 10px;
+  color: var(--ck-tertiary);
+}
+.ck-ex-summary-outcome {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px !important;
+}
+.ck-ex-summary-outcome.verified_closed {
+  color: var(--ck-success);
+}
+.ck-ex-summary-outcome.still_open {
+  color: var(--ck-error);
+}
+.ck-ex-summary-label {
+  font-size: 11px;
+  margin: 13px 0 6px !important;
+  color: var(--ck-secondary);
+}
+.ck-ex-summary-evidence {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 9px 11px;
+  background: var(--ck-raised);
+  border-left: 2px solid var(--ck-divider);
+}
+.ck-ex-summary-command {
+  font-size: 10px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 10px;
+  border: 1px solid var(--ck-divider);
+  border-radius: 4px;
+  margin: 10px 0 !important;
+  background: var(--ck-raised);
+}
+.ck-ex-summary-references {
+  display: grid;
+  gap: 4px;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  margin: 9px 0;
+}
+.ck-ex-summary-section > .ck-ex-summary-source {
+  margin-top: 11px;
+}
+.ck-ex-summary-anchor {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 7px 0;
+  padding: 9px 10px !important;
+}
+.ck-ex-summary-anchor > span {
+  display: block;
+  font: 11px / 1.6 var(--ck-mono-font);
+  overflow-wrap: anywhere;
+}
+.ck-ex-summary-anchor small {
+  display: block;
+  margin-top: 3px;
+  color: var(--ck-tertiary);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.ck-ex-summary-anchor.unresolved {
+  border-style: dashed;
+}
+.ck-ex-summary-files {
+  margin-top: 11px;
+  font-size: 11px;
+  color: var(--ck-secondary);
+}
+.ck-ex-summary-files code {
+  display: block;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  margin-top: 4px;
+}
+.ck-ex-summary-files summary,
+.ck-ex-summary-original summary {
+  cursor: pointer;
+  border-radius: 3px;
+}
+.ck-ex-summary-original {
+  font-size: 12px;
+}
+.ck-ex-summary-original-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  padding: 12px 0 9px;
+}
+.ck-ex-summary-original .ck-ex-summary-source {
+  padding-top: 12px;
+}
+.ck-ex-note-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ck-ex-note-heading h3 {
+  font-size: 12px;
+}
+.ck-ex-note-heading > span {
+  color: var(--ck-tertiary);
+  font-size: 10px;
+}
+.ck-ex-note-label {
+  display: block;
+  margin: 10px 0 5px;
+  color: var(--ck-secondary);
+  font-size: 11px;
+}
+.ck-ex-note-input {
+  display: block;
+  width: 100%;
+  min-height: 45px;
+  max-height: 105px;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--ck-divider);
+  border-radius: 5px;
+  background: var(--ck-content);
+  color: var(--ck-text);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.ck-ex-note-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  font-size: 10px;
+  color: var(--ck-tertiary);
+}

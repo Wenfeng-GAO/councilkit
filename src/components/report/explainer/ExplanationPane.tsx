@@ -1,15 +1,45 @@
 import type {
   ExplainerFinding,
   ExplanationResult,
+  FindingAnchor,
   FindingDecision,
 } from "@shared/runtime/review-explainer/contracts";
 import { useEffect, useRef, useState } from "react";
 import { DecisionButtons } from "./DecisionButtons";
 import { type CodeLocation, ExplanationDiagram } from "./ExplanationDiagram";
 import { ExplainerRequestError, errorMessage, explainerApi } from "./api";
+import { displayDecisionReason, displayFindingTitle } from "./finding-presentation";
 import { explainerUi as UI } from "./ui";
+import { findingDisplayStatus } from "./view-model";
+import "@/styles/review-explainer-details.css";
 
-export function ExplanationPane({
+type PaneTab = "summary" | "explanation" | "original";
+interface ExplanationPaneProps {
+  runId: string;
+  finding: ExplainerFinding;
+  decision: FindingDecision;
+  saving: boolean;
+  contextPending: boolean;
+  onDecide: (id: string, decision: FindingDecision, reason?: string) => void;
+  onBack: () => void;
+  onContext: () => void;
+  onLocate: (location: CodeLocation) => void;
+  number?: number;
+  total?: number;
+  initialTab?: PaneTab;
+  reason?: string;
+  headSha?: string;
+  onPrevious?: () => void;
+  onNext?: () => void;
+  onLocateAnchor?: (anchor: FindingAnchor) => void;
+}
+
+export function ExplanationPane(props: ExplanationPaneProps) {
+  // A new finding owns fresh drafts and requests, even if the parent keeps the pane mounted.
+  return <ExplanationPaneContent key={`${props.runId}:${props.finding.id}`} {...props} />;
+}
+
+function ExplanationPaneContent({
   runId,
   finding,
   decision,
@@ -19,18 +49,26 @@ export function ExplanationPane({
   onBack,
   onContext,
   onLocate,
-}: {
-  runId: string;
-  finding: ExplainerFinding;
-  decision: FindingDecision;
-  saving: boolean;
-  contextPending: boolean;
-  onDecide: (id: string, decision: FindingDecision) => void;
-  onBack: () => void;
-  onContext: () => void;
-  onLocate: (location: CodeLocation) => void;
-}) {
-  const [tab, setTab] = useState<"explanation" | "original">("explanation");
+  number,
+  total,
+  initialTab = "summary",
+  reason,
+  headSha,
+  onPrevious,
+  onNext,
+  onLocateAnchor,
+}: ExplanationPaneProps) {
+  const [tab, setTab] = useState<PaneTab>(initialTab);
+  const savedNote = displayDecisionReason(reason);
+  const [note, setNote] = useState(savedNote);
+  const priorSavedNote = useRef(savedNote);
+  const noteDirty = note !== savedNote;
+  useEffect(() => setTab(initialTab), [initialTab]);
+  useEffect(() => {
+    const previous = priorSavedNote.current;
+    setNote((current) => (current === previous ? savedNote : current));
+    priorSavedNote.current = savedNote;
+  }, [savedNote]);
   const [status, setStatus] = useState<"reading" | "empty" | "generating" | "ready" | "failed">(
     "reading",
   );
@@ -40,6 +78,7 @@ export function ExplanationPane({
   const [diagramOpen, setDiagramOpen] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const generationRef = useRef(false);
+  const requestVersion = useRef(0);
   useEffect(() => {
     if (diagramOpen && dialog.current && !dialog.current.open) dialog.current.showModal();
   }, [diagramOpen]);
@@ -49,16 +88,17 @@ export function ExplanationPane({
   };
   useEffect(() => {
     let alive = true;
+    const request = ++requestVersion.current;
     void explainerApi
       .explanation(runId, finding.id)
       .then((value) => {
-        if (alive) {
+        if (alive && request === requestVersion.current) {
           setResult(value);
           setStatus("ready");
         }
       })
       .catch((error: unknown) => {
-        if (!alive) return;
+        if (!alive || request !== requestVersion.current) return;
         if (error instanceof ExplainerRequestError && error.status === 404) setStatus("empty");
         else {
           setStatus("failed");
@@ -67,22 +107,26 @@ export function ExplanationPane({
       });
     return () => {
       alive = false;
+      requestVersion.current += 1;
     };
   }, [runId, finding.id]);
   const generate = async () => {
     if (generationRef.current) return;
     generationRef.current = true;
+    const request = ++requestVersion.current;
     setStatus("generating");
     setFailure("");
     try {
       const value = await explainerApi.explanation(runId, finding.id, true);
+      if (request !== requestVersion.current) return;
       setResult(value);
       setStatus("ready");
     } catch (error) {
+      if (request !== requestVersion.current) return;
       setStatus("failed");
       setFailure(errorMessage(error));
     } finally {
-      generationRef.current = false;
+      if (request === requestVersion.current) generationRef.current = false;
     }
   };
   const locate = (location: CodeLocation) => {
@@ -93,6 +137,15 @@ export function ExplanationPane({
     closeDiagram();
     onContext();
   };
+  const locateAnchor = (anchor: FindingAnchor) => {
+    closeDiagram();
+    if (onLocateAnchor) onLocateAnchor(anchor);
+    else if (anchor.status === "context") onContext();
+    else if (anchor.status === "resolved" && anchor.path && anchor.side && anchor.line) {
+      onLocate({ path: anchor.path, side: anchor.side, line: anchor.line });
+    }
+  };
+  const title = displayFindingTitle(finding);
   const payload = result?.payload;
   const hasContext = finding.anchors.some((anchor) => anchor.status === "context");
   const copySuggestion = async () => {
@@ -110,13 +163,45 @@ export function ExplanationPane({
     <>
       <header className="ck-ex-pane-header">
         <div className="ck-ex-pane-top">
-          <code>{finding.id}</code>
-          <button type="button" onClick={onBack}>
-            返回代码
-          </button>
+          <span className="ck-ex-summary-number">
+            {number === undefined ? "问题详情" : `问题 #${number}`}
+            {total === undefined ? null : <small> · 当前范围 {total} 条</small>}
+          </span>
+          <div className="ck-ex-summary-navigation">
+            {number !== undefined ? (
+              <>
+                <button
+                  type="button"
+                  disabled={!onPrevious}
+                  onClick={onPrevious}
+                  aria-label="上一个问题"
+                >
+                  ‹
+                </button>
+                <button type="button" disabled={!onNext} onClick={onNext} aria-label="下一个问题">
+                  ›
+                </button>
+              </>
+            ) : null}
+            <button type="button" onClick={onBack}>
+              返回代码
+            </button>
+          </div>
         </div>
-        <h2>{finding.title}</h2>
+        <div className="ck-ex-summary-badges">
+          <span className={`ck-ex-summary-severity ${finding.severity}`}>{finding.severity}</span>
+          <span className="ck-ex-summary-status">{findingDisplayStatus(finding, headSha)}</span>
+        </div>
+        <h2 title={finding.title}>{title}</h2>
         <div className="ck-ex-tabs" role="tablist" aria-label="评审解释">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "summary"}
+            onClick={() => setTab("summary")}
+          >
+            概览
+          </button>
           <button
             type="button"
             role="tab"
@@ -137,7 +222,15 @@ export function ExplanationPane({
         </div>
       </header>
       <div className="ck-ex-pane-body">
-        {tab === "original" ? (
+        {tab === "summary" ? (
+          <FindingSummary
+            finding={finding}
+            headSha={headSha}
+            contextPending={contextPending}
+            onLocateAnchor={locateAnchor}
+            canLocateUnresolved={Boolean(onLocateAnchor)}
+          />
+        ) : tab === "original" ? (
           <section aria-label="原始评审">
             <p className="ck-ex-kicker">原始断言 · 保留完整上下文</p>
             <p className="ck-ex-prose">{finding.text}</p>
@@ -307,12 +400,48 @@ export function ExplanationPane({
         )}
       </div>
       <footer className="ck-ex-pane-footer">
+        <div className="ck-ex-note-heading">
+          <h3>处理决定</h3>
+          <span>保存至此 PR</span>
+        </div>
         <DecisionButtons
           decision={decision}
           disabled={saving}
-          onDecide={(choice) => onDecide(finding.id, choice)}
+          onDecide={(choice) => onDecide(finding.id, choice, note)}
         />
-        <p>打算修复不等于已修好；不修复仅跳过同一评审点。</p>
+        <label className="ck-ex-note-label" htmlFor={`finding-note-${finding.id}`}>
+          备注（可选）
+        </label>
+        <textarea
+          id={`finding-note-${finding.id}`}
+          className="ck-ex-note-input"
+          aria-label="处理备注"
+          rows={2}
+          maxLength={2000}
+          value={note}
+          disabled={saving}
+          placeholder="记录处理原因或后续安排"
+          onChange={(event) => setNote(event.target.value)}
+        />
+        <div className="ck-ex-note-actions">
+          <output aria-live="polite">
+            {saving
+              ? "正在保存…"
+              : noteDirty
+                ? "备注尚未保存"
+                : savedNote
+                  ? "备注已保存"
+                  : "备注按需填写"}
+          </output>
+          <button
+            type="button"
+            disabled={saving || !noteDirty}
+            onClick={() => onDecide(finding.id, decision, note)}
+          >
+            保存备注
+          </button>
+        </div>
+        <p>处理决定不改变核验状态。</p>
       </footer>
       <dialog
         ref={dialog}
@@ -321,7 +450,7 @@ export function ExplanationPane({
         onClose={() => setDiagramOpen(false)}
       >
         <header>
-          <h2>{finding.title}</h2>
+          <h2>{title}</h2>
           <button type="button" onClick={closeDiagram}>
             关闭图解
           </button>
@@ -336,5 +465,140 @@ export function ExplanationPane({
         ) : null}
       </dialog>
     </>
+  );
+}
+
+function FindingSummary({
+  finding,
+  headSha,
+  contextPending,
+  onLocateAnchor,
+  canLocateUnresolved,
+}: {
+  finding: ExplainerFinding;
+  headSha?: string;
+  contextPending: boolean;
+  onLocateAnchor: (anchor: FindingAnchor) => void;
+  canLocateUnresolved: boolean;
+}) {
+  const verification = finding.verification;
+  const stale = !!headSha && verification?.candidateSha !== headSha;
+  const outcomes = {
+    verified_closed: "核验结论：已关闭",
+    still_open: "核验结论：仍成立",
+    not_evaluated: "尚未核验",
+  };
+  const methods = {
+    regression_test: "回归测试",
+    code_trace: "代码追踪",
+    not_evaluated: "未执行核验",
+  };
+  return (
+    <div className="ck-ex-summary">
+      <p className="ck-ex-summary-source">
+        {{ consensus: "共识问题", unique: "独立发现", unknown: "来源未分类" }[finding.source]}
+        {finding.reviewer ? ` · ${finding.reviewer}` : ""}
+      </p>
+      <section className="ck-ex-summary-section" aria-label="最近一次核验">
+        <div className="ck-ex-summary-heading">
+          <h3>最近一次核验</h3>
+          {verification ? <span>{methods[verification.method]}</span> : null}
+        </div>
+        {verification ? (
+          <>
+            <p
+              className={`ck-ex-summary-outcome ${stale ? "not_evaluated" : verification.outcome}`}
+            >
+              {stale
+                ? `历史${outcomes[verification.outcome]} · 待验证当前提交`
+                : outcomes[verification.outcome]}
+            </p>
+            <p className="ck-ex-prose">{verification.reason}</p>
+            <h4 className="ck-ex-summary-label">验证证据</h4>
+            <p className="ck-ex-summary-evidence">{verification.evidence}</p>
+            {verification.command ? (
+              <pre className="ck-ex-summary-command">{verification.command}</pre>
+            ) : null}
+            {verification.locations?.length ? (
+              <div className="ck-ex-summary-references">
+                {verification.locations.map((location, index) => (
+                  <code key={`${index}:${location}`}>{location}</code>
+                ))}
+              </div>
+            ) : null}
+            <p className="ck-ex-summary-source">
+              {verification.reviewer} · 提交{" "}
+              <code title={verification.candidateSha}>
+                {verification.candidateSha.slice(0, 12)}
+              </code>
+              <br />
+              <span title={`Run: ${verification.runId} · Attempt: ${verification.attemptId}`}>
+                {verification.runComplete ? "该次评审已完成" : "该次评审未完成"}
+              </span>
+            </p>
+            <p className="ck-ex-muted">该结论对应上述提交，处理决定另行记录。</p>
+          </>
+        ) : (
+          <p className="ck-ex-muted">未提供核验记录，请结合原始评审与源码判断。</p>
+        )}
+        {finding.acceptedReason ? (
+          <p className="ck-ex-summary-evidence">接受不修原因：{finding.acceptedReason}</p>
+        ) : null}
+      </section>
+      <section className="ck-ex-summary-section" aria-label="关联位置">
+        <div className="ck-ex-summary-heading">
+          <h3>关联位置</h3>
+          <span>{finding.anchors.length} 处引用</span>
+        </div>
+        {finding.anchors.length ? (
+          finding.anchors.map((anchor, index) => (
+            <button
+              type="button"
+              className={`ck-ex-summary-anchor ${anchor.status}`}
+              key={`${anchor.path ?? "unknown"}:${anchor.side}:${anchor.line}:${index}`}
+              disabled={
+                (anchor.status === "context" && contextPending) ||
+                (anchor.status === "unresolved" && !canLocateUnresolved)
+              }
+              onClick={() => onLocateAnchor(anchor)}
+            >
+              <span>
+                {anchor.path ?? "原评审未提供可确认的位置"}
+                {anchor.line
+                  ? `:${anchor.line}${anchor.endLine && anchor.endLine > anchor.line ? `–${anchor.endLine}` : ""}`
+                  : ""}
+              </span>
+              <small>
+                {anchor.side ? `${anchor.side === "old" ? "旧" : "新"}侧 · ` : ""}
+                {anchor.status === "resolved"
+                  ? "定位代码"
+                  : anchor.status === "context"
+                    ? "查看冻结上下文"
+                    : "无法定位"}
+                {anchor.reason ? ` · ${anchor.reason}` : ""}
+              </small>
+            </button>
+          ))
+        ) : (
+          <p className="ck-ex-muted">暂无确认位置，原始评审与当前代码仍可阅读。</p>
+        )}
+        {finding.files.length ? (
+          <details className="ck-ex-summary-files">
+            <summary>原评审引用文件</summary>
+            {finding.files.map((file) => (
+              <code key={file}>{file}</code>
+            ))}
+          </details>
+        ) : null}
+      </section>
+      <details className="ck-ex-summary-original">
+        <summary>完整原始评审</summary>
+        <p className="ck-ex-summary-original-title">{finding.title}</p>
+        <p className="ck-ex-prose">{finding.text}</p>
+        <p className="ck-ex-summary-source">
+          Finding ID · <code>{finding.id}</code>
+        </p>
+      </details>
+    </div>
   );
 }
