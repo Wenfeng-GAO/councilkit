@@ -63,7 +63,12 @@ export function upsertPrDecision(input: {
       aliases: existing?.aliases ?? [],
       sourceRunId: input.sourceRunId,
       decidedAt: new Date().toISOString(),
-      audit: { event: "user_clicked", reason: input.reason ?? "用户明确选择此处理决定" },
+      audit: {
+        event: "user_clicked",
+        reason:
+          (input.reason === undefined ? existing?.audit?.reason : input.reason) ||
+          "用户明确选择此处理决定",
+      },
     },
   });
 }

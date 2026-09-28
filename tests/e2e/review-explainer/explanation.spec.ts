@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { type Page, expect, test } from "@playwright/test";
 import { ASSERTION, FINDING, ROUTES, RUN_ID, TEST_API, UI } from "../../review-explainer/contract";
 import { BUSY_SNIPPET, HIDDEN_CONTEXT_SNIPPET } from "../../review-explainer/fixtures/sample-diff";
-import { controlPost, installOriginAllowlist, openExplainer, resetCase } from "./helpers";
+import {
+  controlPost,
+  installOriginAllowlist,
+  openExplainer,
+  resetCase,
+  selectFinding,
+} from "./helpers";
 
 const FLOW = {
   kind: "flow",
@@ -46,7 +52,8 @@ async function calls(page: Page) {
 }
 
 async function openFinding(page: Page, id: string) {
-  await page.getByTestId(UI.comment(id)).getByTestId(UI.understand).click();
+  await selectFinding(page, id);
+  await page.getByTestId(UI.drawer).getByRole("tab", { name: "看懂问题", exact: true }).click();
   await expect(page.getByTestId(UI.drawer)).toBeVisible();
 }
 
@@ -207,7 +214,7 @@ test("[A09] enlarged graph closes before locating frozen related source in a nar
   await openFinding(page, FINDING.busy);
   expect((await generate(page, FINDING.busy)).status()).toBe(200);
   await page.getByTestId(UI.drawer).getByRole("button", { name: "放大图", exact: true }).click();
-  const dialog = page.getByRole("dialog");
+  const dialog = page.getByRole("dialog", { name: "放大图解", exact: true });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "查看关联上下文", exact: true }).click();
   await expect(dialog).toBeHidden();

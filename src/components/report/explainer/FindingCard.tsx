@@ -1,6 +1,7 @@
 import type { ExplainerFinding, FindingDecision } from "@shared/runtime/review-explainer/contracts";
 import { DecisionButtons } from "./DecisionButtons";
 import type { CodeLocation } from "./ExplanationDiagram";
+import { displayFindingTitle } from "./finding-presentation";
 import { explainerUi as UI } from "./ui";
 
 export function primaryLocation(finding: ExplainerFinding): CodeLocation | null {
@@ -21,6 +22,7 @@ export function FindingCard({
   onDecide,
   onContext,
   contextPending,
+  number,
 }: {
   finding: ExplainerFinding;
   selected: boolean;
@@ -30,6 +32,7 @@ export function FindingCard({
   onDecide: (id: string, decision: FindingDecision) => void;
   onContext: (finding: ExplainerFinding) => void;
   contextPending: boolean;
+  number?: number;
 }) {
   const anchor = primaryLocation(finding);
   return (
@@ -46,6 +49,7 @@ export function FindingCard({
       aria-label={`评审意见：${finding.title}`}
     >
       <div className="ck-ex-finding-meta">
+        {number === undefined ? null : <span>#{number}</span>}
         <span>{finding.severity}</span>
         <code>{finding.id}</code>
         <span>
@@ -61,7 +65,7 @@ export function FindingCard({
             onSelect(finding, false);
           }}
         >
-          {finding.title}
+          {displayFindingTitle(finding)}
         </button>
       </h3>
       <p className="ck-ex-original-excerpt">{finding.text}</p>

@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import { ASSERTION, DECISION, FINDING, ROUTES, RUN_ID, UI } from "../../review-explainer/contract";
-import { installOriginAllowlist, openExplainer, resetCase } from "./helpers";
+import {
+  expectDecision,
+  installOriginAllowlist,
+  openExplainer,
+  resetCase,
+  selectFinding,
+} from "./helpers";
 
 test("[A06] UI choices export only the selected repair and its original acceptance evidence", async ({
   page,
@@ -14,17 +20,18 @@ test("[A06] UI choices export only the selected repair and its original acceptan
     [FINDING.busy, UI.willFix, DECISION.willFix],
     [FINDING.stale, UI.wontFix, DECISION.wontFix],
   ] as const) {
+    await selectFinding(page, id);
     const save = page.waitForResponse(
       (res) => res.url().endsWith(ROUTES.decisions(RUN_ID)) && res.request().method() === "POST",
     );
-    await page.getByTestId(UI.comment(id)).getByTestId(button).click();
+    await page.getByTestId(UI.drawer).getByTestId(button).click();
     const response = await save;
     expect(response.status()).toBe(200);
     expect(response.request().postDataJSON()).toMatchObject({ findingId: id, decision });
   }
-  await expect(page.getByTestId(UI.listFix)).toContainText(FINDING.busy);
-  await expect(page.getByTestId(UI.listSkip)).toContainText(FINDING.stale);
-  await expect(page.getByTestId(UI.listUndecided)).toContainText(FINDING.dup);
+  await expectDecision(page, FINDING.busy, DECISION.willFix);
+  await expectDecision(page, FINDING.stale, DECISION.wontFix);
+  await expectDecision(page, FINDING.dup, DECISION.undecided);
 
   const exportResponse = page.waitForResponse(
     (res) => res.url().endsWith(ROUTES.repairPackage(RUN_ID)) && res.request().method() === "GET",
@@ -54,12 +61,16 @@ test("[A06] UI choices export only the selected repair and its original acceptan
   expect(original?.verification?.status).not.toBe("verified_closed");
 
   // Removing the only selection must also remove it from the next exported scope.
+  await selectFinding(page, FINDING.busy);
   const withdrawal = page.waitForResponse(
     (res) => res.url().endsWith(ROUTES.decisions(RUN_ID)) && res.request().method() === "POST",
   );
-  await page.getByTestId(UI.comment(FINDING.busy)).getByTestId(UI.undecided).click();
+  await page.getByTestId(UI.drawer).getByTestId(UI.undecided).click();
   expect((await withdrawal).status()).toBe(200);
-  await expect(page.getByTestId(UI.listFix)).not.toContainText(FINDING.busy);
+  await expect(page.getByTestId(UI.drawer).getByTestId(UI.willFix)).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await expect(
     page.getByTestId(UI.root).getByRole("button", { name: "导出修复清单", exact: true }),
   ).toBeDisabled();

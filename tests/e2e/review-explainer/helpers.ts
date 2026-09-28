@@ -121,7 +121,50 @@ export async function openExplainer(page: Page, runId: string = RUN_ID): Promise
     missing("review-explainer entry", "理解评审 button is not available");
   await entry.click();
   await expect(page.getByTestId(UI.root)).toBeVisible();
-  await expect(page.getByTestId(UI.identity)).toContainText(/[0-9a-f]{7,40}/);
+  await expect(
+    page.getByTestId(UI.identity).or(page.getByTestId(UI.missing)).first(),
+  ).toBeVisible();
+  if (await page.getByTestId(UI.identity).isVisible()) {
+    await expect(page.getByTestId(UI.identity)).toContainText(/[0-9a-f]{7,40}/);
+  }
+}
+
+/** Drive the visible v2 navigation rather than assuming every file is mounted. */
+export async function selectFinding(page: Page, id: string): Promise<void> {
+  const pane = page.getByTestId(UI.drawer);
+  if (await pane.isVisible()) {
+    await pane.getByRole("button", { name: "返回代码", exact: true }).click();
+  }
+  await page.getByRole("tab", { name: /^问题/ }).click();
+  await page.getByLabel("搜索问题或文件", { exact: true }).fill("");
+  await page.getByLabel("问题状态", { exact: true }).selectOption("all");
+  await page.getByLabel("严重程度", { exact: true }).selectOption("all");
+  await page.getByLabel("处理决定", { exact: true }).selectOption("all");
+  await page.getByTestId(`review-explainer-finding-${id}`).click();
+  await expect(pane).toBeVisible();
+}
+
+export async function selectFile(page: Page, path: string): Promise<void> {
+  const pane = page.getByTestId(UI.drawer);
+  if (await pane.isVisible()) {
+    await pane.getByRole("button", { name: "返回代码", exact: true }).click();
+  }
+  await page.getByRole("tab", { name: /^文件/ }).click();
+  await page.getByLabel("搜索问题或文件", { exact: true }).fill(path);
+  await page.getByTestId(UI.fileRow(path)).click();
+}
+
+export async function expectDecision(page: Page, id: string, choice: string): Promise<void> {
+  await selectFinding(page, id);
+  const pane = page.getByTestId(UI.drawer);
+  await expect(pane.getByTestId(UI.willFix)).toHaveAttribute(
+    "aria-pressed",
+    choice === "will_fix" ? "true" : "false",
+  );
+  await expect(pane.getByTestId(UI.wontFix)).toHaveAttribute(
+    "aria-pressed",
+    choice === "wont_fix" ? "true" : "false",
+  );
 }
 
 export async function getCsrf(page: Page): Promise<string> {

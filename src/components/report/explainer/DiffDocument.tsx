@@ -141,6 +141,8 @@ function CodeRows({
 
 interface Props {
   files: DiffFile[];
+  hideInlineFindings?: boolean;
+  singleFile?: boolean;
   findings: ExplainerFinding[];
   layout: DiffLayout;
   selectedId: string | null;
@@ -174,15 +176,17 @@ export function DiffDocument(props: Props) {
     let chunk: DiffLine[] = [];
     for (const line of hunk.lines) {
       chunk.push(line);
-      const attached = props.findings.filter((finding) => {
-        const anchor = finding.anchors.find((candidate) => candidate.status === "resolved");
-        return (
-          anchor?.side !== undefined &&
-          anchor.path === (anchor.side === "old" ? file.oldPath : file.newPath) &&
-          anchor.line !== undefined &&
-          (anchor.side === "old" ? line.oldLine : line.newLine) === anchor.line
-        );
-      });
+      const attached = props.hideInlineFindings
+        ? []
+        : props.findings.filter((finding) => {
+            const anchor = finding.anchors.find((candidate) => candidate.status === "resolved");
+            return (
+              anchor?.side !== undefined &&
+              anchor.path === (anchor.side === "old" ? file.oldPath : file.newPath) &&
+              anchor.line !== undefined &&
+              (anchor.side === "old" ? line.oldLine : line.newLine) === anchor.line
+            );
+          });
       if (attached.length) {
         contents.push(
           <CodeRows
@@ -219,7 +223,10 @@ export function DiffDocument(props: Props) {
       </section>
     );
   };
-  const unanchored = props.findings.filter((finding) => !primaryLocation(finding));
+  const unanchored = props.hideInlineFindings
+    ? []
+    : props.findings.filter((finding) => !primaryLocation(finding));
+  const FileContainer = props.singleFile ? "section" : "details";
   return (
     <>
       {props.files.map((file) => {
@@ -239,23 +246,30 @@ export function DiffDocument(props: Props) {
           ),
         );
         return (
-          <details
+          <FileContainer
             className="ck-ex-file"
             key={file.path}
             data-file-path={file.path}
-            open={!props.collapsed.has(file.path)}
-            onToggle={(event) => props.onToggleFile(file.path, !event.currentTarget.open)}
+            open={props.singleFile ? undefined : !props.collapsed.has(file.path)}
+            onToggle={
+              props.singleFile
+                ? undefined
+                : (event) =>
+                    props.onToggleFile(file.path, !(event.currentTarget as HTMLDetailsElement).open)
+            }
           >
-            <summary>
-              <span className="ck-ex-filename">{file.path}</span>
-              {file.status === "renamed" ? (
-                <span className="ck-ex-rename">从 {file.oldPath}</span>
-              ) : null}
-              <span className="ck-ex-file-stats">
-                <span className="added">+{file.additions}</span>
-                <span className="removed">−{file.deletions}</span>
-              </span>
-            </summary>
+            {!props.singleFile ? (
+              <summary>
+                <span className="ck-ex-filename">{file.path}</span>
+                {file.status === "renamed" ? (
+                  <span className="ck-ex-rename">从 {file.oldPath}</span>
+                ) : null}
+                <span className="ck-ex-file-stats">
+                  <span className="added">+{file.additions}</span>
+                  <span className="removed">−{file.deletions}</span>
+                </span>
+              </summary>
+            ) : null}
             {file.binary ? (
               <div className="ck-ex-file-notice" data-testid={UI.binary}>
                 二进制文件 · 无法按文本展示代码差异。
@@ -291,9 +305,13 @@ export function DiffDocument(props: Props) {
                 {file.hunks.map((hunk, index) => renderHunk(file, hunk, index))}
               </>
             )}
-            {matching
-              .filter((finding) => !finding.anchors.some((anchor) => anchor.status === "resolved"))
-              .map(renderCard)}
+            {!props.hideInlineFindings
+              ? matching
+                  .filter(
+                    (finding) => !finding.anchors.some((anchor) => anchor.status === "resolved"),
+                  )
+                  .map(renderCard)
+              : null}
             {props.contexts
               .filter(
                 (content) =>
@@ -333,7 +351,7 @@ export function DiffDocument(props: Props) {
                   )}
                 </section>
               ))}
-          </details>
+          </FileContainer>
         );
       })}
       {unanchored.length ? (
