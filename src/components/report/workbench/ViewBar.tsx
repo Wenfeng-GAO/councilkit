@@ -24,6 +24,8 @@ interface ViewBarProps {
   };
   /** 返回 null 表示当前视图没有可复制内容（按钮禁用）。 */
   getCopyText: () => string | null;
+  /** 总览时可选的完整报告复制（null 时不显示第二按钮）。 */
+  getCopyFullReport?: () => string | null;
   onExplain?: () => void;
 }
 
@@ -38,10 +40,12 @@ export function ViewBar({
   onTabChange,
   mobileSelect,
   getCopyText,
+  getCopyFullReport,
   onExplain,
 }: ViewBarProps) {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [copied, setCopied] = useState(false);
+  const [copiedFull, setCopiedFull] = useState(false);
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next = -1;
@@ -67,7 +71,21 @@ export function ViewBar({
     }
   };
 
+  const copyFull = async () => {
+    if (!getCopyFullReport) return;
+    const text = getCopyFullReport();
+    if (text === null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedFull(true);
+      window.setTimeout(() => setCopiedFull(false), 1600);
+    } catch {
+      setCopiedFull(false);
+    }
+  };
+
   const copyText = getCopyText();
+  const copyFullText = getCopyFullReport?.() ?? null;
 
   return (
     <div className="ck-wb-viewbar">
@@ -134,14 +152,31 @@ export function ViewBar({
         <button
           type="button"
           className="ck-wb-ghost"
-          aria-label="复制当前内容"
+          aria-label="复制问题清单"
           disabled={copyText === null}
-          title={copyText === null ? "当前没有可复制的内容" : undefined}
+          title={
+            copyText === null
+              ? "当前没有可复制的内容"
+              : getCopyFullReport
+                ? "复制简短问题清单"
+                : undefined
+          }
           onClick={() => void copy()}
         >
           <CopyIcon className="ck-wb-icon" />
           <span className="ck-wb-copy-label">{copied ? "已复制" : "复制"}</span>
         </button>
+        {getCopyFullReport && copyFullText !== null ? (
+          <button
+            type="button"
+            className="ck-wb-ghost"
+            aria-label="复制完整报告"
+            title="复制完整汇总报告（含附录与过程）"
+            onClick={() => void copyFull()}
+          >
+            <span className="ck-wb-copy-label">{copiedFull ? "已复制" : "复制完整报告"}</span>
+          </button>
+        ) : null}
       </div>
     </div>
   );
