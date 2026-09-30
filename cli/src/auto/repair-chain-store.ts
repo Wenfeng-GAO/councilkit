@@ -170,16 +170,6 @@ export function appendAuthorizedBudget(
   });
 }
 
-export function casWriteChain(expectedCas: number, next: RepairChain): RepairChain {
-  const current = readRepairChain(next.chainId);
-  if (current && current.casVersion !== expectedCas) {
-    throw errors.runFailed("repair chain CAS conflict");
-  }
-  const written = { ...next, casVersion: expectedCas + 1 };
-  writeRepairChain(written);
-  return written;
-}
-
 function jsonParse(text: string): unknown {
   try {
     return JSON.parse(text);
