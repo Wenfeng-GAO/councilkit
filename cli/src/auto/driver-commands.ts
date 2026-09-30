@@ -135,6 +135,13 @@ export const GROK_PROBE_TIMEOUT_MS = 180_000;
  * TIMEOUT-retry-once in review.ts applies on top) matches grok's tolerance.
  */
 export const CURSOR_PROBE_TIMEOUT_MS = 120_000;
+/**
+ * codex-app-server and kimi-stream-json share cursor's tolerance for
+ * concurrent probe stalls: 2026-09-30 ck-review-f70beb84 probe TIMEOUT
+ * at ~60s for both drivers while claude/cursor succeeded. 120s per attempt
+ * (the TIMEOUT-retry-once in review.ts applies on top).
+ */
+export const CODEX_KIMI_PROBE_TIMEOUT_MS = 120_000;
 /** Native-session capture budget for Grok orchestrator spawn. Same bound as probe. */
 export const GROK_SESSION_WAIT_MS = GROK_PROBE_TIMEOUT_MS;
 /**
@@ -150,6 +157,9 @@ export function probeTimeoutMs(
 ): number {
   if (driverId === "grok-stream-json") return Math.max(GROK_PROBE_TIMEOUT_MS, fallback);
   if (driverId === "cursor-stream-json") return Math.max(CURSOR_PROBE_TIMEOUT_MS, fallback);
+  if (driverId === "codex-app-server" || driverId === "kimi-stream-json") {
+    return Math.max(CODEX_KIMI_PROBE_TIMEOUT_MS, fallback);
+  }
   return fallback;
 }
 

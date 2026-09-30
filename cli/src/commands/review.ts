@@ -834,15 +834,16 @@ export async function runReview(
       };
       let result = await spawnOnce(job.spec, probeOptions);
       let probeDurationMs = result.durationMs;
-      // A slow Cursor startup is recoverable; invalid models and cancellation
-      // are not. spawnOnce has already reaped the timed-out process here.
-      if (
-        job.probeAgent.driverSelection.driverId === "cursor-stream-json" &&
-        result.failure?.code === "TIMEOUT" &&
-        !controller.signal.aborted
-      ) {
+      // A slow startup under concurrency is recoverable for cursor, codex, and
+      // kimi; invalid models and cancellation are not. spawnOnce has already
+      // reaped the timed-out process here.
+      const retryableDriver =
+        job.probeAgent.driverSelection.driverId === "cursor-stream-json" ||
+        job.probeAgent.driverSelection.driverId === "codex-app-server" ||
+        job.probeAgent.driverSelection.driverId === "kimi-stream-json";
+      if (retryableDriver && result.failure?.code === "TIMEOUT" && !controller.signal.aborted) {
         out.progress(
-          `  probe cursor-stream-json (${job.probeAgent.modelId}) timed out; retrying once`,
+          `  probe ${job.probeAgent.driverSelection.driverId} (${job.probeAgent.modelId}) timed out; retrying once`,
         );
         result = await spawnOnce(job.spec, probeOptions);
         probeDurationMs += result.durationMs;
