@@ -191,7 +191,7 @@ export function filterFindingProblems(
   filter: FindingListFilter,
 ): FindingListProblem[] {
   if (filter === "all") return [...problems];
-  if (filter === "blocking") return problems.filter((row) => row.blocking);
+  if (filter === "blocking") return problems.filter((row) => row.blocking && !row.resolved);
   if (filter === "pending") return problems.filter((row) => row.pending);
   return problems.filter((row) => row.resolved);
 }
@@ -456,10 +456,7 @@ export function readableFindingTitle(input: string | LedgerFinding): string {
   if (typeof input !== "string") return readableLedgerTitle(input);
   const title = input;
   const line = firstLine(title);
-  const loc = parseLocations(line)[0];
-  const locLabel = loc
-    ? `${baseName(loc.path)}:${loc.start === loc.end ? String(loc.start) : `${loc.start}-${loc.end}`}`
-    : null;
+  // Extract clean problem description without file:line prefix
   const clause =
     stripLocations(line)
       .replace(/`+/g, " ")
@@ -468,7 +465,8 @@ export function readableFindingTitle(input: string | LedgerFinding): string {
       .replace(/^[—–\-\s:：]+/, "")
       .split(/[。！？\n]/u)[0]
       ?.trim() ?? "";
-  const assembled = locLabel && clause ? `${locLabel} — ${clause}` : locLabel || clause || line;
+  // Return clean title without location prefix
+  const assembled = clause || line;
   return truncateDisplayTitle(assembled, FINDING_TITLE_DISPLAY_LIMIT);
 }
 
