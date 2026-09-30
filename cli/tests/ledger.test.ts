@@ -166,6 +166,41 @@ describe("ledger extract", () => {
     });
     expect(file.findings[0]?.id).toBe("persist--lost");
   });
+
+  it.each([
+    ["persist--lost", "**persist--lost** [major]"],
+    ["persist--lost", "[major] **persist--lost**"],
+    ["h-052309e7be19", "**h-052309e7be19** [major]"],
+    ["F-12", "[major] **F-12**"],
+  ])("keeps the original id %s when a report emphasizes it before the finding", (id, prefix) => {
+    const file = extractFindingsFromReport({
+      markdown: `# Autonomous Review Report\n\n---\n\n## 共识发现\n\n- ${prefix} 原反例仍成立，本轮不升阻塞。`,
+      runId: "current",
+      extractedAt: "now",
+    });
+    expect(file.findings[0]?.id).toBe(id);
+    const rows = classifyAgainstPrior(
+      [finding({ id, title: "An earlier description" })],
+      file.findings,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(id);
+    expect(rows[0]?.status).toBe("open");
+    const row = rows[0];
+    if (!row) throw new Error("Expected the original finding");
+    expect(isFindingBlocking(row)).toBe(true);
+  });
+
+  it("does not use a bold id mentioned later in the finding as its identity", () => {
+    const file = extractFindingsFromReport({
+      markdown:
+        "# Autonomous Review Report\n\n---\n\n## 共识发现\n\n- [major] A different failure references **persist--lost** for comparison.",
+      runId: "current",
+      extractedAt: "now",
+    });
+    expect(file.findings).toHaveLength(1);
+    expect(file.findings[0]?.id).not.toBe("persist--lost");
+  });
 });
 
 describe("againstDiffRange", () => {
