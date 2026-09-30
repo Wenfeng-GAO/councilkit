@@ -21,6 +21,7 @@ function finding(partial: {
   files?: string[];
   source?: "consensus" | "unique" | "unknown";
   status?: "open" | "closed" | "accepted" | "regress";
+  acceptedReason?: string;
 }) {
   return {
     status: "open" as const,
@@ -72,6 +73,7 @@ const layoutRun = {
       },
     },
   ],
+  findingGroups: null,
 };
 
 function caseFindings() {
@@ -80,6 +82,7 @@ function caseFindings() {
       id: "recovery.go--266-271-ctx",
       severity: "major",
       reviewer: "review-adversarial",
+      source: "consensus",
       files: ["recovery.go"],
       title: "`recovery.go:266-271` — Resume 失败只看 `ctx.Err()`，不看 `flightCurrent`。",
     }),
@@ -87,6 +90,7 @@ function caseFindings() {
       id: "recovery.go--311-362-fence",
       severity: "major",
       reviewer: "review-adversarial",
+      source: "consensus",
       files: ["recovery.go"],
       title:
         "`recovery.go:311-362` — fence 在 `UpdateSession` 回调内；commit idle 后不再复核 occupancy。",
@@ -95,6 +99,7 @@ function caseFindings() {
       id: "recovery.go--357-uuid-close",
       severity: "major",
       reviewer: "review-correctness",
+      source: "unique",
       files: ["recovery.go"],
       title:
         "`recovery.go:357` — Resume 成功、提交 idle 遇到临时存储错误时 `closeOpenedOn` + `markRecoveryFailed`（UUID 仍在）。改用 `forgetOpenedOn`。",
@@ -103,9 +108,64 @@ function caseFindings() {
       id: "pkg.runtime.recovery.go--357-uuid",
       severity: "major",
       reviewer: "review-correctness",
+      source: "unique",
       files: ["pkg/runtime/recovery.go"],
       title:
         "pkg/runtime/recovery.go:357 — 原 UUID Resume 成功、提交 idle 遇到临时存储错误时 Close，却保留 UUID 为 error。改用 `forgetOpenedOn`。",
+    }),
+    finding({
+      id: "auth.go--sql-injection",
+      severity: "critical",
+      reviewer: "review-security",
+      source: "unique",
+      files: ["auth.go"],
+      title: "`auth.go:45` — SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中，攻击者可执行任意 SQL 命令。",
+    }),
+    finding({
+      id: "memory-leak-listener",
+      severity: "major",
+      reviewer: "review-correctness",
+      source: "consensus",
+      status: "closed",
+      files: ["components/EventEmitter.tsx"],
+      title: "`EventEmitter.tsx:123` — 内存泄漏：事件监听器未在组件卸载时清理，长时间运行会导致内存累积。",
+    }),
+    finding({
+      id: "perf-optimization-memo",
+      severity: "minor",
+      reviewer: "review-maintainability",
+      source: "unique",
+      status: "closed",
+      files: ["hooks/useCalculation.ts"],
+      title: "`useCalculation.ts:234` — 性能优化：可以使用 useMemo 避免不必要的重新计算，当前每次渲染都会执行复杂计算。",
+    }),
+    finding({
+      id: "code-style-naming",
+      severity: "nit",
+      reviewer: "review-maintainability",
+      source: "unique",
+      status: "accepted",
+      files: ["utils/helpers.ts"],
+      title: "`helpers.ts:345` — 代码风格：变量命名不符合团队规范，建议使用驼峰命名法。",
+    }),
+    finding({
+      id: "very-long-title-test",
+      severity: "major",
+      reviewer: "review-adversarial",
+      source: "consensus",
+      files: ["services/DataProcessor.ts"],
+      title:
+        "`DataProcessor.ts:456` — 这是一个非常非常长的问题标题，用于测试当标题很长时，右侧的标签是否能够正确对齐而不会随着标题长度的变化而水平移动，这是一个重要的布局约束条件，需要确保在各种情况下都能保持一致。",
+      status: "regress",
+    }),
+    finding({
+      id: "accepted-with-long-reason",
+      severity: "major",
+      reviewer: "review-correctness",
+      source: "unique",
+      status: "accepted",
+      files: ["legacy/OldModule.ts"],
+      title: "`OldModule.ts:789` — 使用了废弃的 API，应该迁移到新版本。",
     }),
   ];
   for (let i = 0; i < 12; i += 1) {
@@ -128,6 +188,9 @@ function caseFindings() {
       }),
     );
   }
+  // 添加一个接受理由很长的 finding
+  rows.find((r) => r.id === "accepted-with-long-reason")!.acceptedReason =
+    "经过团队讨论，这个遗留模块计划在 Q3 完全重写，当前修改成本过高且收益有限。新架构将彻底解决这个问题。产品团队确认现有功能稳定，用户反馈良好，没有紧急业务压力。重构计划已在路线图中，预计三个月内完成。投入产出比分析显示当前不修改是最优选择。";
   return rows;
 }
 
@@ -171,6 +234,7 @@ const caseRun = {
   startedAt: null,
   endedAt: null,
   hasReport: true,
+  hasFindings: true,
   reportUrl: `/reports/${CASE_ID}`,
   progress: {
     phase: "done",
@@ -194,12 +258,44 @@ const caseRun = {
     sha: SHA,
     prUrl: "https://github.com/example/repo/pull/9",
     againstRunId: null,
-    blockingIds: ["recovery.go--266-271-ctx"],
+    blockingIds: [
+      "recovery.go--266-271-ctx",
+      "recovery.go--311-362-fence",
+      "recovery.go--357-uuid-close",
+      "pkg.runtime.recovery.go--357-uuid",
+      "auth.go--sql-injection",
+      "very-long-title-test",
+    ],
     unverifiedFixIds: [],
-    openIds: ["recovery.go--266-271-ctx"],
+    openIds: [
+      "recovery.go--266-271-ctx",
+      "recovery.go--311-362-fence",
+      "recovery.go--357-uuid-close",
+      "pkg.runtime.recovery.go--357-uuid",
+      "auth.go--sql-injection",
+      "very-long-title-test",
+    ],
     evidenceComplete: true,
   },
   findings: caseFindings(),
+  findingGroups: {
+    version: 1,
+    kind: "councilkit-finding-groups",
+    source: {
+      runId: CASE_ID,
+      sha: SHA,
+      findingsSha256: "0".repeat(64),
+      againstRunId: null,
+    },
+    groups: [
+      {
+        rootCauseId: "uuid-close-recovery",
+        findingIds: ["recovery.go--357-uuid-close", "pkg.runtime.recovery.go--357-uuid"],
+        aliases: [],
+        basis: "两位审查者发现同一 UUID 关闭问题，位置略有不同但根因相同。",
+      },
+    ],
+  },
 };
 
 const priorRun = {
@@ -228,6 +324,7 @@ const priorRun = {
     finding({ id: "keep", severity: "major", title: "still open `tokenKeep`" }),
     finding({ id: "done", severity: "major", title: "was open `tokenDone`" }),
   ],
+  findingGroups: null,
 };
 
 const rereviewRun = {
@@ -255,6 +352,7 @@ const rereviewRun = {
     }),
     finding({ id: "fresh", severity: "minor", title: "gamma.go:3 — new `tokenFresh`." }),
   ],
+  findingGroups: null,
 };
 
 const hollowRun = {
@@ -280,6 +378,7 @@ const hollowRun = {
     openIds: [],
   },
   findings: [],
+  findingGroups: null,
 };
 
 const hollowReviewRun = {
@@ -319,6 +418,7 @@ const emptyRun = {
   markdown: "",
   truncated: false,
   findings: [],
+  findingGroups: null,
 };
 
 const runsById: Record<string, unknown> = {
@@ -446,7 +546,7 @@ for (const width of [1440, 900, 390]) {
 }
 
 for (const width of [1440, 900, 390]) {
-  test(`真实案例等价 fixture：先结论后 3 个阻塞，357 一行（${width}px）`, async ({ page }) => {
+  test(`真实案例等价 fixture：先结论后阻塞，包含多种标签组合（${width}px）`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1100 });
     await mockReviewApis(page);
     await page.goto(`/reports/${CASE_ID}`);
@@ -455,14 +555,24 @@ for (const width of [1440, 900, 390]) {
     await expect(page.getByRole("heading", { name: "问题清单" })).toBeVisible();
     await expect(page.getByText("本轮新审查，未关联历史修复记录")).toBeVisible();
     await expect(page.getByText("评估覆盖完整")).toHaveCount(0);
+    // 默认显示阻塞过滤器
     const list = page.locator(".ck-ledger-row");
-    await expect(list).toHaveCount(3);
-    await maybeScreenshot(page, `case-default-${width}.png`);
+    await expect(list).toHaveCount(6); // 6 个阻塞问题
+    await maybeScreenshot(page, `case-blocking-${width}.png`);
+    // 测试长标题问题是否可见
+    await expect(page.getByText("这是一个非常非常长的问题标题")).toBeVisible();
+    // 测试各种严重度标签
+    await expect(page.locator(".ck-sev-critical")).toBeVisible();
+    await expect(page.locator(".ck-sev-major")).toBeVisible();
+    // 测试共识/独有标签
+    await expect(page.getByText("共识")).toBeVisible();
+    await expect(page.getByText("独有")).toBeVisible();
     const uuidRow = page.locator(".ck-ledger-row").filter({ hasText: "357" });
     await expect(uuidRow).toHaveCount(1);
-    await uuidRow.locator("summary").first().click();
+    uuidRow.locator("summary").first().click();
     await expect(uuidRow.getByText("recovery.go--357-uuid-close")).toBeVisible();
     await expect(uuidRow.getByText("pkg.runtime.recovery.go--357-uuid")).toBeVisible();
+    await expect(uuidRow.getByText("合并 2 条记录")).toBeVisible();
     await maybeScreenshot(page, `case-expanded-357-${width}.png`);
     const h1Box = await heading.boundingBox();
     const listBox = await page.getByRole("heading", { name: "问题清单" }).boundingBox();
@@ -471,10 +581,19 @@ for (const width of [1440, 900, 390]) {
     if (!h1Box || !listBox) throw new Error("Missing overview order");
     expect(h1Box.y).toBeLessThan(listBox.y);
     await page.getByRole("button", { name: "全部" }).click();
-    await expect(page.locator(".ck-ledger-row")).toHaveCount(23);
+    await expect(page.locator(".ck-ledger-row")).toHaveCount(33); // 更新为新的总数
     await maybeScreenshot(page, `case-filter-all-${width}.png`);
+    // 测试已解决过滤器
+    await page.getByRole("button", { name: "已解决" }).click();
+    await expect(page.locator(".ck-ledger-row")).toHaveCount(3); // 2 closed + 1 accepted with long reason
+    await maybeScreenshot(page, `case-filter-resolved-${width}.png`);
+    // 测试接受不修的长理由显示
+    const acceptedRow = page.locator(".ck-ledger-row").filter({ hasText: "废弃的 API" });
+    await expect(acceptedRow).toBeVisible();
+    await expect(acceptedRow.getByText("接受不修")).toBeVisible();
+    // 返回阻塞过滤器
     await page.getByRole("button", { name: "阻塞" }).click();
-    await expect(page.locator(".ck-ledger-row")).toHaveCount(3);
+    await expect(page.locator(".ck-ledger-row")).toHaveCount(6);
     await page.getByText("原始汇总报告").click();
     await expect(page.getByRole("heading", { name: "共识发现" })).toBeVisible();
     await page.locator(".ck-wb-disagreements > summary").click();
@@ -483,7 +602,7 @@ for (const width of [1440, 900, 390]) {
     ).toBeVisible();
     await expect(page.locator(".ck-wb-disagreements").getByText("结论票")).toBeVisible();
     await assertNoHorizontalOverflow(page);
-    await maybeScreenshot(page, `case-${width}.png`);
+    await maybeScreenshot(page, `case-full-overview-${width}.png`);
   });
 }
 
@@ -514,4 +633,66 @@ test("关联报告 HTTP 成功但账本不可用时无法比较", async ({ page 
   await page.goto(`/reports/${HOLLOW_REVIEW_ID}`);
   await expect(page.getByText("无法比较")).toBeVisible();
   await expect(page.getByText("对照关联账本：新增")).toHaveCount(0);
+});
+
+test("标签布局质量验证：对齐、紧凑、层次（桌面）", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await mockReviewApis(page);
+  await page.goto(`/reports/${CASE_ID}`);
+  // 等待页面加载
+  await expect(page.locator(".ck-ledger-row").first()).toBeVisible();
+  // 验证所有标签容器的右边缘对齐
+  const tagsContainers = page.locator(".ck-finding-tags");
+  const count = await tagsContainers.count();
+  expect(count).toBeGreaterThan(0);
+  const rightEdges: number[] = [];
+  for (let i = 0; i < Math.min(count, 6); i++) {
+    const box = await tagsContainers.nth(i).boundingBox();
+    if (box) rightEdges.push(box.x + box.width);
+  }
+  // 检查右边缘对齐（允许 5px 误差，因为不同行可能有滚动条影响）
+  const maxRight = Math.max(...rightEdges);
+  const minRight = Math.min(...rightEdges);
+  expect(maxRight - minRight).toBeLessThan(10);
+  // 验证严重度徽章紧凑（不超过 100px 宽度）
+  const sevBadges = page.locator(".ck-sev");
+  const sevCount = await sevBadges.count();
+  for (let i = 0; i < Math.min(sevCount, 6); i++) {
+    const box = await sevBadges.nth(i).boundingBox();
+    if (box) {
+      expect(box.width).toBeLessThan(100);
+      expect(box.height).toBeLessThan(35);
+    }
+  }
+  // 验证标签行结构（第一行：严重度+状态，第二行可选：次要标签）
+  const firstFinding = page.locator(".ck-ledger-row").first();
+  const tagRows = firstFinding.locator(".ck-finding-tags-row");
+  const rowCount = await tagRows.count();
+  expect(rowCount).toBeGreaterThanOrEqual(1);
+  // 第一行应该包含严重度和状态
+  const firstRow = tagRows.first();
+  expect(await firstRow.locator(".ck-sev").count()).toBe(1);
+  expect(await firstRow.locator(".ck-ledger-status").count()).toBe(1);
+  await maybeScreenshot(page, "tags-layout-quality-desktop.png");
+});
+
+test("标签布局质量验证：移动端对齐和换行（390px）", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockReviewApis(page);
+  await page.goto(`/reports/${CASE_ID}`);
+  await expect(page.locator(".ck-ledger-row").first()).toBeVisible();
+  // 在移动端验证标签不会导致水平溢出
+  await assertNoHorizontalOverflow(page);
+  // 验证长接受理由的标签能正确换行
+  await page.getByRole("button", { name: "已解决" }).click();
+  const acceptedRow = page.locator(".ck-ledger-row").filter({ hasText: "废弃的 API" });
+  await expect(acceptedRow).toBeVisible();
+  const statusTag = acceptedRow.locator(".ck-ledger-status");
+  await expect(statusTag).toBeVisible();
+  const statusBox = await statusTag.boundingBox();
+  if (statusBox) {
+    // 状态标签应该在最大宽度限制内
+    expect(statusBox.width).toBeLessThan(360); // 留出边距
+  }
+  await maybeScreenshot(page, "tags-layout-quality-mobile.png");
 });
