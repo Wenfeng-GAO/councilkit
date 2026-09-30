@@ -186,6 +186,29 @@ export interface ReviewDeps {
  * `..`, empty) is a usage error, never a path-traversal attempt. */
 const RUN_ID_PATTERN = /^ck-review-[0-9a-fA-F-]+$/;
 
+/** Structured probe timing log (observability-only, for future data-driven
+ * optimization decisions). Emits JSON to stderr for easy grepping. */
+function logProbeAttempt(params: {
+  driverId: string;
+  modelId: string;
+  attemptNumber: 1 | 2;
+  durationMs: number;
+  status: "success" | "failure";
+  failureCode?: string;
+}): void {
+  const log = {
+    type: "probe_attempt",
+    timestamp: new Date().toISOString(),
+    driverId: params.driverId,
+    modelId: params.modelId,
+    attemptNumber: params.attemptNumber,
+    durationMs: params.durationMs,
+    status: params.status,
+    ...(params.failureCode ? { failureCode: params.failureCode } : {}),
+  };
+  console.error(JSON.stringify(log));
+}
+
 export async function runReview(
   argv: string[],
   out: OutputSink,
@@ -834,6 +857,14 @@ export async function runReview(
       };
       let result = await spawnOnce(job.spec, probeOptions);
       let probeDurationMs = result.durationMs;
+      logProbeAttempt({
+        driverId: job.probeAgent.driverSelection.driverId,
+        modelId: job.probeAgent.modelId,
+        attemptNumber: 1,
+        durationMs: result.durationMs,
+        status: result.status,
+        failureCode: result.failure?.code,
+      });
       // A slow startup under concurrency is recoverable for cursor, codex, and
       // kimi; invalid models and cancellation are not. spawnOnce has already
       // reaped the timed-out process here.
@@ -847,6 +878,14 @@ export async function runReview(
         );
         result = await spawnOnce(job.spec, probeOptions);
         probeDurationMs += result.durationMs;
+        logProbeAttempt({
+          driverId: job.probeAgent.driverSelection.driverId,
+          modelId: job.probeAgent.modelId,
+          attemptNumber: 2,
+          durationMs: result.durationMs,
+          status: result.status,
+          failureCode: result.failure?.code,
+        });
       }
       const record: DriverProbeRecord = {
         driverId: job.probeAgent.driverSelection.driverId,

@@ -3003,6 +3003,60 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     expect(maxConcurrent).toBeLessThanOrEqual(8);
     expect(new Set(started).size).toBe(started.length);
   });
+
+  it("emits structured probe timing logs for observability", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const alice = store.createAgent({
+      name: "Alice",
+      personaPrompt: "p",
+      modelId: "model-1",
+      color: "#111111",
+      driverSelection: ds,
+    });
+    const bob = store.createAgent({
+      name: "Bob",
+      personaPrompt: "p",
+      modelId: "model-2",
+      color: "#222222",
+      driverSelection: ds,
+    });
+    const stderrLogs: string[] = [];
+    const origConsoleError = console.error;
+    console.error = ((...args: unknown[]) => {
+      stderrLogs.push(args.map((a) => String(a)).join(" "));
+    }) as typeof console.error;
+    const spawn: SpawnImpl = async (input) => {
+      if (input.prompt === DRIVER_PROBE_PROMPT) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { stdout: "ok", exitCode: 0, timedOut: false, aborted: false };
+      }
+      return claudeEnvelope("## 发现\n- ok\n## 验证\n未验证\n## 结论\ncomment");
+    };
+    const sink = makeSink();
+    try {
+      await runCapturing(
+        ["--agents", JSON.stringify([alice.id, bob.id]), "--aggregator", "Bob", "--task", "x"],
+        sink,
+        { spawnImpl: spawn },
+      );
+    } finally {
+      console.error = origConsoleError;
+    }
+    const probeLogs = stderrLogs
+      .filter((line) => line.includes('"type":"probe_attempt"'))
+      .map((line) => JSON.parse(line));
+    expect(probeLogs.length).toBeGreaterThanOrEqual(2);
+    for (const log of probeLogs) {
+      expect(log.type).toBe("probe_attempt");
+      expect(log.driverId).toBe("claude-stream-json");
+      expect(log.attemptNumber).toBe(1);
+      expect(log.durationMs).toBeGreaterThan(0);
+      expect(["success", "failure"]).toContain(log.status);
+      expect(log.timestamp).toBeDefined();
+      expect(log.modelId).toMatch(/^model-[12]$/);
+    }
+  });
 });
 
 function sha256Of(text: string): string {
