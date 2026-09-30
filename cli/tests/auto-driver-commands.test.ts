@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type AttemptSpec,
+  CODEX_KIMI_PROBE_TIMEOUT_MS,
   CURSOR_PROBE_TIMEOUT_MS,
   DRIVER_PROBE_PROMPT,
   DriverActivityCollector,
@@ -547,13 +548,19 @@ describe("cli auto driver-commands", () => {
 
     it("grok probes use a 3-minute budget", () => {
       expect(probeTimeoutMs("grok-stream-json")).toBe(GROK_PROBE_TIMEOUT_MS);
-      expect(probeTimeoutMs("kimi-stream-json")).toBe(60_000);
-      expect(probeTimeoutMs("kimi-stream-json", 90_000)).toBe(90_000);
+      expect(probeTimeoutMs("grok-stream-json", 200_000)).toBe(200_000);
     });
 
     it("cursor probes use a 2-minute budget", () => {
       expect(probeTimeoutMs("cursor-stream-json")).toBe(CURSOR_PROBE_TIMEOUT_MS);
       expect(probeTimeoutMs("cursor-stream-json", 150_000)).toBe(150_000);
+    });
+
+    it("codex and kimi probes use a 2-minute budget", () => {
+      expect(probeTimeoutMs("codex-app-server")).toBe(CODEX_KIMI_PROBE_TIMEOUT_MS);
+      expect(probeTimeoutMs("kimi-stream-json")).toBe(CODEX_KIMI_PROBE_TIMEOUT_MS);
+      expect(probeTimeoutMs("codex-app-server", 150_000)).toBe(150_000);
+      expect(probeTimeoutMs("kimi-stream-json", 150_000)).toBe(150_000);
     });
 
     it("grok spawn env keeps an existing HTTPS_PROXY", () => {
