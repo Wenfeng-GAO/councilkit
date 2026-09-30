@@ -134,7 +134,6 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
 export type StartedEvent = z.infer<typeof startedEventSchema>;
 export type OutputDeltaEvent = z.infer<typeof outputDeltaEventSchema>;
 export type OutputSnapshotEvent = z.infer<typeof outputSnapshotEventSchema>;
-export type ActivityEvent = z.infer<typeof activityEventSchema>;
 export type UsageEvent = z.infer<typeof usageEventSchema>;
 export type CompletedEvent = z.infer<typeof completedEventSchema>;
 export type FailedEvent = z.infer<typeof failedEventSchema>;
