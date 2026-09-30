@@ -807,8 +807,53 @@ function claimRepairLease(input: {
         makeError("INTERNAL", "dispatch", "cannot create writer lease", { retryable: true }),
       );
     }
-    return existing;
+    if (!isStaleWriterLease(existing)) return existing;
+    // Its holder can never legally come back, so a stale lease must not block
+    // the branch forever: automate the documented manual lock-file recovery.
+    try {
+      unlinkSync(path);
+      writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      return next;
+    } catch {
+      const raced = readLeaseFile(path);
+      if (raced === null) {
+        throw httpError(
+          500,
+          makeError("INTERNAL", "dispatch", "cannot take over stale writer lease", {
+            retryable: true,
+          }),
+        );
+      }
+      return raced;
+    }
   }
+}
+
+/**
+ * A writer lease is stale when no writer process can still write — holder pid,
+ * lease-carried writer pids, AND the persisted repair state's writer pids (an
+ * orphaned bridge writer can outlive the repair child that spawned it) — and
+ * the repair read-model no longer counts the holder as active. Resumable
+ * interrupted repair holders are NOT stale — the route keeps deduping into
+ * their run id.
+ */
+function isStaleWriterLease(existing: WriterLease): boolean {
+  const repair = existing.holderKind === "repair" ? readRepairJson(existing.holderRunId) : null;
+  const livePids = [existing.pid, ...(existing.writerPids ?? []), ...(repair?.writerPids ?? [])];
+  if (livePids.some((pid) => isPidAlive(pid))) return false;
+  if (existing.holderKind !== "repair") return true;
+  const detail = readCliRun(existing.holderRunId, process.env);
+  return !isActiveRepairHolder({
+    kind: "repair",
+    status: detail?.status ?? "running",
+    businessResult: repair?.businessResult ?? null,
+    lease: existing,
+    pidAlive: false,
+  });
 }
 
 function refreshRepairLease(input: { key: string; holderRunId: string; pid: number }): void {
@@ -1032,6 +1077,7 @@ function readRepairJson(runId: string): {
   profileName?: string;
   businessResult?: "approved" | "needs_attention" | "stopped" | null;
   outerUsed?: number;
+  writerPids?: number[];
 } | null {
   try {
     const rec = JSON.parse(
@@ -1041,11 +1087,16 @@ function readRepairJson(runId: string): {
       profileName?: unknown;
       businessResult?: unknown;
       outerUsed?: unknown;
+      writerPids?: unknown;
     };
     return {
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : undefined,
       profileName: typeof rec.profileName === "string" ? rec.profileName : undefined,
       outerUsed: typeof rec.outerUsed === "number" ? rec.outerUsed : undefined,
+      writerPids:
+        Array.isArray(rec.writerPids) && rec.writerPids.every((pid) => Number.isSafeInteger(pid))
+          ? (rec.writerPids as number[])
+          : undefined,
       businessResult:
         rec.businessResult === "approved" ||
         rec.businessResult === "needs_attention" ||
