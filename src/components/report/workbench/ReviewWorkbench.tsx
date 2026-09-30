@@ -1,8 +1,14 @@
-import type { AgainstLedgerState } from "@/lib/finding-list";
+import {
+  type AgainstLedgerState,
+  type FindingListFilter,
+  defaultFindingListFilter,
+  projectFindingList,
+} from "@/lib/finding-list";
+import { buildFindingChecklist } from "@/lib/finding-checklist";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
-import { type Ref, useCallback, useEffect, useRef } from "react";
+import { type Ref, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ReviewExplainer } from "../explainer/ReviewExplainer";
 import { ContextBar } from "./ContextBar";
@@ -63,6 +69,15 @@ export function ReviewWorkbench({
   };
   const hostStatus = useWorkbenchHostStatus();
   const { selected, select, tabs, setTab, getOrInitTab } = useWorkbenchSelection();
+
+  // Overview filter state (lifted to enable copy with correct filter)
+  const projection = projectFindingList(run.findings, {
+    sha: run.reviewEvidence?.sha ?? null,
+    groups: run.findingGroups,
+  });
+  const [overviewFilter, setOverviewFilter] = useState<FindingListFilter>(
+    defaultFindingListFilter(projection),
+  );
 
   const attempts = run.progress?.attempts ?? [];
   // AC-01：kind=review 即可达「当前修复」（沿用旧 reviewActions 语义）——无 pipeline 时
@@ -212,7 +227,15 @@ export function ReviewWorkbench({
       return null;
     }
     if (effectiveSelection === "overview") {
-      return run.markdown.trim().length > 0 ? run.markdown : null;
+      // Default: copy short checklist aligned with visible findings
+      return buildFindingChecklist(run, { filter: overviewFilter });
+    }
+    return null;
+  };
+
+  const copyFullReport = () => {
+    if (effectiveSelection === "overview" && run.markdown.trim().length > 0) {
+      return run.markdown;
     }
     return null;
   };
@@ -243,6 +266,7 @@ export function ReviewWorkbench({
             hasRepair: repairAvailable,
           }}
           getCopyText={copyText}
+          getCopyFullReport={effectiveSelection === "overview" ? copyFullReport : undefined}
           onExplain={() => {
             if (readerRef.current)
               scrollMemoryRef.current.set(viewKey, readerRef.current.scrollTop);
@@ -257,6 +281,8 @@ export function ReviewWorkbench({
               hasRepair={repairExists}
               onOpenRepair={() => select("repair")}
               againstState={againstState}
+              filter={overviewFilter}
+              onFilterChange={setOverviewFilter}
             />
           ) : effectiveSelection === "repair" ? (
             <RepairView run={run} repair={repair} pipeline={pipeline} />

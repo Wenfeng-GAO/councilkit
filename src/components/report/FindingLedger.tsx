@@ -27,9 +27,13 @@ import { useMemo, useState } from "react";
 export function FindingLedger({
   run,
   againstState = { status: "none" },
+  filter: externalFilter,
+  onFilterChange,
 }: {
   run: CliRunDetailResponse;
   againstState?: AgainstLedgerState;
+  filter?: FindingListFilter;
+  onFilterChange?: (filter: FindingListFilter) => void;
 }) {
   const candidateSha = run.reviewEvidence?.sha ?? null;
   const projection = useMemo(
@@ -40,7 +44,12 @@ export function FindingLedger({
       }),
     [run.findings, run.findingGroups, candidateSha],
   );
-  const [filter, setFilter] = useState<FindingListFilter | null>(null);
+  const [internalFilter, setInternalFilter] = useState<FindingListFilter | null>(null);
+  const filter = externalFilter ?? internalFilter;
+  const setFilter = (next: FindingListFilter) => {
+    if (externalFilter === undefined) setInternalFilter(next);
+    onFilterChange?.(next);
+  };
   if (
     run.kind !== "review" &&
     run.findings.length === 0 &&

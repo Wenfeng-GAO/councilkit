@@ -2,10 +2,16 @@ import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { FindingLedger } from "@/components/report/FindingLedger";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { reviewOverviewHeading } from "@/lib/cli-run-status";
-import { type AgainstLedgerState, projectFindingList } from "@/lib/finding-list";
+import {
+  type AgainstLedgerState,
+  type FindingListFilter,
+  defaultFindingListFilter,
+  projectFindingList,
+} from "@/lib/finding-list";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
+import { useState } from "react";
 import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
@@ -26,17 +32,27 @@ export function OverviewView({
   hasRepair,
   onOpenRepair,
   againstState = { status: "none" },
+  filter,
+  onFilterChange,
 }: {
   run: CliRunDetailResponse;
   parsed: ParsedReviewReport | null;
   hasRepair: boolean;
   onOpenRepair: () => void;
   againstState?: AgainstLedgerState;
+  filter?: FindingListFilter;
+  onFilterChange?: (filter: FindingListFilter) => void;
 }) {
   const projection = projectFindingList(run.findings, {
     sha: run.reviewEvidence?.sha ?? null,
     groups: run.findingGroups,
   });
+  const [internalFilter, setInternalFilter] = useState<FindingListFilter | null>(null);
+  const effectiveFilter = filter ?? internalFilter ?? defaultFindingListFilter(projection);
+  const handleFilterChange = (next: FindingListFilter) => {
+    if (filter === undefined) setInternalFilter(next);
+    onFilterChange?.(next);
+  };
   const hasLedger = run.hasFindings || run.findings.length > 0;
   const ledgerComplete =
     run.reviewEvidence?.complete === true &&
@@ -120,7 +136,12 @@ export function OverviewView({
           <SafeMarkdown className="text-sm" variant="document" content={overviewBody} />
         </section>
       ) : null}
-      <FindingLedger run={run} againstState={againstState} />
+      <FindingLedger
+        run={run}
+        againstState={againstState}
+        filter={effectiveFilter}
+        onFilterChange={handleFilterChange}
+      />
       {disagreement && disagreement.body.trim().length > 0 ? (
         <details className="ck-wb-history ck-wb-disagreements">
           <summary>
