@@ -192,9 +192,133 @@ describe("FindingLedger candidate evidence", () => {
     expect(html).toContain("pkg.runtime.recovery.go--357-uuid");
     expect(html.match(/class="ck-ledger-row"/g)?.length).toBe(2);
   });
+
+  it("shows a paraphrased blocking pair as one 重大 / 待处理 row", () => {
+    const consequence =
+      "恢复流程先提交空闲记录，随后补偿写在盖章前把刚提交的记录覆写回创建中，调用方仍收到成功。";
+    const run = baseRun({
+      findings: [
+        {
+          id: "agg-stamp",
+          title: "补偿写夹在提交与盖章之间会回退已恢复记录",
+          text: [
+            "补偿写夹在提交与盖章之间会回退已恢复记录",
+            "位置：`pkg/runtime/manager/session_recovery.go:767-848`",
+            `触发与后果：${consequence}`,
+          ].join("\n"),
+          severity: "major",
+          status: "open",
+          source: "unique",
+          reviewer: null,
+          files: ["pkg/runtime/manager/session_recovery.go"],
+        },
+        {
+          id: "seat-stamp",
+          title: "补偿重试写落在提交与盖章之间，恢复报成功但记录回退 creating",
+          text: [
+            "补偿重试写落在提交与盖章之间，恢复报成功但记录回退 creating",
+            "位置：`pkg/runtime/manager/session_recovery.go:767-848`",
+            `触发与后果：${consequence}`,
+          ].join("\n"),
+          severity: "major",
+          status: "open",
+          source: "unique",
+          reviewer: "review-cursor",
+          files: ["pkg/runtime/manager/session_recovery.go"],
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(createElement(FindingLedger, { run }));
+    expect(html).toContain("1 阻塞");
+    expect(html).toContain("重大");
+    expect(html).toContain("待处理");
+    expect(html).toContain("agg-stamp");
+    expect(html).toContain("seat-stamp");
+    expect(html.match(/class="ck-ledger-row"/g)?.length).toBe(1);
+  });
 });
 
 describe("OverviewView reading order", () => {
+  it.each(["approve", "comment"])(
+    "surfaces %s versus an unresolved ledger as a decision conflict",
+    (verdict) => {
+      const markdown = `# Autonomous Review Report\n\n---\n\n## 结论\n\n${verdict}\n`;
+      const run = baseRun({
+        markdown,
+        findings: [
+          {
+            id: "F-block",
+            title: "读取结果遗漏归档会话",
+            text: "读取结果遗漏归档会话",
+            severity: "major",
+            status: "open",
+            source: "consensus",
+            reviewer: null,
+            files: [],
+          },
+        ],
+      });
+      const html = renderToStaticMarkup(
+        createElement(OverviewView, {
+          run,
+          parsed: parseReviewReport(markdown),
+          hasRepair: false,
+          onOpenRepair: () => undefined,
+        }),
+      );
+      expect(html).toContain("审查结论待核对");
+      expect(html).toContain(verdict === "comment" ? "有意见（COMMENT）" : "建议通过（APPROVE）");
+      expect(html).toContain("报告意见与账本门禁尚未对齐");
+      expect(html).toContain("1 个阻塞问题");
+      expect(html).toContain("#01");
+      expect(html).toContain("阻塞依据");
+    },
+  );
+
+  it("does not invent an all-clear gate when the ledger is missing", () => {
+    const markdown = "# Autonomous Review Report\n\n---\n\n## 结论\n\napprove\n";
+    const html = renderToStaticMarkup(
+      createElement(OverviewView, {
+        run: baseRun({ markdown, hasFindings: false }),
+        parsed: parseReviewReport(markdown),
+        hasRepair: false,
+        onOpenRepair: () => undefined,
+      }),
+    );
+    expect(html).toContain("账本未生成，尚无法判断阻塞");
+    expect(html).not.toContain("账本无阻塞");
+  });
+
+  it.each([false, true])(
+    "only shows an empty ledger as clear with complete evidence (%s)",
+    (complete) => {
+      const markdown = "# Autonomous Review Report\n\n---\n\n## 结论\n\napprove\n";
+      const html = renderToStaticMarkup(
+        createElement(OverviewView, {
+          run: baseRun({
+            markdown,
+            hasFindings: true,
+            findings: [],
+            reviewEvidence: {
+              complete,
+              sha: complete ? SHA : null,
+              prUrl: null,
+              againstRunId: null,
+              blockingIds: [],
+              unverifiedFixIds: [],
+              openIds: [],
+            },
+          }),
+          parsed: parseReviewReport(markdown),
+          hasRepair: false,
+          onOpenRepair: () => undefined,
+        }),
+      );
+      expect(html.includes("账本无阻塞")).toBe(complete);
+      if (!complete) expect(html).toContain("账本证据不完整，尚无法判断阻塞");
+    },
+  );
+
   it("leads with 审查已完成, then 概览, then 问题清单, then the original report", () => {
     const markdown = `# Autonomous Review Report
 

@@ -96,7 +96,7 @@ describe("conservative display grouping", () => {
     expect(projection.blockingCount).toBe(3);
     const uuid = projection.problems.find((row) => row.members.length === 2);
     expect(uuid?.members.map((row) => row.id).sort()).toEqual([a.id, b.id].sort());
-    expect(uuid?.title).toContain("357");
+    expect(uuid?.location).toContain("357");
   });
 
   it("keeps same-basename files in different directories independent", () => {
@@ -260,6 +260,147 @@ describe("conservative display grouping", () => {
     const projection = projectFindingList([a, b], { sha: SHA, groups });
     expect(projection.displayCount).toBe(1);
     expect(projection.problems[0]?.origin).toBe("inferred");
+  });
+});
+
+const COPIED_CONSEQUENCE =
+  "恢复流程先提交空闲记录，随后补偿写在盖章前把刚提交的记录覆写回创建中，调用方仍收到成功。";
+
+function withLocation(
+  partial: Partial<LedgerFinding> & Pick<LedgerFinding, "id" | "title">,
+  location: string,
+  extraLines: string[] = [],
+): LedgerFinding {
+  return finding({
+    severity: "major",
+    files: [location.split(":")[0] ?? ""],
+    ...partial,
+    text: [partial.title, `位置：\`${location}\``, ...extraLines].join("\n"),
+  });
+}
+
+describe("paraphrased findings that cite the same location", () => {
+  it("merges titles that differ by one word when the location is only on the 位置 line", () => {
+    const seat = withLocation(
+      {
+        id: "seat-restart",
+        title: "恢复成功后并发重启会漏恢复会话并误报可用",
+        reviewer: "review-correctness",
+      },
+      "pkg/runtime/manager/session_recovery.go:1265-1272",
+    );
+    const aggregated = withLocation(
+      {
+        id: "agg-restart",
+        title: "恢复成功后并发重启会漏恢复并误报可用",
+        reviewer: null,
+      },
+      "pkg/runtime/manager/session_recovery.go:1265-1272",
+    );
+    expect(isProvenDuplicate(seat, aggregated)).toBe(true);
+    const projection = projectFindingList([seat, aggregated]);
+    expect(projection.displayCount).toBe(1);
+    expect(projection.blockingCount).toBe(1);
+    expect(projection.problems[0]?.members.map((row) => row.id).sort()).toEqual([
+      "agg-restart",
+      "seat-restart",
+    ]);
+    expect(projection.problems[0]?.origin).toBe("inferred");
+  });
+
+  it("merges a paraphrased title when the 触发与后果 text is the same defect", () => {
+    const seat = withLocation(
+      {
+        id: "seat-stamp",
+        title: "补偿重试写落在提交与盖章之间，恢复报成功但记录回退 creating",
+        reviewer: "review-cursor",
+      },
+      "pkg/runtime/manager/session_recovery.go:767-848",
+      [`触发与后果：${COPIED_CONSEQUENCE}`],
+    );
+    const aggregated = withLocation(
+      {
+        id: "agg-stamp",
+        title: "补偿写夹在提交与盖章之间会回退已恢复记录",
+        reviewer: null,
+      },
+      "pkg/runtime/manager/session_recovery.go:767-848",
+      [`触发与后果：${COPIED_CONSEQUENCE}`],
+    );
+    expect(isProvenDuplicate(seat, aggregated)).toBe(true);
+    const projection = projectFindingList([seat, aggregated]);
+    expect(projection.blockingCount).toBe(1);
+    expect(projection.problems[0]?.members).toHaveLength(2);
+    expect(projection.problems[0]?.sourceTags).toEqual(["独有"]);
+  });
+
+  it("does not merge the same location when the 触发与后果 names different defects", () => {
+    const mutex = withLocation(
+      { id: "mutex", title: "丢失互斥锁会破坏缓存" },
+      "pkg/cache/store.ts:42",
+      [
+        "触发与后果：当缓存未命中时调用方丢失互斥锁，造成并发写入互相覆盖并破坏已经持久化的缓存数据。",
+      ],
+    );
+    const auth = withLocation(
+      { id: "auth", title: "缺少鉴权会泄露租户" },
+      "pkg/cache/store.ts:42",
+      [
+        "触发与后果：当缓存未命中时调用方缺少鉴权检查，造成其他租户的缓存记录被读出并写回错误的命名空间。",
+      ],
+    );
+    expect(isProvenDuplicate(mutex, auth)).toBe(false);
+    expect(projectFindingList([mutex, auth]).displayCount).toBe(2);
+  });
+
+  it("does not merge a copied 触发与后果 when only the 证据 line cites the same file", () => {
+    const evidence =
+      "证据：临时测试 `pkg/runtime/manager/session_recovery_contract_test.go:30-42`。";
+    const stamp = withLocation(
+      { id: "stamp", title: "补偿写夹在提交与盖章之间会回退已恢复记录" },
+      "pkg/runtime/manager/session_recovery.go:767-848",
+      [`触发与后果：${COPIED_CONSEQUENCE}`, evidence],
+    );
+    const restart = withLocation(
+      { id: "restart", title: "恢复成功后并发重启会漏恢复并误报可用" },
+      "pkg/runtime/manager/session_recovery.go:1265-1272",
+      [`触发与后果：${COPIED_CONSEQUENCE}`, evidence],
+    );
+    expect(isProvenDuplicate(stamp, restart)).toBe(false);
+    expect(projectFindingList([stamp, restart]).blockingCount).toBe(2);
+  });
+
+  it("does not treat a short shared 触发与后果 as the same defect", () => {
+    const left = withLocation(
+      { id: "left", title: "甲路径返回错误" },
+      "pkg/runtime/manager/session_recovery.go:10-12",
+      ["触发与后果：调用返回错误。"],
+    );
+    const right = withLocation(
+      { id: "right", title: "乙路径中断恢复" },
+      "pkg/runtime/manager/session_recovery.go:10-12",
+      ["触发与后果：调用返回错误。"],
+    );
+    expect(isProvenDuplicate(left, right)).toBe(false);
+  });
+
+  it("keeps overlapping but unequal line ranges apart", () => {
+    const wide = withLocation(
+      { id: "wide", title: "重试等锁时会话名被复用会交出会话", source: "consensus" },
+      "pkg/runtime/manager/session_recovery.go:1117-1183",
+      [`触发与后果：${COPIED_CONSEQUENCE}`],
+    );
+    const narrow = withLocation(
+      {
+        id: "narrow",
+        title: "重试遇到跨命名空间同名重建会返回其他会话",
+        reviewer: "review-correctness",
+      },
+      "pkg/runtime/manager/session_recovery.go:1150-1163",
+      [`触发与后果：${COPIED_CONSEQUENCE}`],
+    );
+    expect(isProvenDuplicate(wide, narrow)).toBe(false);
+    expect(projectFindingList([wide, narrow]).displayCount).toBe(2);
   });
 });
 
@@ -659,6 +800,182 @@ describe("readable titles", () => {
     );
     expect(readable).toContain("session_recovery.go:266-271");
     expect(readable).not.toMatch(/`\s*`/);
+  });
+});
+
+describe("incremental review identity and titles", () => {
+  const mapperId =
+    "app.dal.....pistonsessiondoextendmapper.java--app-dal-...-pistonsessiondoextendmapper.java-67-75";
+  const mapper = finding({
+    id: mapperId,
+    severity: "major",
+    title:
+      "app/dal/.../PistonSessionDOExtendMapper.java:67-75 — 公开名 `sessionID` 与 GET `/{sessionNameOrID}` 共用 AI Vision id 语义但非等价合同。",
+    verification: {
+      ...verification("still_open"),
+      reason:
+        "公开名 sessionID 与 GET /{sessionNameOrID} 仍非等价合同；selectBySessionNameOrSessionID 未改。",
+    },
+  });
+  const repeated = finding({
+    id: "h-48d359829697",
+    severity: "major",
+    title: `${mapperId}** — 四席按行为 \`still_open\`（cursor 关闭见分歧）。公开名 \`sessionID\` 与 GET 仍非等价合同。`,
+    text: `${mapperId}** — 四席按行为 \`still_open\`（cursor 关闭见分歧）。公开名 \`sessionID\` 与 GET 仍非等价合同；\`selectBySessionNameOrSessionID\` 未改。反例：\`session_name='av-1'\` 且 \`agentrun_session_id\` 为其它值时 GET 命中、\`filter=sessionID = 'av-1'\` 不命中。`,
+    source: "consensus",
+  });
+  const archived = finding({
+    id: "h-052309e7be19",
+    severity: "major",
+    title:
+      "h-052309e7be19** — 五席 `still_open`。GET `/{sessionNameOrID}` 仍是 `session_name = ? OR agentrun_session_id = ?` 且无 `status`。",
+    text: "h-052309e7be19** — 五席 `still_open`。GET `/{sessionNameOrID}` 仍是 `session_name = ? OR agentrun_session_id = ?` 且无 `status`；list 的 `sessionID` 只等值 `agentrun_session_id`，默认 `STATUS NOT IN (archived)`。反例：archived 行 GET `/{av-1}` 命中，默认 `filter=sessionID = 'av-1'` 被 policy 滤空。本轮只文档化不等价，不构成落地偏离。",
+    source: "consensus",
+  });
+
+  it("merges an exact leading ledger reference even when its target has a singleton sidecar", () => {
+    const groups: FindingGroupsFile = {
+      version: 1,
+      kind: FINDING_GROUPS_KIND,
+      source: {
+        runId: "run",
+        sha: SHA,
+        findingsSha256: "b".repeat(64),
+        againstRunId: "prior",
+      },
+      groups: [
+        { rootCauseId: mapperId, findingIds: [mapperId], aliases: [], basis: "stable root" },
+      ],
+    };
+    const input = [repeated, archived, mapper];
+    const snapshot = JSON.stringify(input);
+    const projection = projectFindingList(input, { sha: SHA, groups });
+    expect(projection.originalCount).toBe(3);
+    expect(projection.displayCount).toBe(2);
+    expect(projection.blockingCount).toBe(2);
+    const merged = projection.problems.find((problem) => problem.members.length === 2);
+    expect(merged?.members.map((row) => row.id)).toEqual(
+      expect.arrayContaining([mapperId, repeated.id]),
+    );
+    expect(merged?.basis).toContain("明确引用");
+    expect(
+      projection.problems.find((row) => row.members[0]?.id === archived.id)?.members,
+    ).toHaveLength(1);
+    expect(JSON.stringify(input)).toBe(snapshot);
+  });
+
+  it.each([
+    `prefix-${mapperId} — 另一问题`,
+    `${mapperId}-extra — 另一问题`,
+    `无关问题，背景引用 ${mapperId} — 不是同一根因`,
+    `另一问题。\n${mapperId} — 背景引用`,
+  ])("does not treat a partial ID or an incidental body mention as identity: %s", (text) => {
+    const unrelated = finding({
+      id: "unrelated",
+      severity: "minor",
+      title: "缓存更新漏掉权限校验",
+      text,
+    });
+    expect(isProvenDuplicate(mapper, unrelated)).toBe(false);
+    expect(projectFindingList([mapper, unrelated]).displayCount).toBe(2);
+  });
+
+  it("puts the cause before locations and replaces opaque headings with substantive body text", () => {
+    const projection = projectFindingList([repeated, archived, mapper]);
+    const merged = projection.problems.find((row) => row.members.length === 2);
+    const history = projection.problems.find((row) => row.members[0]?.id === archived.id);
+    expect(merged?.title).toContain("session_name");
+    expect(merged?.title).toContain("GET 命中");
+    expect(merged?.title).toContain("不命中");
+    expect(merged?.location).toBe("PistonSessionDOExtendMapper.java:67-75");
+    expect(history?.title).toContain("archived");
+    expect(history?.title).toContain("滤空");
+    for (const row of projection.problems) {
+      expect(row.title).not.toMatch(/h-[a-f\d]{12}|still_open|四席|五席|app\.dal|\*\*/);
+      expect(Array.from(row.title).length).toBeLessThanOrEqual(FINDING_TITLE_DISPLAY_LIMIT);
+    }
+  });
+
+  it("falls back to verification reason when the title and body contain only bookkeeping", () => {
+    const row = finding({
+      id: "h-123456abcdef",
+      severity: "minor",
+      title: "h-123456abcdef — 五席 still_open",
+      verification: { ...verification("still_open"), reason: "字段操作符缺失时契约测试仍会通过。" },
+    });
+    expect(projectFindingList([row]).problems[0]?.title).toBe("字段操作符缺失时契约测试仍会通过");
+  });
+
+  it.each([
+    "F-12",
+    "h-123456abcdef",
+    "session.java--missing-status",
+    "app.service.session.provider",
+  ])("does not present a bare identity as a cause: %s", (id) => {
+    const row = finding({ id, title: id, severity: "minor" });
+    expect(projectFindingList([row]).problems[0]?.title).toBe("问题原因待补充（展开查看原始记录）");
+    row.verification = { ...verification("still_open"), reason: "请求缺少权限校验。" };
+    expect(projectFindingList([row]).problems[0]?.title).toBe("请求缺少权限校验");
+    row.title = `${id} — 五席 still_open`;
+    row.text = row.title;
+    expect(projectFindingList([row]).problems[0]?.title).toBe("请求缺少权限校验");
+  });
+
+  it("shows the test failure instead of spending the title on a long filename and test name", () => {
+    const row = finding({
+      id: "contract-test",
+      severity: "minor",
+      title:
+        "`test/openapi/test_pma_openapi_contract.py` 新增 `test_session_list_filter_matrix_declares_session_id`：只断言整段 description 含操作符，字段缺项时测试仍通过。",
+      files: ["test/openapi/test_pma_openapi_contract.py"],
+    });
+    const problem = projectFindingList([row]).problems[0];
+    expect(problem?.title).toBe("只断言整段 description 含操作符，字段缺项时测试仍通过");
+    expect(problem?.location).toBe("test_pma_openapi_contract.py");
+  });
+
+  it("keeps wildcard syntax and tolerates verification without locations", () => {
+    const row = finding({
+      id: "indexes",
+      severity: "minor",
+      title: "`idx_tenant_*` 不能支持按外部 ID 查找。",
+      verification: { ...verification("still_open"), locations: undefined },
+    });
+    const problem = projectFindingList([row]).problems[0];
+    expect(problem?.title).toContain("idx_tenant_*");
+    expect(problem?.location).toBeNull();
+  });
+});
+
+describe("local review paraphrase sample", () => {
+  it("collapses the two blocking paraphrase pairs in ck-review-c608e4b3 when that run exists", () => {
+    const path = join(
+      homedir(),
+      ".config/councilkit/runs/ck-review-c608e4b3-0447-4049-8b8e-7a7606bf0a3b/findings.json",
+    );
+    if (!existsSync(path)) return;
+    const file = parseFindingsFile(readFileSync(path, "utf8"));
+    expect(file).not.toBeNull();
+    const projection = projectFindingList(file?.findings ?? [], { sha: file?.sha });
+    const restart = projection.problems.filter((row) =>
+      row.members.some((member) => member.title.includes("恢复成功后并发重启会漏恢复")),
+    );
+    const stamp = projection.problems.filter((row) =>
+      row.members.some((member) => member.title.includes("提交与盖章之间")),
+    );
+    expect(restart).toHaveLength(1);
+    expect(restart[0]?.members).toHaveLength(2);
+    expect(restart[0]?.blocking).toBe(true);
+    expect(stamp).toHaveLength(1);
+    expect(stamp[0]?.members).toHaveLength(2);
+    expect(stamp[0]?.blocking).toBe(true);
+    expect(projection.blockingCount).toBe(7);
+    const namespace = projection.problems.filter((row) =>
+      row.members.some(
+        (member) => member.title.includes("会话名被复用") || member.title.includes("跨命名空间"),
+      ),
+    );
+    expect(namespace).toHaveLength(2);
   });
 });
 

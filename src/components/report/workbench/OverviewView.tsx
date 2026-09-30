@@ -2,17 +2,18 @@ import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { FindingLedger } from "@/components/report/FindingLedger";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { reviewOverviewHeading } from "@/lib/cli-run-status";
-import type { AgainstLedgerState } from "@/lib/finding-list";
+import { type AgainstLedgerState, projectFindingList } from "@/lib/finding-list";
 import type { ParsedReviewReport } from "@/lib/review-report";
+import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
 
 const VERDICT_LABEL: Record<NonNullable<ParsedReviewReport["verdict"]>, string> = {
-  approve: "Approve",
-  "changes-requested": "Changes requested",
-  comment: "Comment",
+  approve: "建议通过（APPROVE）",
+  "changes-requested": "要求修改（CHANGES REQUESTED）",
+  comment: "有意见（COMMENT）",
 };
 
 /**
@@ -32,7 +33,20 @@ export function OverviewView({
   onOpenRepair: () => void;
   againstState?: AgainstLedgerState;
 }) {
-  const heading = reviewOverviewHeading(run);
+  const projection = projectFindingList(run.findings, {
+    sha: run.reviewEvidence?.sha ?? null,
+    groups: run.findingGroups,
+  });
+  const hasLedger = run.hasFindings || run.findings.length > 0;
+  const ledgerComplete =
+    run.reviewEvidence?.complete === true &&
+    FULL_COMMIT_SHA.test(run.reviewEvidence.sha ?? "") &&
+    run.reviewEvidence.evidenceComplete !== false;
+  const decisionConflict =
+    run.status === "completed" &&
+    projection.blockingCount > 0 &&
+    (parsed?.verdict === "approve" || parsed?.verdict === "comment");
+  const heading = decisionConflict ? "审查结论待核对" : reviewOverviewHeading(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
   const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
   const partial = seats.length > 0 && doneSeats < seats.length;
@@ -51,6 +65,7 @@ export function OverviewView({
     <article className="ck-wb-document">
       <h1>{heading}</h1>
       <p className="ck-wb-report-meta">
+        {run.status === "completed" ? <span>审查执行已完成</span> : null}
         {seats.length > 0 ? (
           <span>
             {doneSeats}/{seats.length} 席位已完成
@@ -59,11 +74,34 @@ export function OverviewView({
         {run.truncated ? <span>报告超过 2MB，已截断显示</span> : null}
       </p>
       {parsed?.verdict ? (
-        <p
-          className={`ck-verdict ck-verdict-${verdictClass(parsed.verdict)} ck-wb-overview-verdict`}
-        >
-          {VERDICT_LABEL[parsed.verdict]}
-        </p>
+        <section className="ck-wb-review-decision" aria-label="审查结论">
+          <p className="ck-wb-decision-verdict">
+            <span>报告意见</span>
+            <strong>{VERDICT_LABEL[parsed.verdict]}</strong>
+          </p>
+          <p>
+            账本门禁：
+            {hasLedger ? (
+              <a className="ck-finding-list-link" href="#ck-ledger">
+                {projection.blockingCount > 0
+                  ? `${projection.blockingCount} 个阻塞问题，待处理`
+                  : ledgerComplete
+                    ? "账本无阻塞"
+                    : "账本证据不完整，尚无法判断阻塞"}
+              </a>
+            ) : (
+              "账本未生成，尚无法判断阻塞"
+            )}
+          </p>
+          {decisionConflict ? (
+            <p className="ck-wb-decision-conflict">
+              报告意见与账本门禁尚未对齐。请核对问题的适用范围和处置依据，再判断是否可以通过。
+            </p>
+          ) : null}
+          {parsed.verdict === "comment" ? (
+            <p className="ck-finding-list-note">COMMENT 表示审查有意见，尚未给出通过建议。</p>
+          ) : null}
+        </section>
       ) : null}
       {partial ? (
         <p className="ck-wb-source">结果尚不完整 · 缺席或失败的席位不代表没有意见</p>
@@ -119,9 +157,4 @@ export function OverviewView({
       </section>
     </article>
   );
-}
-
-function verdictClass(verdict: NonNullable<ParsedReviewReport["verdict"]>): string {
-  if (verdict === "changes-requested") return "changes";
-  return verdict;
 }

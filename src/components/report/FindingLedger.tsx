@@ -79,6 +79,11 @@ export function FindingLedger({
     <section className="ck-finding-list" aria-labelledby="ck-ledger">
       <h2 id="ck-ledger">问题清单</h2>
       <p className="ck-finding-list-summary">{summary}</p>
+      {projection.blockingCount > 0 ? (
+        <p className="ck-finding-list-note">
+          阻塞依据：账本中重大或致命的问题，尚未验证解决或接受不修。报告中的“本轮不阻塞”不会自动改变这项门禁。
+        </p>
+      ) : null}
       {countNote ? <p className="ck-finding-list-note">{countNote}</p> : null}
       {relation ? <p className="ck-finding-list-note">{relation}</p> : null}
       {againstId ? (
@@ -121,7 +126,12 @@ export function FindingLedger({
           {visible.length > 0 ? (
             <ul className="ck-ledger">
               {visible.map((problem) => (
-                <ProblemRow key={problem.key} problem={problem} sha={candidateSha} />
+                <ProblemRow
+                  key={problem.key}
+                  problem={problem}
+                  number={projection.problems.indexOf(problem) + 1}
+                  sha={candidateSha}
+                />
               ))}
             </ul>
           ) : (
@@ -166,28 +176,40 @@ export function FindingLedger({
 
 function ProblemRow({
   problem,
+  number,
   sha,
 }: {
   problem: FindingListProblem;
+  number: number;
   sha: string | null;
 }) {
   return (
     <li className="ck-ledger-row">
       <details>
         <summary className="ck-finding-summary">
-          <span className={`ck-sev ck-sev-${problem.severity}`}>
-            {severityLabel(problem.severity)}
+          <span className="ck-finding-number">#{String(number).padStart(2, "0")}</span>
+          <span className="ck-finding-heading">
+            <span className="ck-ledger-title">{problem.title}</span>
+            {problem.location ? (
+              <span className="ck-finding-location">{problem.location}</span>
+            ) : null}
           </span>
-          <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
-            {problem.statusLabel}
-          </span>
-          <span className="ck-ledger-title">{problem.title}</span>
           <span className="ck-finding-tags">
+            <span className={`ck-sev ck-sev-${problem.severity}`}>
+              {severityLabel(problem.severity)}
+            </span>
+            <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
+              {problem.statusLabel}
+            </span>
+            {problem.blocking ? <span className="ck-finding-source">账本阻塞</span> : null}
             {problem.sourceTags.map((tag) => (
               <span key={tag} className="ck-finding-source">
                 {tag}
               </span>
             ))}
+            {problem.members.length > 1 ? (
+              <span className="ck-finding-source">合并 {problem.members.length} 条记录</span>
+            ) : null}
           </span>
         </summary>
         <div className="ck-finding-detail">

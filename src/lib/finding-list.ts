@@ -4,6 +4,10 @@
  * Groups are display-only: they never rewrite findings, change repair gates,
  * CLI close authority, or exported ids. Close/blocking still use
  * isFindingVerifiedClosed / isFindingBlocking on each original member.
+ *
+ * A declared location is the title or a leading 位置 line. 证据 lines are
+ * incidental and do not count. A paraphrased title still matches when both
+ * sides cite that location and repeat the same 触发与后果.
  */
 import {
   type FindingSeverity,
@@ -23,6 +27,10 @@ import {
 
 const FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
 const LOCATION_PATTERN = String.raw`((?:[\w.-]+\/)*${FILE_EXT}):(\d+)(?:-(\d+))?`;
+const NARRATIVE_LINE = /^\s*(?:触发与后果|证据|建议|验证|结论)\s*[:：]/;
+const CONSEQUENCE_LINE = /^\s*触发与后果\s*[:：]\s*(.+)$/m;
+/** Shorter than this, a shared 触发与后果 is boilerplate, not a copied defect. */
+const MIN_CONSEQUENCE_HAN = 24;
 
 function locationRe(): RegExp {
   return new RegExp(LOCATION_PATTERN, "g");
@@ -43,6 +51,7 @@ export type FindingListOrigin = "sidecar" | "inferred" | "singleton";
 export interface FindingListProblem {
   key: string;
   title: string;
+  location: string | null;
   severity: FindingSeverity;
   source: FindingSource;
   sourceTags: Array<"共识" | "独有">;
@@ -160,7 +169,7 @@ export function projectFindingList(
     );
   }
 
-  const ordered = sortProblems(problems);
+  const ordered = sortProblems(mergeExplicitReferences(problems, sha));
   return {
     problems: ordered,
     originalCount: findings.length,
@@ -335,7 +344,8 @@ function toProblem(
   ];
   return {
     key: meta.key,
-    title: readableFindingTitle(representative?.title ?? ordered[0]?.title ?? meta.key),
+    title: representative ? readableFindingTitle(representative) : meta.key,
+    location: problemLocation(ordered),
     severity: highestSeverity(ordered),
     source: representative?.source ?? "unknown",
     sourceTags,
@@ -392,11 +402,59 @@ function inferDuplicateGroups(findings: readonly LedgerFinding[]): LedgerFinding
 
 export function isProvenDuplicate(left: LedgerFinding, right: LedgerFinding): boolean {
   if (left.id === right.id) return true;
+  if (explicitlyReferences(left, right.id) || explicitlyReferences(right, left.id)) return true;
   if (!locationsMatch(primaryLocations(left), primaryLocations(right))) return false;
-  return residualEvidence(left.title, right.title);
+  if (residualEvidence(left.title, right.title)) return true;
+  const leftConsequence = consequenceClause(left);
+  const rightConsequence = consequenceClause(right);
+  if (!leftConsequence || !rightConsequence) return false;
+  return residualEvidence(leftConsequence, rightConsequence);
 }
 
-export function readableFindingTitle(title: string): string {
+/** Only a leading, delimited ID is an identity declaration; body mentions are not. */
+function explicitlyReferences(row: LedgerFinding, id: string): boolean {
+  return [row.title, row.text].some((source) => {
+    const line = firstLine(source).replace(/^(?:[-*+]\s+)?[*`_\s]*/, "");
+    if (!line.startsWith(id)) return false;
+    return /^[*`_]*\s*(?:[—–：]\s*|:\s+)/u.test(line.slice(id.length));
+  });
+}
+
+function mergeExplicitReferences(
+  problems: readonly FindingListProblem[],
+  sha: string | null,
+): FindingListProblem[] {
+  const merged = [...problems];
+  for (let leftIndex = 0; leftIndex < merged.length; leftIndex += 1) {
+    const left = merged[leftIndex];
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < merged.length; rightIndex += 1) {
+      const right = merged[rightIndex];
+      if (!right) continue;
+      const leftReferencesRight = left.members.some((a) =>
+        right.members.some((b) => explicitlyReferences(a, b.id)),
+      );
+      const rightReferencesLeft = right.members.some((a) =>
+        left.members.some((b) => explicitlyReferences(a, b.id)),
+      );
+      if (!leftReferencesRight && !rightReferencesLeft) continue;
+      merged[leftIndex] = toProblem([...left.members, ...right.members], sha, {
+        key: leftReferencesRight ? right.key : left.key,
+        origin: left.origin === "sidecar" || right.origin === "sidecar" ? "sidecar" : "inferred",
+        basis: "阅读合并：摘要前导明确引用同一账本 ID，原始记录保留",
+      });
+      merged.splice(rightIndex, 1);
+      // Revisit the merged group so every exact identity link is considered.
+      leftIndex -= 1;
+      break;
+    }
+  }
+  return merged;
+}
+
+export function readableFindingTitle(input: string | LedgerFinding): string {
+  if (typeof input !== "string") return readableLedgerTitle(input);
+  const title = input;
   const line = firstLine(title);
   const loc = parseLocations(line)[0];
   const locLabel = loc
@@ -414,15 +472,98 @@ export function readableFindingTitle(title: string): string {
   return truncateDisplayTitle(assembled, FINDING_TITLE_DISPLAY_LIMIT);
 }
 
+function readableLedgerTitle(row: LedgerFinding): string {
+  const body = substantiveClauses(row.text, row.id);
+  const heading = substantiveClauses(row.title, row.id);
+  const reason = substantiveClauses(row.verification?.reason ?? "");
+  const candidates = body.length > 0 ? body : heading.length > 0 ? heading : reason;
+  const first = candidates[0];
+  if (!first) return "问题原因待补充（展开查看原始记录）";
+  // An explicit counterexample describes the observable failure. Keep its consequence
+  // when shortening, since SQL and method names can consume the entire leading half.
+  const counterexample = candidates.find((clause) => /^反例[:：]/u.test(clause));
+  if (counterexample) {
+    const chars = Array.from(counterexample.replace(/^反例[:：]\s*/u, ""));
+    if (chars.length <= FINDING_TITLE_DISPLAY_LIMIT) return chars.join("");
+    const tailLength = Math.floor(FINDING_TITLE_DISPLAY_LIMIT / 2);
+    return `${chars.slice(0, FINDING_TITLE_DISPLAY_LIMIT - tailLength - 1).join("")}…${chars.slice(-tailLength).join("")}`;
+  }
+  return truncateDisplayTitle(first, FINDING_TITLE_DISPLAY_LIMIT);
+}
+
+function substantiveClauses(source: string, findingId?: string): string[] {
+  let text = firstLine(source)
+    .replace(/`+/g, "")
+    .replace(/\*{2,}/g, "")
+    .trim();
+  if (text === findingId) return [];
+  const separator = text.search(/\s+[—–]\s+/u);
+  if (separator >= 0) {
+    const prefix = text.slice(0, separator);
+    if (prefix === findingId || /^h-[a-f\d]{6,}\b|^F-?\d+\b|--|^review-[\w-]+\b/u.test(prefix)) {
+      text = text.slice(separator).replace(/^[\s—–]+/u, "");
+    }
+  }
+  const filenamePrefix = new RegExp(String.raw`^(?:[\w.-]+\/)*${FILE_EXT}\s+`);
+  const preambleEnd = text.indexOf("：");
+  if (filenamePrefix.test(text) && preambleEnd >= 0) text = text.slice(preambleEnd + 1);
+  return stripLocations(text)
+    .replace(/^[:：\s—–、]+/u, "")
+    .split(/[。！？\n]/u)
+    .map((clause) => clause.replace(/\s+/g, " ").trim())
+    .filter(
+      (clause) =>
+        clause.length > 0 &&
+        !/^(?:F-?\d+|[\w.-]+--\S+)$/iu.test(clause) &&
+        !/^(?:[一二三四五六七八九\d]+席|review-[\w-]+\b).*(?:still_open|verified_closed|not_evaluated)/u.test(
+          clause,
+        ) &&
+        !/^(?:仍成立|已关闭|本轮阻塞|h-[a-f\d]{6,}\b)/u.test(clause),
+    );
+}
+
+function problemLocation(members: readonly LedgerFinding[]): string | null {
+  for (const row of members) {
+    const location =
+      primaryLocations(row)[0] ?? parseLocations(row.verification?.locations?.join(" ") ?? "")[0];
+    if (location) {
+      const lines =
+        location.start === location.end ? `${location.start}` : `${location.start}-${location.end}`;
+      return `${baseName(location.path)}:${lines}`;
+    }
+  }
+  const file = members.flatMap((row) => row.files).find((path) => path.includes("."));
+  return file ? baseName(file) : null;
+}
+
 function primaryLocations(row: LedgerFinding): CitedLocation[] {
-  const head = `${firstLine(row.title)}\n${firstLine(row.text)}`;
-  const found = parseLocations(head);
+  const found = parseLocations(declaredCitationText(row));
   if (found.length > 0) return found;
+  const head = `${firstLine(row.title)}\n${firstLine(row.text)}`;
   const line = firstLineNumber(head);
   if (line === null) return [];
   return row.files
     .filter((file) => file.includes("."))
     .map((path) => ({ path, start: line, end: line }));
+}
+
+function declaredCitationText(row: LedgerFinding): string {
+  const kept: string[] = [];
+  for (const line of `${row.title}\n${row.text}`.split("\n")) {
+    if (NARRATIVE_LINE.test(line)) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+function consequenceClause(row: LedgerFinding): string | null {
+  const clause = CONSEQUENCE_LINE.exec(row.text)?.[1]?.trim() ?? "";
+  if (hanLength(clause) < MIN_CONSEQUENCE_HAN) return null;
+  return clause;
+}
+
+function hanLength(text: string): number {
+  return Array.from(text).filter((char) => /\p{Script=Han}/u.test(char)).length;
 }
 
 function parseLocations(text: string): CitedLocation[] {
@@ -597,6 +738,13 @@ function firstLineNumber(text: string): number | null {
 }
 
 function inferredBasis(members: readonly LedgerFinding[]): string {
+  if (
+    members.some((row) =>
+      members.some((other) => row.id !== other.id && explicitlyReferences(row, other.id)),
+    )
+  ) {
+    return "阅读合并：摘要前导明确引用同一账本 ID，原始记录保留";
+  }
   const locations = members.flatMap((row) => primaryLocations(row));
   const shown = locations[0];
   if (!shown) return "阅读合并：相近问题描述，原始记录保留";
