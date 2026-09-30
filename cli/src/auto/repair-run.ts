@@ -1127,7 +1127,6 @@ export async function executeRepairLoop(input: {
         : recoveryActionFor(gate.reasons[0]?.code ?? "findings_open"),
     });
     if (gate.passed) {
-      releaseWriterQuietly(profile, input.runId);
       return finish(input, {
         businessResult: "approved",
         reasonCode: null,
@@ -1613,6 +1612,12 @@ function finish(
     status: result.businessResult === "stopped" ? "interrupted" : "completed",
     phase: "repair-finalizing",
   });
+  // Every terminal outcome releases the writer lease: a finished repair is not
+  // an active holder (`isActiveRepairHolder`), so a lingering lease would wedge
+  // `ck fix`/`ck apply` and the Host repair start on this branch until the lock
+  // file is removed manually. `releaseWriterQuietly` still fails closed when a
+  // writer pid that could keep writing is alive.
+  releaseTerminalWriterLease(input.runId, state);
   const exitCode =
     result.businessResult === "approved"
       ? EXIT.ok
@@ -1748,6 +1753,19 @@ function releaseWriterQuietly(profile: RepairProfile, holderRunId: string): void
   } catch {
     // keep blocking if extras are alive
   }
+}
+
+function releaseTerminalWriterLease(runId: string, state: RepairState | null): void {
+  const profileName = state?.profileName ?? null;
+  if (profileName === null) return;
+  let profile: RepairProfile;
+  try {
+    profile = loadRepairProfile(profileName);
+  } catch {
+    // Fail closed: an unresolvable profile keeps the lease on disk.
+    return;
+  }
+  releaseWriterQuietly(profile, runId);
 }
 
 function expectedRemoteSha(state: RepairState, sourceSha: string): string {

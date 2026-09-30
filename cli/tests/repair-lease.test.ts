@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writerLeaseKey, writerLeasePath } from "@shared/runtime/repair-lease";
@@ -98,6 +98,97 @@ describe("writer lease CAS", () => {
       reclaim: { journalChecked: true, remoteChecked: true },
     });
     expect(reclaimed.epoch).toBeGreaterThan(1);
+  });
+
+  it("reclaims a dead pid only after journal and remote checks", () => {
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "fix",
+      holderRunId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      pid: 999_999_999,
+    });
+    const reclaimed = acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "apply",
+      holderRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+      pid: process.pid,
+      reclaim: { journalChecked: true, remoteChecked: true },
+    });
+    expect(reclaimed.epoch).toBeGreaterThan(1);
+  });
+
+  it("takes over a dead lease whose repair holder reached a terminal business result", () => {
+    const holderId = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    const runDir = join(home, "runs", holderId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        profileName: "default",
+        outerUsed: 1,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: "needs_attention",
+        reasonCode: "findings_open",
+      })}\n`,
+    );
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "repair",
+      holderRunId: holderId,
+      pid: 999_999_999,
+    });
+    const taken = acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "fix",
+      holderRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+      pid: process.pid,
+    });
+    expect(taken.holderRunId).toBe("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2");
+    expect(taken.epoch).toBeGreaterThan(1);
+  });
+
+  it("keeps refusing a dead lease whose repair holder has no terminal business result", () => {
+    const holderId = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    const runDir = join(home, "runs", holderId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        profileName: "default",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: null,
+        reasonCode: null,
+      })}\n`,
+    );
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "repair",
+      holderRunId: holderId,
+      pid: 999_999_999,
+    });
+    expect(() =>
+      acquireWriterLease({
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        holderKind: "apply",
+        holderRunId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+        pid: process.pid,
+      }),
+    ).toThrow(/journal|remote|stale/i);
   });
 
   it("refuses to release while an extra writer pid is still alive", () => {

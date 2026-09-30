@@ -1,10 +1,23 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CliRunLaunchRequest } from "@host/cli-launcher";
 import { cliRunsRoutes } from "@host/routes/cli-runs";
 import type { HostServices, HttpError, RouteContext } from "@host/server";
+import {
+  parseWriterLease,
+  writerLeaseKey,
+  writerLeasePath,
+} from "@shared/runtime/repair-lease";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createRepairGrant,
@@ -105,6 +118,88 @@ describe("repair mutation handlers", () => {
     const second = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
       runId: string;
     };
+    expect(second.runId).toBe(first.runId);
+    expect(launches).toHaveLength(1);
+  });
+
+  it("spawns a fresh repair after a dead needs_attention lease instead of returning the old run", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    const first = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    // The prior repair finished needs_attention and its writer lease stayed on
+    // disk with a dead pid: the deterministic wedge REPAIR-LEASE-001 describes.
+    const key = writerLeaseKey({ repo: "github.com/acme/repo", sourceBranch: "feat-x" });
+    const leasePath = writerLeasePath(home, key);
+    const priorLease = parseWriterLease(readFileSync(leasePath, "utf8"));
+    if (priorLease === null) throw new Error("missing writer lease");
+    writeFileSync(
+      leasePath,
+      `${JSON.stringify({ ...priorLease, pid: 999_999_999 }, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(home, "runs", first.runId, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: RUN_ID,
+        profileName: "default",
+        outerUsed: 1,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: "needs_attention",
+        reasonCode: "pr_drift",
+      })}\n`,
+    );
+    const second = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+      started: boolean;
+    };
+    expect(second.started).toBe(true);
+    expect(second.runId).not.toBe(first.runId);
+    expect(launches).toHaveLength(2);
+    expect(launches[1]?.runId).toBe(second.runId);
+    const lease = parseWriterLease(readFileSync(leasePath, "utf8"));
+    expect(lease?.holderRunId).toBe(second.runId);
+  });
+
+  it("keeps deduping into a resumable interrupted holder instead of taking over its lease", async () => {
+    seedProfile();
+    const { routes, launches } = routesWithLauncher();
+    const start = routes.find((route) => route.pattern === "/api/v1/cli-runs/repair");
+    if (start === undefined) throw new Error("missing repair route");
+    const first = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+    };
+    const key = writerLeaseKey({ repo: "github.com/acme/repo", sourceBranch: "feat-x" });
+    const leasePath = writerLeasePath(home, key);
+    const priorLease = parseWriterLease(readFileSync(leasePath, "utf8"));
+    if (priorLease === null) throw new Error("missing writer lease");
+    writeFileSync(
+      leasePath,
+      `${JSON.stringify({ ...priorLease, pid: 999_999_999 }, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(home, "runs", first.runId, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "interrupted",
+        progress: {
+          phase: "repair-preparing",
+          attempts: [],
+          updatedAt: new Date().toISOString(),
+        },
+        pipeline: null,
+      })}\n`,
+    );
+    const second = (await start.handler(ctx({ from: RUN_ID, profile: "default" }))) as {
+      runId: string;
+      started: boolean;
+    };
+    expect(second.started).toBe(true);
     expect(second.runId).toBe(first.runId);
     expect(launches).toHaveLength(1);
   });

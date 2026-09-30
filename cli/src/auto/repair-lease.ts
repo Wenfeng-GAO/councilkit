@@ -10,6 +10,7 @@ import {
 import { errors } from "../errors";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
+import { readRepairState } from "./repair-persist";
 
 export interface AcquireWriterLeaseInput {
   repo: string;
@@ -20,10 +21,18 @@ export interface AcquireWriterLeaseInput {
   writerPids?: number[];
   reclaim?: { journalChecked: boolean; remoteChecked: boolean };
   isPidAlive?: (pid: number) => boolean;
+  /**
+   * Lets a dead lease be taken over when its holder run has provably finished.
+   * The default refuses every holder except a repair run whose persisted
+   * businessResult is terminal (approved / needs_attention / stopped) — the
+   * same read-model predicate `isActiveRepairHolder` applies.
+   */
+  isHolderSettled?: (holder: WriterLease) => boolean;
 }
 
 export function acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease {
   const alive = input.isPidAlive ?? isPidAlive;
+  const isHolderSettled = input.isHolderSettled ?? repairHolderFinished;
   const key = writerLeaseKey({ repo: input.repo, sourceBranch: input.sourceBranch });
   const path = writerLeasePath(ensureHome(), key);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -51,12 +60,12 @@ export function acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease 
     } catch {
       const raced = parseWriterLease(readFileText(path) ?? "");
       if (raced === null) throw errors.io("cannot create writer lease");
-      return takeExisting(raced, next, alive, input.reclaim, path);
+      return takeExisting(raced, next, alive, input.reclaim, isHolderSettled, path);
     }
   }
   const existing = parseWriterLease(existingText);
   if (existing === null) throw errors.io("writer lease file is invalid");
-  return takeExisting(existing, next, alive, input.reclaim, path);
+  return takeExisting(existing, next, alive, input.reclaim, isHolderSettled, path);
 }
 
 export function releaseWriterLease(input: {
@@ -92,6 +101,7 @@ function takeExisting(
   next: WriterLease,
   alive: (pid: number) => boolean,
   reclaim: AcquireWriterLeaseInput["reclaim"],
+  isHolderSettled: (holder: WriterLease) => boolean,
   path: string,
 ): WriterLease {
   if (existing.holderRunId === next.holderRunId) {
@@ -110,7 +120,7 @@ function takeExisting(
       { existingRunId: existing.holderRunId, key: existing.key },
     );
   }
-  if (!reclaim?.journalChecked || !reclaim.remoteChecked) {
+  if (!isHolderSettled(existing) && (!reclaim?.journalChecked || !reclaim.remoteChecked)) {
     throw errors.runFailed(
       "cannot reclaim a stale writer lease without journal and remote checks",
       { existingRunId: existing.holderRunId, key: existing.key },
@@ -119,4 +129,36 @@ function takeExisting(
   const stolen: WriterLease = { ...next, epoch: existing.epoch + 1 };
   atomicWriteJson(path, stolen);
   return stolen;
+}
+
+/**
+ * A repair holder whose persisted businessResult is terminal can never legally
+ * hold the writer lease again (`isActiveRepairHolder` returns false for it), so
+ * its dead lease may be taken over. Holders without terminal state stay behind
+ * the journal+remote reclaim gate.
+ */
+function repairHolderFinished(holder: WriterLease): boolean {
+  if (holder.holderKind !== "repair") return false;
+  const state = readRepairState(resolvePaths().runDir(holder.holderRunId));
+  return (state?.businessResult ?? null) !== null;
+}
+
+/**
+ * Best-effort release for stop paths; reports whether the lease is actually
+ * gone from disk so callers can answer `leaseReleased` truthfully.
+ */
+export function releaseWriterLeaseQuietly(input: {
+  repo: string;
+  sourceBranch: string;
+  holderRunId: string;
+  isPidAlive?: (pid: number) => boolean;
+}): boolean {
+  try {
+    releaseWriterLease(input);
+    return true;
+  } catch {
+    const key = writerLeaseKey({ repo: input.repo, sourceBranch: input.sourceBranch });
+    const path = writerLeasePath(resolvePaths().home, key);
+    return readFileText(path) === null;
+  }
 }

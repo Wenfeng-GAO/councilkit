@@ -22,6 +22,7 @@ import {
   writeRepairState,
 } from "../auto/repair-persist";
 import { loadRepairProfile } from "../auto/repair-profile";
+import { releaseWriterLeaseQuietly } from "../auto/repair-lease";
 import { type RepairLoopDeps, executeRepairLoop } from "../auto/repair-run";
 import { SquadctlBridge, probeSquadBridge } from "../auto/squadctl-bridge";
 import { EXIT, errors } from "../errors";
@@ -248,7 +249,7 @@ async function runRepairRun(
   if (deps.loop === false) {
     const parked = await parkUntilStopped(deps);
     if (parked === "interrupted") {
-      markStopped(bootstrapped.runDir, bootstrapped.state);
+      markStopped(bootstrapped.runDir, runId, bootstrapped.state);
     }
     await out.finish(
       {
@@ -396,16 +397,17 @@ async function runRepairStop(
     );
     throw new RepairExit(EXIT.interrupted);
   }
-  const next = markStopped(runDir, state);
+  const stopped = markStopped(runDir, runId, state, isPidAlive);
   await out.finish(
     {
       runId,
       status: "interrupted",
-      businessResult: next.businessResult,
-      leaseReleased: true,
+      businessResult: stopped.state.businessResult,
+      leaseReleased: stopped.leaseReleased,
       pipeline: null,
     },
-    () => `已停止 ${runId}`,
+    () =>
+      stopped.leaseReleased ? `已停止 ${runId}` : `已停止 ${runId}，写入锁仍未释放`,
   );
   throw new RepairExit(EXIT.interrupted);
 }
@@ -430,7 +432,7 @@ async function runRepairResume(
   if (deps.loop === false) {
     const parked = await parkUntilStopped(deps);
     if (parked === "interrupted") {
-      markStopped(runDir, resumed);
+      markStopped(runDir, runId, resumed);
     }
     await out.finish(
       {
@@ -471,11 +473,34 @@ function parseParentRunId(argv: string[]): string {
   return runId;
 }
 
-function markStopped(runDir: string, state: RepairState): RepairState {
+function markStopped(
+  runDir: string,
+  runId: string,
+  state: RepairState,
+  isPidAlive?: (pid: number) => boolean,
+): { state: RepairState; leaseReleased: boolean } {
   const next: RepairState = { ...state, businessResult: "stopped" };
   writeRepairState(runDir, next);
   writeRepairLive(runDir, { status: "interrupted", phase: "repair-preparing" });
-  return next;
+  return { state: next, leaseReleased: releaseStoppedWriterLease(runId, state, isPidAlive) };
+}
+
+function releaseStoppedWriterLease(
+  runId: string,
+  state: RepairState,
+  isPidAlive?: (pid: number) => boolean,
+): boolean {
+  let repo: string;
+  let sourceBranch: string;
+  try {
+    const profile = loadRepairProfile(state.profileName);
+    repo = profile.repo;
+    sourceBranch = profile.sourceBranch;
+  } catch {
+    // Cannot resolve the lease key; report the lease as still held.
+    return false;
+  }
+  return releaseWriterLeaseQuietly({ repo, sourceBranch, holderRunId: runId, isPidAlive });
 }
 
 async function parkUntilStopped(deps: RepairCommandDeps): Promise<"running" | "interrupted"> {
