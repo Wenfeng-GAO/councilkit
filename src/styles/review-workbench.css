@@ -482,6 +482,28 @@
   margin: 12px 0 0;
   width: fit-content;
 }
+.ck-wb-review-decision {
+  margin: 20px 0 0;
+  padding: 12px 0 12px 16px;
+  border-left: 3px solid var(--ck-accent);
+}
+.ck-wb-document .ck-wb-review-decision p {
+  margin: 0 0 8px;
+}
+.ck-wb-document .ck-wb-review-decision p:last-child {
+  margin-bottom: 0;
+}
+.ck-wb-decision-verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.ck-wb-decision-verdict > span {
+  color: var(--ck-secondary);
+}
+.ck-wb-decision-conflict {
+  color: var(--ck-accent);
+}
 .ck-wb-overview-brief {
   margin-top: 28px;
   min-width: 0;

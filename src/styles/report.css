@@ -431,7 +431,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 1rem;
 }
 
 .ck-ledger-row {
@@ -450,10 +450,35 @@
   min-width: 0;
 }
 
+.ck-finding-summary:focus-visible {
+  outline: 2px solid var(--color-brass);
+  outline-offset: 4px;
+}
+
 .ck-finding-id-sev {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+.ck-finding-number {
+  font-family: var(--font-command);
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.ck-finding-heading {
+  min-width: 0;
+}
+
+.ck-finding-location {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--font-command);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
 }
 
 .ck-finding-summary::-webkit-details-marker {
@@ -575,7 +600,7 @@
   max-width: 100%;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: 0.75rem/1.65 var(--font-command);
+  font: 0.75rem / 1.65 var(--font-command);
   color: var(--color-fg);
 }
 
@@ -612,7 +637,7 @@
     grid-template-columns: max-content minmax(0, 1fr);
   }
 
-  .ck-ledger-title,
+  .ck-finding-heading,
   .ck-finding-tags {
     grid-column: 1 / -1;
   }

@@ -9,6 +9,7 @@ const PRIOR_ID = "ck-review-00000000-0000-4000-8000-0000000000e6";
 const EMPTY_ID = "ck-review-00000000-0000-4000-8000-0000000000e7";
 const HOLLOW_ID = "ck-review-00000000-0000-4000-8000-0000000000e9";
 const HOLLOW_REVIEW_ID = "ck-review-00000000-0000-4000-8000-0000000000ea";
+const CONFLICT_ID = "ck-review-00000000-0000-4000-8000-0000000000eb";
 
 const ARTIFACTS = process.env.CK_ARTIFACTS_DIR;
 
@@ -421,6 +422,40 @@ const emptyRun = {
   findingGroups: null,
 };
 
+// Reproduces the reported bold historical-ID alias, without requiring local run files.
+const mapperId = "app.dal.....mapper.java--app-dal-...-mapper.java-67-75";
+const conflictRun = {
+  ...priorRun,
+  runId: CONFLICT_ID,
+  reportUrl: `/reports/${CONFLICT_ID}`,
+  markdown:
+    "# Autonomous Review Report\n\n---\n\n## 概览\n\n本轮只文档化 GET 与 list 的差异，不升阻塞。\n\n## 结论\n\ncomment\n",
+  findings: [
+    finding({
+      id: "h-48d359829697",
+      title: `${mapperId}** — 四席按行为 still_open。公开名 sessionID 与 GET 仍非等价合同。`,
+      severity: "major",
+      source: "consensus",
+    }),
+    finding({
+      id: mapperId,
+      title: "Mapper.java:67-75 — GET 可按会话名称命中，list 仅匹配 sessionID。",
+      severity: "major",
+      files: ["Mapper.java"],
+    }),
+    finding({
+      id: "h-052309e7be19",
+      title: "h-052309e7be19** — 五席 still_open。GET 可返回已归档会话，list 默认排除 archived。",
+      severity: "major",
+    }),
+    finding({
+      id: "test.py--assertion",
+      title: "测试只检查全文，未校验字段操作符。",
+      severity: "minor",
+    }),
+  ],
+};
+
 const runsById: Record<string, unknown> = {
   [LAYOUT_ID]: layoutRun,
   [CASE_ID]: caseRun,
@@ -429,6 +464,7 @@ const runsById: Record<string, unknown> = {
   [rereviewRun.runId]: rereviewRun,
   [HOLLOW_ID]: hollowRun,
   [HOLLOW_REVIEW_ID]: hollowReviewRun,
+  [CONFLICT_ID]: conflictRun,
 };
 
 async function mockReviewApis(page: Page): Promise<void> {
@@ -542,6 +578,41 @@ for (const width of [1440, 900, 390]) {
     await maybeScreenshot(page, `layout-${width}.png`);
     await row.locator("summary").first().click();
     await expect(row.locator("details").first()).not.toHaveAttribute("open");
+  });
+}
+
+for (const width of [1440, 390]) {
+  test(`COMMENT 与账本冲突可见、重复合并、筛选保留序号（${width}px）`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1100 });
+    await mockReviewApis(page);
+    await page.goto(`/reports/${CONFLICT_ID}`);
+    await expect(page.getByRole("heading", { name: "审查结论待核对" })).toBeVisible();
+    await expect(page.getByText("有意见（COMMENT）", { exact: true })).toBeVisible();
+    await expect(page.getByText("报告意见与账本门禁尚未对齐", { exact: false })).toBeVisible();
+    await expect(page.locator(".ck-ledger-row")).toHaveCount(2);
+    await expect(page.getByText("合并 2 条记录", { exact: true })).toBeVisible();
+    const titles = await page.locator(".ck-ledger-title").allTextContents();
+    expect(
+      titles.every(
+        (title) =>
+          !title.includes("h-052309") && !title.includes("still_open") && !title.includes(mapperId),
+      ),
+    ).toBe(true);
+    const numbers = await page.locator(".ck-finding-number").allTextContents();
+    expect(numbers).toEqual(["#01", "#02"]);
+    await page.getByRole("button", { name: "全部", exact: true }).click();
+    await expect(page.locator(".ck-ledger-row")).toHaveCount(3);
+    expect((await page.locator(".ck-finding-number").allTextContents()).slice(0, 2)).toEqual(
+      numbers,
+    );
+    await page.getByRole("button", { name: "阻塞", exact: true }).click();
+    await assertNoHorizontalOverflow(page);
+    await maybeScreenshot(page, `decision-conflict-${width}.png`);
+    const aliasRow = page.locator(".ck-ledger-row").filter({ hasText: "合并 2 条记录" });
+    await aliasRow.locator("summary").first().click();
+    await expect(aliasRow.getByText("h-48d359829697", { exact: true })).toBeVisible();
+    await expect(aliasRow.getByText(mapperId, { exact: true })).toBeVisible();
+    await assertNoHorizontalOverflow(page);
   });
 }
 
