@@ -31,12 +31,14 @@ pnpm exec councilkit ideate "一句话创意" --json            # 产品创意�
 
 ### `init` 默认配置
 
-- **默认 Agent**：
-  - `review-security` / `review-correctness` / `review-maintainability`（总是创建）
-  - `review-adversarial`（PATH 上有 `grok` 时）
-  - `review-cursor`（PATH 上有 `cursor-agent` 时，model = `auto`）
-  - `ideate-product` / `ideate-engineering`（PATH 上有 grok/kimi 时）
-  - `ideate-challenger`（PATH 有 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型）
+- **默认 Agent**（按 PATH 上可发现的 CLI 创建）：
+  - `review-security`（需要 `cld`）
+  - `review-correctness`（需要 `grok`）
+  - `review-maintainability`（需要 `kimi`）
+  - `review-adversarial`（需要 `grok`）
+  - `review-cursor`（需要 `cursor-agent`，model = `auto`）
+  - `ideate-product` / `ideate-engineering`（需要 grok/kimi）
+  - `ideate-challenger`（需要 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型）
 
 - **默认 Council**：
   - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）

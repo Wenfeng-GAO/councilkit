@@ -31,17 +31,17 @@ CLI 命令 `councilkit runs open <run-id>` 会打印报告 URL。
 `councilkit review` 产出的确定性 `report.md` 包含：
 
 1. **Attempts 表格**（五列）：
-   - Attempt ID
-   - Agent 名称
-   - 执行状态
-   - 运行时长
-   - 主要发现数量
+   - Attempt（= agent 名称）
+   - Driver/Model（= driverId/modelId）
+   - 结果（ok 或 failed:code）
+   - 耗时（持续时间）
+   - 工具调用（tool call 次数或「无过程数据」）
 
 2. **聚合正文**（中文五章节）：
-   - 概述
-   - 关键发现
-   - 次要观察
-   - 建议
+   - 概览
+   - 共识发现
+   - 独有发现
+   - 分歧
    - 结论
 
 3. **过程对比**：各 Attempt 的执行过程差异

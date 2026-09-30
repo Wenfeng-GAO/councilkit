@@ -121,7 +121,7 @@ pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
 
 - **macOS only**（V1）
 - **Node.js 22 精确主版本**
-- **Runtime Host 必须运行**（除 `review`/`ideate`/`apply`/`fix`/`repair` 外）
+- **Runtime Host 必须运行**（除 Autonomous Run（`review`/`ideate`/`apply`/`fix`/`repair`）与本地存储命令（`init`/`agent`/`council`/`jury`/`runs`/`findings`）外）
 - **CLI 与浏览器数据不互通**
 - **单一 canonical origin**：`http://127.0.0.1:43127`，永不迁移
 - **Reporter/Facilitator 必填**，不静默 fallback
