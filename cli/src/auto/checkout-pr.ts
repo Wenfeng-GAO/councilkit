@@ -156,7 +156,7 @@ export async function inspectPullRequest(
   }
   if (parsed.kind === "github") {
     if (findExecutable("gh", env) === null) {
-      throw errors.usage("GitHub PRs need `gh` on PATH to resolve the source branch");
+      throw errors.runFailed("GitHub PRs need `gh` on PATH to resolve the source branch");
     }
     const view = await runCommand({
       executable: "gh",
@@ -178,7 +178,7 @@ export async function inspectPullRequest(
     };
   }
   if (findExecutable("antcode", env) === null) {
-    throw errors.usage("AntCode PRs need `antcode` on PATH to resolve the source branch");
+    throw errors.runFailed("AntCode PRs need `antcode` on PATH to resolve the source branch");
   }
   const ant = parseAntCodePrUrl(parsed.url);
   if (ant === null) {
