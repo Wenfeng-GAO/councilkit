@@ -13,7 +13,16 @@ describe("buildFindingChecklist", () => {
     status: "completed",
     markdown: "Full report content",
     truncated: false,
+    startedAt: "2026-01-01T00:00:00Z",
+    endedAt: "2026-01-01T01:00:00Z",
+    hasReport: true,
+    hasPlan: false,
     hasFindings: true,
+    reportUrl: "http://localhost:43127/reports/ck-run-test-123",
+    progress: null,
+    planMarkdown: "",
+    planTruncated: false,
+    documents: [],
     findings: [
       {
         id: "finding-1",
@@ -45,12 +54,16 @@ describe("buildFindingChecklist", () => {
         files: [],
         reviewer: "review-maintainability",
         verification: {
+          outcome: "verified_closed",
           reviewer: "review-maintainability",
-          method: "source_analysis",
+          method: "code_trace",
           reason: "已在后续提交中添加测试",
-          candidateSha: "abc123def456",
+          candidateSha: "abc123def456789012345678901234567890abcd",
           evidence: "测试文件已创建",
           locations: ["tests/unit/feature.test.ts"],
+          runId: "ck-run-verify-123",
+          attemptId: "verify-attempt-1",
+          runComplete: true,
         },
       },
     ],
@@ -61,17 +74,18 @@ describe("buildFindingChecklist", () => {
       evidenceComplete: true,
       prUrl: null,
       againstRunId: null,
+      blockingIds: [],
+      unverifiedFixIds: [],
+      openIds: [],
       uncoveredIds: [],
     },
-    progress: null,
-    landings: [],
     planLock: null,
+    landings: [],
+    hasPlanLock: false,
     pipeline: null,
+    handoff: null,
     sourceRunId: null,
     lastError: null,
-    createdAt: 1234567890,
-    outerUsed: null,
-    outerMax: null,
   };
 
   it("builds checklist with all findings by default", () => {
@@ -159,6 +173,15 @@ describe("buildFindingChecklist", () => {
     const runWithGroups: CliRunDetailResponse = {
       ...mockRun,
       findingGroups: {
+        version: 1,
+        kind: "councilkit-finding-groups",
+        source: {
+          runId: "ck-run-test-123",
+          sha: "abc123def456789012345678901234567890abcd",
+          findingsSha256:
+            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+          againstRunId: null,
+        },
         groups: [
           {
             rootCauseId: "root-1",
