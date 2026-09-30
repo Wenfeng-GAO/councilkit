@@ -195,21 +195,27 @@ function ProblemRow({
             ) : null}
           </span>
           <span className="ck-finding-tags">
-            <span className={`ck-sev ck-sev-${problem.severity}`}>
-              {severityLabel(problem.severity)}
-            </span>
-            <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
-              {problem.statusLabel}
-            </span>
-            {problem.blocking ? <span className="ck-finding-source">账本阻塞</span> : null}
-            {problem.sourceTags.map((tag) => (
-              <span key={tag} className="ck-finding-source">
-                {tag}
+            <span className="ck-finding-tags-row">
+              <span className={`ck-sev ck-sev-${problem.severity}`}>
+                {severityLabel(problem.severity)}
               </span>
-            ))}
-            {problem.members.length > 1 ? (
-              <span className="ck-finding-source">合并 {problem.members.length} 条记录</span>
-            ) : null}
+              <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
+                {problem.statusLabel}
+              </span>
+            </span>
+            {(problem.blocking || problem.sourceTags.length > 0 || problem.members.length > 1) && (
+              <span className="ck-finding-tags-row">
+                {problem.blocking ? <span className="ck-finding-source">账本阻塞</span> : null}
+                {problem.sourceTags.map((tag) => (
+                  <span key={tag} className="ck-finding-source">
+                    {tag}
+                  </span>
+                ))}
+                {problem.members.length > 1 ? (
+                  <span className="ck-finding-source">合并 {problem.members.length} 条记录</span>
+                ) : null}
+              </span>
+            )}
           </span>
         </summary>
         <div className="ck-finding-detail">
