@@ -1218,14 +1218,42 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
    * page and no running execution. Idempotent on an already-concluded room.
    * An unfinalized active round with no live execution is atomically aborted
    * inside beginReportExecution (ruling §3). The report anchors on the
-   * roundNumber-largest completed round. */
+   * roundNumber-largest completed round.
+   *
+   * ROT-CONCLUDE-001: a completed-but-not-concluded room may have had its warm
+   * runtime released (releaseRuntime flips binding.state to "closed"); the old
+   * assertion-only `await currentToken(roomId)` threw `no active controller`
+   * on that cold room, dead-ending the conclude flow (open room, no report)
+   * until the user started a throwaway new round to re-warm. Mirror startRound's
+   * cold-tolerant resolution: tokenForRoom returns null on a cold room, so
+   * controlRoom → ensureScope cold-builds a fresh scope (the exact proven path
+   * startRound uses for a fresh room / needs_rebase recovery). An observing page
+   * (controlRoom returns null) still surfaces "no active controller" via
+   * currentToken, preserving the controlling-page precondition. dispatchTurn
+   * re-derives its own token from the now-warm binding. */
   async function concludeRoom(roomId: string): Promise<void> {
     const room = await db.rooms.get(roomId);
     if (!room) throw new Error(`unknown room ${roomId}`);
     if (room.status === "concluded") return; // idempotent
-    // currentToken asserts the controlling page (throws if not); the value is
-    // not used further because dispatchTalk re-derives its own token.
-    await currentToken(roomId);
+    // Resolve a controller token tolerantly for a possibly-cold runtime. On a
+    // warm room tokenForRoom returns the active binding's token (asserting
+    // controlling like the old currentToken). On a cold room (binding closed by
+    // releaseRuntime, or never warmed), controlRoom → ensureScope cold-builds a
+    // fresh scope — the same path startRound takes for a fresh/needs_rebase room.
+    // An observing page (controlRoom → null) surfaces the original throw.
+    if (!(await tokenForRoom(roomId))) {
+      const handle = await controlRoom(roomId);
+      if (!handle) {
+        // Observing page: surfaces "no active controller for room X".
+        await currentToken(roomId);
+      } else {
+        const participants = await activeParticipants(roomId);
+        if (participants.length === 0) {
+          throw new Error("room has no active participants");
+        }
+        await ensureScope(roomId, participants);
+      }
+    }
     if (room.activeRoundId) {
       const activeRound = await db.rounds.get(room.activeRoundId);
       if (activeRound?.activeExecutionId) {
