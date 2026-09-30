@@ -1,0 +1,155 @@
+{
+  "cutoff": "2026-09-22T02:25:48.134Z",
+  "delegationAt": "2026-09-21T14:19:17.946Z",
+  "codex": {
+    "root": {
+      "input_tokens": 172707994,
+      "cached_input_tokens": 172088064,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 221031,
+      "reasoning_output_tokens": 136461,
+      "total_tokens": 172929025
+    },
+    "subagents": [
+      {
+        "role": "/root",
+        "path": "/Users/hengzhuo/.codex/sessions/2026/09/21/rollout-2026-09-21T19-32-26-01a0c3bd-1f55-7bb2-9850-813ce6a6b1c0.jsonl",
+        "usage": {
+          "input_tokens": 5199465,
+          "cached_input_tokens": 4994304,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 15506,
+          "reasoning_output_tokens": 2955,
+          "total_tokens": 5214971
+        }
+      },
+      {
+        "role": "/root",
+        "path": "/Users/hengzhuo/.codex/sessions/2026/09/21/rollout-2026-09-21T19-33-23-01a0c3bd-ff24-7470-af78-bb94ea5f4be4.jsonl",
+        "usage": {
+          "input_tokens": 2384199,
+          "cached_input_tokens": 2294656,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10333,
+          "reasoning_output_tokens": 1889,
+          "total_tokens": 2394532
+        }
+      },
+      {
+        "role": "/root",
+        "path": "/Users/hengzhuo/.codex/sessions/2026/09/21/rollout-2026-09-21T19-33-54-01a0c3be-77e9-7373-a40e-c415f8a32038.jsonl",
+        "usage": {
+          "input_tokens": 2664489,
+          "cached_input_tokens": 2587904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10636,
+          "reasoning_output_tokens": 1073,
+          "total_tokens": 2675125
+        }
+      }
+    ],
+    "total": {
+      "input_tokens": 182956147,
+      "cached_input_tokens": 181964928,
+      "output_tokens": 257506,
+      "reasoning_output_tokens": 142378,
+      "total_tokens": 183213653
+    },
+    "sinceDelegation": {
+      "input_tokens": 149429504,
+      "cached_input_tokens": 149130752,
+      "output_tokens": 168408,
+      "reasoning_output_tokens": 124127,
+      "total_tokens": 149597912
+    },
+    "positiveUsageUpdatesSinceDelegation": 313,
+    "sleepCallsSinceDelegation": 125
+  },
+  "cursor": {
+    "source": "/tmp/councilkit-cursor-convergence-20260921/cursor.stream.jsonl",
+    "records": [
+      {
+        "session_id": "9d41e367-4cce-4861-8123-28029fb8e4a3",
+        "request_id": "439b3af2-d5c1-4144-bd06-1dcb31e86bd6",
+        "duration_ms": 1895375,
+        "usage": {
+          "inputTokens": 54545,
+          "outputTokens": 18599,
+          "cacheReadTokens": 6243584,
+          "cacheWriteTokens": 0
+        }
+      },
+      {
+        "session_id": "9d41e367-4cce-4861-8123-28029fb8e4a3",
+        "request_id": "4470c001-0342-4569-924d-21f3830ae998",
+        "duration_ms": 1911057,
+        "usage": {
+          "inputTokens": 631912,
+          "outputTokens": 74363,
+          "cacheReadTokens": 11424384,
+          "cacheWriteTokens": 0
+        }
+      },
+      {
+        "session_id": "9d41e367-4cce-4861-8123-28029fb8e4a3",
+        "request_id": "fbf8c780-b55f-452b-b435-3beac195ca83",
+        "duration_ms": 302372,
+        "usage": {
+          "inputTokens": 321419,
+          "outputTokens": 14223,
+          "cacheReadTokens": 2349824,
+          "cacheWriteTokens": 0
+        }
+      },
+      {
+        "session_id": "9d41e367-4cce-4861-8123-28029fb8e4a3",
+        "request_id": "a1f33a35-15cb-4dba-8dfd-5f1697a81c35",
+        "duration_ms": 38171,
+        "usage": {
+          "inputTokens": 127564,
+          "outputTokens": 1282,
+          "cacheReadTokens": 24320,
+          "cacheWriteTokens": 0
+        }
+      },
+      {
+        "session_id": "6d5a90ec-5a58-453f-b377-36999d08e1a3",
+        "request_id": "5f02c014-c9f8-4f75-b216-48b8bb1574cc",
+        "duration_ms": 3390747,
+        "usage": {
+          "inputTokens": 1381708,
+          "outputTokens": 133258,
+          "cacheReadTokens": 26108544,
+          "cacheWriteTokens": 0
+        }
+      },
+      {
+        "session_id": "6d5a90ec-5a58-453f-b377-36999d08e1a3",
+        "request_id": "76889889-33ca-46e4-be9a-f8a5dfdff481",
+        "duration_ms": 1638814,
+        "usage": {
+          "inputTokens": 544129,
+          "outputTokens": 42606,
+          "cacheReadTokens": 8604032,
+          "cacheWriteTokens": 0
+        }
+      }
+    ],
+    "total": {
+      "inputTokens": 3061277,
+      "outputTokens": 284331,
+      "cacheReadTokens": 54754688,
+      "cacheWriteTokens": 0,
+      "totalTokens": 58100296
+    },
+    "missingUsage": [
+      "initial killed invocation (3781.8s)",
+      "resource_exhausted invocation (1050.6s)"
+    ]
+  },
+  "exclusions": [
+    "this token analysis turn after user request",
+    "web GPT-6 Pro usage",
+    "prior user Grok Build and prior CouncilKit review runtime usage"
+  ]
+}

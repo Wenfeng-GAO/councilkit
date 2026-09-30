@@ -1,0 +1,648 @@
+[
+  {
+    "runId": "ck-review-73a6a322-0b19-4bef-857b-10d4907792e6",
+    "start": "2026-09-20T16:25:33.936Z",
+    "startLocal": "09-21 00:25",
+    "end": "2026-09-20T16:38:08.963Z",
+    "sha": "efcc75b308c49c96e2df0daa28b90c967695255f",
+    "against": null,
+    "status": "completed",
+    "seats": 3,
+    "attemptFinished": 4,
+    "attemptMs": 1531853,
+    "probeCount": 3,
+    "probeMs": 49587,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 12.583783333333335,
+    "ledgerCount": 15,
+    "ledgerBlocking": 3,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": true,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "claude-stream-json": 1,
+      "kimi-stream-json": 1,
+      "cursor-stream-json": 2
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-73a6a322-0b19-4bef-857b-10d4907792e6/findings.json"
+  },
+  {
+    "runId": "ck-review-15fd78be-e516-43e8-98dc-a0e1a051c3c3",
+    "start": "2026-09-20T16:44:00.311Z",
+    "startLocal": "09-21 00:44",
+    "end": "2026-09-20T17:06:28.680Z",
+    "sha": "c7cb20903676645d90edc278287ecfa98604de39",
+    "against": "ck-review-73a6a322-0b19-4bef-857b-10d4907792e6",
+    "status": "failed",
+    "seats": 3,
+    "attemptFinished": 4,
+    "attemptMs": 1140024,
+    "probeCount": 4,
+    "probeMs": 121294,
+    "correctionCount": 3,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-0",
+        "start": "2026-09-20T16:50:59.510Z",
+        "end": "2026-09-20T17:03:45.653Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-1",
+        "start": "2026-09-20T16:50:59.636Z",
+        "end": "2026-09-20T17:03:45.663Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-2",
+        "start": "2026-09-20T16:50:59.666Z",
+        "end": "2026-09-20T17:03:45.673Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 22.472816666666667,
+    "ledgerCount": 15,
+    "ledgerBlocking": 3,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "cursor-stream-json": 2,
+      "kimi-stream-json": 1,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-15fd78be-e516-43e8-98dc-a0e1a051c3c3/findings.json"
+  },
+  {
+    "runId": "ck-review-c8c26f8c-9ee5-4b01-8a8a-5966063f78c2",
+    "start": "2026-09-20T17:08:48.168Z",
+    "startLocal": "09-21 01:08",
+    "end": "2026-09-20T17:19:40.024Z",
+    "sha": "1151790702596098c687b14361362b489b8c1375",
+    "against": "ck-review-73a6a322-0b19-4bef-857b-10d4907792e6",
+    "status": "completed",
+    "seats": 2,
+    "attemptFinished": 3,
+    "attemptMs": 945375,
+    "probeCount": 2,
+    "probeMs": 17381,
+    "correctionCount": 2,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-0",
+        "start": "2026-09-20T17:18:14.107Z",
+        "end": "2026-09-20T17:19:04.330Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-1",
+        "start": "2026-09-20T17:18:14.486Z",
+        "end": "2026-09-20T17:19:04.342Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 10.864266666666667,
+    "ledgerCount": 16,
+    "ledgerBlocking": 0,
+    "verifiedClosed": 5,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 1,
+    "coverageErrors": {
+      "missing_required_id": 1
+    },
+    "drivers": {
+      "kimi-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-c8c26f8c-9ee5-4b01-8a8a-5966063f78c2/findings.json"
+  },
+  {
+    "runId": "ck-review-7277fa26-a3d7-4376-867e-d1f18a528b8f",
+    "start": "2026-09-20T17:21:25.825Z",
+    "startLocal": "09-21 01:21",
+    "end": "2026-09-20T17:30:43.501Z",
+    "sha": "2dc1541f391002ad35044dd663aa147b6e60954e",
+    "against": "ck-review-c8c26f8c-9ee5-4b01-8a8a-5966063f78c2",
+    "status": "completed",
+    "seats": 2,
+    "attemptFinished": 3,
+    "attemptMs": 465199,
+    "probeCount": 2,
+    "probeMs": 32936,
+    "correctionCount": 1,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-0",
+        "start": "2026-09-20T17:27:27.012Z",
+        "end": "2026-09-20T17:30:09.369Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 9.2946,
+    "ledgerCount": 17,
+    "ledgerBlocking": 2,
+    "verifiedClosed": 0,
+    "closedButUnverified": 5,
+    "coverageComplete": false,
+    "coverageIssues": 3,
+    "coverageErrors": {
+      "missing_required_id": 3
+    },
+    "drivers": {
+      "kimi-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-7277fa26-a3d7-4376-867e-d1f18a528b8f/findings.json"
+  },
+  {
+    "runId": "ck-review-03dc0e78-bd76-4131-ab96-350e668b7b72",
+    "start": "2026-09-20T23:48:08.830Z",
+    "startLocal": "09-21 07:48",
+    "end": "2026-09-20T23:51:12.289Z",
+    "sha": null,
+    "against": null,
+    "status": "failed",
+    "seats": 5,
+    "attemptFinished": 5,
+    "attemptMs": 244101,
+    "probeCount": 5,
+    "probeMs": 295504,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 3.05765,
+    "ledgerCount": 0,
+    "ledgerBlocking": 0,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": true,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "codex-app-server": 1,
+      "grok-stream-json": 1,
+      "cursor-stream-json": 1,
+      "kimi-stream-json": 1,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-03dc0e78-bd76-4131-ab96-350e668b7b72/findings.json"
+  },
+  {
+    "runId": "ck-review-b6b126e1-cc3f-4c2f-a50b-90cc84213ed4",
+    "start": "2026-09-20T23:55:37.881Z",
+    "startLocal": "09-21 07:55",
+    "end": "2026-09-21T00:17:26.032Z",
+    "sha": "67426b0b9d3878a21c4b933e179e8f02e39408d0",
+    "against": null,
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 3062044,
+    "probeCount": 5,
+    "probeMs": 295081,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 21.80251666666667,
+    "ledgerCount": 17,
+    "ledgerBlocking": 2,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": true,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "codex-app-server": 1,
+      "grok-stream-json": 1,
+      "kimi-stream-json": 1,
+      "cursor-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-b6b126e1-cc3f-4c2f-a50b-90cc84213ed4/findings.json"
+  },
+  {
+    "runId": "ck-review-a86d340c-5de6-4b11-b9cd-fe8200979166",
+    "start": "2026-09-21T00:26:13.294Z",
+    "startLocal": "09-21 08:26",
+    "end": "2026-09-21T00:55:05.150Z",
+    "sha": "3f251af23448fc5ea14661fea716501130d8739c",
+    "against": "ck-review-b6b126e1-cc3f-4c2f-a50b-90cc84213ed4",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 2779871,
+    "probeCount": 5,
+    "probeMs": 296214,
+    "correctionCount": 2,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-0",
+        "start": "2026-09-21T00:48:41.477Z",
+        "end": "2026-09-21T00:53:35.601Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-4",
+        "start": "2026-09-21T00:48:41.515Z",
+        "end": "2026-09-21T00:53:35.611Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 28.864266666666666,
+    "ledgerCount": 18,
+    "ledgerBlocking": 2,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 4,
+    "coverageErrors": {
+      "missing_required_id": 4
+    },
+    "drivers": {
+      "codex-app-server": 1,
+      "grok-stream-json": 1,
+      "cursor-stream-json": 2,
+      "kimi-stream-json": 1,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-a86d340c-5de6-4b11-b9cd-fe8200979166/findings.json"
+  },
+  {
+    "runId": "ck-review-981a31fd-9f63-4822-9176-fd785311e764",
+    "start": "2026-09-21T02:54:06.835Z",
+    "startLocal": "09-21 10:54",
+    "end": "2026-09-21T03:09:10.646Z",
+    "sha": "3f251af23448fc5ea14661fea716501130d8739c",
+    "against": null,
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 2829748,
+    "probeCount": 5,
+    "probeMs": 75949,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 15.063516666666667,
+    "ledgerCount": 21,
+    "ledgerBlocking": 9,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": true,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "codex-app-server": 1,
+      "kimi-stream-json": 1,
+      "cursor-stream-json": 1,
+      "claude-stream-json": 1,
+      "grok-stream-json": 2
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-981a31fd-9f63-4822-9176-fd785311e764/findings.json"
+  },
+  {
+    "runId": "ck-review-bf9ea27c-aac2-48c3-bd8a-177fd641158c",
+    "start": "2026-09-21T05:13:57.414Z",
+    "startLocal": "09-21 13:13",
+    "end": "2026-09-21T05:41:23.589Z",
+    "sha": "9b92b35016aedbbe308551923da963695386ed9c",
+    "against": null,
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 3570664,
+    "probeCount": 5,
+    "probeMs": 62083,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 27.436249999999998,
+    "ledgerCount": 24,
+    "ledgerBlocking": 4,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": true,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "kimi-stream-json": 1,
+      "codex-app-server": 1,
+      "cursor-stream-json": 1,
+      "grok-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-bf9ea27c-aac2-48c3-bd8a-177fd641158c/findings.json"
+  },
+  {
+    "runId": "ck-review-6d36436b-5bb3-4ec5-ba9e-49d2b061ca25",
+    "start": "2026-09-21T07:06:10.115Z",
+    "startLocal": "09-21 15:06",
+    "end": "2026-09-21T07:35:33.712Z",
+    "sha": "690db5c6d41ca69e57d1be77cc57887991b5a60e",
+    "against": "ck-review-bf9ea27c-aac2-48c3-bd8a-177fd641158c",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 4203027,
+    "probeCount": 5,
+    "probeMs": 109796,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 29.393283333333333,
+    "ledgerCount": 30,
+    "ledgerBlocking": 4,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 12,
+    "coverageErrors": {
+      "contradictory_outcome": 12
+    },
+    "drivers": {
+      "kimi-stream-json": 1,
+      "cursor-stream-json": 1,
+      "claude-stream-json": 1,
+      "codex-app-server": 1,
+      "grok-stream-json": 2
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-6d36436b-5bb3-4ec5-ba9e-49d2b061ca25/findings.json"
+  },
+  {
+    "runId": "ck-review-1d531e3e-ae63-4e39-aba6-54f1cfcd13f7",
+    "start": "2026-09-21T07:39:25.341Z",
+    "startLocal": "09-21 15:39",
+    "end": "2026-09-21T08:05:28.371Z",
+    "sha": "846ca2bfdb74a781b5f8c4c0a52c1c34a5ca4e43",
+    "against": "ck-review-6d36436b-5bb3-4ec5-ba9e-49d2b061ca25",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 4284562,
+    "probeCount": 5,
+    "probeMs": 106052,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": 26.0505,
+    "ledgerCount": 34,
+    "ledgerBlocking": 6,
+    "verifiedClosed": 0,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 19,
+    "coverageErrors": {
+      "contradictory_outcome": 19
+    },
+    "drivers": {
+      "kimi-stream-json": 1,
+      "codex-app-server": 1,
+      "cursor-stream-json": 1,
+      "grok-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-1d531e3e-ae63-4e39-aba6-54f1cfcd13f7/findings.json"
+  },
+  {
+    "runId": "ck-review-6d7df10f-dfe6-4cfc-b1be-834171f104ab",
+    "start": "2026-09-21T08:10:45.177Z",
+    "startLocal": "09-21 16:10",
+    "end": "2026-09-21T08:37:17.926Z",
+    "sha": "1888f84da27addb060117dee85f68421eaba1b65",
+    "against": "ck-review-1d531e3e-ae63-4e39-aba6-54f1cfcd13f7",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 4475541,
+    "probeCount": 5,
+    "probeMs": 106184,
+    "correctionCount": 3,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-0",
+        "start": "2026-09-21T08:29:33.196Z",
+        "end": "2026-09-21T08:33:54.090Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-2",
+        "start": "2026-09-21T08:29:33.252Z",
+        "end": "2026-09-21T08:33:54.102Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-4",
+        "start": "2026-09-21T08:29:33.291Z",
+        "end": "2026-09-21T08:33:54.112Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 26.545816666666667,
+    "ledgerCount": 37,
+    "ledgerBlocking": 5,
+    "verifiedClosed": 3,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 16,
+    "coverageErrors": {
+      "contradictory_outcome": 16
+    },
+    "drivers": {
+      "codex-app-server": 1,
+      "kimi-stream-json": 1,
+      "cursor-stream-json": 1,
+      "grok-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-6d7df10f-dfe6-4cfc-b1be-834171f104ab/findings.json"
+  },
+  {
+    "runId": "ck-review-917192e9-472e-47ec-9cf5-4bbaa35cb25e",
+    "start": "2026-09-21T08:41:31.617Z",
+    "startLocal": "09-21 16:41",
+    "end": "2026-09-21T09:24:07.147Z",
+    "sha": "8deaad66774aec7f6903bf6d19597ae5db3a3729",
+    "against": "ck-review-6d7df10f-dfe6-4cfc-b1be-834171f104ab",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 5479783,
+    "probeCount": 5,
+    "probeMs": 110521,
+    "correctionCount": 1,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-3",
+        "start": "2026-09-21T09:18:19.671Z",
+        "end": "2026-09-21T09:21:10.225Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 42.59216666666667,
+    "ledgerCount": 49,
+    "ledgerBlocking": 16,
+    "verifiedClosed": 0,
+    "closedButUnverified": 1,
+    "coverageComplete": false,
+    "coverageIssues": 25,
+    "coverageErrors": {
+      "contradictory_outcome": 25
+    },
+    "drivers": {
+      "kimi-stream-json": 1,
+      "codex-app-server": 1,
+      "cursor-stream-json": 1,
+      "grok-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-917192e9-472e-47ec-9cf5-4bbaa35cb25e/findings.json"
+  },
+  {
+    "runId": "ck-review-5d661d2d-c5e6-47ce-bcdd-cdb4abbe51b1",
+    "start": "2026-09-21T09:28:27.300Z",
+    "startLocal": "09-21 17:28",
+    "end": "2026-09-21T10:03:00.453Z",
+    "sha": "4fd41dfe81b02cbc13cf1a1c8d3057d3a0c312e7",
+    "against": "ck-review-917192e9-472e-47ec-9cf5-4bbaa35cb25e",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 5063375,
+    "probeCount": 5,
+    "probeMs": 70476,
+    "correctionCount": 2,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-2",
+        "start": "2026-09-21T09:57:15.670Z",
+        "end": "2026-09-21T09:59:50.033Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-3",
+        "start": "2026-09-21T09:57:15.723Z",
+        "end": "2026-09-21T09:59:50.044Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 34.55255,
+    "ledgerCount": 59,
+    "ledgerBlocking": 11,
+    "verifiedClosed": 9,
+    "closedButUnverified": 0,
+    "coverageComplete": false,
+    "coverageIssues": 19,
+    "coverageErrors": {
+      "contradictory_outcome": 12,
+      "missing_required_id": 7
+    },
+    "drivers": {
+      "kimi-stream-json": 1,
+      "codex-app-server": 1,
+      "cursor-stream-json": 1,
+      "grok-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-5d661d2d-c5e6-47ce-bcdd-cdb4abbe51b1/findings.json"
+  },
+  {
+    "runId": "ck-review-a67fc61f-800d-41d5-83bf-a32e4bf2b8c7",
+    "start": "2026-09-21T10:05:53.012Z",
+    "startLocal": "09-21 18:05",
+    "end": "2026-09-21T10:57:58.043Z",
+    "sha": "f72e9429cd998b689dfc92bf748339da8d3ef34b",
+    "against": "ck-review-5d661d2d-c5e6-47ce-bcdd-cdb4abbe51b1",
+    "status": "completed",
+    "seats": 5,
+    "attemptFinished": 6,
+    "attemptMs": 4611601,
+    "probeCount": 5,
+    "probeMs": 83176,
+    "correctionCount": 3,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [
+      {
+        "id": "corr-attempt-1",
+        "start": "2026-09-21T10:34:36.456Z",
+        "end": "2026-09-21T10:53:13.730Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-3",
+        "start": "2026-09-21T10:34:36.489Z",
+        "end": "2026-09-21T10:53:13.741Z",
+        "reason": "substantial_rejudgment"
+      },
+      {
+        "id": "corr-attempt-4",
+        "start": "2026-09-21T10:34:36.521Z",
+        "end": "2026-09-21T10:53:13.752Z",
+        "reason": "substantial_rejudgment"
+      }
+    ],
+    "wallMinutes": 52.08385,
+    "ledgerCount": 66,
+    "ledgerBlocking": 16,
+    "verifiedClosed": 5,
+    "closedButUnverified": 9,
+    "coverageComplete": false,
+    "coverageIssues": 21,
+    "coverageErrors": {
+      "contradictory_outcome": 21
+    },
+    "drivers": {
+      "kimi-stream-json": 1,
+      "codex-app-server": 1,
+      "cursor-stream-json": 1,
+      "grok-stream-json": 2,
+      "claude-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-a67fc61f-800d-41d5-83bf-a32e4bf2b8c7/findings.json"
+  },
+  {
+    "runId": "ck-review-fff9e15e-2173-40c7-849c-177f0959b826",
+    "start": "2026-09-21T11:08:53.694Z",
+    "startLocal": "09-21 19:08",
+    "end": null,
+    "sha": "3bada48be6948e8a6a0e6a6cf42a03cc38ff215c",
+    "against": "ck-review-a67fc61f-800d-41d5-83bf-a32e4bf2b8c7",
+    "status": "running",
+    "seats": 5,
+    "attemptFinished": 4,
+    "attemptMs": 2939798,
+    "probeCount": 5,
+    "probeMs": 68480,
+    "correctionCount": 0,
+    "correctionAccepted": 0,
+    "correctionTimeRecords": [],
+    "wallMinutes": null,
+    "ledgerCount": null,
+    "ledgerBlocking": null,
+    "verifiedClosed": null,
+    "closedButUnverified": null,
+    "coverageComplete": null,
+    "coverageIssues": 0,
+    "coverageErrors": {},
+    "drivers": {
+      "kimi-stream-json": 1,
+      "cursor-stream-json": 1,
+      "codex-app-server": 1,
+      "grok-stream-json": 1
+    },
+    "ledgerPath": "/Users/hengzhuo/.config/councilkit/runs/ck-review-fff9e15e-2173-40c7-849c-177f0959b826/findings.json"
+  }
+]

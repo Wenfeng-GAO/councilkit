@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "destination": "ChatGPT web",
+  "modelVisibleLabel": "6 Pro",
+  "conversationUrl": "https://chatgpt.com/c/6ab1236b-d3d4-83e8-878e-332063b4cc61",
+  "attachment": "/Users/hengzhuo/code/github/Wenfeng-GAO/councilkit/docs/verification/2026-09-21-gpt6-pro-review-packet.md",
+  "attachmentSha256": "f8b18f49926904f7059b028aa2df6b38fba19513ecaca46009ab631b33a348b5",
+  "submitted": true,
+  "reviewStatus": "completed",
+  "reviewCompletedAt": "2026-09-21T12:39:42.874Z",
+  "reviewRetrievedVia": "read_thread",
+  "reviewDocument": "/Users/hengzhuo/code/github/Wenfeng-GAO/councilkit/docs/verification/2026-09-21-gpt6-pro-review.md",
+  "confirmedBy": "ChatGPT page shows attachment in sent user message; assistant acknowledges checking evidence boundaries and control-protocol failure paths",
+  "capturedAt": "2026-09-21T12:31:49.973619+00:00"
+}
