@@ -450,6 +450,12 @@
   min-width: 0;
 }
 
+.ck-finding-id-sev {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .ck-finding-summary::-webkit-details-marker {
   display: none;
 }

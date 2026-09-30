@@ -187,7 +187,12 @@ function ProblemRow({
     <li className="ck-ledger-row">
       <details>
         <summary className="ck-finding-summary">
-          <span className="ck-finding-number">#{String(number).padStart(2, "0")}</span>
+          <span className="ck-finding-id-sev">
+            <span className="ck-finding-number">#{String(number).padStart(2, "0")}</span>
+            <span className={`ck-sev ck-sev-${problem.severity}`}>
+              {severityLabel(problem.severity)}
+            </span>
+          </span>
           <span className="ck-finding-heading">
             <span className="ck-ledger-title">{problem.title}</span>
             {problem.location ? (
@@ -196,9 +201,6 @@ function ProblemRow({
           </span>
           <span className="ck-finding-tags">
             <span className="ck-finding-tags-row">
-              <span className={`ck-sev ck-sev-${problem.severity}`}>
-                {severityLabel(problem.severity)}
-              </span>
               <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
                 {problem.statusLabel}
               </span>
