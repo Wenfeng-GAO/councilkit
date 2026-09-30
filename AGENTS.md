@@ -1,22 +1,26 @@
 # AGENTS.md — CouncilKit for coding agents
 
-CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `ideate` / `apply` / `fix` / `repair` 命令）不经 Runtime Host 跑 agent，直接 spawn agent 子进程。`review`/`apply`/`fix`/`repair` 是全能力路径，见 `docs/brainstorms/2026-07-29-autonomous-parallel-review.md` 与 `docs/brainstorms/2026-09-20-squad-repair-until-approved-requirements.md`；`ideate` 是受限只读讨论，不修改用户项目。浏览器「Squad 自动修复」是 Host spawn 同 checkout 的 `councilkit repair run`；次级「内置修复」仍是 `councilkit fix`。Host 不 spawn `squadctl`、不读 `.squad/`。
+CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。
+
+术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `ideate` / `apply` / `fix` / `repair` 命令）不经 Runtime Host 跑 agent，直接 spawn agent 子进程。`review`/`apply`/`fix`/`repair` 是全能力路径；`ideate` 是受限只读讨论，不修改用户项目。
 
 ## 前置
 
-1. 仓库根 `pnpm install --frozen-lockfile`。
-2. 构建 CLI：`pnpm build:cli`（产物 `cli/dist/main.mjs`，bin = `cli/bin/councilkit.mjs`）。
-3. 启动 Runtime Host：`pnpm start`（或 `pnpm dev`），浏览器可关。Host 不可达时 CLI 退出码 3，**绝不自动拉起 Host**，也**绝不 spawn Host**。
+1. 仓库根 `pnpm install --frozen-lockfile`
+2. 构建 CLI：`pnpm build:cli`（产物 `cli/dist/main.mjs`，bin = `cli/bin/councilkit.mjs`）
+3. 启动 Runtime Host：`pnpm start`（或 `pnpm dev`），浏览器可关。Host 不可达时 CLI 退出码 3，**绝不自动拉起 Host**，也**绝不 spawn Host**
 
 ## 最短路径（`--json` 机器可读）
 
-`--json`：进度/诊断走 stderr，stdout 只出一个最终 JSON。退出码见 README CLI 章节（0/2/3/4/5/7/130）。
+`--json`：进度/诊断走 stderr，stdout 只出一个最终 JSON。退出码见 [CLI 手册退出码表](docs/cli-handbook.md#退出码)（0/2/3/4/5/7/130）。
 
 ```bash
 # 0. 一键写入默认审查班子（不经 Host；PATH 上有 cld/kimi/grok/cursor-agent 才建对应 Agent）
 pnpm exec councilkit init --json
+
 # 之后审查不再手写 --agents JSON：
 pnpm exec councilkit review <url> --json
+
 # Host 运行时浏览器打开 http://127.0.0.1:43127/reports/<runId>
 pnpm exec councilkit repair run --from <ck-review-id> --profile <name> --json
 pnpm exec councilkit fix --run <ck-review-id> --json     # 方案陪审 → 一集群 apply → 对照账本复审
@@ -25,29 +29,50 @@ pnpm exec councilkit review <url> --against <ck-review-id> --json  # 增量陪�
 pnpm exec councilkit ideate "一句话创意" --json            # 产品创意；默认 Council product-jury
 ```
 
-`init` 写入 Agent `review-security` / `review-correctness` / `review-maintainability`（PATH 上有 `grok` 时再加 `review-adversarial`；有 `cursor-agent` 时再加 `review-cursor`，model = `auto`）与 Council `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）。已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）。`--force` 先删 `pr-jury` 与 `product-jury` 再重建。PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 还要 PATH 有 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型（顶层 `config.toml` `model=`，否则 `models_cache.json`）。Council `product-jury` 的 Reporter 优先 Codex，已配置 Reporter 不静默换人。
+### `init` 默认配置
+
+- **默认 Agent**（按 PATH 上可发现的 CLI 创建）：
+  - `review-security`（需要 `cld`）
+  - `review-correctness`（需要 `grok`）
+  - `review-maintainability`（需要 `kimi`）
+  - `review-adversarial`（需要 `grok`）
+  - `review-cursor`（需要 `cursor-agent`，model = `auto`）
+  - `ideate-product` / `ideate-engineering`（需要 grok/kimi）
+  - `ideate-challenger`（需要 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型）
+
+- **默认 Council**：
+  - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）
+  - `product-jury`（Reporter 优先 Codex，其次 product，再 engineering；已配置 Reporter 不静默换人）
+
+- **行为**：已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）
+- `--force` 先删 `pr-jury` 与 `product-jury` 再重建
+
+### 诊断与发现
 
 ```bash
 # 1. 自检 Host + 实时模型闭集（讨论 Run 才需要；review 不需要）
-pnpm exec councilkit doctor  --json
-pnpm exec councilkit models  --json
+pnpm exec councilkit doctor --json
+pnpm exec councilkit models --json
 ```
 
 `models --json` 每条含 `driverId / route / installationId / catalog / cachedAt / error`。从实时 catalog 选 modelId（不要硬编码）：
 
 ```jsonc
 // models --json 片段
-{ "driverId":"claude-stream-json", "route":"cfuse",  "catalog":["antchat/GLM-5.2[1m]", "..."], "error":null }
-{ "driverId":"kimi-stream-json",   "route":null,     "catalog":["kimi-code/k3"],              "error":null }
-{ "driverId":"grok-stream-json",   "route":null,     "catalog":["grok-4.6","grok-4.5"],       "error":null }
-{ "driverId":"cursor-stream-json", "route":null,     "catalog":["auto","composer-2.5", "..."], "error":null }
+{ "driverId":"claude-stream-json", "route":"cfuse", "catalog":["antchat/GLM-5.2[1m]", "..."], "error":null }
+{ "driverId":"kimi-stream-json", "route":null, "catalog":["kimi-code/k3"], "error":null }
+{ "driverId":"grok-stream-json", "route":null, "catalog":["grok-4.6","grok-4.5"], "error":null }
+{ "driverId":"cursor-stream-json", "route":null, "catalog":["auto","composer-2.5", "..."], "error":null }
 ```
+
+### 建 Agent 与 Council
 
 ```bash
 # 2. 建两个 Agent（Driver Selection = driverId + 类型化 options；不含凭据/installationId）
 pnpm exec councilkit agent create --name A --persona-prompt "..." \
   --driver-id claude-stream-json --options '{"route":"cfuse"}' \
   --model-id "antchat/GLM-5.2[1m]" --color "#a1b2c3" --json
+
 pnpm exec councilkit agent create --name B --persona-prompt "..." \
   --driver-id kimi-stream-json --options '{}' \
   --model-id "kimi-code/k3" --color "#b2c3d4" --json
@@ -61,6 +86,8 @@ pnpm exec councilkit council create --name smoke --topic "..." \
   --background "..." --target-output "..." \
   --agents '["<A-id>","<B-id>"]' --rounds 2 --reporter "<B-id>" --json
 ```
+
+### 发起 Run
 
 ```bash
 # 4. 发起 Run（固定 N 轮 + 一次 Reporter 总结；报告落 runs/<run-id>/report.md）
@@ -91,18 +118,46 @@ pnpm exec councilkit run --agents '["<A-id>","<B-id>"]' --topic "..." \
 
 ## 关键约束
 
-- **Reporter 必填**，不静默 fallback；Agent 被 Council 引用时不可删除（先删 Council）。
-- Council 人数（含 Reporter）≤ 8（Host `maxParticipantsPerScope`）。
-- `agents.json`/`councils.json` 严格 schema + `version`，无凭据字段；损坏文件给可诊断错误（不回显原文）。
-- 凭据（cookie/CSRF）只存进程内存，Host 重启自动重取一次；不落盘、不出现在任何输出。
-- CLI 只保证与**同 checkout** Host 互通；与浏览器数据不互通。讨论命令 `run` 无 `--resume`；`review --resume` 可重跑失败席并复用成功席。`findings accept` 把账本项标为接受不修（须写理由）；缺席复审不会变成 accept。
-- live smoke 与 Host 共用 43127、独占串行；端口被占只 `lsof` 记录，不 kill 非自身进程。
-- **Live Transcript**：review/apply/fix 的每个 attempt 会把 driver 过程事件（text/thinking/tool call）增量写入 `runs/<runId>/live/<attemptId>.jsonl`（CLI 侧 `cli/src/auto/live-events.ts`，写失败静默、2MB 上限；grok 用 `streaming-messages-json` 与 claude 共用解析器；cursor-agent 用 `stream-json`，`auto` 省略 `--model`；probe 仍用单对象 `json`）。Host 端点 `GET /api/v1/cli-runs/:runId/attempts/:attemptId/live?afterSeq=N`（分页 + 坏行容忍）；`/reports/<runId>` 的 attempt 卡片展开「过程」即可看实时输出。该 sidecar 是观察层，不进 transcript/report。
-- **Durable result**：`GET /api/v1/cli-runs/:runId/attempts/:attemptId/result` 返回当前执行的 durable 全文（`executionRef/executionStatus/availability/markdown/truncated/failure/reusedFrom`；identity 推导见 `shared/runtime/execution-ref.ts` 与 `docs/verification/2026-09-20-b0-execution-identity.md`）。kind=review 的报告页是固定席位工作台（三栏 + 单一 selectedAttempt），单席「报告」轴只认该端点，不认 live 正文； Aggregator 用 `attemptId="aggregator"`。
-- **Squad observe**：`ck-squad-<uuid>` / `kind=squad` 是外部 `squadctl --observe` 写入的只读 sidecar（同一 `COUNCILKIT_HOME/runs`）。Host 不读 `.squad/`、不 spawn `squadctl`、不对 squad run 提供 fix/re-review。报告页走席位过程 + 只读 `handoff` 块 + sidecar 里的 brief/plan/评审/final，不走修复管线。旧 sidecar `interrupted` + 全席终态 + `phase≠done` 读时映射为 `awaiting_orchestrator`（「等待编排」）；显式收工为 `closed`（「已收工」）。看过程需要 Host（`pnpm start` 或 launchd）；前台 `pnpm dev` 被杀 ≠ 观察消失。
+- **Reporter 必填**，不静默 fallback；Agent 被 Council 引用时不可删除（先删 Council）
+- **Council 人数**（含 Reporter）≤ 8（Host `maxParticipantsPerScope`）
+- **`agents.json`/`councils.json`** 严格 schema + `version`，无凭据字段；损坏文件给可诊断错误（不回显原文）
+- **凭据**（cookie/CSRF）只存进程内存，Host 重启自动重取一次；不落盘、不出现在任何输出
+- **CLI 只保证与同 checkout Host 互通**；与浏览器数据不互通
+- 讨论命令 `run` 无 `--resume`；`review --resume` 可重跑失败席并复用成功席
+- `findings decide` 把账本项标为打算修复/不修复；缺席复审不会变成 accept
+- live smoke 与 Host 共用 43127、独占串行；端口被占只 `lsof` 记录，不 kill 非自身进程
+
+## Live Transcript & Durable Result
+
+- **Live Transcript**：review/apply/fix 的每个 attempt 会把 driver 过程事件（text/thinking/tool call）增量写入 `runs/<runId>/live/<attemptId>.jsonl`（CLI 侧 `cli/src/auto/live-events.ts`，写失败静默、2MB 上限）
+  - grok 用 `streaming-messages-json` 与 claude 共用解析器
+  - cursor-agent 用 `stream-json`，`auto` 省略 `--model`
+  - probe 仍用单对象 `json`
+  - Host 端点 `GET /api/v1/cli-runs/:runId/attempts/:attemptId/live?afterSeq=N`（分页 + 坏行容忍）
+  - `/reports/<runId>` 的 attempt 卡片展开「过程」即可看实时输出
+  - 该 sidecar 是观察层，不进 transcript/report
+
+- **Durable result**：`GET /api/v1/cli-runs/:runId/attempts/:attemptId/result` 返回当前执行的 durable 全文（`executionRef/executionStatus/availability/markdown/truncated/failure/reusedFrom`；identity 推导见 `shared/runtime/execution-ref.ts` 与 `docs/verification/2026-09-20-b0-execution-identity.md`）
+  - kind=review 的报告页是固定席位工作台（三栏 + 单一 selectedAttempt）
+  - 单席「报告」轴只认该端点，不认 live 正文
+  - Aggregator 用 `attemptId="aggregator"`
+
+- **Squad observe**：`ck-squad-<uuid>` / `kind=squad` 是外部 `squadctl --observe` 写入的只读 sidecar（同一 `COUNCILKIT_HOME/runs`）
+  - Host 不读 `.squad/`、不 spawn `squadctl`、不对 squad run 提供 fix/re-review
+  - 报告页走席位过程 + 只读 `handoff` 块 + sidecar 里的 brief/plan/评审/final，不走修复管线
+  - 旧 sidecar `interrupted` + 全席终态 + `phase≠done` 读时映射为 `awaiting_orchestrator`（「等待编排」）；显式收工为 `closed`（「已收工」）
+  - 看过程需要 Host（`pnpm start` 或 launchd）；前台 `pnpm dev` 被杀 ≠ 观察消失
 
 ## 目录速览
 
-- `cli/src/`：CLI 源码（commands/run/report/host/store）。`cli/tests/` 单测。
-- `tests/smoke/live-cli-run-smoke.ts`：真实 cfuse+kimi 两轮 + Reporter 的 live smoke（构建后用 `TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx` 驱动）。
-- `src/`、`runtime-host/`：浏览器与 Host（CLI 复用 `src/runtime/client.ts` + `event-stream.ts`，不改它们）。
+- `cli/src/`：CLI 源码（commands/run/report/host/store）。`cli/tests/` 单测
+- `tests/smoke/live-cli-run-smoke.ts`：真实 cfuse+kimi 两轮 + Reporter 的 live smoke（构建后用 `TSX_TSCONFIG_PATH=tsconfig.integration.json pnpm exec tsx` 驱动）
+- `src/`、`runtime-host/`：浏览器与 Host（CLI 复用 `src/runtime/client.ts` + `event-stream.ts`，不改它们）
+
+## 完整文档
+
+- **[CLI 手册](docs/cli-handbook.md)** — 完整命令参考、退出码、认证模型、审查流程
+- **[Runtime Host 运维](docs/host-operations.md)** — 启动、launchd 托管、诊断、端口管理
+- **[报告页与账本](docs/report-page.md)** — 审查报告查看、finding 决策、修复流程
+- **[CONTEXT.md](CONTEXT.md)** — 术语权威定义
+- **[文档索引](docs/INDEX.md)** — 完整文档导航
