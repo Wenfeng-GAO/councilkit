@@ -95,6 +95,11 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
       list-style: none;
       min-width: 0;
     }
+    .ck-finding-id-sev {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
     .ck-finding-number {
       font-family: var(--font-command);
       font-size: 0.72rem;
@@ -212,14 +217,16 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#01</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#01</span>
+                <span class="ck-sev ck-sev-critical">致命</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>auth.go:45</code> — SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中，攻击者可执行任意 SQL 命令</span>
+                <span class="ck-ledger-title">SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中，攻击者可执行任意 SQL 命令</span>
                 <span class="ck-finding-location">新侧 L45</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-critical">致命</span>
                   <span class="ck-ledger-status ck-ledger-open">待处理</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -235,14 +242,16 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#02</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#02</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>recovery.go:266-271</code> — Resume 失败只看 <code>ctx.Err()</code>，不看 <code>flightCurrent</code></span>
+                <span class="ck-ledger-title">Resume 失败只看 ctx.Err()，不看 flightCurrent</span>
                 <span class="ck-finding-location">新侧 L266-271</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-open">待处理</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -258,14 +267,16 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#03</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#03</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>recovery.go:357</code> — Resume 成功、提交 idle 遇到临时存储错误时 <code>closeOpenedOn</code> + <code>markRecoveryFailed</code>（UUID 仍在）。改用 <code>forgetOpenedOn</code></span>
+                <span class="ck-ledger-title">Resume 成功、提交 idle 遇到临时存储错误时 closeOpenedOn + markRecoveryFailed（UUID 仍在）。改用 forgetOpenedOn</span>
                 <span class="ck-finding-location">新侧 L357</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-open">待处理</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -282,14 +293,16 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#04</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#04</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>DataProcessor.ts:456</code> — 这是一个非常非常长的问题标题，用于测试当标题很长时，右侧的标签是否能够正确对齐而不会随着标题长度的变化而水平移动，这是一个重要的布局约束条件</span>
+                <span class="ck-ledger-title">这是一个非常非常长的问题标题，用于测试当标题很长时，右侧的标签是否能够正确对齐而不会随着标题长度的变化而水平移动，这是一个重要的布局约束条件</span>
                 <span class="ck-finding-location">新侧 L456</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-regress">回归</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -305,14 +318,16 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#05</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#05</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>recovery.go:311-362</code> — fence 在 <code>UpdateSession</code> 回调内；commit idle 后不再复核 occupancy</span>
+                <span class="ck-ledger-title">fence 在 UpdateSession 回调内；commit idle 后不再复核 occupancy</span>
                 <span class="ck-finding-location">新侧 L311-362</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-open">待处理</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -324,18 +339,20 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
           </details>
         </li>
 
-        <!-- Finding 6: Major closed -->
-        <li class="ck-ledger-row">
+        <!-- Finding 6: Major, NOT in blocking filter because it's closed -->
+        <li class="ck-ledger-row" style="display: none;">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#06</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#06</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>EventEmitter.tsx:123</code> — 内存泄漏：事件监听器未在组件卸载时清理，长时间运行会导致内存累积</span>
+                <span class="ck-ledger-title">内存泄漏：事件监听器未在组件卸载时清理</span>
                 <span class="ck-finding-location">新侧 L123</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-closed">已解决</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -441,6 +458,11 @@ test("生成完整本轮总览截图（移动）", async ({ page }) => {
       cursor: pointer;
       list-style: none;
       min-width: 0;
+    }
+    .ck-finding-id-sev {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
     }
     .ck-finding-number {
       font-family: var(--font-command);
@@ -549,7 +571,7 @@ test("生成完整本轮总览截图（移动）", async ({ page }) => {
 
     <section class="ck-finding-list">
       <h2 id="ck-ledger">问题清单</h2>
-      <p class="ck-finding-list-summary">10 个问题 · 6 待处理 · 6 阻塞</p>
+      <p class="ck-finding-list-summary">5 个问题 · 5 待处理 · 5 阻塞</p>
 
       <fieldset class="ck-finding-filters">
         <button type="button" class="ck-finding-filter" aria-pressed="true">阻塞</button>
@@ -563,14 +585,16 @@ test("生成完整本轮总览截图（移动）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#01</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#01</span>
+                <span class="ck-sev ck-sev-critical">致命</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>auth.go:45</code> — SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中</span>
+                <span class="ck-ledger-title">SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中</span>
                 <span class="ck-finding-location">新侧 L45</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-critical">致命</span>
                   <span class="ck-ledger-status ck-ledger-open">待处理</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -586,14 +610,16 @@ test("生成完整本轮总览截图（移动）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#02</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#02</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>recovery.go:266-271</code> — Resume 失败只看 <code>ctx.Err()</code></span>
+                <span class="ck-ledger-title">Resume 失败只看 ctx.Err()</span>
                 <span class="ck-finding-location">新侧 L266</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-open">待处理</span>
                 </span>
                 <span class="ck-finding-tags-row">
@@ -609,14 +635,16 @@ test("生成完整本轮总览截图（移动）", async ({ page }) => {
         <li class="ck-ledger-row">
           <details>
             <summary class="ck-finding-summary">
-              <span class="ck-finding-number">#03</span>
+              <span class="ck-finding-id-sev">
+                <span class="ck-finding-number">#03</span>
+                <span class="ck-sev ck-sev-major">重大</span>
+              </span>
               <span class="ck-finding-heading">
-                <span class="ck-ledger-title"><code>DataProcessor.ts:456</code> — 这是一个非常非常长的问题标题，用于测试当标题很长时标签布局</span>
+                <span class="ck-ledger-title">这是一个非常非常长的问题标题，用于测试当标题很长时标签布局</span>
                 <span class="ck-finding-location">新侧 L456</span>
               </span>
               <span class="ck-finding-tags">
                 <span class="ck-finding-tags-row">
-                  <span class="ck-sev ck-sev-major">重大</span>
                   <span class="ck-ledger-status ck-ledger-regress">回归</span>
                 </span>
                 <span class="ck-finding-tags-row">

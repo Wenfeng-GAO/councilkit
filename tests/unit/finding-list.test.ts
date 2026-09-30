@@ -786,19 +786,21 @@ describe("settled mixed status", () => {
 });
 
 describe("readable titles", () => {
-  it("keeps location and truncates long representative titles", () => {
+  it("strips location and truncates long representative titles", () => {
     const title = `recovery.go:357 — ${"很长的问题描述".repeat(40)}`;
     const readable = readableFindingTitle(title);
-    expect(readable).toContain("recovery.go:357");
+    expect(readable).not.toContain("recovery.go:357");
+    expect(readable).toContain("很长的问题描述");
     expect(Array.from(readable).length).toBeLessThanOrEqual(FINDING_TITLE_DISPLAY_LIMIT);
     expect(readable.endsWith("…")).toBe(true);
   });
 
-  it("does not leave empty ticks after stripping a cited location", () => {
+  it("strips cited location and does not leave empty ticks", () => {
     const readable = readableFindingTitle(
       "`session_recovery.go:266-271` — Resume 失败只看 `ctx.Err()`，不看 `flightCurrent`。",
     );
-    expect(readable).toContain("session_recovery.go:266-271");
+    expect(readable).not.toContain("session_recovery.go:266-271");
+    expect(readable).toContain("Resume 失败只看 ctx.Err()");
     expect(readable).not.toMatch(/`\s*`/);
   });
 });
