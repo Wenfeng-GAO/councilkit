@@ -52,6 +52,36 @@ describe("review finding title format", () => {
     },
   );
 
+  it("keeps the labeled finding id when an earlier evidence backtick contains --", () => {
+    const rows = extract(
+      `- [major] ${TITLE}\n${[
+        ...DETAILS,
+        "对照：`--resume` 会按数组下标复用，另一项是 `pkg.runtime.manager.session_manager.go--other`。",
+        "原 Finding ID：`F-1`",
+      ]
+        .map((line) => `  ${line}`)
+        .join("\n")}`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe("F-1");
+    expect(rows[0]?.title).toBe(TITLE);
+  });
+
+  it("does not use a body backtick that contains -- as the finding id", () => {
+    const rows = extract(
+      `- [major] ${TITLE}\n${[
+        ...DETAILS,
+        "对照：`--resume` 会按数组下标复用。",
+      ]
+        .map((line) => `  ${line}`)
+        .join("\n")}`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).not.toBe("--resume");
+    expect(rows[0]?.id.startsWith("pkg.runtime.manager.session_manager.go--")).toBe(true);
+    expect(rows[0]?.title).toBe(TITLE);
+  });
+
   it("keeps legacy one-line finding titles, assertions and IDs unchanged", () => {
     const text = "src/session.ts:20 — Session lock leaks after timeout.";
     const rows = extract(`- [major] ${text}`);
