@@ -107,7 +107,7 @@ export function readSourceWindow(input: {
     } else {
       const end = input.fromOffset ?? st.size;
       const start = Math.max(0, end - INITIAL_TAIL_BYTES);
-      const result = readForward(fd, start, end, input, start > 0, input.limitRecords);
+      const result = readForward(fd, start, end, input, start > 0, Number.POSITIVE_INFINITY);
       records.push(...result.records);
       partialBadLines += result.partialBadLines;
       isolatedOversize += result.isolatedOversize;
@@ -119,7 +119,7 @@ export function readSourceWindow(input: {
   }
 
   return {
-    records,
+    records: records.slice(0, input.limitRecords),
     generation,
     nextOffset,
     exhausted: nextOffset >= st.size && !incompleteTail,
@@ -159,8 +159,8 @@ function readForward(
   let partialBadLines = 0;
   let isolatedOversize = 0;
   let incompleteTail = false;
+  let byteCursor = 0;
 
-  let lineStart = 0;
   if (dropPartialFirst && start > 0) {
     const firstNl = slice.indexOf(0x0a);
     if (firstNl === -1) {
@@ -172,20 +172,20 @@ function readForward(
         incompleteTail: true,
       };
     }
-    lineStart = firstNl + 1;
+    byteCursor = firstNl + 1;
   }
-  let committed = lineStart;
 
-  while (lineStart < slice.length && records.length < limitRecords) {
-    const nl = slice.indexOf(0x0a, lineStart);
+  let committed = byteCursor;
+  while (byteCursor < slice.length && records.length < limitRecords) {
+    const nl = slice.indexOf(0x0a, byteCursor);
     if (nl === -1) {
       incompleteTail = true;
       break;
     }
-    const lineBuf = slice.subarray(lineStart, nl);
-    const absoluteOffset = start + lineStart;
+    const lineBuf = slice.subarray(byteCursor, nl);
+    const absoluteOffset = start + byteCursor;
     committed = nl + 1;
-    lineStart = nl + 1;
+    byteCursor = nl + 1;
 
     if (lineBuf.length > REPAIR_OBS_LINE_ISOLATE) {
       isolatedOversize += 1;
