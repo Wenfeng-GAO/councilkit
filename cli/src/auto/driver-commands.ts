@@ -1124,10 +1124,14 @@ function extractGrok(stdout: string): string | null {
   return tryParse(trimmed.slice(start, end + 1));
 }
 
-/** A grok `{"type":"result"}` NDJSON frame's `.result` text; null otherwise. */
+/** Usable grok `{"type":"result"}` text. An error frame is not a deliverable,
+ * even when it carries `.result` text. A missing subtype still counts, so a
+ * single-object result without the Anthropic success label keeps working. */
 function extractGrokLine(line: string): string | null {
   const obj = parseJsonLine(line);
   if (obj === null || obj.type !== "result") return null;
+  if (obj.is_error === true) return null;
+  if (typeof obj.subtype === "string" && obj.subtype !== "success") return null;
   return asText(obj.result);
 }
 
