@@ -255,6 +255,27 @@ function readForward(
   };
 }
 
+function incompleteUtf8Tail(buf: Buffer): number {
+  let i = buf.length - 1;
+  let cont = 0;
+  while (i >= 0 && cont < 3) {
+    const byte = buf[i];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
+    cont += 1;
+    i -= 1;
+  }
+  if (i < 0) return 0;
+  const lead = buf[i];
+  if (lead === undefined) return 0;
+  let need = 0;
+  if ((lead & 0xe0) === 0xc0) need = 2;
+  else if ((lead & 0xf0) === 0xe0) need = 3;
+  else if ((lead & 0xf8) === 0xf0) need = 4;
+  else return 0;
+  const have = buf.length - i;
+  return have < need ? have : 0;
+}
+
 export function readDetailChunk(input: {
   path: string;
   byteOffset: number;
@@ -275,12 +296,14 @@ export function readDetailChunk(input: {
     const n = readSync(fd, buf, 0, size, start);
     const slice = buf.subarray(0, n);
     const nl = slice.indexOf(0x0a);
-    const bodyBuf = nl === -1 ? slice : slice.subarray(0, nl);
-    const body = redactObservationText(bodyBuf.toString("utf8"));
+    const lineEnd = nl === -1 ? slice.length : nl;
     const more = nl === -1 && start + n < Math.min(st.size, lineEndLimit);
+    const held = more ? incompleteUtf8Tail(slice.subarray(0, lineEnd)) : 0;
+    const consumed = held > 0 && held < lineEnd ? lineEnd - held : lineEnd;
+    const body = redactObservationText(slice.subarray(0, consumed).toString("utf8"));
     return {
       body,
-      nextCursor: more ? String(cursorOffset + n) : null,
+      nextCursor: more ? String(cursorOffset + consumed) : null,
       truncated: more,
     };
   } finally {
