@@ -330,6 +330,75 @@ describe("host repair observation routes (no listen)", () => {
     );
   });
 
+  it("pages earlier rows of every cold-tailed source", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const pad = "x".repeat(16 * 1024);
+    const lines = (prefix: string) =>
+      Array.from({ length: 40 }, (_, index) =>
+        JSON.stringify({
+          type: "tool.started",
+          callId: `${prefix}-${index}`,
+          name: "shell",
+          summary: `${prefix}-${index}`,
+          role: "coder",
+          at: "2026-09-22T06:00:01Z",
+          pad,
+        }),
+      );
+    writeFileSync(join(taskDir, "orchestrator.log"), `${lines("a").join("\n")}\n`);
+    writeFileSync(join(taskDir, "coder.jsonl"), `${lines("b").join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const page = async (cursor: string | null, limit?: string) =>
+      (await route.handler(
+        ctx({
+          round: "current",
+          ...(limit ? { limit } : {}),
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+
+    const first = await page(null);
+    const firstSummaries = first.upserts.map((row) => row.summary);
+    expect(firstSummaries).not.toContain("a-0");
+    expect(firstSummaries).not.toContain("b-0");
+    expect(firstSummaries).toContain("a-39");
+    expect(firstSummaries).toContain("b-39");
+    expect(first.earlierCursor).not.toBeNull();
+
+    const earlierPages: string[][] = [];
+    let earlier = first.earlierCursor;
+    for (let guard = 0; earlier && guard < 30; guard += 1) {
+      const data = await page(earlier, "2");
+      earlierPages.push(data.upserts.map((row) => row.summary));
+      earlier = data.earlierCursor;
+    }
+    expect(earlier).toBeNull();
+
+    const forward: string[] = [];
+    let cursor: string | null = first.nextCursor;
+    for (let guard = 0; cursor && guard < 30; guard += 1) {
+      const data = await page(cursor);
+      forward.push(...data.upserts.map((row) => row.summary));
+      if (!data.hasMore) break;
+      cursor = data.nextCursor;
+    }
+
+    const seen = [...earlierPages.flat(), ...firstSummaries, ...forward];
+    const rank = (summary: string) => {
+      const match = /^([ab])-(\d+)$/.exec(summary);
+      if (!match?.[1] || !match[2]) return Number.MAX_SAFE_INTEGER;
+      return (match[1] === "a" ? 0 : 100) + Number(match[2]);
+    };
+    expect(
+      seen.filter((row) => row.startsWith("a-") || row.startsWith("b-")).sort((a, b) => rank(a) - rank(b)),
+    ).toEqual([
+      ...Array.from({ length: 40 }, (_, index) => `a-${index}`),
+      ...Array.from({ length: 40 }, (_, index) => `b-${index}`),
+    ]);
+  });
+
   it("keeps the start of a later source that is larger than the cold tail", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const line = (summary: string, callId: string) =>
