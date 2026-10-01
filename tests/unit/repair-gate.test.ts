@@ -230,4 +230,24 @@ describe("evaluateRepairGate", () => {
     expect(blockedGate.passed).toBe(false);
     expect(blockedGate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
+
+  it("does not read a negated approve as the conclusion verdict", () => {
+    expect(extractAggregatorVerdict("## 结论\n\n不能 approve。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不能 `approve`。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnot approve\n")).toBe(null);
+    const prose = "## 结论\n\n不能 approve，维持 changes-requested。\n";
+    expect(extractAggregatorVerdict(prose)).toBe("changes-requested");
+
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(prose),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
 });
