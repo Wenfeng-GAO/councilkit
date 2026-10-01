@@ -21,6 +21,7 @@ import { IDEATE_AUTH_BASENAMES } from "../src/auto/ideate-policy";
 import { IDEATE_REPORT_HEADINGS } from "../src/auto/templates/ideate";
 import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { IdeateExit, runIdeate } from "../src/commands/ideate";
+import { CliError } from "../src/errors";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -588,6 +589,32 @@ describe("councilkit ideate", () => {
     ]);
     expect(finalLive.progress.attempts.find((row) => row.attemptId === "aggregate-final")?.status).toBe("success");
     expect(fake.activeCount()).toBe(0);
+  });
+
+  it("rejects a concurrency flag that is not a bare positive integer", async () => {
+    seedRoster();
+    const sink = makeSink();
+    let spawned = 0;
+    const spawnImpl: SpawnImpl = async (input) => {
+      spawned += 1;
+      return envelope(input.driverId ?? "", "ok");
+    };
+    const cases = ["2oops", "0", "1.9", "foo"] as const;
+    for (const raw of cases) {
+      spawned = 0;
+      let caught: unknown;
+      try {
+        await runIdeate(["idea", "--debate-rounds", "0", "--concurrency", raw], sink, { spawnImpl });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(CliError);
+      expect((caught as CliError).exitCode).toBe(2);
+      expect((caught as CliError).message).toBe(
+        `--concurrency must be a positive integer, got "${raw}"`,
+      );
+      expect(spawned).toBe(0);
+    }
   });
 });
 
