@@ -21,6 +21,7 @@ export type SourceReadResult = {
   reset: boolean;
   incompleteTail: boolean;
   unreadable: boolean;
+  earlierOffset: number | null;
 };
 
 const INITIAL_TAIL_BYTES = 512 * 1024;
@@ -51,6 +52,7 @@ export function readSourceWindow(input: {
       reset: false,
       incompleteTail: false,
       unreadable: false,
+      earlierOffset: null,
     };
   }
   const generation = fingerprintSource({
@@ -71,6 +73,7 @@ export function readSourceWindow(input: {
   let isolatedOversize = 0;
   let incompleteTail = false;
   let nextOffset = 0;
+  let scanStart = 0;
 
   let fd: number;
   try {
@@ -87,6 +90,7 @@ export function readSourceWindow(input: {
       reset,
       incompleteTail: false,
       unreadable: code === "EACCES" || code === "EPERM",
+      earlierOffset: null,
     };
   }
   try {
@@ -98,6 +102,7 @@ export function readSourceWindow(input: {
       // Cold mid-file tails may start inside a line; committed cursors are
       // always on a line boundary and must not drop the next complete record.
       const dropPartialFirst = coldTail && start > 0;
+      scanStart = start;
       const result = readForward(fd, start, st.size, input, dropPartialFirst, input.limitRecords);
       records.push(...result.records);
       partialBadLines += result.partialBadLines;
@@ -107,6 +112,7 @@ export function readSourceWindow(input: {
     } else {
       const end = input.fromOffset ?? st.size;
       const start = Math.max(0, end - INITIAL_TAIL_BYTES);
+      scanStart = start;
       const result = readForward(fd, start, end, input, start > 0, Number.POSITIVE_INFINITY);
       records.push(...result.records);
       partialBadLines += result.partialBadLines;
@@ -125,6 +131,12 @@ export function readSourceWindow(input: {
   if (input.direction === "earlier" && page[0]) {
     nextOffset = page[0].byteOffset;
   }
+  const first = page[0];
+  const droppedEarlierRecords = input.direction === "earlier" && records.length > page.length;
+  const earlierOffset =
+    first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
+      ? first.byteOffset
+      : null;
 
   return {
     records: page,
@@ -136,6 +148,7 @@ export function readSourceWindow(input: {
     reset,
     incompleteTail,
     unreadable: false,
+    earlierOffset,
   };
 }
 

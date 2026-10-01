@@ -8,9 +8,10 @@ import {
   type RepairOperation,
   applyUiWindow,
   countNewOperations,
-  markUnfinishedTools,
   isStaleRequest,
+  markUnfinishedTools,
   nextPollDelayMs,
+  prependEarlierOperations,
 } from "@shared/runtime/repair-observation";
 import {
   exportRepairEvidence,
@@ -304,14 +305,8 @@ export function useRepairObservation(input: {
         if (seq !== requestSeqRef.current) return;
         setObservation((prev) => {
           if (!prev) return prev;
-          const byId = new Map(prev.upserts.map((op) => [op.operationId, op]));
-          for (const op of data.upserts) {
-            if (!byId.has(op.operationId)) byId.set(op.operationId, op);
-          }
           const upserts = markUnfinishedTools(
-            [...byId.values()].sort((a, b) =>
-              a.receivedAt < b.receivedAt ? -1 : a.receivedAt > b.receivedAt ? 1 : 0,
-            ),
+            prependEarlierOperations(prev.upserts, data.upserts),
             Date.parse(data.serverTime),
           );
           return { ...prev, upserts, earlierCursor: data.earlierCursor };

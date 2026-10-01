@@ -326,8 +326,7 @@ export function createRepairObservationService(options: ObservationServiceOption
           watermarks: [{ sourceId: source.sourceId, generation: read.generation, offset: read.nextOffset }],
         }),
       });
-      const earliest = read.records[0];
-      if (!earlierCursor && earliest && earliest.byteOffset > 0) {
+      if (!earlierCursor && read.earlierOffset !== null) {
         earlierCursor = encodeObservationCursor({
           runId: input.runId,
           round,
@@ -336,7 +335,7 @@ export function createRepairObservationService(options: ObservationServiceOption
             {
               sourceId: source.sourceId,
               generation: read.generation,
-              offset: earliest.byteOffset,
+              offset: read.earlierOffset,
             },
           ],
         });

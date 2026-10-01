@@ -255,6 +255,23 @@ describe("host repair observation routes (no listen)", () => {
     expect(data.earlierCursor).toBeNull();
   });
 
+  it("does not offer an earlier page when a leading newline precedes the only record", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const line = JSON.stringify({
+      type: "tool.started",
+      callId: "c1",
+      name: "shell",
+      summary: "only-row",
+      role: "coder",
+      at: "2026-09-22T06:00:01Z",
+    });
+    writeFileSync(join(taskDir, "orchestrator.log"), `\n${line}\n`);
+    const data = await observe();
+    expect(data.upserts.map((row) => row.summary)).toEqual(["only-row"]);
+    expect(data.hasMore).toBe(false);
+    expect(data.earlierCursor).toBeNull();
+  });
+
   it("walks earlier pages back to the first row without repeating the cold tail", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const pad = "x".repeat(16 * 1024);

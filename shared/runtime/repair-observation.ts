@@ -804,6 +804,15 @@ export function earlierControlCount(loadedHidden: number, earlierCursor: string 
   return earlierCursor === null ? 0 : 1;
 }
 
+export function prependEarlierOperations(
+  existing: RepairOperation[],
+  page: RepairOperation[],
+): RepairOperation[] {
+  const seen = new Set(existing.map((op) => op.operationId));
+  const older = page.filter((op) => !seen.has(op.operationId));
+  return [...older, ...existing];
+}
+
 export function applyUiWindow(
   ops: RepairOperation[],
   visibleCount: number,
