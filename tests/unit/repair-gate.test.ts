@@ -235,6 +235,10 @@ describe("evaluateRepairGate", () => {
     expect(extractAggregatorVerdict("## 结论\n\n不能 approve。\n")).toBe(null);
     expect(extractAggregatorVerdict("## 结论\n\n不能 `approve`。\n")).toBe(null);
     expect(extractAggregatorVerdict("## 结论\n\nnot approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\npiano approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\n不能直接 approve。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnot directly approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不是问题。最终 approve\n")).toBe("approve");
     const prose = "## 结论\n\n不能 approve，维持 changes-requested。\n";
     expect(extractAggregatorVerdict(prose)).toBe("changes-requested");
 
