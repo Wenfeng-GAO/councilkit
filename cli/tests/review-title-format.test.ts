@@ -69,16 +69,14 @@ describe("review finding title format", () => {
 
   it("does not use a body backtick that contains -- as the finding id", () => {
     const rows = extract(
-      `- [major] ${TITLE}\n${[
-        ...DETAILS,
-        "对照：`--resume` 会按数组下标复用。",
-      ]
+      `- [major] ${TITLE}\n${[...DETAILS, "对照：`--resume` 会按数组下标复用。"]
         .map((line) => `  ${line}`)
         .join("\n")}`,
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.id).not.toBe("--resume");
-    expect(rows[0]?.id.startsWith("pkg.runtime.manager.session_manager.go--")).toBe(true);
+    expect(rows[0]?.id).toBe(
+      "pkg.runtime.manager.session_manager.go--状态回滚失败后会话永久停留在创建中",
+    );
     expect(rows[0]?.title).toBe(TITLE);
   });
 
