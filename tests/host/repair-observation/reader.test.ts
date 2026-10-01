@@ -225,6 +225,41 @@ describe("source-reader bounded reads (U06/U07)", () => {
     expect(third).toEqual({ body: "89", nextCursor: null, truncated: false });
   });
 
+  it("pages earlier records nearest the cursor without a gap", () => {
+    const path = join(dir, "earlier.jsonl");
+    const lines = Array.from({ length: 30 }, (_, index) =>
+      JSON.stringify({ type: "text", text: `row-${index}` }),
+    );
+    writeFileSync(path, `${lines.join("\n")}\n`);
+    const readEarlier = (fromOffset: number, limitRecords: number) =>
+      readSourceWindow({
+        path,
+        sourceId: "s",
+        executionRef: "e#1.1",
+        round: 1,
+        roleKey: "builder",
+        expectedGeneration: null,
+        fromOffset,
+        receivedAt: "t",
+        limitRecords,
+        direction: "earlier",
+      });
+    const end = statSync(path).size;
+    const newest = readEarlier(end, 10);
+    expect(newest.records.map((row) => row.text)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `row-${index + 20}`),
+    );
+    const middle = readEarlier(newest.nextOffset, 10);
+    expect(middle.records.map((row) => row.text)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `row-${index + 10}`),
+    );
+    const oldest = readEarlier(middle.nextOffset, 10);
+    expect(oldest.records.map((row) => row.text)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `row-${index}`),
+    );
+    expect(oldest.nextOffset).toBe(0);
+  });
+
   it("pages a multibyte event line without splitting a character", () => {
     const path = join(dir, "utf8-detail.jsonl");
     const payload = "中中中";
