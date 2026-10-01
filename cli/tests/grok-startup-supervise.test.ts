@@ -80,7 +80,7 @@ describe("superviseOrchestrator grok startup", () => {
     `);
     const result = await superviseOrchestrator(child, GROK_SESSION_WAIT_MS, stdoutBuf);
     const elapsed = Date.now() - started;
-    expect(result).toEqual({ ok: true, sessionId: "late-session" });
+    expect(result).toEqual({ ok: true, sessionId: "late-session", model: null });
     expect(elapsed).toBeGreaterThanOrEqual(4500);
     expect(elapsed).toBeLessThan(20_000);
     expect(child.killed).toBe(false);
@@ -107,7 +107,7 @@ describe("superviseOrchestrator grok startup", () => {
     await waitForSession(stdoutBuf, "native-session-1");
     const started = Date.now();
     const result = await superviseOrchestrator(child, GROK_SESSION_WAIT_MS, stdoutBuf);
-    expect(result).toEqual({ ok: true, sessionId: "native-session-1" });
+    expect(result).toEqual({ ok: true, sessionId: "native-session-1", model: null });
     expect(Date.now() - started).toBeLessThan(2000);
   }, 8_000);
 
@@ -134,7 +134,7 @@ describe("superviseOrchestrator grok startup", () => {
     await waitForExit(child);
     await waitForSession(stdoutBuf, "native-session-1");
     const result = await superviseOrchestrator(child, GROK_SESSION_WAIT_MS, stdoutBuf);
-    expect(result).toEqual({ ok: true, sessionId: "native-session-1" });
+    expect(result).toEqual({ ok: true, sessionId: "native-session-1", model: null });
   }, 8_000);
 
   it("surfaces a spawn error without waiting the production deadline", async () => {
