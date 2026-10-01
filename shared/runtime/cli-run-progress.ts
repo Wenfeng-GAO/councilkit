@@ -320,16 +320,14 @@ export function liveStateFromRecords(
 
   const attemptRows: CliRunAttemptProgress[] = started.attempts.map((meta) => {
     const done = finished.get(meta.attemptId);
-    // willRetry is the runner's proof that this failure is not the current
-    // execution. While the run can still append, the seat is that retry.
-    const retrying = done?.willRetry === true && !sawFinished;
+    const followUpOpen = done?.willRetry === true && !sawFinished;
     return {
       ...meta,
       role: "attempt",
-      status: retrying ? "running" : (done?.status ?? "queued"),
-      durationMs: retrying ? null : (done?.durationMs ?? null),
+      status: followUpOpen ? "running" : (done?.status ?? "queued"),
+      durationMs: followUpOpen ? null : (done?.durationMs ?? null),
       lastActivity: null,
-      ...(done?.result && !retrying ? { result: done.result } : {}),
+      ...(done?.result && !followUpOpen ? { result: done.result } : {}),
     };
   });
   const attemptTerminal = attemptRows.every(
