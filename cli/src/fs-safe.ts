@@ -1,14 +1,26 @@
-/**
- * Shared filesystem-safety primitives for commands that recursively delete or
- * create directories inside the runs tree (`runs gc`, `review`). The trust
- * model: the runs ROOT is bound ONCE (lstat proves a real directory, realpath
- * + dev/ino pin its canonical location and identity) and every target is validated against that
- * BOUND root — never against a root re-resolved later, which could have been
- * swapped for a symlink to an external tree in between (reviewer findings).
- */
-import { type Stats, lstatSync, realpathSync } from "node:fs";
+import {
+  constants,
+  type Stats,
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  realpathSync,
+} from "node:fs";
 import { dirname, sep } from "node:path";
 import { errors } from "./errors";
+
+/**
+ * Closes the directory fd when the TrustedRoot is collected. The fd has to
+ * stay open until collection. On ext4, delete + mkdir at the same path
+ * recycles the directory inode once nothing holds it, so a dev/ino snapshot
+ * alone cannot see the swap.
+ */
+const closePinnedDirectoryOnCollect = new FinalizationRegistry<number>((fd) => {
+  try {
+    closeSync(fd);
+  } catch {}
+});
 
 /** A trusted root pinned at bind time. */
 export interface TrustedRoot {
@@ -16,12 +28,12 @@ export interface TrustedRoot {
   path: string;
   /** Canonical realpath captured at bind time. */
   realPath: string;
-  /** Device of the bound directory (lstat at bind time). */
+  /** Device of the held directory fd. */
   dev: number;
-  /** Inode of the bound directory (lstat at bind time): a same-path
-   * REPLACEMENT (delete + fresh real directory) keeps the realpath string but
-   * gets a new inode, so the realpath alone cannot detect it. */
+  /** Inode of the held directory fd. */
   ino: number;
+  /** Open directory fd. Keeps the bound inode allocated for the life of this object. */
+  fd: number;
 }
 
 /**
@@ -41,36 +53,56 @@ export function bindTrustedRoot(root: string): TrustedRoot | null {
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw errors.io("the trusted root is not a real directory (refusing to proceed)");
   }
+  let fd: number;
   try {
-    return { path: root, realPath: realpathSync(root), dev: stat.dev, ino: stat.ino };
+    fd = openSync(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   } catch (cause) {
+    throw errors.io(`cannot resolve the trusted root: ${ioName(cause)}`, { cause: ioName(cause) });
+  }
+  try {
+    const pinned = fstatSync(fd);
+    const bound: TrustedRoot = {
+      path: root,
+      realPath: realpathSync(root),
+      dev: pinned.dev,
+      ino: pinned.ino,
+      fd,
+    };
+    closePinnedDirectoryOnCollect.register(bound, fd);
+    return bound;
+  } catch (cause) {
+    try {
+      closeSync(fd);
+    } catch {}
     throw errors.io(`cannot resolve the trusted root: ${ioName(cause)}`, { cause: ioName(cause) });
   }
 }
 
 /**
- * Re-validate a bound root against the CURRENT filesystem: it must still be a
- * real directory resolving to the SAME realpath pinned at bind time AND the
- * SAME dev+inode. A root swapped since bind time (deleted, replaced, or turned
- * into a symlink — even one resolving to a tree shaped like the original, and
- * even a same-path replacement by another REAL directory, which keeps the
- * realpath but not the inode) is fail-closed exit 5.
+ * Re-validate a bound root against the CURRENT filesystem. The path must still
+ * be a real directory at the pinned realpath, and it must still be the held
+ * directory fd. `fstat` on that fd reports nlink 0 after the directory is
+ * unlinked, which catches a same-path recreate even when the new directory
+ * would otherwise recycle the inode.
  */
 export function revalidateTrustedRoot(bound: TrustedRoot): void {
   let stat: Stats;
   let realPath: string;
+  let pinned: Stats;
   try {
+    pinned = fstatSync(bound.fd);
     stat = lstatSync(bound.path);
     realPath = realpathSync(bound.path);
   } catch (cause) {
     throw errors.io(`the trusted root changed: ${ioName(cause)}`, { cause: ioName(cause) });
   }
   if (
+    pinned.nlink === 0 ||
     !stat.isDirectory() ||
     stat.isSymbolicLink() ||
     realPath !== bound.realPath ||
-    stat.dev !== bound.dev ||
-    stat.ino !== bound.ino
+    stat.dev !== pinned.dev ||
+    stat.ino !== pinned.ino
   ) {
     throw errors.io("the trusted root changed (refusing to proceed)");
   }
