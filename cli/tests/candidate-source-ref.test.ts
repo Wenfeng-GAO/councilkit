@@ -168,6 +168,46 @@ describe("private candidate source ref pinning", () => {
     expect(invalidTask.reason).toBe("invalid-task-id");
   });
 
+  it("classifies a dangling ref as dangling-ref when the caller locale is not C", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-pin-locale-"));
+    roots.push(root);
+    const { repo, sourceSha, candidateSha } = initControllerWithIndependentWorktree(root);
+    const ref = privateCandidateRef(TASK_ID, candidateSha);
+    if (!ref) throw new Error("expected ref");
+    const missing = "e".repeat(40);
+    const danglingPath = git(repo, ["rev-parse", "--git-path", ref]);
+    const danglingAbs = danglingPath.startsWith("/") ? danglingPath : join(repo, danglingPath);
+    mkdirSync(dirname(danglingAbs), { recursive: true });
+    writeFileSync(danglingAbs, `${missing}\n`);
+    const callerEnv = {
+      ...process.env,
+      LANG: "zh_CN.UTF-8",
+      LC_ALL: "zh_CN.UTF-8",
+      LANGUAGE: "zh_CN",
+    };
+    const seenForEachRef: NodeJS.ProcessEnv[] = [];
+    const runCommand = async (input: Parameters<typeof defaultRunCommand>[0]) => {
+      if (input.argv[0] === "for-each-ref") seenForEachRef.push(input.env ?? {});
+      return defaultRunCommand(input);
+    };
+    const dangling = await pinPrivateCandidateRef({
+      repo,
+      taskId: TASK_ID,
+      candidateSha,
+      expectedOldSha: sourceSha,
+      env: callerEnv,
+      runCommand,
+    });
+    expect(dangling.ok).toBe(false);
+    if (dangling.ok) throw new Error("expected refuse");
+    expect(dangling.reason).toBe("dangling-ref");
+    expect(seenForEachRef[0]?.LC_ALL).toBe("C");
+    expect(protectedGitEnv(callerEnv).LC_ALL).toBe("C");
+    expect(protectedGitEnv(callerEnv).GIT_NO_REPLACE_OBJECTS).toBe("1");
+    expect(protectedGitEnv(callerEnv).GIT_GRAFT_FILE).toBe("/dev/null");
+    expect(git(repo, ["rev-parse", "HEAD"])).toBe(sourceSha);
+  });
+
   it("does not treat a descendant child ref as the exact private candidate ref", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-pin-child-"));
     roots.push(root);

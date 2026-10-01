@@ -267,7 +267,10 @@ function fail(reason: PinCandidateFailureReason, message: string): PinCandidateR
   return { ok: false, reason, message };
 }
 
-/** Strip repo-redirect env and force a replace/graft-free object view. */
+/**
+ * Strip repo-redirect env, force a replace/graft-free object view, and pin git
+ * stderr to the C locale.
+ */
 export function protectedGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const {
     GIT_DIR: _gitDir,
@@ -283,6 +286,7 @@ export function protectedGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     ...next,
     GIT_NO_REPLACE_OBJECTS: "1",
     GIT_GRAFT_FILE: "/dev/null",
+    LC_ALL: "C",
   };
 }
 
