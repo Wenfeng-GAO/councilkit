@@ -979,6 +979,42 @@ describe("cli auto driver-commands", () => {
       );
     });
 
+    it("grok: an error result does not replace an earlier success", () => {
+      const stdout = [
+        JSON.stringify({ type: "result", subtype: "success", result: "good" }),
+        JSON.stringify({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          result: "boom",
+        }),
+      ].join("\n");
+      expect(extractFinalOutput("grok-stream-json", stdout)).toBe("good");
+    });
+
+    it("grok: an error result that carries text is not a deliverable", () => {
+      const stdout = JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        result: "boom",
+      });
+      expect(extractFinalOutput("grok-stream-json", stdout)).toBeNull();
+    });
+
+    it("grok: a captured error result falls back to the earlier success", () => {
+      const stdout = JSON.stringify({ type: "result", subtype: "success", result: "from-stream" });
+      const captured = JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        result: "boom",
+      });
+      expect(extractFinalOutput("grok-stream-json", stdout, undefined, captured)).toBe(
+        "from-stream",
+      );
+    });
+
     it("grok: returns null when text is missing", () => {
       expect(extractFinalOutput("grok-stream-json", '{"sessionId":"s"}')).toBeNull();
     });
