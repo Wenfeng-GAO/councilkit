@@ -199,6 +199,8 @@ function plannedRoles(sources: TrustedSource[], adapterPath: string | null): Rep
   return [...byKey.values()];
 }
 
+const EVENT_DETAIL_PAGE_CAP = 200;
+
 export function createRepairObservationService(options: ObservationServiceOptions = {}) {
   const nowFn = options.now ?? (() => new Date());
   const env = options.env ?? process.env;
@@ -446,7 +448,7 @@ export function createRepairObservationService(options: ObservationServiceOption
       limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
     });
     let op = obs.upserts.find((row) => row.eventId === input.eventId);
-    while (!op && seenCursors.size < 200) {
+    while (!op && seenCursors.size < EVENT_DETAIL_PAGE_CAP) {
       const next = obs.nextCursor;
       if (!next || seenCursors.has(next)) break;
       seenCursors.add(next);
