@@ -813,6 +813,17 @@ export function prependEarlierOperations(
   return [...older, ...existing];
 }
 
+export function mergeObservedOperations(
+  existing: RepairOperation[],
+  incoming: RepairOperation[],
+): RepairOperation[] {
+  const byId = new Map(existing.map((op) => [op.operationId, op]));
+  for (const op of incoming) byId.set(op.operationId, op);
+  return [...byId.values()].sort((a, b) =>
+    a.receivedAt < b.receivedAt ? -1 : a.receivedAt > b.receivedAt ? 1 : 0,
+  );
+}
+
 export function applyUiWindow(
   ops: RepairOperation[],
   visibleCount: number,

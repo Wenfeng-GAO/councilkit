@@ -5,6 +5,7 @@ import {
   REPAIR_OBS_SILENCE_MS,
   applyUiWindow,
   earlierControlCount,
+  mergeObservedOperations,
   prependEarlierOperations,
   buildEventId,
   buildOperationId,
@@ -347,6 +348,44 @@ describe("U08 window and cache", () => {
     expect(prependEarlierOperations(existing, page).map((op) => op.summary)).toEqual([
       "head",
       "tail",
+    ]);
+  });
+
+  it("keeps an earlier page ahead of the tail when a later poll arrives", () => {
+    const tail = baseOp({
+      operationId: "tail",
+      eventId: "evt-tail",
+      receivedAt: "2026-09-22T06:00:01Z",
+      summary: "tail",
+    });
+    const head = baseOp({
+      operationId: "head",
+      eventId: "evt-head",
+      receivedAt: "2026-09-22T06:00:05Z",
+      summary: "head",
+    });
+    const loaded = prependEarlierOperations([tail], [head]);
+    const newer = baseOp({
+      operationId: "newer",
+      eventId: "evt-newer",
+      receivedAt: "2026-09-22T06:00:06Z",
+      summary: "newer",
+    });
+    expect(mergeObservedOperations(loaded, [newer]).map((op) => op.summary)).toEqual([
+      "head",
+      "tail",
+      "newer",
+    ]);
+    const completed = baseOp({
+      operationId: "tail",
+      eventId: "evt-tail-done",
+      receivedAt: "2026-09-22T06:00:09Z",
+      status: "completed",
+      summary: "tail-done",
+    });
+    expect(mergeObservedOperations(loaded, [completed]).map((op) => op.summary)).toEqual([
+      "head",
+      "tail-done",
     ]);
   });
 });
