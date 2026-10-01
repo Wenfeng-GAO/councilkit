@@ -248,6 +248,42 @@ describe("host repair observation routes (no listen)", () => {
     expect(seen).toEqual(["alpha", "beta", "gamma"]);
   });
 
+  it("keeps the start of a later source that is larger than the cold tail", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const line = (summary: string, callId: string) =>
+      `${JSON.stringify({
+        type: "tool.started",
+        callId,
+        name: "shell",
+        summary,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      })}\n`;
+    writeFileSync(join(taskDir, "orchestrator.log"), line("alpha", "a1"));
+    writeFileSync(
+      join(taskDir, "coder.jsonl"),
+      `${line("early-marker", "b1")}${"x".repeat(600 * 1024)}\n${line("late-marker", "b2")}`,
+    );
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 4; page += 1) {
+      const data = (await route.handler(
+        ctx({
+          round: "current",
+          limit: "1",
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+      seen.push(...data.upserts.map((row) => row.summary));
+      if (!data.hasMore) break;
+      cursor = data.nextCursor;
+    }
+    expect(seen).toEqual(["alpha", "early-marker", "late-marker"]);
+  });
+
   it("opens detail for an event that arrives after the first page", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const lines = Array.from({ length: 201 }, (_, index) =>
