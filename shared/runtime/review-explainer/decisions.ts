@@ -1,6 +1,7 @@
-import { constants, closeSync, mkdirSync, openSync, unlinkSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { type ExclusiveLock, LockBusyError, acquireExclusiveLock } from "../exclusive-lock";
 import type { DecisionItem, DecisionsFile, FindingDecision } from "./contracts";
 import { ExplainerError, assertPrivatePath, atomicJson, readBounded } from "./io";
 
@@ -64,18 +65,14 @@ export function applyFindingDecision(input: {
   )
     throw new ExplainerError("Invalid decision request");
   const lock = `${input.file}.lock`;
-  let fd: number | undefined;
+  let held: ExclusiveLock | undefined;
   try {
     if (input.root) assertPrivatePath(input.root, input.file, true);
     mkdirSync(dirname(input.file), { recursive: true, mode: 0o700 });
     try {
-      fd = openSync(
-        lock,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-        0o600,
-      );
+      held = acquireExclusiveLock(lock);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+      if (error instanceof LockBusyError)
         throw new ExplainerError("Decision revision conflict; reload and retry", 409);
       throw error;
     }
@@ -105,13 +102,6 @@ export function applyFindingDecision(input: {
     if (error instanceof ExplainerError) throw error;
     throw new ExplainerError("Cannot persist decision: storage write failure", 500);
   } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-      try {
-        unlinkSync(lock);
-      } catch {
-        /* failure leaves observable lock */
-      }
-    }
+    held?.release();
   }
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeSourceFix, newRepairBudget } from "@shared/runtime/repair-chain";
@@ -7,6 +7,7 @@ import { evaluateRepairGate } from "@shared/runtime/repair-gate";
 import { SQUAD_REQUIRED_GATES_V1, hashRepairGatePolicy } from "@shared/runtime/repair-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  chainPath,
   consumeLockedRetry,
   consumeLockedSourceFix,
   loadOrCreateChain,
@@ -53,6 +54,22 @@ describe("repair chain store identity and locked budget", () => {
     expect(second.chain.chainId).toBe(first.chain.chainId);
     expect(second.chain.budget.sourceFixUsed).toBe(1);
     expect(second.chain.parentRunIds).toContain("ck-repair-2");
+  });
+
+  it("continues a source fix when a dead controller left the chain lock", () => {
+    const created = loadOrCreateChain({
+      repo: "github.com/acme/repo",
+      prUrl: "https://github.com/acme/repo/pull/4",
+      goalFingerprint: "c".repeat(64),
+      parentRunId: "ck-repair-1",
+      nowMs: 10,
+    });
+    writeFileSync(`${chainPath(created.chain.chainId)}.lock`, "");
+    const used = consumeLockedSourceFix(created.chain.chainId, 11);
+    expect(used.ok).toBe(true);
+    if (used.ok) expect(used.budget.sourceFixUsed).toBe(1);
+    const stored = readRepairChain(created.chain.chainId);
+    expect(stored?.budget.sourceFixUsed).toBe(1);
   });
 
   it("does not let a lock-outside stale budget overwrite the chain", () => {
