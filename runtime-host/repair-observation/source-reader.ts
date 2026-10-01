@@ -118,8 +118,16 @@ export function readSourceWindow(input: {
     closeSync(fd);
   }
 
+  const page =
+    input.direction === "earlier"
+      ? records.slice(Math.max(0, records.length - input.limitRecords))
+      : records.slice(0, input.limitRecords);
+  if (input.direction === "earlier" && page[0]) {
+    nextOffset = page[0].byteOffset;
+  }
+
   return {
-    records: records.slice(0, input.limitRecords),
+    records: page,
     generation,
     nextOffset,
     exhausted: nextOffset >= st.size && !incompleteTail,
