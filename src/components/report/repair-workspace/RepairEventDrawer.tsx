@@ -41,7 +41,7 @@ export function RepairEventDrawer({
       return;
     }
     let cancelled = false;
-    void fetchRepairEventDetail({ runId, eventId: operation.eventId })
+    void fetchRepairEventDetail({ runId, eventId: operation.eventId, round: operation.round })
       .then((row) => {
         if (!cancelled) setDetail(row);
       })

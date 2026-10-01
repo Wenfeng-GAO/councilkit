@@ -497,11 +497,12 @@ export function createRepairObservationService(options: ObservationServiceOption
     runId: string;
     eventId: string;
     cursorRaw: string | null;
+    roundRaw: string | null;
   }): RepairEventDetail {
     const seenForward = new Set<string>();
     let obs = getObservation({
       runId: input.runId,
-      roundRaw: "current",
+      roundRaw: input.roundRaw,
       cursorRaw: null,
       limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
     });
@@ -515,7 +516,7 @@ export function createRepairObservationService(options: ObservationServiceOption
       seenForward.add(next);
       obs = getObservation({
         runId: input.runId,
-        roundRaw: "current",
+        roundRaw: input.roundRaw,
         cursorRaw: next,
         limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
       });
@@ -529,7 +530,7 @@ export function createRepairObservationService(options: ObservationServiceOption
         seenEarlier.add(earlier);
         obs = getObservation({
           runId: input.runId,
-          roundRaw: "current",
+          roundRaw: input.roundRaw,
           cursorRaw: earlier,
           limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
         });
