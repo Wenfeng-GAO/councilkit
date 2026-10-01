@@ -8,7 +8,6 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import {
-  REPAIR_OBS_CURSOR_MAX,
   REPAIR_OBS_DETAIL_CHUNK,
   REPAIR_OBS_PAGE_LIMIT,
   REPAIR_OBS_SCHEMA_VERSION,
@@ -70,27 +69,19 @@ function encodeEarlierCursor(
 ): string | null {
   const pending = marks.filter((mark) => mark.offset > 0);
   while (pending.length > 0) {
-    const cursor = {
-      runId,
-      round,
-      direction: "earlier" as const,
-      watermarks: pending.map((mark) => ({ ...mark })),
-    };
-    const json = JSON.stringify(cursor);
-    // decodeObservationCursor limits the base64 cursor, which is longer than this JSON.
-    if (
-      json.length <= REPAIR_OBS_CURSOR_MAX &&
-      base64UrlEncodeLength(json) <= REPAIR_OBS_CURSOR_MAX
-    ) {
-      return encodeObservationCursor(cursor);
+    try {
+      return encodeObservationCursor({
+        runId,
+        round,
+        direction: "earlier",
+        watermarks: pending,
+      });
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "cursor too large") throw error;
+      pending.pop();
     }
-    pending.pop();
   }
   return null;
-}
-
-function base64UrlEncodeLength(json: string): number {
-  return 4 * Math.ceil(Buffer.byteLength(json) / 3);
 }
 
 function clampLimit(raw: string | null): number {

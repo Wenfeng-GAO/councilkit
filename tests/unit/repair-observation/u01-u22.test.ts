@@ -298,6 +298,26 @@ describe("U07 cursor and rotation", () => {
     const huge = "a".repeat(5000);
     expect(decodeObservationCursor(huge, { runId: "ck-repair-a", round: 2 }).ok).toBe(false);
   });
+
+  it("only emits a cursor that decode will accept", () => {
+    let lastOk = "";
+    for (let pad = 100; pad < 8000; pad += 50) {
+      try {
+        lastOk = encodeObservationCursor({
+          runId: "ck-repair-a",
+          round: 1,
+          direction: "earlier",
+          watermarks: [{ sourceId: "s".repeat(pad), generation: "g", offset: 1 }],
+        });
+      } catch (error) {
+        expect(error).toMatchObject({ message: "cursor too large" });
+        expect(lastOk.length).toBeGreaterThan(0);
+        expect(decodeObservationCursor(lastOk, { runId: "ck-repair-a", round: 1 }).ok).toBe(true);
+        return;
+      }
+    }
+    throw new Error("expected encode to reject an oversized cursor");
+  });
 });
 
 describe("U08 window and cache", () => {

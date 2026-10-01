@@ -342,11 +342,11 @@ export type ObservationCursor = {
 };
 
 export function encodeObservationCursor(cursor: ObservationCursor): string {
-  const json = JSON.stringify(cursor);
-  if (json.length > REPAIR_OBS_CURSOR_MAX) {
+  const encoded = base64UrlEncode(JSON.stringify(cursor));
+  if (encoded.length > REPAIR_OBS_CURSOR_MAX) {
     throw new Error("cursor too large");
   }
-  return base64UrlEncode(json);
+  return encoded;
 }
 
 export function decodeObservationCursor(
