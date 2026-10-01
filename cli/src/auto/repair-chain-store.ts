@@ -1,5 +1,6 @@
-import { closeSync, mkdirSync, openSync, readdirSync, unlinkSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { acquireExclusiveLock, releaseExclusiveLock } from "@shared/runtime/exclusive-lock";
 import {
   type RepairBudget,
   type RepairChain,
@@ -88,23 +89,14 @@ export function withChainLock<T>(chainId: string, fn: () => T): T {
   const lockPath = `${chainPath(chainId)}.lock`;
   let fd: number;
   try {
-    fd = openSync(lockPath, "wx", 0o600);
+    fd = acquireExclusiveLock(lockPath);
   } catch {
     throw errors.runFailed("repair chain is locked by another controller");
   }
   try {
     return fn();
   } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      // lock fd
-    }
-    try {
-      unlinkSync(lockPath);
-    } catch {
-      // lock file
-    }
+    releaseExclusiveLock(lockPath, fd);
   }
 }
 

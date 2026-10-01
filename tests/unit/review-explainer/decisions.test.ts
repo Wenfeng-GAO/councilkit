@@ -151,6 +151,44 @@ describe("A04 applyFindingDecision", () => {
     expect(existsSync(lock)).toBe(false);
     expect(existsSync(file)).toBe(true);
   });
+
+  it("does not take a lock still held by this process", async () => {
+    const { apply } = await api();
+    const root = mkdtempSync(join(tmpdir(), "ck-explainer-live-lock-"));
+    roots.push(root);
+    const file = join(root, "decisions.json");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, `${process.pid}\n`);
+    expect(() =>
+      apply({
+        file,
+        findingId: FINDING.busy,
+        decision: DECISION.willFix,
+        expectedRevision: 0,
+      }),
+    ).toThrow(/conflict|reload/i);
+    expect(existsSync(file)).toBe(false);
+    expect(readFileSync(lock, "utf8").trim()).toBe(String(process.pid));
+  });
+
+  it("does not take a freshly created empty lock", async () => {
+    const { apply } = await api();
+    const root = mkdtempSync(join(tmpdir(), "ck-explainer-fresh-lock-"));
+    roots.push(root);
+    const file = join(root, "decisions.json");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, "");
+    expect(() =>
+      apply({
+        file,
+        findingId: FINDING.dup,
+        decision: DECISION.willFix,
+        expectedRevision: 0,
+      }),
+    ).toThrow(/conflict|reload/i);
+    expect(existsSync(file)).toBe(false);
+    expect(existsSync(lock)).toBe(true);
+  });
 });
 
 function deadPid(): number {
