@@ -319,6 +319,59 @@ describe("ledger classify", () => {
       expect(rows[0]?.status).toBe("open");
     },
   );
+
+  it("does not treat a body comparison quote as the same finding", () => {
+    const prior = [
+      finding({
+        id: "pkg.session--other",
+        title: "session stays creating",
+        text: "session stays creating",
+        status: "open",
+        severity: "major",
+        files: ["pkg/session.go"],
+      }),
+    ];
+    const next = [
+      finding({
+        id: "pkg.ledger--fresh",
+        title: "ledger drops the fresh row",
+        text: "ledger drops the fresh row\n对照：`pkg.session--other` 是另一项。",
+        status: "open",
+        severity: "major",
+        files: ["pkg/ledger.go"],
+      }),
+    ];
+    const rows = classifyAgainstPrior(prior, next);
+    expect(rows.map((row) => [row.id, row.title, row.status])).toEqual([
+      ["pkg.ledger--fresh", "ledger drops the fresh row", "open"],
+      ["pkg.session--other", "session stays creating", "open"],
+    ]);
+  });
+
+  it("links a later line that labels the prior finding id", () => {
+    const prior = [
+      finding({
+        id: "F-1",
+        title: "old title",
+        text: "old title",
+        status: "open",
+        severity: "major",
+      }),
+    ];
+    const next = [
+      finding({
+        id: "pkg.ledger--fresh",
+        title: "rewritten headline",
+        text: "rewritten headline\n原 Finding ID：`F-1`",
+        status: "open",
+        severity: "major",
+      }),
+    ];
+    const rows = classifyAgainstPrior(prior, next);
+    expect(rows.map((row) => [row.id, row.title, row.status])).toEqual([
+      ["F-1", "rewritten headline", "open"],
+    ]);
+  });
 });
 
 const CANDIDATE_SHA = "a".repeat(40);

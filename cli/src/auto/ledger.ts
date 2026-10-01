@@ -678,18 +678,19 @@ function extractPaths(text: string): string[] {
   return files;
 }
 
-function quotedFindingId(text: string): string | null {
+function declaredFindingIds(text: string): string[] {
   const leadingBoldId = /^(?:\*\*)?([^\s*`]{1,160})\*\*(?=\s|$)/.exec(text)?.[1];
   const labeled = /原 Finding ID[：:]\s*`([^`\n]+)`/.exec(text)?.[1];
-  const titleBackticks = explicitFindingIds(text.split("\n")[0] ?? "");
+  const titleLine = text.split("\n")[0] ?? "";
+  return [leadingBoldId, labeled, ...explicitFindingIds(titleLine)].filter(
+    (id): id is string => id !== undefined && id.length > 0 && id.length <= 160 && !/\s/.test(id),
+  );
+}
+
+function quotedFindingId(text: string): string | null {
   return (
-    [leadingBoldId, labeled, ...titleBackticks].find(
-      (id): id is string =>
-        id !== undefined &&
-        id.length > 0 &&
-        id.length <= 160 &&
-        !/\s/.test(id) &&
-        (/--/.test(id) || /^F-\d+$/i.test(id) || /^h-[0-9a-f]{12}$/i.test(id)),
+    declaredFindingIds(text).find(
+      (id) => /--/.test(id) || /^F-\d+$/i.test(id) || /^h-[0-9a-f]{12}$/i.test(id),
     ) ?? null
   );
 }
@@ -723,12 +724,10 @@ function matchFinding(
   if (strict) return strict;
   const byId = eligible.find((row) => row.id === prior.id);
   if (byId) return byId;
-  // Reports often quote an existing ID; never slugify that quote into misc--misc--… .
   const byReference = eligible.find(
     (row) =>
-      !used.has(row.id) &&
-      (explicitFindingIds(row.text).includes(prior.id) ||
-        explicitFindingIds(prior.text).includes(row.id)),
+      declaredFindingIds(row.text).includes(prior.id) ||
+      declaredFindingIds(prior.text).includes(row.id),
   );
   if (byReference) return byReference;
   let best: { row: LedgerFinding; score: number } | null = null;
