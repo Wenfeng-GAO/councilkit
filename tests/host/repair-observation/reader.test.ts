@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readSourceWindow } from "@host/repair-observation/source-reader";
@@ -94,7 +94,10 @@ describe("source-reader bounded reads (U06/U07)", () => {
 
   it("detects generation reset when file is replaced", () => {
     const path = join(dir, "c.jsonl");
-    writeFileSync(path, `${JSON.stringify({ type: "text", text: "a" })}\n`);
+    const lineA = `${JSON.stringify({ type: "text", text: "a" })}\n`;
+    const lineB = `${JSON.stringify({ type: "text", text: "b" })}\n`;
+    expect(Buffer.byteLength(lineA)).toBe(Buffer.byteLength(lineB));
+    writeFileSync(path, lineA);
     const first = readSourceWindow({
       path,
       sourceId: "s",
@@ -107,8 +110,10 @@ describe("source-reader bounded reads (U06/U07)", () => {
       limitRecords: 10,
       direction: "forward",
     });
-    writeFileSync(path, `${JSON.stringify({ type: "text", text: "b" })}\n`);
-    const second = readSourceWindow({
+    expect(first.nextOffset).toBe(Buffer.byteLength(lineA));
+
+    writeFileSync(path, lineB);
+    const overwritten = readSourceWindow({
       path,
       sourceId: "s",
       executionRef: "e#1.1",
@@ -120,7 +125,29 @@ describe("source-reader bounded reads (U06/U07)", () => {
       limitRecords: 10,
       direction: "forward",
     });
-    expect(second.reset).toBe(true);
+    expect(overwritten.generation).toBe(first.generation);
+    expect(overwritten.reset).toBe(false);
+
+    const aside = `${path}.aside`;
+    renameSync(path, aside);
+    writeFileSync(path, lineB);
+    expect(statSync(path).ino).not.toBe(statSync(aside).ino);
+    expect(statSync(path).size).toBe(first.nextOffset);
+    const replaced = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: first.generation,
+      fromOffset: first.nextOffset,
+      receivedAt: "t3",
+      limitRecords: 10,
+      direction: "forward",
+    });
+    expect(replaced.generation).not.toBe(first.generation);
+    expect(replaced.reset).toBe(true);
+    expect(replaced.records[0]?.text).toBe("b");
   });
 });
 
