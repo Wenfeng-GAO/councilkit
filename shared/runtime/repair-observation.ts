@@ -817,11 +817,19 @@ export function mergeObservedOperations(
   existing: RepairOperation[],
   incoming: RepairOperation[],
 ): RepairOperation[] {
-  const byId = new Map(existing.map((op) => [op.operationId, op]));
-  for (const op of incoming) byId.set(op.operationId, op);
-  return [...byId.values()].sort((a, b) =>
-    a.receivedAt < b.receivedAt ? -1 : a.receivedAt > b.receivedAt ? 1 : 0,
-  );
+  const incomingById = new Map(incoming.map((op) => [op.operationId, op]));
+  const seen = new Set<string>();
+  const merged: RepairOperation[] = [];
+  for (const op of existing) {
+    seen.add(op.operationId);
+    merged.push(incomingById.get(op.operationId) ?? op);
+  }
+  for (const op of incoming) {
+    if (seen.has(op.operationId)) continue;
+    seen.add(op.operationId);
+    merged.push(op);
+  }
+  return merged;
 }
 
 export function applyUiWindow(
