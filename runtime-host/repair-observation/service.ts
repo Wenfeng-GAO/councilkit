@@ -498,27 +498,44 @@ export function createRepairObservationService(options: ObservationServiceOption
     eventId: string;
     cursorRaw: string | null;
   }): RepairEventDetail {
-    const seenCursors = new Set<string>();
-    let pageCursor: string | null = null;
+    const seenForward = new Set<string>();
     let obs = getObservation({
       runId: input.runId,
       roundRaw: "current",
-      cursorRaw: pageCursor,
+      cursorRaw: null,
       limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
     });
     let op = obs.upserts.find((row) => row.eventId === input.eventId);
-    while (!op && seenCursors.size < EVENT_DETAIL_PAGE_CAP) {
+    // Cold tails start mid-file. Events the activity list loads with
+    // earlierCursor are not on this page or any forward page.
+    const earlierStart = obs.earlierCursor;
+    while (!op && seenForward.size < EVENT_DETAIL_PAGE_CAP) {
       const next = obs.nextCursor;
-      if (!next || seenCursors.has(next)) break;
-      seenCursors.add(next);
-      pageCursor = next;
+      if (!next || seenForward.has(next)) break;
+      seenForward.add(next);
       obs = getObservation({
         runId: input.runId,
         roundRaw: "current",
-        cursorRaw: pageCursor,
+        cursorRaw: next,
         limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
       });
       op = obs.upserts.find((row) => row.eventId === input.eventId);
+    }
+    if (!op) {
+      const seenEarlier = new Set<string>();
+      let earlier = earlierStart;
+      while (earlier && !op && seenEarlier.size < EVENT_DETAIL_PAGE_CAP) {
+        if (seenEarlier.has(earlier)) break;
+        seenEarlier.add(earlier);
+        obs = getObservation({
+          runId: input.runId,
+          roundRaw: "current",
+          cursorRaw: earlier,
+          limitRaw: String(REPAIR_OBS_PAGE_LIMIT),
+        });
+        op = obs.upserts.find((row) => row.eventId === input.eventId);
+        earlier = obs.earlierCursor;
+      }
     }
     if (!op) {
       return repairEventDetailSchema.parse({
