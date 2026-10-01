@@ -679,12 +679,17 @@ function extractPaths(text: string): string[] {
 }
 
 function quotedFindingId(text: string): string | null {
-  // parseReviewReport may remove the opening ** from `**id** [major] ...`.
-  // Only a leading bold ID declares identity; later mentions may compare other findings.
   const leadingBoldId = /^(?:\*\*)?([^\s*`]{1,160})\*\*(?=\s|$)/.exec(text)?.[1];
+  const labeled = /原 Finding ID[：:]\s*`([^`\n]+)`/.exec(text)?.[1];
+  const titleBackticks = explicitFindingIds(text.split("\n")[0] ?? "");
   return (
-    [...(leadingBoldId ? [leadingBoldId] : []), ...explicitFindingIds(text)].find(
-      (id) => /--/.test(id) || /^F-\d+$/i.test(id) || /^h-[0-9a-f]{12}$/i.test(id),
+    [leadingBoldId, labeled, ...titleBackticks].find(
+      (id): id is string =>
+        id !== undefined &&
+        id.length > 0 &&
+        id.length <= 160 &&
+        !/\s/.test(id) &&
+        (/--/.test(id) || /^F-\d+$/i.test(id) || /^h-[0-9a-f]{12}$/i.test(id)),
     ) ?? null
   );
 }
