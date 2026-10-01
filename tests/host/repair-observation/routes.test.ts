@@ -248,6 +248,37 @@ describe("host repair observation routes (no listen)", () => {
     expect(seen).toEqual(["alpha", "beta", "gamma"]);
   });
 
+  it("opens detail for an event that arrives after the first page", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const lines = Array.from({ length: 201 }, (_, index) =>
+      JSON.stringify({
+        type: "tool.started",
+        callId: `c${index}`,
+        name: "shell",
+        summary: `row-${index}`,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      }),
+    );
+    writeFileSync(join(taskDir, "orchestrator.log"), `${lines.join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const list = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    const detail = routes.find((r) => r.pattern.endsWith("/repair/events/:eventId"));
+    if (!list || !detail) throw new Error("missing observation routes");
+    const first = (await list.handler(ctx({ round: "current" }))) as RepairObservation;
+    const second = (await list.handler(
+      ctx({ round: "current", cursor: first.nextCursor ?? "" }),
+    )) as RepairObservation;
+    const later = second.upserts.find((row) => row.summary === "row-200");
+    expect(later?.eventId).toMatch(/^evt_/);
+    const body = (await detail.handler(
+      ctx({}, { runId: RUN_ID, eventId: later!.eventId }),
+    )) as { availability: string; body: string; reasons: string[] };
+    expect(body.availability).toBe("available");
+    expect(body.body).toBe("row-200");
+    expect(body.reasons).toEqual([]);
+  });
+
   it("returns redacted observation and clamps limit", async () => {
     const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
     const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
