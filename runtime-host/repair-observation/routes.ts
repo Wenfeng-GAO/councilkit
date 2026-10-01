@@ -62,6 +62,7 @@ export function repairObservationRoutes(options?: { now?: () => Date }): Route[]
           runId,
           eventId,
           cursorRaw: ctx.query.get("cursor"),
+          roundRaw: ctx.query.get("round"),
         });
         assertResponseSize(data);
         return data;

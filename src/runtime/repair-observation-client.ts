@@ -54,10 +54,12 @@ export function fetchRepairObservation(input: {
 export function fetchRepairEventDetail(input: {
   runId: string;
   eventId: string;
+  round?: string | number;
   cursor?: string | null;
   signal?: AbortSignal;
 }): Promise<RepairEventDetail> {
   const query = new URLSearchParams();
+  if (input.round !== undefined) query.set("round", String(input.round));
   if (input.cursor) query.set("cursor", input.cursor);
   const qs = query.toString();
   return sessionGetJson(
