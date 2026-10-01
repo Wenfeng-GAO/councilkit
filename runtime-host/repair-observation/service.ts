@@ -4,7 +4,7 @@
  * Failures never affect repair execution.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import {
@@ -23,6 +23,7 @@ import {
   evaluateApprovalConsistency,
   executionGroupForRole,
   exportEvidenceMarkdown,
+  fingerprintSource,
   observationDone,
   redactObservationText,
   redactObservationValue,
@@ -39,6 +40,22 @@ export type ObservationServiceOptions = {
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
 };
+
+function pinUnreadSource(path: string): { generation: string; offset: 0 } | null {
+  try {
+    const st = statSync(path);
+    return {
+      generation: fingerprintSource({
+        size: st.size,
+        mtimeMs: st.mtimeMs,
+        ino: typeof st.ino === "number" ? st.ino : null,
+      }),
+      offset: 0,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function clampLimit(raw: string | null): number {
   if (raw === null || raw.length === 0) return REPAIR_OBS_PAGE_LIMIT;
@@ -240,10 +257,11 @@ export function createRepairObservationService(options: ObservationServiceOption
       if (room <= 0) {
         hasMore = true;
         sourcesExhausted = false;
-        if (prev) {
+        const held = prev ?? pinUnreadSource(source.path);
+        if (held) {
           watermarks.push({
             sourceId: source.sourceId,
-            generation: prev.generation,
+            generation: held.generation,
             cursor: encodeObservationCursor({
               runId: input.runId,
               round,
@@ -251,8 +269,8 @@ export function createRepairObservationService(options: ObservationServiceOption
               watermarks: [
                 {
                   sourceId: source.sourceId,
-                  generation: prev.generation,
-                  offset: prev.offset,
+                  generation: held.generation,
+                  offset: held.offset,
                 },
               ],
             }),
@@ -289,7 +307,10 @@ export function createRepairObservationService(options: ObservationServiceOption
         upserts.push(op);
       }
       if (ops.length > 0) anyRecords = true;
-      if (!read.exhausted) sourcesExhausted = false;
+      if (!read.exhausted) {
+        sourcesExhausted = false;
+        hasMore = true;
+      }
       watermarks.push({
         sourceId: source.sourceId,
         generation: read.generation,
