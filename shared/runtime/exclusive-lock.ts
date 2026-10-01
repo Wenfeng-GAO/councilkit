@@ -1,16 +1,8 @@
-import {
-  constants,
-  type Stats,
-  closeSync,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { chmodSync, unlinkSync } from "node:fs";
+import { createRequire } from "node:module";
+import type { DatabaseSync } from "node:sqlite";
 
-const NO_PID_LOCK_STALE_MS = 5_000;
+const require = createRequire(import.meta.url);
 
 export class LockBusyError extends Error {
   constructor() {
@@ -19,74 +11,77 @@ export class LockBusyError extends Error {
   }
 }
 
-export function acquireExclusiveLock(lockPath: string): number {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+export interface ExclusiveLock {
+  release(): void;
+}
+
+export function acquireExclusiveLock(lockPath: string): ExclusiveLock {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let db: DatabaseSync | undefined;
     try {
-      const fd = openSync(
-        lockPath,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-        0o600,
-      );
-      try {
-        writeSync(fd, `${process.pid}\n`);
-        fsyncSync(fd);
-      } catch (error) {
-        closeSync(fd);
-        try {
-          unlinkSync(lockPath);
-        } catch {}
-        throw error;
-      }
-      return fd;
+      db = openLockDatabase(lockPath);
+      chmodSync(lockPath, 0o600);
+      db.exec("BEGIN EXCLUSIVE");
+      return {
+        release() {
+          try {
+            db?.exec("ROLLBACK");
+          } catch {}
+          try {
+            db?.close();
+          } catch {}
+        },
+      };
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ELOOP") {
+      try {
+        db?.close();
+      } catch {}
+      if (isDatabaseLocked(error)) throw new LockBusyError();
+      if (attempt === 0 && isNotDatabase(error)) {
         try {
           unlinkSync(lockPath);
         } catch {}
         continue;
       }
-      if (code !== "EEXIST") throw error;
-      if (!staleExclusiveLock(lockPath)) throw new LockBusyError();
-      try {
-        unlinkSync(lockPath);
-      } catch {}
+      throw error;
     }
   }
   throw new LockBusyError();
 }
 
-export function releaseExclusiveLock(lockPath: string, fd: number): void {
+function openLockDatabase(lockPath: string): DatabaseSync {
+  const restore = suppressSqliteExperimentalWarning();
   try {
-    closeSync(fd);
-  } catch {}
-  try {
-    unlinkSync(lockPath);
-  } catch {}
+    const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+    return new DatabaseSync(lockPath);
+  } finally {
+    restore();
+  }
 }
 
-function staleExclusiveLock(lockPath: string): boolean {
-  let stat: Stats;
-  try {
-    stat = lstatSync(lockPath);
-  } catch {
-    return false;
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) return true;
-  let text = "";
-  try {
-    text = readFileSync(lockPath, "utf8").trim();
-  } catch {
-    return false;
-  }
-  const pid = Number(text);
-  if (Number.isInteger(pid) && pid > 0) {
-    try {
-      process.kill(pid, 0);
-      return false;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== "EPERM";
-    }
-  }
-  return Date.now() - stat.mtimeMs >= NO_PID_LOCK_STALE_MS;
+function suppressSqliteExperimentalWarning(): () => void {
+  const original = process.emitWarning;
+  process.emitWarning = ((warning: unknown, ...args: unknown[]) => {
+    const message =
+      typeof warning === "string"
+        ? warning
+        : warning instanceof Error
+          ? warning.message
+          : String(warning);
+    if (message.includes("SQLite")) return;
+    return original.call(process, warning as never, ...(args as never[]));
+  }) as typeof process.emitWarning;
+  return () => {
+    process.emitWarning = original;
+  };
+}
+
+function isDatabaseLocked(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return /database is locked|SQLITE_BUSY/i.test(message);
+}
+
+function isNotDatabase(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return /not a database/i.test(message);
 }
