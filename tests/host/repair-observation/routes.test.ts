@@ -435,6 +435,61 @@ describe("host repair observation routes (no listen)", () => {
     expect(seen).toEqual(["alpha", "early-marker", "late-marker"]);
   });
 
+  it("opens detail for an event that sits before the cold tail", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const pad = "x".repeat(16 * 1024);
+    const early = JSON.stringify({
+      type: "tool.completed",
+      callId: "c0",
+      name: "shell",
+      summary: "row-0",
+      output: `ONLY_EARLY_${"e".repeat(40)}`,
+      role: "coder",
+      at: "2026-09-22T06:00:01Z",
+    });
+    const rest = Array.from({ length: 40 }, (_, index) =>
+      JSON.stringify({
+        type: "tool.started",
+        callId: `c${index + 1}`,
+        name: "shell",
+        summary: `row-${index + 1}`,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+        pad,
+      }),
+    );
+    writeFileSync(join(taskDir, "orchestrator.log"), `${early}\n${rest.join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const list = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    const detail = routes.find((r) => r.pattern.endsWith("/repair/events/:eventId"));
+    if (!list || !detail) throw new Error("missing observation routes");
+    const page = async (cursor: string | null) =>
+      (await list.handler(
+        ctx({
+          round: "current",
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+    const first = await page(null);
+    expect(first.upserts.map((row) => row.summary)).not.toContain("row-0");
+    expect(first.earlierCursor).not.toBeNull();
+    let earlier = first.earlierCursor;
+    let earlyEvent: RepairObservation["upserts"][number] | undefined;
+    for (let guard = 0; earlier && guard < 30 && !earlyEvent; guard += 1) {
+      const data = await page(earlier);
+      earlyEvent = data.upserts.find((row) => row.summary.startsWith("row-0"));
+      earlier = data.earlierCursor;
+    }
+    expect(earlyEvent?.eventId).toMatch(/^evt_/);
+    if (!earlyEvent) throw new Error("missing earlier event");
+    const body = (await detail.handler(
+      ctx({}, { runId: RUN_ID, eventId: earlyEvent.eventId }),
+    )) as { availability: string; body: string; reasons: string[] };
+    expect(body.availability).toBe("available");
+    expect(body.body).toBe(early);
+    expect(body.reasons).toEqual([]);
+  });
+
   it("opens detail for an event that arrives after the first page", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const lines = Array.from({ length: 201 }, (_, index) =>
