@@ -98,10 +98,21 @@ export function extractAggregatorVerdict(
   markdown: string | null | undefined,
 ): RepairGateReview["aggregatorVerdict"] {
   if (!markdown) return null;
-  const match = /\b(approve|changes-requested|comment)\b/.exec(markdown);
-  if (match?.[1] === "approve" || match?.[1] === "changes-requested" || match?.[1] === "comment") {
-    return match[1];
+  const text = markdown.replace(/\r\n/g, "\n");
+  const heading = /^## 结论[^\S\n]*$/m.exec(text);
+  if (heading?.index === undefined) return null;
+  const after = text.slice(heading.index + heading[0].length).replace(/^\n+/, "");
+  const next = /^## /m.exec(after);
+  const body = next?.index === undefined ? after : after.slice(0, next.index);
+  for (const line of body.split("\n")) {
+    const bare = asVerdict(line.trim());
+    if (bare) return bare;
   }
+  return asVerdict(/\b(approve|changes-requested|comment)\b/.exec(body)?.[1]);
+}
+
+function asVerdict(value: string | undefined): RepairGateReview["aggregatorVerdict"] {
+  if (value === "approve" || value === "changes-requested" || value === "comment") return value;
   return null;
 }
 

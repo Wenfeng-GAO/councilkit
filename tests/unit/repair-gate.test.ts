@@ -196,6 +196,15 @@ describe("evaluateRepairGate", () => {
     expect(extractAggregatorVerdict("# Autonomous Review Report\n\n## 结论\n\ncomment\n")).toBe(
       "comment",
     );
+    expect(extractAggregatorVerdict("席位给出 approve。\n\n## 分歧\n\nchanges-requested\n")).toBe(
+      null,
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不能 approve。\n\nchanges-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(
+      extractAggregatorVerdict("## 结论\n\n最终 changes-requested，因为账本还有阻塞。\n"),
+    ).toBe("changes-requested");
 
     const clearedGate = evaluateRepairGate(
       baseInput({
