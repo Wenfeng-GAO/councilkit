@@ -149,6 +149,49 @@ describe("source-reader bounded reads (U06/U07)", () => {
     expect(replaced.reset).toBe(true);
     expect(replaced.records[0]?.text).toBe("b");
   });
+
+  it("pages forward by utf-8 byte offsets", () => {
+    const path = join(dir, "utf8.jsonl");
+    const line1 = `${JSON.stringify({ type: "text", text: "中文" })}\n`;
+    const line2 = `${JSON.stringify({ type: "text", text: "next" })}\n`;
+    const line3 = `${JSON.stringify({ type: "text", text: "tail" })}\n`;
+    writeFileSync(path, `${line1}${line2}${line3}`);
+    const page = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: null,
+      fromOffset: 0,
+      receivedAt: "t",
+      limitRecords: 1,
+      direction: "forward",
+    });
+    expect(page.records.map((row) => row.text)).toEqual(["中文"]);
+    expect(page.records[0]?.byteOffset).toBe(0);
+    expect(page.nextOffset).toBe(Buffer.byteLength(line1));
+    expect(page.exhausted).toBe(false);
+
+    const rest = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: page.generation,
+      fromOffset: page.nextOffset,
+      receivedAt: "t2",
+      limitRecords: 10,
+      direction: "forward",
+    });
+    expect(rest.reset).toBe(false);
+    expect(rest.records.map((row) => row.text)).toEqual(["next", "tail"]);
+    expect(rest.records[0]?.byteOffset).toBe(Buffer.byteLength(line1));
+    expect(rest.records[1]?.byteOffset).toBe(Buffer.byteLength(`${line1}${line2}`));
+    expect(rest.nextOffset).toBe(Buffer.byteLength(`${line1}${line2}${line3}`));
+    expect(rest.exhausted).toBe(true);
+  });
 });
 
 describe("resolver trusted roots", () => {
