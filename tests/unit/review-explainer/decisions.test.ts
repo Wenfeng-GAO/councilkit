@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -112,4 +112,54 @@ describe("A04 applyFindingDecision", () => {
     ).toThrow();
     expect(readFileSync(file, "utf8")).toBe(before);
   });
+
+  it("records the decision when a previous holder died and left the lock", async () => {
+    const { apply, read } = await api();
+    const root = mkdtempSync(join(tmpdir(), "ck-explainer-stale-lock-"));
+    roots.push(root);
+    const file = join(root, "decisions.json");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, `${deadPid()}\n`);
+    const saved = apply({
+      file,
+      findingId: FINDING.busy,
+      decision: DECISION.willFix,
+      expectedRevision: 0,
+    });
+    expect(saved.items[FINDING.busy]?.decision).toBe(DECISION.willFix);
+    expect(saved.revision).toBe(1);
+    expect(read(file).items[FINDING.busy]?.decision).toBe(DECISION.willFix);
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it("records the decision when a crash left an empty lock behind", async () => {
+    const { apply } = await api();
+    const root = mkdtempSync(join(tmpdir(), "ck-explainer-empty-lock-"));
+    roots.push(root);
+    const file = join(root, "decisions.json");
+    const lock = `${file}.lock`;
+    writeFileSync(lock, "");
+    const stale = new Date(Date.now() - 60_000);
+    utimesSync(lock, stale, stale);
+    const saved = apply({
+      file,
+      findingId: FINDING.stale,
+      decision: DECISION.wontFix,
+      expectedRevision: 0,
+    });
+    expect(saved.items[FINDING.stale]?.decision).toBe(DECISION.wontFix);
+    expect(existsSync(lock)).toBe(false);
+    expect(existsSync(file)).toBe(true);
+  });
 });
+
+function deadPid(): number {
+  for (let pid = 1_000_000_000; pid < 1_000_000_100; pid += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return pid;
+    }
+  }
+  throw new Error("could not find an unused pid for the stale-lock fixture");
+}
