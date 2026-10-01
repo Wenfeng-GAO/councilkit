@@ -813,6 +813,25 @@ export function prependEarlierOperations(
   return [...older, ...existing];
 }
 
+export function mergeObservedOperations(
+  existing: RepairOperation[],
+  incoming: RepairOperation[],
+): RepairOperation[] {
+  const incomingById = new Map(incoming.map((op) => [op.operationId, op]));
+  const seen = new Set<string>();
+  const merged: RepairOperation[] = [];
+  for (const op of existing) {
+    seen.add(op.operationId);
+    merged.push(incomingById.get(op.operationId) ?? op);
+  }
+  for (const op of incoming) {
+    if (seen.has(op.operationId)) continue;
+    seen.add(op.operationId);
+    merged.push(op);
+  }
+  return merged;
+}
+
 export function applyUiWindow(
   ops: RepairOperation[],
   visibleCount: number,

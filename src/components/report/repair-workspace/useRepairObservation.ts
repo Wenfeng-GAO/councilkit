@@ -10,6 +10,7 @@ import {
   countNewOperations,
   isStaleRequest,
   markUnfinishedTools,
+  mergeObservedOperations,
   nextPollDelayMs,
   prependEarlierOperations,
 } from "@shared/runtime/repair-observation";
@@ -84,12 +85,8 @@ export function useRepairObservation(input: {
         knownOpsRef.current = new Set(upserts.map((op) => op.operationId));
         return { ...next, upserts };
       }
-      const byId = new Map(prev.upserts.map((op) => [op.operationId, op]));
-      for (const op of next.upserts) byId.set(op.operationId, op);
       const merged = markUnfinishedTools(
-        [...byId.values()].sort((a, b) =>
-          a.receivedAt < b.receivedAt ? -1 : a.receivedAt > b.receivedAt ? 1 : 0,
-        ),
+        mergeObservedOperations(prev.upserts, next.upserts),
         nowMs,
       );
       if (!pinnedRef.current && !applyBuffer) {
