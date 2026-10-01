@@ -131,6 +131,8 @@ export function readSourceWindow(input: {
   };
 }
 
+const READ_CHUNK = 64 * 1024;
+
 function readForward(
   fd: number,
   start: number,
@@ -151,45 +153,20 @@ function readForward(
   isolatedOversize: number;
   incompleteTail: boolean;
 } {
-  const length = Math.max(0, end - start);
-  const buf = Buffer.alloc(length);
-  const bytesRead = readSync(fd, buf, 0, length, start);
-  const slice = buf.subarray(0, bytesRead);
   const records: RawSourceRecord[] = [];
   let partialBadLines = 0;
   let isolatedOversize = 0;
   let incompleteTail = false;
-  let byteCursor = 0;
+  let pos = start;
+  let carry = Buffer.alloc(0);
+  let skippingPartial = dropPartialFirst && start > 0;
+  let countedOversize = false;
+  let committed = start;
 
-  if (dropPartialFirst && start > 0) {
-    const firstNl = slice.indexOf(0x0a);
-    if (firstNl === -1) {
-      return {
-        records: [],
-        nextOffset: start,
-        partialBadLines: 0,
-        isolatedOversize: 0,
-        incompleteTail: true,
-      };
-    }
-    byteCursor = firstNl + 1;
-  }
-
-  let committed = byteCursor;
-  while (byteCursor < slice.length && records.length < limitRecords) {
-    const nl = slice.indexOf(0x0a, byteCursor);
-    if (nl === -1) {
-      incompleteTail = true;
-      break;
-    }
-    const lineBuf = slice.subarray(byteCursor, nl);
-    const absoluteOffset = start + byteCursor;
-    committed = nl + 1;
-    byteCursor = nl + 1;
-
+  const accept = (lineBuf: Buffer, lineStart: number) => {
     if (lineBuf.length > REPAIR_OBS_LINE_ISOLATE) {
       isolatedOversize += 1;
-      continue;
+      return;
     }
     const parsed = parsePublicSourceLine(lineBuf.toString("utf8"), {
       sourceId: meta.sourceId,
@@ -197,24 +174,81 @@ function readForward(
       executionRef: meta.executionRef,
       round: meta.round,
       roleKey: meta.roleKey,
-      byteOffset: absoluteOffset,
+      byteOffset: lineStart,
       receivedAt: meta.receivedAt,
     });
-    if (parsed === "skip") continue;
+    if (parsed === "skip") return;
     if (parsed === "bad") {
       partialBadLines += 1;
-      continue;
+      return;
     }
     if (parsed.text) parsed.text = redactObservationText(parsed.text);
     if (parsed.summary) parsed.summary = redactObservationText(parsed.summary);
     if (parsed.detail) parsed.detail = redactObservationText(parsed.detail);
     if (parsed.path) parsed.path = redactObservationText(parsed.path);
     records.push(parsed);
+  };
+
+  while (pos < end && records.length < limitRecords) {
+    const want = Math.min(READ_CHUNK, end - pos);
+    const buf = Buffer.alloc(want);
+    const n = readSync(fd, buf, 0, want, pos);
+    if (n <= 0) break;
+    const chunk = buf.subarray(0, n);
+    const data = carry.length === 0 ? chunk : Buffer.concat([carry, chunk]);
+    const dataStart = pos - carry.length;
+    pos += n;
+    carry = Buffer.alloc(0);
+
+    let cursor = 0;
+    if (skippingPartial) {
+      const nl = data.indexOf(0x0a);
+      if (nl === -1) {
+        if (data.length > REPAIR_OBS_LINE_ISOLATE) {
+          if (!countedOversize) {
+            isolatedOversize += 1;
+            countedOversize = true;
+          }
+        } else {
+          carry = Buffer.from(data);
+        }
+        continue;
+      }
+      cursor = nl + 1;
+      skippingPartial = false;
+      countedOversize = false;
+      committed = dataStart + cursor;
+    }
+
+    while (cursor < data.length && records.length < limitRecords) {
+      const nl = data.indexOf(0x0a, cursor);
+      if (nl === -1) break;
+      accept(data.subarray(cursor, nl), dataStart + cursor);
+      cursor = nl + 1;
+      committed = dataStart + cursor;
+    }
+
+    if (records.length >= limitRecords) break;
+
+    const rest = data.subarray(cursor);
+    if (rest.length > REPAIR_OBS_LINE_ISOLATE) {
+      if (!countedOversize) {
+        isolatedOversize += 1;
+        countedOversize = true;
+      }
+      skippingPartial = true;
+    } else if (rest.length > 0) {
+      carry = Buffer.from(rest);
+    }
+  }
+
+  if (records.length < limitRecords && (carry.length > 0 || skippingPartial)) {
+    incompleteTail = true;
   }
 
   return {
     records,
-    nextOffset: start + committed,
+    nextOffset: committed,
     partialBadLines,
     isolatedOversize,
     incompleteTail,
