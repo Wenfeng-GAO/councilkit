@@ -224,6 +224,18 @@ describe("source-reader bounded reads (U06/U07)", () => {
     const third = readDetailChunk({ path, byteOffset: 0, cursorOffset: 8, chunkSize: 4 });
     expect(third).toEqual({ body: "89", nextCursor: null, truncated: false });
   });
+
+  it("pages a multibyte event line without splitting a character", () => {
+    const path = join(dir, "utf8-detail.jsonl");
+    const payload = "中中中";
+    writeFileSync(path, `${payload}\nNEXT\n`);
+    const first = readDetailChunk({ path, byteOffset: 0, cursorOffset: 0, chunkSize: 4 });
+    expect(first).toEqual({ body: "中", nextCursor: "3", truncated: true });
+    const second = readDetailChunk({ path, byteOffset: 0, cursorOffset: 3, chunkSize: 4 });
+    expect(second).toEqual({ body: "中", nextCursor: "6", truncated: true });
+    const third = readDetailChunk({ path, byteOffset: 0, cursorOffset: 6, chunkSize: 4 });
+    expect(third).toEqual({ body: "中", nextCursor: null, truncated: false });
+  });
 });
 
 describe("resolver trusted roots", () => {
