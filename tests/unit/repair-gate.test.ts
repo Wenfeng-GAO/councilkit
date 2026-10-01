@@ -1,5 +1,5 @@
 import type { LedgerFinding } from "@shared/runtime/cli-ledger";
-import { evaluateRepairGate } from "@shared/runtime/repair-gate";
+import { evaluateRepairGate, extractAggregatorVerdict } from "@shared/runtime/repair-gate";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
 import { describe, expect, it } from "vitest";
 
@@ -162,5 +162,72 @@ describe("evaluateRepairGate", () => {
     );
     expect(result.passed).toBe(false);
     expect(result.reasons.map((row) => row.code)).toContain("verdict_contradiction");
+  });
+
+  it("uses the conclusion token when earlier sections quote a different reviewer verdict", () => {
+    const markdown = (overview: string, conclusion: string) =>
+      [
+        "# Autonomous Review Report",
+        "",
+        "- Status: complete",
+        "",
+        "---",
+        "",
+        "## 概览",
+        "",
+        overview,
+        "",
+        "## 分歧",
+        "",
+        "- review-security 给 approve，其余三位给 changes-requested。",
+        "",
+        "## 结论",
+        "",
+        conclusion,
+        "",
+        "## 附录:各审查者交付物",
+        "",
+        "comment",
+      ].join("\n");
+    const cleared = markdown("四位成功审查者均给出 `changes-requested`。", "approve");
+    const blocked = markdown("有席位给出 approve。", "changes-requested");
+    expect(extractAggregatorVerdict(cleared)).toBe("approve");
+    expect(extractAggregatorVerdict(blocked)).toBe("changes-requested");
+    expect(extractAggregatorVerdict("# Autonomous Review Report\n\n## 结论\n\ncomment\n")).toBe(
+      "comment",
+    );
+    expect(extractAggregatorVerdict("席位给出 approve。\n\n## 分歧\n\nchanges-requested\n")).toBe(
+      null,
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不能 approve。\n\nchanges-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(
+      extractAggregatorVerdict("## 结论\n\n最终 changes-requested，因为账本还有阻塞。\n"),
+    ).toBe("changes-requested");
+
+    const clearedGate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(cleared),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(clearedGate.passed).toBe(true);
+    expect(clearedGate.reasons).toEqual([]);
+
+    const blockedGate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(blocked),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(blockedGate.passed).toBe(false);
+    expect(blockedGate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
 });
