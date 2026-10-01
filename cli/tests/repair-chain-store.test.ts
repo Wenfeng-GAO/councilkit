@@ -64,7 +64,7 @@ describe("repair chain store identity and locked budget", () => {
       parentRunId: "ck-repair-1",
       nowMs: 10,
     });
-    writeFileSync(`${chainPath(created.chain.chainId)}.lock`, `${deadPid()}\n`);
+    writeFileSync(`${chainPath(created.chain.chainId)}.lock`, "");
     const used = consumeLockedSourceFix(created.chain.chainId, 11);
     expect(used.ok).toBe(true);
     if (used.ok) expect(used.budget.sourceFixUsed).toBe(1);
@@ -159,14 +159,3 @@ describe("production gate wrapper", () => {
     );
   });
 });
-
-function deadPid(): number {
-  for (let pid = 1_000_000_000; pid < 1_000_000_100; pid += 1) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return pid;
-    }
-  }
-  throw new Error("could not find an unused pid for the stale-lock fixture");
-}

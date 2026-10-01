@@ -115,13 +115,35 @@ describe("A04 applyFindingDecision", () => {
     expect(readFileSync(file, "utf8")).toBe(before);
   });
 
-  it("records the decision when a previous holder died and left the lock", async () => {
-    const { apply, read } = await api();
+  it("leaves a non-database lock file in place and does not write the decision", async () => {
+    const { apply } = await api();
     const root = mkdtempSync(join(tmpdir(), "ck-explainer-stale-lock-"));
     roots.push(root);
     const file = join(root, "decisions.json");
     const lock = `${file}.lock`;
-    writeFileSync(lock, `${deadPid()}\n`);
+    const body = `${deadPid()}\n`;
+    writeFileSync(lock, body);
+    expect(() =>
+      apply({
+        file,
+        findingId: FINDING.busy,
+        decision: DECISION.willFix,
+        expectedRevision: 0,
+      }),
+    ).toThrow(/not a database|storage write failure/i);
+    expect(existsSync(file)).toBe(false);
+    expect(readFileSync(lock, "utf8")).toBe(body);
+  });
+
+  it("records the decision when a previous holder died and left the lock", async () => {
+    const { apply, read } = await api();
+    const root = mkdtempSync(join(tmpdir(), "ck-explainer-dead-holder-"));
+    roots.push(root);
+    const file = join(root, "decisions.json");
+    const holder = startLockHolder(`${file}.lock`);
+    expect(await holder.finished).toBe("held");
+    holder.child.kill("SIGKILL");
+    await holder.exited;
     const saved = apply({
       file,
       findingId: FINDING.busy,

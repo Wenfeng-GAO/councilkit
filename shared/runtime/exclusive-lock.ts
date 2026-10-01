@@ -1,4 +1,4 @@
-import { chmodSync, unlinkSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -16,37 +16,28 @@ export interface ExclusiveLock {
 }
 
 export function acquireExclusiveLock(lockPath: string): ExclusiveLock {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let db: DatabaseSync | undefined;
-    try {
-      db = openLockDatabase(lockPath);
-      chmodSync(lockPath, 0o600);
-      db.exec("BEGIN EXCLUSIVE");
-      return {
-        release() {
-          try {
-            db?.exec("ROLLBACK");
-          } catch {}
-          try {
-            db?.close();
-          } catch {}
-        },
-      };
-    } catch (error) {
-      try {
-        db?.close();
-      } catch {}
-      if (isDatabaseLocked(error)) throw new LockBusyError();
-      if (attempt === 0 && isNotDatabase(error)) {
+  let db: DatabaseSync | undefined;
+  try {
+    db = openLockDatabase(lockPath);
+    chmodSync(lockPath, 0o600);
+    db.exec("BEGIN EXCLUSIVE");
+    return {
+      release() {
         try {
-          unlinkSync(lockPath);
+          db?.exec("ROLLBACK");
         } catch {}
-        continue;
-      }
-      throw error;
-    }
+        try {
+          db?.close();
+        } catch {}
+      },
+    };
+  } catch (error) {
+    try {
+      db?.close();
+    } catch {}
+    if (isDatabaseLocked(error)) throw new LockBusyError();
+    throw error;
   }
-  throw new LockBusyError();
 }
 
 function openLockDatabase(lockPath: string): DatabaseSync {
@@ -79,9 +70,4 @@ function suppressSqliteExperimentalWarning(): () => void {
 function isDatabaseLocked(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return /database is locked|SQLITE_BUSY/i.test(message);
-}
-
-function isNotDatabase(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : "";
-  return /not a database/i.test(message);
 }
