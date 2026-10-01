@@ -151,6 +151,59 @@ describe("liveStateFromRecords", () => {
     ]);
   });
 
+  it("keeps a willRetry failure in flight until the run finishes", () => {
+    const retrying = liveStateFromRecords([
+      started,
+      {
+        kind: "attempt.finished",
+        attemptId: "attempt-0",
+        status: "success",
+        durationMs: 10,
+        output: "seat-a done",
+      },
+      {
+        kind: "attempt.finished",
+        attemptId: "attempt-1",
+        status: "failure",
+        durationMs: 5_000,
+        output: null,
+        willRetry: true,
+        failure: { code: "EXIT", message: "non-zero exit 1" },
+      },
+    ]);
+    expect(retrying?.status).toBe("running");
+    expect(retrying?.progress.phase).toBe("attempts");
+    expect(retrying?.progress.attempts.map((row) => row.status)).toEqual([
+      "success",
+      "running",
+      "pending",
+    ]);
+    expect(retrying?.progress.attempts[1]?.durationMs).toBeNull();
+    expect(retrying?.progress.attempts[1]?.result).toBeUndefined();
+
+    const settled = liveStateFromRecords([
+      started,
+      {
+        kind: "attempt.finished",
+        attemptId: "attempt-0",
+        status: "success",
+        durationMs: 10,
+      },
+      {
+        kind: "attempt.finished",
+        attemptId: "attempt-1",
+        status: "failure",
+        durationMs: 5_000,
+        willRetry: true,
+      },
+      { kind: "review.finished", status: "failed" },
+    ]);
+    expect(settled?.status).toBe("failed");
+    expect(settled?.progress.phase).toBe("done");
+    expect(settled?.progress.attempts[1]?.status).toBe("failure");
+    expect(settled?.progress.attempts[1]?.durationMs).toBe(5_000);
+  });
+
   it("marks the run completed from review.finished", () => {
     const live = liveStateFromRecords([
       started,
