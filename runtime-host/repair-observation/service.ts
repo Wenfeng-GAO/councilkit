@@ -41,6 +41,11 @@ export type ObservationServiceOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+function detailByteOffset(op: { detailRef: string | null }): number {
+  const fromRef = /^detail:(\d+)$/.exec(op.detailRef ?? "");
+  return fromRef?.[1] ? Number.parseInt(fromRef[1], 10) : 0;
+}
+
 function pinUnreadSource(path: string): { generation: string; offset: 0 } | null {
   try {
     const st = statSync(path);
@@ -523,9 +528,7 @@ export function createRepairObservationService(options: ObservationServiceOption
     let nextCursor: string | null = null;
     if (source && op.detailRef) {
       const cursorOffset = Number.parseInt(input.cursorRaw ?? "0", 10) || 0;
-      // Recover byte offset from operationId when callId was offset-based.
-      const offMatch = /\|off:(\d+)/.exec(op.operationId);
-      const byteOffset = offMatch ? Number.parseInt(offMatch[1]!, 10) : 0;
+      const byteOffset = detailByteOffset(op);
       const chunk = readDetailChunk({
         path: source.path,
         byteOffset,
