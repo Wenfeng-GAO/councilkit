@@ -736,6 +736,79 @@ describe("GET /api/v1/cli-runs/:runId/attempts/:attemptId/result", () => {
     expect(body.reusedFrom).toBeNull();
   });
 
+  it("keeps live polling open while the evidenced retry is still in flight", async () => {
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "success", { output: "seat-a", attemptNumber: 1 }),
+      finishedRecord("attempt-1", "failure", {
+        output: null,
+        attemptNumber: 1,
+        willRetry: true,
+        exitCode: 1,
+        durationMs: 5_000,
+        failure: { code: "EXIT", message: "non-zero exit 1" },
+      }),
+    ]);
+    const liveDir = join(home, "runs", RUN_ID, "live");
+    mkdirSync(liveDir, { recursive: true });
+    writeFileSync(
+      join(liveDir, "attempt-1.jsonl"),
+      `${JSON.stringify({ seq: 1, at: "t1", type: "text.delta", text: "retrying" })}\n`,
+    );
+    host = await boot();
+
+    const detailRes = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}`, {
+      headers: authedHeaders(host),
+    });
+    expect(detailRes.status).toBe(200);
+    const detail = (await detailRes.json()) as {
+      ok: true;
+      data: {
+        status: string;
+        progress: {
+          phase: string;
+          attempts: Array<{ attemptId: string; status: string }>;
+        } | null;
+      };
+    };
+    expect(detail.data.status).toBe("running");
+    expect(detail.data.progress?.phase).toBe("attempts");
+    expect(
+      detail.data.progress?.attempts.find((row) => row.attemptId === "attempt-1")?.status,
+    ).toBe("running");
+
+    const liveRes = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-1/live`,
+      { headers: authedHeaders(host) },
+    );
+    expect(liveRes.status).toBe(200);
+    const live = (await liveRes.json()) as {
+      ok: true;
+      data: { events: Array<{ seq: number }>; nextSeq: number; done: boolean };
+    };
+    expect(live.data.events.map((event) => event.seq)).toEqual([1]);
+    expect(live.data.nextSeq).toBe(1);
+    expect(live.data.done).toBe(false);
+
+    seedTranscript([
+      startedRecord(),
+      finishedRecord("attempt-0", "success", { output: "seat-a", attemptNumber: 1 }),
+      finishedRecord("attempt-1", "failure", {
+        output: null,
+        attemptNumber: 1,
+        exitCode: 1,
+        durationMs: 3_000,
+        failure: { code: "EXIT", message: "authentication failed" },
+      }),
+    ]);
+    const closed = await fetch(
+      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-1/live`,
+      { headers: authedHeaders(host) },
+    );
+    const closedBody = (await closed.json()) as { ok: true; data: { done: boolean } };
+    expect(closedBody.data.done).toBe(true);
+  });
+
   it("reports the evidenced in-flight retry window only when the record carries willRetry", async () => {
     seedTranscript([
       startedRecord(),
