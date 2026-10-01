@@ -214,7 +214,12 @@ export function liveStateFromRecords(
   } | null = null;
   const finished = new Map<
     string,
-    { status: "success" | "failure"; durationMs: number; result: CliRunAttemptResult }
+    {
+      status: "success" | "failure";
+      durationMs: number;
+      result: CliRunAttemptResult;
+      willRetry: boolean;
+    }
   >();
   let aggregation: {
     status: "success" | "failure";
@@ -281,7 +286,12 @@ export function liveStateFromRecords(
       if (attemptId.length === 0 || status === null) continue;
       const durationMs = typeof row.durationMs === "number" ? row.durationMs : 0;
       const output = typeof row.output === "string" ? row.output : null;
-      finished.set(attemptId, { status, durationMs, result: summarizeSeatOutput(output) });
+      finished.set(attemptId, {
+        status,
+        durationMs,
+        result: summarizeSeatOutput(output),
+        willRetry: row.willRetry === true,
+      });
     } else if (kind === "review.resumed") {
       const rerun = Array.isArray(row.rerunAttemptIds) ? row.rerunAttemptIds : [];
       for (const id of rerun) {
@@ -310,13 +320,16 @@ export function liveStateFromRecords(
 
   const attemptRows: CliRunAttemptProgress[] = started.attempts.map((meta) => {
     const done = finished.get(meta.attemptId);
+    // willRetry is the runner's proof that this failure is not the current
+    // execution. While the run can still append, the seat is that retry.
+    const retrying = done?.willRetry === true && !sawFinished;
     return {
       ...meta,
       role: "attempt",
-      status: done?.status ?? "queued",
-      durationMs: done?.durationMs ?? null,
+      status: retrying ? "running" : (done?.status ?? "queued"),
+      durationMs: retrying ? null : (done?.durationMs ?? null),
       lastActivity: null,
-      ...(done?.result ? { result: done.result } : {}),
+      ...(done?.result && !retrying ? { result: done.result } : {}),
     };
   });
   const attemptTerminal = attemptRows.every(
