@@ -112,7 +112,7 @@ export function extractAggregatorVerdict(
 }
 
 const NEGATION_BEFORE =
-  /(?:不能|不要|不可|不应|不是|并非|并未|并不|没有|未|not|no|don'?t|cannot|can'?t)\s*$/i;
+  /(?:(?:不能|不要|不可|不应|不是|并非|并未|并不|没有|未)[^\n。！？!?]{0,6}|(?:^|[^A-Za-z])(?:not|no|don'?t|cannot|can'?t)(?:\s+[A-Za-z]+){0,2})\s*$/i;
 
 function verdictInProse(body: string): RepairGateReview["aggregatorVerdict"] {
   for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/g)) {
