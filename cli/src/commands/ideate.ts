@@ -57,7 +57,7 @@ import { atomicWriteFile } from "../store/atomic-write";
 import { ensureRunDir, resolvePaths } from "../store/paths";
 import type { AgentRecord } from "../store/schemas";
 import { Store } from "../store/store";
-import { parseFlags, parseJsonFlag, parseNonNegativeIntFlag, parseTimeoutMs } from "./parse";
+import { parseFlags, parseIntFlag, parseJsonFlag, parseNonNegativeIntFlag, parseTimeoutMs } from "./parse";
 
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 300 * 1000;
 const DEFAULT_RUN_TIMEOUT_MS = 1800 * 1000;
@@ -116,6 +116,8 @@ export async function runIdeate(argv: string[], out: OutputSink, deps: IdeateDep
   const debateRounds =
     debateRoundsRaw === undefined ? 1 : parseNonNegativeIntFlag(debateRoundsRaw as string, "debate-rounds");
   if (debateRounds > 2) throw errors.usage("--debate-rounds must be 0, 1, or 2");
+  const concurrency =
+    values.concurrency === undefined ? 10 : parseIntFlag(values.concurrency as string, "concurrency");
 
   const hasModels = values.models !== undefined;
   const hasCouncil = values.council !== undefined;
@@ -165,8 +167,6 @@ export async function runIdeate(argv: string[], out: OutputSink, deps: IdeateDep
     DEFAULT_RUN_TIMEOUT_MS,
     "run-timeout",
   );
-  const concurrency =
-    values.concurrency === undefined ? 10 : Number.parseInt(String(values.concurrency), 10);
   const assigned = typeof values["run-id"] === "string" ? values["run-id"].trim() : undefined;
   if (assigned !== undefined && !RUN_ID_RE.test(assigned)) {
     throw errors.usage(`--run-id must be a ck-ideate-<uuid> run id, got "${assigned}"`);
@@ -401,7 +401,7 @@ export async function runIdeate(argv: string[], out: OutputSink, deps: IdeateDep
   if (proposalSpecs.length > 0 && !shouldStop(controller, now, deadline)) {
     const wave = await runAttempts(proposalSpecs, {
       timeoutMs: budget(),
-      concurrency: Number.isFinite(concurrency) && concurrency > 0 ? concurrency : 10,
+      concurrency,
       signal: controller.signal,
       spawnImpl: deps.spawnImpl,
       timers: deps.timers,
