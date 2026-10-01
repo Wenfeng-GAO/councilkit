@@ -216,6 +216,38 @@ describe("host repair observation routes (no listen)", () => {
     }
   });
 
+  it("does not drop a later source when an earlier source fills the page", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const line = (summary: string, callId: string) =>
+      `${JSON.stringify({
+        type: "tool.started",
+        callId,
+        name: "shell",
+        summary,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      })}\n`;
+    writeFileSync(join(taskDir, "orchestrator.log"), `${line("alpha", "a1")}${line("beta", "a2")}`);
+    writeFileSync(join(taskDir, "coder.jsonl"), line("gamma", "b1"));
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 3; page += 1) {
+      const data = (await route.handler(
+        ctx({
+          round: "current",
+          limit: "1",
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+      seen.push(...data.upserts.map((row) => row.summary));
+      cursor = data.nextCursor;
+    }
+    expect(seen).toEqual(["alpha", "beta", "gamma"]);
+  });
+
   it("returns redacted observation and clamps limit", async () => {
     const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
     const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));

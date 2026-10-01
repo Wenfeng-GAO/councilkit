@@ -149,6 +149,85 @@ describe("source-reader bounded reads (U06/U07)", () => {
     expect(replaced.reset).toBe(true);
     expect(replaced.records[0]?.text).toBe("b");
   });
+
+  it("resumes at the next unread line when the page limit cuts a forward read", () => {
+    const path = join(dir, "page.jsonl");
+    const line1 = `${JSON.stringify({ type: "text", text: "one" })}\n`;
+    const line2 = `${JSON.stringify({ type: "text", text: "two" })}\n`;
+    const line3 = `${JSON.stringify({ type: "text", text: "three" })}\n`;
+    writeFileSync(path, `${line1}${line2}${line3}`);
+    const first = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: null,
+      fromOffset: 0,
+      receivedAt: "t",
+      limitRecords: 1,
+      direction: "forward",
+    });
+    expect(first.records.map((row) => row.text)).toEqual(["one"]);
+    expect(first.nextOffset).toBe(Buffer.byteLength(line1));
+    expect(first.exhausted).toBe(false);
+
+    const second = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: first.generation,
+      fromOffset: first.nextOffset,
+      receivedAt: "t2",
+      limitRecords: 1,
+      direction: "forward",
+    });
+    expect(second.records.map((row) => row.text)).toEqual(["two"]);
+    expect(second.nextOffset).toBe(Buffer.byteLength(`${line1}${line2}`));
+    expect(second.partialBadLines).toBe(0);
+
+    const third = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: second.generation,
+      fromOffset: second.nextOffset,
+      receivedAt: "t3",
+      limitRecords: 1,
+      direction: "forward",
+    });
+    expect(third.records.map((row) => row.text)).toEqual(["three"]);
+    expect(third.nextOffset).toBe(Buffer.byteLength(`${line1}${line2}${line3}`));
+    expect(third.exhausted).toBe(true);
+  });
+
+  it("stores the byte offset of the line after non-ascii text", () => {
+    const path = join(dir, "utf8.jsonl");
+    const line1 = `${JSON.stringify({ type: "text", text: "你" })}\n`;
+    const line2 = `${JSON.stringify({ type: "text", text: "next" })}\n`;
+    writeFileSync(path, `${line1}${line2}`);
+    const read = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: null,
+      fromOffset: 0,
+      receivedAt: "t",
+      limitRecords: 10,
+      direction: "forward",
+    });
+    expect(read.records.map((row) => row.text)).toEqual(["你", "next"]);
+    expect(read.records[1]?.byteOffset).toBe(Buffer.byteLength(line1));
+    expect(read.nextOffset).toBe(Buffer.byteLength(`${line1}${line2}`));
+    expect(read.exhausted).toBe(true);
+    expect(read.partialBadLines).toBe(0);
+  });
 });
 
 describe("resolver trusted roots", () => {
