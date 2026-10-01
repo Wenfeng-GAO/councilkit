@@ -490,6 +490,59 @@ describe("host repair observation routes (no listen)", () => {
     expect(body.reasons).toEqual([]);
   });
 
+  it("opens detail for an event on a round that is not current", async () => {
+    const oldDir = join(home, "squad-tasks", "task-old");
+    mkdirSync(oldDir, { recursive: true });
+    const line = JSON.stringify({
+      type: "tool.completed",
+      callId: "old-1",
+      name: "shell",
+      summary: "round-1-row",
+      output: "ONLY_ROUND_1",
+      role: "coder",
+      at: "2026-09-22T05:00:01Z",
+    });
+    writeFileSync(join(oldDir, "orchestrator.log"), `${line}\n`);
+    const currentDir = join(home, "squad-tasks", "task-1");
+    patchRun({
+      cycles: [
+        {
+          n: 1,
+          phase: "done",
+          childReviewId: null,
+          squadTaskId: "task-old",
+          squadTaskDir: oldDir,
+        },
+        {
+          n: 2,
+          phase: "active",
+          childReviewId: null,
+          squadTaskId: "task-1",
+          squadTaskDir: currentDir,
+        },
+      ],
+    });
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const list = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    const detail = routes.find((r) => r.pattern.endsWith("/repair/events/:eventId"));
+    if (!list || !detail) throw new Error("missing observation routes");
+    const past = (await list.handler(ctx({ round: "1" }))) as RepairObservation;
+    const event = past.upserts.find((row) => row.summary.startsWith("round-1-row"));
+    expect(event?.eventId).toMatch(/^evt_/);
+    if (!event) throw new Error("missing round 1 event");
+    const current = (await detail.handler(
+      ctx({}, { runId: RUN_ID, eventId: event.eventId }),
+    )) as { availability: string; body: string };
+    expect(current.availability).toBe("unavailable");
+    expect(current.body).toBe("");
+    const body = (await detail.handler(
+      ctx({ round: "1" }, { runId: RUN_ID, eventId: event.eventId }),
+    )) as { availability: string; body: string; reasons: string[] };
+    expect(body.availability).toBe("available");
+    expect(body.body).toBe(line);
+    expect(body.reasons).toEqual([]);
+  });
+
   it("opens detail for an event that arrives after the first page", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const lines = Array.from({ length: 201 }, (_, index) =>
