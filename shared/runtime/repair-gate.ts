@@ -108,7 +108,20 @@ export function extractAggregatorVerdict(
     const bare = asVerdict(line.trim());
     if (bare) return bare;
   }
-  return asVerdict(/\b(approve|changes-requested|comment)\b/.exec(body)?.[1]);
+  return verdictInProse(body);
+}
+
+const NEGATION_BEFORE =
+  /(?:不能|不要|不可|不应|不是|并非|并未|并不|没有|未|not|no|don'?t|cannot|can'?t)\s*$/i;
+
+function verdictInProse(body: string): RepairGateReview["aggregatorVerdict"] {
+  for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/g)) {
+    const index = match.index ?? 0;
+    const before = body.slice(Math.max(0, index - 16), index).replace(/[`"*]/g, "");
+    if (NEGATION_BEFORE.test(before)) continue;
+    return asVerdict(match[1]);
+  }
+  return null;
 }
 
 function asVerdict(value: string | undefined): RepairGateReview["aggregatorVerdict"] {
