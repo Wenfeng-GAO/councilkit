@@ -98,7 +98,7 @@ export function readSourceWindow(input: {
       // Cold mid-file tails may start inside a line; committed cursors are
       // always on a line boundary and must not drop the next complete record.
       const dropPartialFirst = coldTail && start > 0;
-      const result = readForward(fd, start, st.size, input, dropPartialFirst);
+      const result = readForward(fd, start, st.size, input, dropPartialFirst, input.limitRecords);
       records.push(...result.records);
       partialBadLines += result.partialBadLines;
       isolatedOversize += result.isolatedOversize;
@@ -107,7 +107,7 @@ export function readSourceWindow(input: {
     } else {
       const end = input.fromOffset ?? st.size;
       const start = Math.max(0, end - INITIAL_TAIL_BYTES);
-      const result = readForward(fd, start, end, input, start > 0);
+      const result = readForward(fd, start, end, input, start > 0, Number.POSITIVE_INFINITY);
       records.push(...result.records);
       partialBadLines += result.partialBadLines;
       isolatedOversize += result.isolatedOversize;
@@ -143,6 +143,7 @@ function readForward(
     receivedAt: string;
   },
   dropPartialFirst: boolean,
+  limitRecords: number,
 ): {
   records: RawSourceRecord[];
   nextOffset: number;
@@ -154,16 +155,14 @@ function readForward(
   const buf = Buffer.alloc(length);
   const bytesRead = readSync(fd, buf, 0, length, start);
   const slice = buf.subarray(0, bytesRead);
-  const text = slice.toString("utf8");
   const records: RawSourceRecord[] = [];
   let partialBadLines = 0;
   let isolatedOversize = 0;
   let incompleteTail = false;
-  let committed = 0;
+  let byteCursor = 0;
 
-  let searchFrom = 0;
   if (dropPartialFirst && start > 0) {
-    const firstNl = text.indexOf("\n");
+    const firstNl = slice.indexOf(0x0a);
     if (firstNl === -1) {
       return {
         records: [],
@@ -173,28 +172,26 @@ function readForward(
         incompleteTail: true,
       };
     }
-    searchFrom = firstNl + 1;
-    committed = searchFrom;
+    byteCursor = firstNl + 1;
   }
 
-  let lineStart = searchFrom;
-  while (lineStart < text.length) {
-    const nl = text.indexOf("\n", lineStart);
+  let committed = byteCursor;
+  while (byteCursor < slice.length && records.length < limitRecords) {
+    const nl = slice.indexOf(0x0a, byteCursor);
     if (nl === -1) {
       incompleteTail = true;
       break;
     }
-    const line = text.slice(lineStart, nl);
-    const absoluteOffset = start + lineStart;
-    const lineBytes = Buffer.byteLength(line, "utf8");
+    const lineBuf = slice.subarray(byteCursor, nl);
+    const absoluteOffset = start + byteCursor;
     committed = nl + 1;
-    lineStart = nl + 1;
+    byteCursor = nl + 1;
 
-    if (lineBytes > REPAIR_OBS_LINE_ISOLATE) {
+    if (lineBuf.length > REPAIR_OBS_LINE_ISOLATE) {
       isolatedOversize += 1;
       continue;
     }
-    const parsed = parsePublicSourceLine(line, {
+    const parsed = parsePublicSourceLine(lineBuf.toString("utf8"), {
       sourceId: meta.sourceId,
       sourceGeneration: "pending",
       executionRef: meta.executionRef,
