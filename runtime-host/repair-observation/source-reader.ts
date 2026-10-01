@@ -264,18 +264,24 @@ export function readDetailChunk(input: {
   const fd = openSync(input.path, "r");
   try {
     const st = statSync(input.path);
-    const start = input.byteOffset + input.cursorOffset;
-    if (start >= st.size) return { body: "", nextCursor: null, truncated: false };
-    const size = Math.min(input.chunkSize, st.size - start);
+    const cursorOffset = input.cursorOffset > 0 ? input.cursorOffset : 0;
+    const start = input.byteOffset + cursorOffset;
+    const lineEndLimit = input.byteOffset + REPAIR_OBS_LINE_ISOLATE;
+    if (start >= st.size || start >= lineEndLimit) {
+      return { body: "", nextCursor: null, truncated: false };
+    }
+    const size = Math.min(input.chunkSize, st.size - start, lineEndLimit - start);
     const buf = Buffer.alloc(size);
     const n = readSync(fd, buf, 0, size, start);
-    const body = redactObservationText(buf.subarray(0, n).toString("utf8"));
-    const next = start + n;
-    const truncated = next < st.size;
+    const slice = buf.subarray(0, n);
+    const nl = slice.indexOf(0x0a);
+    const bodyBuf = nl === -1 ? slice : slice.subarray(0, nl);
+    const body = redactObservationText(bodyBuf.toString("utf8"));
+    const more = nl === -1 && start + n < Math.min(st.size, lineEndLimit);
     return {
       body,
-      nextCursor: truncated ? String(input.cursorOffset + n) : null,
-      truncated,
+      nextCursor: more ? String(cursorOffset + n) : null,
+      truncated: more,
     };
   } finally {
     closeSync(fd);

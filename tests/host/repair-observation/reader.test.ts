@@ -1,7 +1,7 @@
 import { mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readSourceWindow } from "@host/repair-observation/source-reader";
+import { readDetailChunk, readSourceWindow } from "@host/repair-observation/source-reader";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 let dir: string;
@@ -191,6 +191,38 @@ describe("source-reader bounded reads (U06/U07)", () => {
     expect(rest.records[1]?.byteOffset).toBe(Buffer.byteLength(`${line1}${line2}`));
     expect(rest.nextOffset).toBe(Buffer.byteLength(`${line1}${line2}${line3}`));
     expect(rest.exhausted).toBe(true);
+  });
+
+  it("keeps an event detail chunk inside its own line", () => {
+    const path = join(dir, "detail.jsonl");
+    const line = `${JSON.stringify({ type: "tool.completed", output: "ONLY_THIS" })}\n`;
+    const next = `${JSON.stringify({ type: "tool.completed", output: "ONLY_NEXT" })}\n`;
+    writeFileSync(path, `${line}${next}`);
+    const chunk = readDetailChunk({
+      path,
+      byteOffset: 0,
+      cursorOffset: 0,
+      chunkSize: 64 * 1024,
+    });
+    expect(chunk).toEqual({
+      body: line.slice(0, -1),
+      nextCursor: null,
+      truncated: false,
+    });
+  });
+
+  it("pages a long event line without reading the following event", () => {
+    const path = join(dir, "long-detail.jsonl");
+    const payload = "0123456789";
+    const line = `${payload}\n`;
+    const next = "NEXT\n";
+    writeFileSync(path, `${line}${next}`);
+    const first = readDetailChunk({ path, byteOffset: 0, cursorOffset: 0, chunkSize: 4 });
+    expect(first).toEqual({ body: "0123", nextCursor: "4", truncated: true });
+    const second = readDetailChunk({ path, byteOffset: 0, cursorOffset: 4, chunkSize: 4 });
+    expect(second).toEqual({ body: "4567", nextCursor: "8", truncated: true });
+    const third = readDetailChunk({ path, byteOffset: 0, cursorOffset: 8, chunkSize: 4 });
+    expect(third).toEqual({ body: "89", nextCursor: null, truncated: false });
   });
 });
 

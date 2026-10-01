@@ -593,7 +593,7 @@ export function normalizeToolRecords(records: RawSourceRecord[]): RepairOperatio
       kind,
       status,
       summary: summary.length > 0 ? summary : kind,
-      detailRef: record.detail ? `detail:${operationId}` : null,
+      detailRef: record.detail ? `detail:${record.byteOffset}` : null,
       truncated: false,
     };
     byOp.set(operationId, mergeOperationRevision(byOp.get(operationId), next));
