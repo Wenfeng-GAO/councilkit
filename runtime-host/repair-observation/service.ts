@@ -326,12 +326,18 @@ export function createRepairObservationService(options: ObservationServiceOption
           watermarks: [{ sourceId: source.sourceId, generation: read.generation, offset: read.nextOffset }],
         }),
       });
-      if (read.nextOffset > 0) {
+      if (!earlierCursor && read.earlierOffset !== null) {
         earlierCursor = encodeObservationCursor({
           runId: input.runId,
           round,
           direction: "earlier",
-          watermarks: [{ sourceId: source.sourceId, generation: read.generation, offset: read.nextOffset }],
+          watermarks: [
+            {
+              sourceId: source.sourceId,
+              generation: read.generation,
+              offset: read.earlierOffset,
+            },
+          ],
         });
       }
     }

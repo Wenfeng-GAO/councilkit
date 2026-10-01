@@ -248,6 +248,88 @@ describe("host repair observation routes (no listen)", () => {
     expect(seen).toEqual(["alpha", "beta", "gamma"]);
   });
 
+  it("does not offer an earlier page when the log was read from byte zero", async () => {
+    const data = await observe();
+    expect(data.upserts).toHaveLength(1);
+    expect(data.hasMore).toBe(false);
+    expect(data.earlierCursor).toBeNull();
+  });
+
+  it("does not offer an earlier page when a leading newline precedes the only record", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const line = JSON.stringify({
+      type: "tool.started",
+      callId: "c1",
+      name: "shell",
+      summary: "only-row",
+      role: "coder",
+      at: "2026-09-22T06:00:01Z",
+    });
+    writeFileSync(join(taskDir, "orchestrator.log"), `\n${line}\n`);
+    const data = await observe();
+    expect(data.upserts.map((row) => row.summary)).toEqual(["only-row"]);
+    expect(data.hasMore).toBe(false);
+    expect(data.earlierCursor).toBeNull();
+  });
+
+  it("walks earlier pages back to the first row without repeating the cold tail", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const pad = "x".repeat(16 * 1024);
+    const lines = Array.from({ length: 40 }, (_, index) =>
+      JSON.stringify({
+        type: "tool.started",
+        callId: `c${index}`,
+        name: "shell",
+        summary: `row-${index}`,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+        pad,
+      }),
+    );
+    writeFileSync(join(taskDir, "orchestrator.log"), `${lines.join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const page = async (cursor: string | null) =>
+      (await route.handler(
+        ctx({
+          round: "current",
+          limit: "2",
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+
+    const first = await page(null);
+    const firstSummaries = first.upserts.map((row) => row.summary);
+    expect(firstSummaries).not.toContain("row-0");
+    expect(first.earlierCursor).not.toBeNull();
+
+    const earlierPages: string[][] = [];
+    let earlier = first.earlierCursor;
+    for (let guard = 0; earlier && guard < 30; guard += 1) {
+      const data = await page(earlier);
+      earlierPages.push(data.upserts.map((row) => row.summary));
+      earlier = data.earlierCursor;
+    }
+    expect(earlier).toBeNull();
+
+    const forward: string[] = [];
+    let cursor: string | null = first.nextCursor;
+    for (let guard = 0; cursor && guard < 30; guard += 1) {
+      const data = await page(cursor);
+      forward.push(...data.upserts.map((row) => row.summary));
+      if (!data.hasMore) break;
+      cursor = data.nextCursor;
+    }
+
+    const seen = [...earlierPages.flat(), ...firstSummaries, ...forward];
+    const overlap = earlierPages.flat().filter((row) => firstSummaries.includes(row));
+    expect(overlap).toEqual([]);
+    expect([...seen].sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)))).toEqual(
+      Array.from({ length: 40 }, (_, index) => `row-${index}`),
+    );
+  });
+
   it("keeps the start of a later source that is larger than the cold tail", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const line = (summary: string, callId: string) =>

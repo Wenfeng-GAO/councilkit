@@ -1,6 +1,6 @@
 import { activityPresentation, goalPresentation, phaseName } from "./presentation";
 import { IconInfo, IconX } from "./icons";
-import { filterOperations } from "@shared/runtime/repair-observation";
+import { earlierControlCount, filterOperations } from "@shared/runtime/repair-observation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RepairActivity } from "./RepairActivity";
 import { RepairEventDrawer } from "./RepairEventDrawer";
@@ -367,13 +367,10 @@ export function RepairWorkspace({
               operations={filteredWindow}
               roles={obs.observation?.roles ?? []}
               executionEnded={ended}
-              hiddenCount={
-                obs.windowed.hiddenCount > 0 ||
-                obs.observation?.hasMore ||
-                obs.observation?.earlierCursor
-                  ? Math.max(obs.windowed.hiddenCount, 1)
-                  : 0
-              }
+              hiddenCount={earlierControlCount(
+                obs.windowed.hiddenCount,
+                obs.observation?.earlierCursor ?? null,
+              )}
               newCount={obs.reading.newCount}
               pinned={obs.reading.pinned}
               emptyReason={vm.emptyReason}

@@ -4,6 +4,8 @@ import {
   REPAIR_OBS_PROCESS_FRESH_MS,
   REPAIR_OBS_SILENCE_MS,
   applyUiWindow,
+  earlierControlCount,
+  prependEarlierOperations,
   buildEventId,
   buildOperationId,
   countNewOperations,
@@ -310,6 +312,42 @@ describe("U08 window and cache", () => {
     const window = applyUiWindow(ops, 200);
     expect(window.window.length).toBeLessThanOrEqual(200);
     expect(window.hiddenCount).toBeGreaterThan(0);
+  });
+
+  it("offers an earlier control for an unread prefix and not for a fully shown short log", () => {
+    expect(earlierControlCount(0, null)).toBe(0);
+    expect(earlierControlCount(0, "prefix")).toBe(1);
+    expect(earlierControlCount(12, null)).toBe(12);
+    expect(earlierControlCount(12, "prefix")).toBe(12);
+  });
+
+  it("keeps an earlier page ahead of rows loaded later", () => {
+    const existing = [
+      baseOp({
+        operationId: "tail",
+        eventId: "evt-tail",
+        receivedAt: "2026-09-22T06:00:01Z",
+        summary: "tail",
+      }),
+    ];
+    const page = [
+      baseOp({
+        operationId: "head",
+        eventId: "evt-head",
+        receivedAt: "2026-09-22T06:00:05Z",
+        summary: "head",
+      }),
+      baseOp({
+        operationId: "tail",
+        eventId: "evt-tail-again",
+        receivedAt: "2026-09-22T06:00:05Z",
+        summary: "tail-again",
+      }),
+    ];
+    expect(prependEarlierOperations(existing, page).map((op) => op.summary)).toEqual([
+      "head",
+      "tail",
+    ]);
   });
 });
 
