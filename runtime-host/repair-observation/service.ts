@@ -234,6 +234,30 @@ export function createRepairObservationService(options: ObservationServiceOption
       const prev = decoded.ok
         ? decoded.cursor.watermarks.find((w) => w.sourceId === source.sourceId)
         : undefined;
+      const room = limit - upserts.length;
+      if (room <= 0) {
+        hasMore = true;
+        sourcesExhausted = false;
+        if (prev) {
+          watermarks.push({
+            sourceId: source.sourceId,
+            generation: prev.generation,
+            cursor: encodeObservationCursor({
+              runId: input.runId,
+              round,
+              direction: "forward",
+              watermarks: [
+                {
+                  sourceId: source.sourceId,
+                  generation: prev.generation,
+                  offset: prev.offset,
+                },
+              ],
+            }),
+          });
+        }
+        continue;
+      }
       const read = readSourceWindow({
         path: source.path,
         sourceId: source.sourceId,
@@ -243,7 +267,7 @@ export function createRepairObservationService(options: ObservationServiceOption
         expectedGeneration: prev?.generation ?? null,
         fromOffset: reset ? null : (prev?.offset ?? null),
         receivedAt: now.toISOString(),
-        limitRecords: limit,
+        limitRecords: room,
         direction: decoded.ok && !reset ? decoded.cursor.direction : "forward",
       });
       if (read.reset) reset = true;
