@@ -1,6 +1,8 @@
 import {
   REPAIR_OBS_PIN_THRESHOLD_PX,
   REPAIR_OBS_POLL_MS,
+  REPAIR_OBS_UI_MAX_ROWS,
+  REPAIR_OBS_UI_WINDOW,
   type RepairEvidence,
   type RepairObservation,
   type RepairOperation,
@@ -66,6 +68,9 @@ export function useRepairObservation(input: {
   const bufferRef = useRef<RepairOperation[]>([]);
   const readingRoundRef = useRef<number | "current">("current");
   const observationDoneRef = useRef(false);
+  const hiddenCountRef = useRef(0);
+  const earlierCursorRef = useRef<string | null>(null);
+  const loadingEarlierRef = useRef(false);
 
   pinnedRef.current = reading.pinned;
   readingRoundRef.current = reading.round;
@@ -94,6 +99,7 @@ export function useRepairObservation(input: {
         return {
           ...next,
           upserts: merged,
+          earlierCursor: prev.earlierCursor,
         };
       }
       knownOpsRef.current = new Set(merged.map((op) => op.operationId));
@@ -101,6 +107,7 @@ export function useRepairObservation(input: {
       return {
         ...next,
         upserts: merged,
+        earlierCursor: prev.earlierCursor,
         task: {
           ...next.task,
           lastActivityAt: laterTimestamp(next.task.lastActivityAt, prev.task.lastActivityAt),
@@ -120,6 +127,7 @@ export function useRepairObservation(input: {
     failuresRef.current = 0;
     inFlightRef.current = false;
     observationDoneRef.current = false;
+    loadingEarlierRef.current = false;
     setObservation(null);
     setEvidence(null);
     setConnectionLost(false);
@@ -260,22 +268,64 @@ export function useRepairObservation(input: {
     bufferRef.current = [];
   }, []);
 
+  const windowed = applyUiWindow(observation?.upserts ?? [], visibleCount);
+  hiddenCountRef.current = windowed.hiddenCount;
+  earlierCursorRef.current = observation?.earlierCursor ?? null;
+
   const loadEarlier = useCallback(() => {
     const scroller = input.getScroller();
     const first = scroller?.querySelector<HTMLElement>("[data-testid^='repair-activity-row-']");
     const anchorId = first?.getAttribute("data-event-id");
     const offset = first ? first.getBoundingClientRect().top : 0;
-    setVisibleCount((n) => Math.min(400, n + 200));
-    window.requestAnimationFrame(() => {
-      if (!anchorId || !scroller) return;
-      const node = scroller.querySelector<HTMLElement>(`[data-event-id='${anchorId}']`);
-      if (!node) return;
-      const delta = node.getBoundingClientRect().top - offset;
-      scroller.scrollTop += delta;
-    });
-  }, [input.getScroller]);
-
-  const windowed = applyUiWindow(observation?.upserts ?? [], visibleCount);
+    const restore = () => {
+      window.requestAnimationFrame(() => {
+        if (!anchorId || !scroller) return;
+        const node = scroller.querySelector<HTMLElement>(`[data-event-id='${anchorId}']`);
+        if (!node) return;
+        const delta = node.getBoundingClientRect().top - offset;
+        scroller.scrollTop += delta;
+      });
+    };
+    const prefix = earlierCursorRef.current;
+    if (hiddenCountRef.current > 0 || !prefix || loadingEarlierRef.current) {
+      setVisibleCount((n) => Math.min(REPAIR_OBS_UI_MAX_ROWS, n + REPAIR_OBS_UI_WINDOW));
+      restore();
+      return;
+    }
+    const seq = requestSeqRef.current;
+    loadingEarlierRef.current = true;
+    void (async () => {
+      try {
+        const data = await fetchRepairObservation({
+          runId: input.runId,
+          round: readingRoundRef.current,
+          cursor: prefix,
+        });
+        if (seq !== requestSeqRef.current) return;
+        setObservation((prev) => {
+          if (!prev) return prev;
+          const byId = new Map(prev.upserts.map((op) => [op.operationId, op]));
+          for (const op of data.upserts) {
+            if (!byId.has(op.operationId)) byId.set(op.operationId, op);
+          }
+          const upserts = markUnfinishedTools(
+            [...byId.values()].sort((a, b) =>
+              a.receivedAt < b.receivedAt ? -1 : a.receivedAt > b.receivedAt ? 1 : 0,
+            ),
+            Date.parse(data.serverTime),
+          );
+          return { ...prev, upserts, earlierCursor: data.earlierCursor };
+        });
+        setVisibleCount((n) => Math.min(REPAIR_OBS_UI_MAX_ROWS, n + REPAIR_OBS_UI_WINDOW));
+        restore();
+      } catch (err) {
+        if (seq !== requestSeqRef.current) return;
+        setError(err instanceof Error ? err.message : "观察读取失败");
+      } finally {
+        if (seq === requestSeqRef.current) loadingEarlierRef.current = false;
+      }
+    })();
+  }, [input.getScroller, input.runId]);
 
   const downloadEvidence = useCallback(
     async (format: "json" | "md") => {

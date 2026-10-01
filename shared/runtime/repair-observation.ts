@@ -799,6 +799,11 @@ export function countNewOperations(
   return { count, ids };
 }
 
+export function earlierControlCount(loadedHidden: number, earlierCursor: string | null): number {
+  if (loadedHidden > 0) return loadedHidden;
+  return earlierCursor === null ? 0 : 1;
+}
+
 export function applyUiWindow(
   ops: RepairOperation[],
   visibleCount: number,

@@ -4,6 +4,7 @@ import {
   REPAIR_OBS_PROCESS_FRESH_MS,
   REPAIR_OBS_SILENCE_MS,
   applyUiWindow,
+  earlierControlCount,
   buildEventId,
   buildOperationId,
   countNewOperations,
@@ -310,6 +311,13 @@ describe("U08 window and cache", () => {
     const window = applyUiWindow(ops, 200);
     expect(window.window.length).toBeLessThanOrEqual(200);
     expect(window.hiddenCount).toBeGreaterThan(0);
+  });
+
+  it("offers an earlier control for an unread prefix and not for a fully shown short log", () => {
+    expect(earlierControlCount(0, null)).toBe(0);
+    expect(earlierControlCount(0, "prefix")).toBe(1);
+    expect(earlierControlCount(12, null)).toBe(12);
+    expect(earlierControlCount(12, "prefix")).toBe(12);
   });
 });
 
