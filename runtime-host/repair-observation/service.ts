@@ -8,6 +8,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import {
+  REPAIR_OBS_CURSOR_MAX,
   REPAIR_OBS_DETAIL_CHUNK,
   REPAIR_OBS_PAGE_LIMIT,
   REPAIR_OBS_SCHEMA_VERSION,
@@ -60,6 +61,36 @@ function pinUnreadSource(path: string): { generation: string; offset: 0 } | null
   } catch {
     return null;
   }
+}
+
+function encodeEarlierCursor(
+  runId: string,
+  round: number,
+  marks: Array<{ sourceId: string; generation: string; offset: number }>,
+): string | null {
+  const pending = marks.filter((mark) => mark.offset > 0);
+  while (pending.length > 0) {
+    const cursor = {
+      runId,
+      round,
+      direction: "earlier" as const,
+      watermarks: pending.map((mark) => ({ ...mark })),
+    };
+    const json = JSON.stringify(cursor);
+    // decodeObservationCursor limits the base64 cursor, which is longer than this JSON.
+    if (
+      json.length <= REPAIR_OBS_CURSOR_MAX &&
+      base64UrlEncodeLength(json) <= REPAIR_OBS_CURSOR_MAX
+    ) {
+      return encodeObservationCursor(cursor);
+    }
+    pending.pop();
+  }
+  return null;
+}
+
+function base64UrlEncodeLength(json: string): number {
+  return 4 * Math.ceil(Buffer.byteLength(json) / 3);
 }
 
 function clampLimit(raw: string | null): number {
@@ -248,6 +279,7 @@ export function createRepairObservationService(options: ObservationServiceOption
 
     const upserts: RepairOperation[] = [];
     const watermarks: RepairObservation["sourceWatermarks"] = [];
+    const earlierMarks: Array<{ sourceId: string; generation: string; offset: number }> = [];
     let hasMore = false;
     let earlierCursor: string | null = null;
     let sourcesExhausted = true;
@@ -258,6 +290,7 @@ export function createRepairObservationService(options: ObservationServiceOption
       const prev = decoded.ok
         ? decoded.cursor.watermarks.find((w) => w.sourceId === source.sourceId)
         : undefined;
+      const direction = decoded.ok && !reset ? decoded.cursor.direction : "forward";
       const room = limit - upserts.length;
       if (room <= 0) {
         hasMore = true;
@@ -281,8 +314,16 @@ export function createRepairObservationService(options: ObservationServiceOption
             }),
           });
         }
+        if (direction === "earlier" && prev && prev.offset > 0) {
+          earlierMarks.push({
+            sourceId: source.sourceId,
+            generation: prev.generation,
+            offset: prev.offset,
+          });
+        }
         continue;
       }
+      if (direction === "earlier" && !prev) continue;
       const read = readSourceWindow({
         path: source.path,
         sourceId: source.sourceId,
@@ -293,7 +334,7 @@ export function createRepairObservationService(options: ObservationServiceOption
         fromOffset: reset ? null : (prev?.offset ?? null),
         receivedAt: now.toISOString(),
         limitRecords: room,
-        direction: decoded.ok && !reset ? decoded.cursor.direction : "forward",
+        direction,
       });
       if (read.reset) reset = true;
       if (read.unreadable) reasons.push("来源权限不足，部分记录不可读");
@@ -326,21 +367,16 @@ export function createRepairObservationService(options: ObservationServiceOption
           watermarks: [{ sourceId: source.sourceId, generation: read.generation, offset: read.nextOffset }],
         }),
       });
-      if (!earlierCursor && read.earlierOffset !== null) {
-        earlierCursor = encodeObservationCursor({
-          runId: input.runId,
-          round,
-          direction: "earlier",
-          watermarks: [
-            {
-              sourceId: source.sourceId,
-              generation: read.generation,
-              offset: read.earlierOffset,
-            },
-          ],
+      if (read.earlierOffset !== null) {
+        earlierMarks.push({
+          sourceId: source.sourceId,
+          generation: read.generation,
+          offset: read.earlierOffset,
         });
       }
     }
+
+    earlierCursor = encodeEarlierCursor(input.runId, round, earlierMarks);
 
     const { evidence, currentExecutionRef } = readProcessEvidence(resolved.sources);
     const terminal = resolved.state?.businessResult !== null && resolved.state?.businessResult !== undefined;
