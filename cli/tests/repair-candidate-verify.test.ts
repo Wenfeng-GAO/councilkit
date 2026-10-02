@@ -647,12 +647,33 @@ describe("candidate snapshot and verification cache", () => {
       ["jest-tests.log", "Tests:       1 failed, 4 passed, 5 total\n"],
       ["vitest-files.log", " Test Files  1 failed (1)\n"],
       ["vitest-tests.log", "      Tests  1 failed | 4 passed (5)\n"],
+      [
+        "pytest-summary.log",
+        [
+          "=================================== FAILURES ===================================",
+          "__________________________________ test_bar ___________________________________",
+          "E   AssertionError: boom",
+          "=========================== short test summary info ============================",
+          "FAILED test_foo.py::test_bar - AssertionError: boom",
+          "========================= 1 failed, 1 passed in 0.12s =========================",
+          "",
+        ].join("\n"),
+      ],
+      [
+        "pytest-count.log",
+        "========================= 1 failed, 1 passed in 0.12s =========================\n",
+      ],
+      ["pytest-failed-line.log", "FAILED test_foo.py::test_bar - AssertionError: boom\n"],
+      [
+        "pytest-color.log",
+        "\u001b[31mFAILED\u001b[0m test_foo.py::test_bar - AssertionError: boom\n",
+      ],
     ] as const;
     for (const [name, stdout] of failing) {
-      expect(evaluateVerificationAsset(receiptFor(name, stdout), "A1")).toEqual({
-        ok: false,
-        reason: "failing tests cannot prove pass",
-      });
+      expect([name, evaluateVerificationAsset(receiptFor(name, stdout), "A1")]).toEqual([
+        name,
+        { ok: false, reason: "failing tests cannot prove pass" },
+      ]);
     }
     const named = receiptFor(
       "named-fail.log",
@@ -679,6 +700,20 @@ describe("candidate snapshot and verification cache", () => {
       ].join("\n"),
     );
     expect(evaluateVerificationAsset(goJsonPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const pytestPass = receiptFor(
+      "pytest-pass.log",
+      [
+        "============================= test session starts ==============================",
+        "collected 1 item",
+        "",
+        "test_foo.py .                                                            [100%]",
+        "",
+        "============================== 1 passed in 0.01s ===============================",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(pytestPass, "A1")).toEqual({ ok: true, reason: "verified" });
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
