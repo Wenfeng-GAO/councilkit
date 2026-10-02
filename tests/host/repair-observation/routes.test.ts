@@ -396,9 +396,12 @@ describe("host repair observation routes (no listen)", () => {
     );
   });
 
-  it("pages earlier past an isolated line the backward search cannot align", async () => {
+  it.each([
+    REPAIR_OBS_LINE_ISOLATE + 1,
+    REPAIR_OBS_LINE_ISOLATE + 512 * 1024 + 64 * 1024,
+    2 * 1024 * 1024 + 512 * 1024,
+  ])("pages earlier past an isolated line of %i bytes", async (bodyLen) => {
     const taskDir = join(home, "squad-tasks", "task-1");
-    const suffixCount = 4;
     const line = (summary: string, callId: string) =>
       JSON.stringify({
         type: "tool.started",
@@ -408,13 +411,10 @@ describe("host repair observation routes (no listen)", () => {
         role: "coder",
         at: "2026-09-22T06:00:01Z",
       });
-    const oversize = "x".repeat(REPAIR_OBS_LINE_ISOLATE + 512 * 1024 + 64 * 1024);
-    const lines = [
-      line("prefix-0", "prefix"),
-      oversize,
-      ...Array.from({ length: suffixCount }, (_, index) => line(`suffix-${index}`, `s${index}`)),
-    ];
-    writeFileSync(join(taskDir, "orchestrator.log"), `${lines.join("\n")}\n`);
+    writeFileSync(
+      join(taskDir, "orchestrator.log"),
+      `${[line("prefix-0", "prefix"), "x".repeat(bodyLen), line("suffix-0", "suffix")].join("\n")}\n`,
+    );
     const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
     const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
     if (!route) throw new Error("missing observation route");
@@ -439,9 +439,7 @@ describe("host repair observation routes (no listen)", () => {
     }
 
     expect(guard).toBeLessThan(12);
-    expect([...seen].sort()).toEqual(
-      ["prefix-0", ...Array.from({ length: suffixCount }, (_, index) => `suffix-${index}`)].sort(),
-    );
+    expect([...seen].sort()).toEqual(["prefix-0", "suffix-0"]);
   });
 
   it("pages earlier rows of every cold-tailed source", async () => {
