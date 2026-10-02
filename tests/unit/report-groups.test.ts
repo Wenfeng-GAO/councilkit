@@ -365,4 +365,30 @@ changes-requested
     expect(diff.onlyA.map((item) => item.text)).toEqual(["文档示例带 id。"]);
     expect(diff.onlyB.map((item) => item.text)[0]).toContain("超大 chunk");
   });
+
+  it("keeps findings distinct when they share only the clause before a period", () => {
+    const report = (items: string) => `# Autonomous Review Report
+
+- Task: review PR https://example.com/p/1
+
+---
+
+## 共识发现
+
+${items}
+
+## 结论
+
+changes-requested
+`;
+    const parsedA = parseReviewReport(
+      report("- [major] Call foo.bar before close.\n- [major] Call foo.baz before close."),
+    );
+    const parsedB = parseReviewReport(report("- [major] Call foo.bar before close."));
+    if (parsedA === null || parsedB === null) throw new Error("expected both reports to parse");
+    const diff = diffFindings(flattenFindings(parsedA), flattenFindings(parsedB));
+    expect(diff.both.map((pair) => pair.a.text)).toEqual(["Call foo.bar before close."]);
+    expect(diff.onlyA.map((item) => item.text)).toEqual(["Call foo.baz before close."]);
+    expect(diff.onlyB).toEqual([]);
+  });
 });
