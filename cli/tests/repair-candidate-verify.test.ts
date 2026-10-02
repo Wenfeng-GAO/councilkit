@@ -157,7 +157,7 @@ describe("candidate snapshot and verification cache", () => {
     expect(receipt).toBeNull();
   });
 
-  it("does not treat an empty passing command log as proof that tests ran", () => {
+  it("accepts a silent exit-0 command whose log header is not command output", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-empty-"));
     homes.push(root);
     const sha = "d".repeat(40);
@@ -188,12 +188,9 @@ describe("candidate snapshot and verification cache", () => {
       cacheKey,
     });
     if (receipt === null) throw new Error("expected a receipt");
-    expect(receipt.receipts[0]?.ranZeroTests).toBe(true);
+    expect(receipt.receipts[0]?.ranZeroTests).toBe(false);
     expect(receipt.receipts[0]?.skipped).toBe(false);
-    expect(evaluateVerificationAsset(receipt, "A1")).toEqual({
-      ok: false,
-      reason: "zero tests or skipped tests cannot prove pass",
-    });
+    expect(evaluateVerificationAsset(receipt, "A1")).toEqual({ ok: true, reason: "verified" });
   });
 
   it("reads skip and pass evidence from the command output, not the log header", () => {
@@ -255,6 +252,34 @@ describe("candidate snapshot and verification cache", () => {
     if (skipped === null) throw new Error("expected a receipt");
     expect(skipped.receipts[0]?.skipped).toBe(true);
     expect(evaluateVerificationAsset(skipped, "A1").ok).toBe(false);
+
+    const zeroPath = join(root, "zero.log");
+    writeCommandLog(zeroPath, {
+      exitCode: 0,
+      stdout: "0 tests\n",
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey,
+      command: "go test ./ready",
+    });
+    const zero = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "go test ./ready",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "tests-v1",
+      logPath: zeroPath,
+      cacheKey,
+    });
+    if (zero === null) throw new Error("expected a receipt");
+    expect(zero.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(zero, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
