@@ -330,6 +330,69 @@ describe("host repair observation routes (no listen)", () => {
     );
   });
 
+  it("pages earlier past a line between the tail window and the isolate cap", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const suffixCount = 40;
+    const lines = [
+      JSON.stringify({
+        type: "tool.started",
+        callId: "prefix",
+        name: "shell",
+        summary: "prefix-0",
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      }),
+      JSON.stringify({
+        type: "tool.started",
+        callId: "big",
+        name: "shell",
+        summary: "BIG-LINE",
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+        pad: "x".repeat(600 * 1024),
+      }),
+      ...Array.from({ length: suffixCount }, (_, index) =>
+        JSON.stringify({
+          type: "tool.started",
+          callId: `s${index}`,
+          name: "shell",
+          summary: `suffix-${index}`,
+          role: "coder",
+          at: "2026-09-22T06:00:01Z",
+          pad: "y".repeat(20 * 1024),
+        }),
+      ),
+    ];
+    writeFileSync(join(taskDir, "orchestrator.log"), `${lines.join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const page = async (cursor: string | null) =>
+      (await route.handler(
+        ctx({
+          round: "current",
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    let guard = 0;
+    for (; guard < 12; guard += 1) {
+      const data = await page(cursor);
+      for (const row of data.upserts) {
+        if (row.summary) seen.add(row.summary);
+      }
+      if (!data.earlierCursor) break;
+      cursor = data.earlierCursor;
+    }
+
+    expect(guard).toBeLessThan(12);
+    expect([...seen].sort()).toEqual(
+      ["BIG-LINE", "prefix-0", ...Array.from({ length: suffixCount }, (_, index) => `suffix-${index}`)].sort(),
+    );
+  });
+
   it("pages earlier rows of every cold-tailed source", async () => {
     const taskDir = join(home, "squad-tasks", "task-1");
     const pad = "x".repeat(16 * 1024);
