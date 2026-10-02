@@ -3,6 +3,7 @@
  * Used by `councilkit apply`. Never shells out; argv is passed to spawn.
  */
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
 import { errors } from "../errors";
 import { findExecutable, resolveExecutable } from "./driver-commands";
@@ -39,6 +40,7 @@ export interface CheckedOutPr {
 }
 
 const DEFAULT_CMD_TIMEOUT_MS = 5 * 60 * 1000;
+const STDOUT_CAP_BYTES = 8 * 1024 * 1024;
 const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const GH_JSON_FIELDS =
@@ -63,10 +65,29 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
     : resolveExecutable(input.executable);
   return new Promise((resolve) => {
     let settled = false;
-    const finish = (result: RunCommandResult): void => {
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stdoutOverflow = false;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const finish = (partial: { exitCode: number | null; error?: string }): void => {
       if (settled) return;
       settled = true;
-      resolve(result);
+      if (stdoutOverflow && partial.error === undefined && partial.exitCode === 0) {
+        resolve({
+          stdout: "",
+          stderr,
+          exitCode: null,
+          error: `stdout exceeded ${STDOUT_CAP_BYTES} bytes; refusing a truncated capture`,
+        });
+        return;
+      }
+      resolve({
+        stdout: stdoutOverflow ? "" : stdout + stdoutDecoder.end(),
+        stderr,
+        exitCode: partial.exitCode,
+        ...(partial.error === undefined ? {} : { error: partial.error }),
+      });
     };
     let child: ReturnType<typeof spawn>;
     try {
@@ -78,18 +99,20 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
       });
     } catch (error) {
       finish({
-        stdout: "",
-        stderr: "",
         exitCode: null,
         error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
-    let stdout = "";
-    let stderr = "";
     child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-      if (stdout.length > 8 * 1024 * 1024) stdout = stdout.slice(-4 * 1024 * 1024);
+      if (stdoutOverflow) return;
+      if (stdoutBytes + chunk.length > STDOUT_CAP_BYTES) {
+        stdoutOverflow = true;
+        stdout = "";
+        return;
+      }
+      stdoutBytes += chunk.length;
+      stdout += stdoutDecoder.write(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
@@ -110,8 +133,6 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
       }, 1000);
       killFollowup.unref?.();
       finish({
-        stdout,
-        stderr,
         exitCode: null,
         error: `timed out after ${input.timeoutMs ?? DEFAULT_CMD_TIMEOUT_MS}ms`,
       });
@@ -120,15 +141,13 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
     child.on("error", (error) => {
       clearTimeout(timeout);
       finish({
-        stdout,
-        stderr,
         exitCode: null,
         error: error.message,
       });
     });
     child.on("close", (code) => {
       clearTimeout(timeout);
-      finish({ stdout, stderr, exitCode: code });
+      finish({ exitCode: code });
     });
   });
 }
