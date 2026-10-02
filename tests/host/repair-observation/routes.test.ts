@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repairObservationRoutes } from "@host/repair-observation/routes";
 import type { HostServices, RouteContext } from "@host/server";
-import type { RepairObservation } from "@shared/runtime/repair-observation";
+import {
+  REPAIR_OBS_LINE_ISOLATE,
+  type RepairObservation,
+} from "@shared/runtime/repair-observation";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const RUN_ID = "ck-repair-00000000-0000-4000-8000-000000000128";
@@ -390,6 +393,54 @@ describe("host repair observation routes (no listen)", () => {
     expect(guard).toBeLessThan(12);
     expect([...seen].sort()).toEqual(
       ["BIG-LINE", "prefix-0", ...Array.from({ length: suffixCount }, (_, index) => `suffix-${index}`)].sort(),
+    );
+  });
+
+  it("pages earlier past an isolated line the backward search cannot align", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const suffixCount = 4;
+    const line = (summary: string, callId: string) =>
+      JSON.stringify({
+        type: "tool.started",
+        callId,
+        name: "shell",
+        summary,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      });
+    const oversize = "x".repeat(REPAIR_OBS_LINE_ISOLATE + 512 * 1024 + 64 * 1024);
+    const lines = [
+      line("prefix-0", "prefix"),
+      oversize,
+      ...Array.from({ length: suffixCount }, (_, index) => line(`suffix-${index}`, `s${index}`)),
+    ];
+    writeFileSync(join(taskDir, "orchestrator.log"), `${lines.join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const page = async (cursor: string | null) =>
+      (await route.handler(
+        ctx({
+          round: "current",
+          ...(cursor ? { cursor } : {}),
+        }),
+      )) as RepairObservation;
+
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    let guard = 0;
+    for (; guard < 12; guard += 1) {
+      const data = await page(cursor);
+      for (const row of data.upserts) {
+        if (row.summary) seen.add(row.summary);
+      }
+      if (!data.earlierCursor) break;
+      cursor = data.earlierCursor;
+    }
+
+    expect(guard).toBeLessThan(12);
+    expect([...seen].sort()).toEqual(
+      ["prefix-0", ...Array.from({ length: suffixCount }, (_, index) => `suffix-${index}`)].sort(),
     );
   });
 
