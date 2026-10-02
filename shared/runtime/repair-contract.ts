@@ -229,10 +229,7 @@ export function interpretTestLog(
   const text = `${stdout}\n${stderr}`;
   const skipped = /\bSKIP(?:PED)?\b/i.test(text) || /\b\d+\s+skipped\b/i.test(text);
   const ranZeroTests =
-    stdout.trim().length === 0 ||
-    /\b0\s+tests?\b/i.test(text) ||
-    /\bno tests?\b/i.test(text) ||
-    /\bTest Files\s+0\b/i.test(text);
+    /\b0\s+tests?\b/i.test(text) || /\bno tests?\b/i.test(text) || /\bTest Files\s+0\b/i.test(text);
   return { skipped: skipped && exitCode === 0, ranZeroTests };
 }
 

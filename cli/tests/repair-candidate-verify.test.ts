@@ -157,6 +157,131 @@ describe("candidate snapshot and verification cache", () => {
     expect(receipt).toBeNull();
   });
 
+  it("accepts a silent exit-0 command whose log header is not command output", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-empty-"));
+    homes.push(root);
+    const sha = "d".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const logPath = join(root, "verify.log");
+    writeCommandLog(logPath, {
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey,
+      command: "go test ./skip",
+    });
+    const receipt = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "go test ./skip",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "tests-v1",
+      logPath,
+      cacheKey,
+    });
+    if (receipt === null) throw new Error("expected a receipt");
+    expect(receipt.receipts[0]?.ranZeroTests).toBe(false);
+    expect(receipt.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(receipt, "A1")).toEqual({ ok: true, reason: "verified" });
+  });
+
+  it("reads skip and pass evidence from the command output, not the log header", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-body-"));
+    homes.push(root);
+    const sha = "e".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const logPath = join(root, "verify.log");
+    writeCommandLog(logPath, {
+      exitCode: 0,
+      stdout: "ok  example.com/ready 0.02s\n",
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey,
+      command: "go test ./skip",
+    });
+    const passed = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "go test ./skip",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "tests-v1",
+      logPath,
+      cacheKey,
+    });
+    if (passed === null) throw new Error("expected a receipt");
+    expect(passed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(passed.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(passed, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const skippedPath = join(root, "skipped.log");
+    writeCommandLog(skippedPath, {
+      exitCode: 0,
+      stdout: "--- SKIP: TestReady\nok  example.com/ready 0.02s\n",
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey,
+      command: "go test ./ready",
+    });
+    const skipped = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "go test ./ready",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "tests-v1",
+      logPath: skippedPath,
+      cacheKey,
+    });
+    if (skipped === null) throw new Error("expected a receipt");
+    expect(skipped.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skipped, "A1").ok).toBe(false);
+
+    const zeroPath = join(root, "zero.log");
+    writeCommandLog(zeroPath, {
+      exitCode: 0,
+      stdout: "0 tests\n",
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey,
+      command: "go test ./ready",
+    });
+    const zero = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "go test ./ready",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "tests-v1",
+      logPath: zeroPath,
+      cacheKey,
+    });
+    if (zero === null) throw new Error("expected a receipt");
+    expect(zero.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(zero, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("measures dirtyTree after a command mutates tracked source", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-mut-"));
     homes.push(root);

@@ -271,10 +271,13 @@ export function parseCommandLogMetadata(log: string): {
   dirtyTree: boolean;
   cacheKey: string;
   command: string;
+  output: string;
 } | null {
   const header: Record<string, string> = {};
   const lines = log.split("\n");
-  for (const line of lines) {
+  let index = 0;
+  for (; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
     if (line === "---") break;
     const match = /^(exit|cwd|sha|dirty|cache|command)=(.*)$/.exec(line);
     if (!match) break;
@@ -288,6 +291,7 @@ export function parseCommandLogMetadata(log: string): {
   if (!Number.isInteger(exitCode) || !/^[0-9a-f]{40}$/.test(snapshotSha)) return null;
   if (!/^[a-f0-9]{64}$/.test(cacheKey) || cwd.length === 0) return null;
   if (header.dirty !== "0" && header.dirty !== "1") return null;
+  const output = lines[index] === "---" ? lines.slice(index + 1).join("\n") : "";
   return {
     exitCode,
     cwd,
@@ -295,6 +299,7 @@ export function parseCommandLogMetadata(log: string): {
     dirtyTree: header.dirty === "1",
     cacheKey,
     command,
+    output,
   };
 }
 
@@ -321,7 +326,7 @@ export function receiptFromIsolatedLog(input: {
   if (meta.cacheKey !== input.cacheKey) return null;
   if (meta.cwd !== input.cwd) return null;
   if (meta.command !== input.command) return null;
-  const interpreted = interpretTestLog(log, "", meta.exitCode);
+  const interpreted = interpretTestLog(meta.output, "", meta.exitCode);
   return {
     assertionId: input.assertionId,
     snapshotSha: meta.snapshotSha,
