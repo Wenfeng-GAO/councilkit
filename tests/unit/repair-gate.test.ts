@@ -1,3 +1,4 @@
+import { isBareVerdictLine } from "@shared/runtime/aggregator-verdict";
 import type { LedgerFinding } from "@shared/runtime/cli-ledger";
 import { evaluateRepairGate, extractAggregatorVerdict } from "@shared/runtime/repair-gate";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
@@ -339,6 +340,35 @@ describe("evaluateRepairGate", () => {
 
     const prose = "## 结论\n\nshouldn’t approve，维持 changes-requested。\n";
     expect(extractAggregatorVerdict(prose)).toBe("changes-requested");
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(prose),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
+
+  it("reads a capitalized conclusion token as that verdict", () => {
+    expect(extractAggregatorVerdict("## 结论\n\nChanges-requested\n")).toBe("changes-requested");
+    expect(extractAggregatorVerdict("## 结论\n\nApprove\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nCOMMENT\n")).toBe("comment");
+    expect(extractAggregatorVerdict("## 结论\n\n**Changes-requested**\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n最终 Changes-requested。\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不会 Approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nNevertheless Approve\n")).toBe("approve");
+    expect(isBareVerdictLine("Changes-requested")).toBe(true);
+    expect(isBareVerdictLine("不会 Approve")).toBe(false);
+
+    const prose = "## 结论\n\nChanges-requested\n";
     const gate = evaluateRepairGate(
       baseInput({
         review: {

@@ -10,6 +10,7 @@ import {
   splitH3Blocks,
 } from "@/lib/review-report";
 import { type SeatAttemptRef, matchSeatAttempt } from "@/lib/seat-inspector";
+import { isBareVerdictLine } from "@shared/runtime/aggregator-verdict";
 import { useEffect, useState } from "react";
 import "@/styles/report.css";
 
@@ -528,7 +529,7 @@ function VerdictBody({ body }: { body: string }) {
 function stripVerdictLine(body: string): string {
   return body
     .split("\n")
-    .filter((line) => !/^\s*(approve|changes-requested|comment)\s*$/.test(line))
+    .filter((line) => !isBareVerdictLine(line))
     .join("\n")
     .trim();
 }

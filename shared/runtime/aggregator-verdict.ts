@@ -19,7 +19,7 @@ const NEGATION_BEFORE =
   /(?:(?:不会|不再|不能|不要|不可|不应|不是|并非|并未|并不|没有|未)[^\n。！？!?，,；;、]{0,6}|不|(?:^|[^A-Za-z])(?:not|never|no|cannot|(?:ca|do|wo|should|would|could|does|did|must)n['\u2019]?t)(?:\s+[A-Za-z]+){0,2})\s*$/i;
 
 function verdictInProse(body: string): AggregatorVerdict {
-  for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/g)) {
+  for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/gi)) {
     const index = match.index ?? 0;
     const before = body.slice(Math.max(0, index - 16), index).replace(/[`"*]/g, "");
     if (NEGATION_BEFORE.test(before)) continue;
@@ -28,7 +28,12 @@ function verdictInProse(body: string): AggregatorVerdict {
   return null;
 }
 
+export function isBareVerdictLine(line: string): boolean {
+  return asVerdict(line.trim()) !== null;
+}
+
 function asVerdict(value: string | undefined): AggregatorVerdict {
-  if (value === "approve" || value === "changes-requested" || value === "comment") return value;
+  const token = value?.toLowerCase();
+  if (token === "approve" || token === "changes-requested" || token === "comment") return token;
   return null;
 }
