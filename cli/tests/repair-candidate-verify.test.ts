@@ -472,6 +472,59 @@ describe("candidate snapshot and verification cache", () => {
     expect(specSkip.receipts[0]?.skipped).toBe(true);
     expect(specSkip.receipts[0]?.ranZeroTests).toBe(false);
     expect(evaluateVerificationAsset(specSkip, "A1").ok).toBe(false);
+
+    const junitPass = receiptFor(
+      "junit-pass.log",
+      [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<testsuites>",
+        '\t<testcase name="a" time="0.000540" classname="test"/>',
+        "\t<!-- tests 1 -->",
+        "\t<!-- skipped 0 -->",
+        "</testsuites>",
+        "",
+      ].join("\n"),
+    );
+    expect(junitPass.receipts[0]?.skipped).toBe(false);
+    expect(junitPass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(junitPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const coloredPass = receiptFor(
+      "spec-color-pass.log",
+      "\u001b[34mℹ tests 1\u001b[39m\n\u001b[34mℹ skipped 0\u001b[39m\n",
+    );
+    expect(coloredPass.receipts[0]?.skipped).toBe(false);
+    expect(coloredPass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(coloredPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const junitEmpty = receiptFor(
+      "junit-empty.log",
+      [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<testsuites>",
+        "\t<!-- tests 0 -->",
+        "\t<!-- skipped 0 -->",
+        "</testsuites>",
+        "",
+      ].join("\n"),
+    );
+    expect(junitEmpty.receipts[0]?.skipped).toBe(false);
+    expect(junitEmpty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(junitEmpty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const coloredEmpty = receiptFor(
+      "spec-color-empty.log",
+      "\u001b[34mℹ tests 0\u001b[39m\n\u001b[34mℹ skipped 0\u001b[39m\n",
+    );
+    expect(coloredEmpty.receipts[0]?.skipped).toBe(false);
+    expect(coloredEmpty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(coloredEmpty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
