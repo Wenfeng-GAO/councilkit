@@ -267,4 +267,19 @@ describe("evaluateRepairGate", () => {
     expect(extractAggregatorVerdict("## 结论\n\n不仅安全，仍 approve\n")).toBe("approve");
     expect(extractAggregatorVerdict("## 结论\n\n不少人给出 approve\n")).toBe("approve");
   });
+
+  it("treats 不会, 不再, won't, and never before a verdict token as negation", () => {
+    expect(extractAggregatorVerdict("## 结论\n\n不会 approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不会 `approve`。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不会直接 approve。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不再 approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不会 approve，维持 changes-requested。\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nwon't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnever approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnever directly approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不会。最终 approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nnevertheless approve\n")).toBe("approve");
+  });
 });
