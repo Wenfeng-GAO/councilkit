@@ -74,6 +74,7 @@ export function readSourceWindow(input: {
   let incompleteTail = false;
   let nextOffset = 0;
   let scanStart = 0;
+  let windowAligned = true;
 
   let fd: number;
   try {
@@ -113,6 +114,7 @@ export function readSourceWindow(input: {
       const end = input.fromOffset ?? st.size;
       const window = earlierWindowStart(fd, end);
       const start = window.start;
+      windowAligned = window.aligned;
       scanStart = start;
       const result = readForward(fd, start, end, input, !window.aligned, Number.POSITIVE_INFINITY);
       records.push(...result.records);
@@ -134,10 +136,12 @@ export function readSourceWindow(input: {
   }
   const first = page[0];
   const droppedEarlierRecords = input.direction === "earlier" && records.length > page.length;
+  const isolatedLineResume = !windowAligned && scanStart > 0 ? scanStart : null;
   const earlierOffset =
-    first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
+    isolatedLineResume ??
+    (first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
       ? first.byteOffset
-      : null;
+      : null);
 
   return {
     records: page,
