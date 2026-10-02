@@ -634,6 +634,15 @@ describe("candidate snapshot and verification cache", () => {
       ["go-fail.log", "--- FAIL: TestReady (0.00s)\n"],
       ["go-status.log", "FAIL\n"],
       ["go-package-fail.log", "FAIL\texample.com/ready\t0.01s\n"],
+      [
+        "go-json.log",
+        [
+          '{"Action":"output","Package":"example.com/ready","Test":"TestReady","Output":"--- FAIL: TestReady (0.00s)\\n"}',
+          '{"Action":"fail","Package":"example.com/ready","Test":"TestReady","Elapsed":0}',
+          '{"Action":"fail","Package":"example.com/ready","Elapsed":0}',
+          "",
+        ].join("\n"),
+      ],
       ["jest-suites.log", "Test Suites: 1 failed, 1 total\n"],
       ["jest-tests.log", "Tests:       1 failed, 4 passed, 5 total\n"],
       ["vitest-files.log", " Test Files  1 failed (1)\n"],
@@ -659,6 +668,17 @@ describe("candidate snapshot and verification cache", () => {
       ].join("\n"),
     );
     expect(evaluateVerificationAsset(named, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const goJsonPass = receiptFor(
+      "go-json-pass.log",
+      [
+        '{"Action":"output","Package":"example.com/ready","Test":"TestReady","Output":"    ready_test.go:4: {\\"Action\\":\\"fail\\"}\\n"}',
+        '{"Action":"pass","Package":"example.com/ready","Test":"TestReady","Elapsed":0}',
+        '{"Action":"pass","Package":"example.com/ready","Elapsed":0}',
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(goJsonPass, "A1")).toEqual({ ok: true, reason: "verified" });
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
