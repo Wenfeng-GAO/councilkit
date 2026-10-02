@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type RunCommand,
   checkoutPullRequest,
+  defaultRunCommand,
   inspectPullRequest,
   parseApplyPrUrl,
   parseGitHubPrUrl,
@@ -319,5 +320,42 @@ describe("checkoutPullRequest command sequence", () => {
         PATH: process.env.PATH,
       }),
     ).rejects.toThrow(/baseRefName/);
+  });
+});
+
+describe("defaultRunCommand capture", () => {
+  it("returns a short command stdout unchanged", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "ck-run-cmd-"));
+    try {
+      const result = await defaultRunCommand({
+        executable: process.execPath,
+        argv: ["-e", "process.stdout.write('ok\\n')"],
+        cwd,
+        timeoutMs: 15_000,
+      });
+      expect(result).toEqual({ stdout: "ok\n", stderr: "", exitCode: 0 });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses an oversized stdout instead of returning its tail as success", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "ck-run-cmd-"));
+    try {
+      const result = await defaultRunCommand({
+        executable: process.execPath,
+        argv: [
+          "-e",
+          "process.stdout.write(Buffer.alloc(9 * 1024 * 1024, 0x61)); process.stdout.write('TAIL');",
+        ],
+        cwd,
+        timeoutMs: 20_000,
+      });
+      expect(result.exitCode).toBeNull();
+      expect(result.stdout).toBe("");
+      expect(result.error).toBe("stdout exceeded 8388608 bytes; refusing a truncated capture");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
