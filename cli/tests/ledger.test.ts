@@ -16,7 +16,7 @@ import {
   persistFindingsFromReport,
   resolveClusterCloses,
 } from "../src/auto/ledger";
-import type { LedgerFinding } from "../src/auto/ledger";
+import type { LedgerFinding, PlanCluster } from "../src/auto/ledger";
 import type { AttemptResult } from "../src/auto/runner";
 
 const SAMPLE = `# Autonomous Review Report
@@ -574,6 +574,63 @@ describe("independent finding verification", () => {
     )[0];
     expect(isFindingVerifiedClosed(illegalPeer, CANDIDATE_SHA)).toBe(false);
     expect(illegalPeer?.verification?.outcome).toBe("still_open");
+  });
+});
+
+function bareCluster(partial: Pick<PlanCluster, "mentions" | "body">): PlanCluster {
+  return {
+    id: "zzzz-cluster",
+    title: "zzzz-cluster",
+    closes: [],
+    files: [],
+    gates: [],
+    policy: "",
+    invariants: "",
+    forbidden: "",
+    tests: "",
+    ...partial,
+  };
+}
+
+describe("resolveClusterCloses finding ids", () => {
+  const findings = [
+    finding({ id: "F-1", title: "alpha waiter leak", severity: "major" }),
+    finding({ id: "F-2", title: "minor footnote", severity: "minor" }),
+    finding({ id: "F-10", title: "beta writer leak", severity: "major" }),
+    finding({ id: "F-11", title: "gamma reader leak", severity: "critical" }),
+    finding({ id: "persist--lost", title: "delta buffer leak", severity: "major" }),
+    finding({ id: "persist--lost-extra", title: "epsilon buffer leak", severity: "major" }),
+    finding({ id: "go", title: "zeta runtime leak", severity: "major" }),
+  ];
+
+  it("closes F-10 without also closing F-1 or a minor id named beside it", () => {
+    expect(
+      resolveClusterCloses(
+        bareCluster({ mentions: "F-10", body: "Repair F-10. Leave F-2." }),
+        findings,
+      ),
+    ).toEqual(["F-10"]);
+  });
+
+  it("closes F-1 when the cluster names that id, including a trailing period", () => {
+    expect(resolveClusterCloses(bareCluster({ mentions: "F-1.", body: "" }), findings)).toEqual([
+      "F-1",
+    ]);
+  });
+
+  it("does not close go when the cluster names log.go", () => {
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "internal/log.go", body: "" }), findings),
+    ).toEqual([]);
+  });
+
+  it("closes a slug id only when the cluster names that id and not a longer one", () => {
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "persist--lost-extra", body: "" }), findings),
+    ).toEqual(["persist--lost-extra"]);
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "`persist--lost`", body: "" }), findings),
+    ).toEqual(["persist--lost"]);
   });
 });
 
