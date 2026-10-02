@@ -399,6 +399,8 @@ describe("host repair observation routes (no listen)", () => {
   it.each([
     REPAIR_OBS_LINE_ISOLATE + 1,
     REPAIR_OBS_LINE_ISOLATE + 512 * 1024 + 64 * 1024,
+    2 * 1024 * 1024 - 1,
+    2 * 1024 * 1024 + 512 * 1024 - 1,
     2 * 1024 * 1024 + 512 * 1024,
   ])("pages earlier past an isolated line of %i bytes", async (bodyLen) => {
     const taskDir = join(home, "squad-tasks", "task-1");
