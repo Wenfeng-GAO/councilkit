@@ -3,6 +3,7 @@
  * `councilkit review` writes. Returns null when the document is not that
  * format so the page can fall back to plain document rendering.
  */
+import { extractAggregatorVerdict } from "@shared/runtime/aggregator-verdict";
 import {
   FINDING_SEVERITIES,
   type FindingSeverity,
@@ -352,11 +353,7 @@ function splitTableRow(line: string): string[] {
 }
 
 function extractVerdict(body: string): ParsedReviewReport["verdict"] {
-  const match = /\b(approve|changes-requested|comment)\b/.exec(body);
-  if (match?.[1] === "approve" || match?.[1] === "changes-requested" || match?.[1] === "comment") {
-    return match[1];
-  }
-  return null;
+  return extractAggregatorVerdict(`## 结论\n${body}`);
 }
 
 function slugify(title: string): string {
