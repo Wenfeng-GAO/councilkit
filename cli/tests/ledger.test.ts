@@ -634,6 +634,41 @@ describe("resolveClusterCloses finding ids", () => {
   });
 });
 
+describe("resolveClusterCloses finding files", () => {
+  const findings = [
+    finding({
+      id: "F-9",
+      title: "zzzzqqqq waiter leak",
+      severity: "major",
+      files: ["log.go"],
+    }),
+    finding({
+      id: "F-10",
+      title: "yyyyrrrr writer leak",
+      severity: "major",
+      files: ["src/app.ts"],
+    }),
+  ];
+
+  it("closes a finding only when the cluster names that file path", () => {
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "dialog.go", body: "" }), findings),
+    ).toEqual([]);
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "vendor/src/app.ts", body: "" }), findings),
+    ).toEqual([]);
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "log.go.bak", body: "" }), findings),
+    ).toEqual([]);
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "Repair log.go.", body: "" }), findings),
+    ).toEqual(["F-9"]);
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "src/app.ts:42", body: "" }), findings),
+    ).toEqual(["F-10"]);
+  });
+});
+
 describe("plan.lock parse", () => {
   it("reads cluster machine fields and deferred items", () => {
     const lock = parsePlanDocument(PLAN, {
