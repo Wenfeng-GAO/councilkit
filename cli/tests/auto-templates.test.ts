@@ -461,4 +461,12 @@ describe("cli auto templates — plan prompts", () => {
     expect(extractConsensusPlan(markdown)).toContain("jsonl never torn");
     expect(looksLikePlanDocument(extractConsensusPlan(markdown) ?? "")).toBe(true);
   });
+
+  it("reads a capitalized plan conclusion token", () => {
+    const conclusion = (token: string) => `## 概览\nok\n## 结论\n${token}\n`;
+    expect(extractVerdictToken(conclusion("Approve"))).toBe("approve");
+    expect(extractVerdictToken(conclusion("Changes-requested"))).toBe("changes-requested");
+    expect(extractVerdictToken(conclusion("COMMENT"))).toBe("comment");
+    expect(extractVerdictToken(conclusion("最终 Approve"))).toBe(null);
+  });
 });
