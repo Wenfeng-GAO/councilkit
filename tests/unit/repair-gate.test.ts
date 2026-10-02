@@ -254,4 +254,17 @@ describe("evaluateRepairGate", () => {
     expect(gate.passed).toBe(false);
     expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
+
+  it("treats a lone 不 immediately before a verdict token as negation", () => {
+    expect(extractAggregatorVerdict("## 结论\n\n不 approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不 `approve`。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n此处不 approve。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n绝不 changes-requested\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\n不 approve，维持 changes-requested。\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不过最终 approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\n不仅安全，仍 approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\n不少人给出 approve\n")).toBe("approve");
+  });
 });
