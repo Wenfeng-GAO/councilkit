@@ -4,6 +4,7 @@ import {
   type ReviewAttemptRow,
   type ReviewFinding,
   type ReviewSection,
+  conclusionSectionVerdict,
   formatFindingSeverityStats,
   sortReviewFindings,
   splitH3Blocks,
@@ -515,9 +516,8 @@ function FindingCard({ finding }: { finding: ReviewFinding }) {
 }
 
 function VerdictBody({ body }: { body: string }) {
-  const match = /\b(approve|changes-requested|comment)\b/.exec(body);
-  if (!match?.[1]) return null;
-  const verdict = match[1] as NonNullable<ParsedReviewReport["verdict"]>;
+  const verdict = conclusionSectionVerdict(body);
+  if (!verdict) return null;
   return (
     <p className={`ck-verdict ck-verdict-${verdictClass(verdict)} mb-4`}>
       {VERDICT_LABEL[verdict]}
