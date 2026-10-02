@@ -233,7 +233,7 @@ export function interpretTestLog(
     /\b0\s+tests?\b/i.test(text) ||
     /\bno tests?\b/i.test(text) ||
     /\bTest Files\s+0\b/i.test(text) ||
-    /(?:^|\n)\s*(?:#|ℹ)\s+tests\s+0\b/i.test(text);
+    /\btests\s+0\b/i.test(text);
   return { skipped, ranZeroTests };
 }
 
