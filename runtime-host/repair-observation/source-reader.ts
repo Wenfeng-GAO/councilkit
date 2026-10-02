@@ -136,14 +136,14 @@ export function readSourceWindow(input: {
   }
   const first = page[0];
   const droppedEarlierRecords = input.direction === "earlier" && records.length > page.length;
-  const openedOnIsolatedLine = records.length === 0 && isolatedOversize > 0;
-  const isolatedLineResume =
-    scanStart > 0 && (!windowAligned || openedOnIsolatedLine) ? scanStart : null;
+  const noKeptRecordBeforeCursor = records.length === 0 && scanStart > 0;
+  const openedInsideLine = !windowAligned && scanStart > 0 && !droppedEarlierRecords;
   const earlierOffset =
-    isolatedLineResume ??
-    (first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
-      ? first.byteOffset
-      : null);
+    noKeptRecordBeforeCursor || openedInsideLine
+      ? scanStart
+      : first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
+        ? first.byteOffset
+        : null;
 
   return {
     records: page,
