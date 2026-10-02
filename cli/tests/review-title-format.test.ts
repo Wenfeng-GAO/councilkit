@@ -80,6 +80,21 @@ describe("review finding title format", () => {
     expect(rows[0]?.title).toBe(TITLE);
   });
 
+  it("does not use a title-line flag backtick as the finding id", () => {
+    const flagged = extract(
+      `- [major] \`--resume\` ${TITLE}\n${DETAILS.map((line) => `  ${line}`).join("\n")}`,
+    );
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]?.id).toBe(
+      "pkg.runtime.manager.session_manager.go--resume-状态回滚失败后会话永久停留在创建中",
+    );
+    expect(flagged[0]?.files).toEqual(["pkg/runtime/manager/session_manager.go"]);
+
+    const both = extract("- [major] `--resume` 不会沿用 `persist--lost`");
+    expect(both).toHaveLength(1);
+    expect(both[0]?.id).toBe("persist--lost");
+  });
+
   it("keeps legacy one-line finding titles, assertions and IDs unchanged", () => {
     const text = "src/session.ts:20 — Session lock leaks after timeout.";
     const rows = extract(`- [major] ${text}`);
