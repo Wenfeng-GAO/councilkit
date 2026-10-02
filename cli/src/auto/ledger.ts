@@ -255,7 +255,7 @@ export function resolveClusterCloses(
   const matched: string[] = [];
   for (const finding of findings) {
     if (finding.severity !== "critical" && finding.severity !== "major") continue;
-    if (hay.includes(finding.id.toLowerCase())) {
+    if (hayMentionsFindingId(hay, finding.id)) {
       matched.push(finding.id);
       continue;
     }
@@ -269,6 +269,28 @@ export function resolveClusterCloses(
     if (fileHit || titleHit) matched.push(finding.id);
   }
   return unique(matched);
+}
+
+function hayMentionsFindingId(hay: string, id: string): boolean {
+  const needle = id.toLowerCase();
+  if (needle.length === 0) return false;
+  for (let from = 0; from < hay.length; ) {
+    const at = hay.indexOf(needle, from);
+    if (at < 0) return false;
+    const before = at > 0 ? hay.charAt(at - 1) : "";
+    const after = hay.charAt(at + needle.length);
+    if (idBoundaryBefore(before) && idBoundaryAfter(after)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+function idBoundaryBefore(char: string): boolean {
+  return !/[a-z0-9._-]/i.test(char);
+}
+
+function idBoundaryAfter(char: string): boolean {
+  return char === "." || !/[a-z0-9._-]/i.test(char);
 }
 
 export function attachClosesFromFindings(
