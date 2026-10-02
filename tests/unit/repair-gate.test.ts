@@ -316,4 +316,39 @@ describe("evaluateRepairGate", () => {
     expect(gate.passed).toBe(false);
     expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
+
+  it("treats an n't contraction, including a curly apostrophe, as negation", () => {
+    expect(extractAggregatorVerdict("## 结论\n\nshouldn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nshouldn’t approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nwouldn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\ncouldn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\ndoesn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\ndidn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nmustn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nwon’t approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\ndon’t `approve`。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\ncan’t approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nshould approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nwould approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\ncould approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\ncan approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nnotable approve\n")).toBe("approve");
+    expect(
+      extractAggregatorVerdict("## 结论\n\nshouldn't approve，维持 changes-requested。\n"),
+    ).toBe("changes-requested");
+
+    const prose = "## 结论\n\nshouldn’t approve，维持 changes-requested。\n";
+    expect(extractAggregatorVerdict(prose)).toBe("changes-requested");
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(prose),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
 });
