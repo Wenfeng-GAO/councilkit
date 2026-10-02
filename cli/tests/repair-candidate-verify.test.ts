@@ -527,6 +527,56 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("does not treat a todo-only node:test log as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-todo-"));
+    homes.push(root);
+    const sha = "a".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const logPath = join(root, "todo.log");
+    writeCommandLog(logPath, {
+      exitCode: 0,
+      stdout: [
+        "TAP version 13",
+        "# Subtest: later",
+        "not ok 1 - later # TODO",
+        "1..1",
+        "# tests 1",
+        "# pass 0",
+        "# fail 0",
+        "# skipped 0",
+        "# todo 1",
+        "",
+      ].join("\n"),
+      stderr: "",
+      snapshotSha: sha,
+      cwd: root,
+      dirtyTree: false,
+      cacheKey,
+      command: "node --test",
+    });
+    const receipt = receiptFromIsolatedLog({
+      assertionId: "A1",
+      command: "node --test",
+      cwd: root,
+      snapshotSha: sha,
+      dirtyTree: false,
+      testAssetVersion: "tests-v1",
+      logPath,
+      cacheKey,
+    });
+    if (receipt === null) throw new Error("expected a receipt");
+    expect(receipt.receipts[0]?.skipped).toBe(true);
+    expect(receipt.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(receipt, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("measures dirtyTree after a command mutates tracked source", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-mut-"));
     homes.push(root);
