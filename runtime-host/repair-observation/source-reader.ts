@@ -111,9 +111,10 @@ export function readSourceWindow(input: {
       nextOffset = result.nextOffset;
     } else {
       const end = input.fromOffset ?? st.size;
-      const start = Math.max(0, end - INITIAL_TAIL_BYTES);
+      const window = earlierWindowStart(fd, end);
+      const start = window.start;
       scanStart = start;
-      const result = readForward(fd, start, end, input, start > 0, Number.POSITIVE_INFINITY);
+      const result = readForward(fd, start, end, input, !window.aligned, Number.POSITIVE_INFINITY);
       records.push(...result.records);
       partialBadLines += result.partialBadLines;
       isolatedOversize += result.isolatedOversize;
@@ -153,6 +154,29 @@ export function readSourceWindow(input: {
 }
 
 const READ_CHUNK = 64 * 1024;
+
+function earlierWindowStart(fd: number, end: number): { start: number; aligned: boolean } {
+  const windowStart = Math.max(0, end - INITIAL_TAIL_BYTES);
+  if (windowStart === 0) return { start: 0, aligned: true };
+  const prev = Buffer.alloc(1);
+  if (readSync(fd, prev, 0, 1, windowStart - 1) === 1 && prev[0] === 0x0a) {
+    return { start: windowStart, aligned: true };
+  }
+  const floor = Math.max(0, windowStart - REPAIR_OBS_LINE_ISOLATE);
+  let pos = windowStart;
+  while (pos > floor) {
+    const chunkStart = Math.max(floor, pos - READ_CHUNK);
+    const len = pos - chunkStart;
+    const buf = Buffer.alloc(len);
+    const got = readSync(fd, buf, 0, len, chunkStart);
+    if (got <= 0) break;
+    for (let i = got - 1; i >= 0; i -= 1) {
+      if (buf[i] === 0x0a) return { start: chunkStart + i + 1, aligned: true };
+    }
+    pos = chunkStart;
+  }
+  return { start: floor, aligned: floor === 0 };
+}
 
 function readForward(
   fd: number,
