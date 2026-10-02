@@ -257,6 +257,8 @@ function logShowsFailures(text: string): boolean {
   if (/^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^--- FAIL:/m.test(plain)) return true;
   if (/^FAIL(?:\r?$|\t)/m.test(plain)) return true;
+  if (/^[ \t]*FAILED[ \t]+\S/m.test(plain)) return true;
+  if (/^=+[ \t][^\n]*\b[1-9]\d*[ \t]+failed\b/m.test(plain)) return true;
   if (/(?<!\\)"Action"\s*:\s*"fail"/.test(plain)) return true;
   return false;
 }
