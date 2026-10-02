@@ -325,6 +325,155 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("reads node:test summaries by skip count and test count", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-node-"));
+    homes.push(root);
+    const sha = "f".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "node --test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "node --test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const tapPass = receiptFor(
+      "tap-pass.log",
+      [
+        "TAP version 13",
+        "# Subtest: adds",
+        "ok 1 - adds",
+        "1..1",
+        "# tests 1",
+        "# suites 0",
+        "# pass 1",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "# todo 0",
+        "# duration_ms 49.29192",
+        "",
+      ].join("\n"),
+    );
+    expect(tapPass.receipts[0]?.skipped).toBe(false);
+    expect(tapPass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(tapPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const specPass = receiptFor(
+      "spec-pass.log",
+      [
+        "✔ adds (0.639193ms)",
+        "ℹ tests 1",
+        "ℹ suites 0",
+        "ℹ pass 1",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 47.320316",
+        "",
+      ].join("\n"),
+    );
+    expect(specPass.receipts[0]?.skipped).toBe(false);
+    expect(specPass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(specPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const jestPass = receiptFor(
+      "jest-pass.log",
+      "Test Suites: 1 passed, 1 total\nTests:       5 passed, 0 skipped, 5 total\n",
+    );
+    expect(jestPass.receipts[0]?.skipped).toBe(false);
+    expect(jestPass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(jestPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const tapEmpty = receiptFor(
+      "tap-empty.log",
+      [
+        "TAP version 13",
+        "1..0",
+        "# tests 0",
+        "# suites 0",
+        "# pass 0",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "# todo 0",
+        "# duration_ms 5.803368",
+        "",
+      ].join("\n"),
+    );
+    expect(tapEmpty.receipts[0]?.skipped).toBe(false);
+    expect(tapEmpty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(tapEmpty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const specEmpty = receiptFor(
+      "spec-empty.log",
+      [
+        "ℹ tests 0",
+        "ℹ suites 0",
+        "ℹ pass 0",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 7.728986",
+        "",
+      ].join("\n"),
+    );
+    expect(specEmpty.receipts[0]?.skipped).toBe(false);
+    expect(specEmpty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(specEmpty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const specSkip = receiptFor(
+      "spec-skip.log",
+      [
+        "﹣ adds (0.796238ms) # SKIP",
+        "✔ ok (0.253092ms)",
+        "ℹ tests 2",
+        "ℹ suites 0",
+        "ℹ pass 1",
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 1",
+        "ℹ todo 0",
+        "ℹ duration_ms 48.51019",
+        "",
+      ].join("\n"),
+    );
+    expect(specSkip.receipts[0]?.skipped).toBe(true);
+    expect(specSkip.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(specSkip, "A1").ok).toBe(false);
+  });
+
   it("measures dirtyTree after a command mutates tracked source", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-mut-"));
     homes.push(root);
