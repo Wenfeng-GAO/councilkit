@@ -181,6 +181,12 @@ function earlierWindowStart(fd: number, end: number): { start: number; aligned: 
     }
     pos = chunkStart;
   }
+  if (floor > 0) {
+    const atFloor = Buffer.alloc(1);
+    if (readSync(fd, atFloor, 0, 1, floor - 1) === 1 && atFloor[0] === 0x0a) {
+      return { start: floor, aligned: true };
+    }
+  }
   return { start: floor, aligned: floor === 0 };
 }
 
