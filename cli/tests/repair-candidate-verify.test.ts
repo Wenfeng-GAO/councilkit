@@ -187,9 +187,10 @@ describe("candidate snapshot and verification cache", () => {
       logPath,
       cacheKey,
     });
-    expect(receipt?.receipts[0]?.ranZeroTests).toBe(true);
-    expect(receipt?.receipts[0]?.skipped).toBe(false);
-    expect(evaluateVerificationAsset(receipt!, "A1")).toEqual({
+    if (receipt === null) throw new Error("expected a receipt");
+    expect(receipt.receipts[0]?.ranZeroTests).toBe(true);
+    expect(receipt.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(receipt, "A1")).toEqual({
       ok: false,
       reason: "zero tests or skipped tests cannot prove pass",
     });
@@ -225,9 +226,10 @@ describe("candidate snapshot and verification cache", () => {
       logPath,
       cacheKey,
     });
-    expect(passed?.receipts[0]?.ranZeroTests).toBe(false);
-    expect(passed?.receipts[0]?.skipped).toBe(false);
-    expect(evaluateVerificationAsset(passed!, "A1")).toEqual({ ok: true, reason: "verified" });
+    if (passed === null) throw new Error("expected a receipt");
+    expect(passed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(passed.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(passed, "A1")).toEqual({ ok: true, reason: "verified" });
 
     const skippedPath = join(root, "skipped.log");
     writeCommandLog(skippedPath, {
@@ -250,8 +252,9 @@ describe("candidate snapshot and verification cache", () => {
       logPath: skippedPath,
       cacheKey,
     });
-    expect(skipped?.receipts[0]?.skipped).toBe(true);
-    expect(evaluateVerificationAsset(skipped!, "A1").ok).toBe(false);
+    if (skipped === null) throw new Error("expected a receipt");
+    expect(skipped.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skipped, "A1").ok).toBe(false);
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
