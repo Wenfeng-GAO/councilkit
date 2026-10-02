@@ -260,7 +260,7 @@ export function resolveClusterCloses(
       continue;
     }
     const fileHit = finding.files.some(
-      (file) => cluster.files.includes(file) || hay.includes(file.toLowerCase()),
+      (file) => cluster.files.includes(file) || hayMentionsPath(hay, file),
     );
     const titleCore = finding.title.replace(/^[\w./-]+:\s*/, "").toLowerCase();
     const titleHit =
@@ -291,6 +291,29 @@ function idBoundaryBefore(char: string): boolean {
 
 function idBoundaryAfter(char: string): boolean {
   return char === "." || !/[a-z0-9._-]/i.test(char);
+}
+
+function hayMentionsPath(hay: string, file: string): boolean {
+  const needle = file.toLowerCase();
+  if (needle.length === 0) return false;
+  for (let from = 0; from < hay.length; ) {
+    const at = hay.indexOf(needle, from);
+    if (at < 0) return false;
+    const before = at > 0 ? hay.charAt(at - 1) : "";
+    if (pathBounded(before) && pathBoundedAfter(hay, at + needle.length)) return true;
+    from = at + 1;
+  }
+  return false;
+}
+
+function pathBounded(char: string): boolean {
+  return !/[\w./-]/i.test(char);
+}
+
+function pathBoundedAfter(hay: string, at: number): boolean {
+  const char = hay.charAt(at);
+  if (char === "." && pathBounded(hay.charAt(at + 1))) return true;
+  return pathBounded(char);
 }
 
 export function attachClosesFromFindings(
