@@ -1,4 +1,5 @@
 import {
+  conclusionSectionVerdict,
   formatFindingSeverityStats,
   parseFindingGroups,
   parseFindings,
@@ -83,6 +84,14 @@ describe("parseReviewReport", () => {
     );
     expect(negatedOnly?.verdict).toBeNull();
     expect(negatedThenReal?.verdict).toBe("changes-requested");
+  });
+
+  it("skips a negated approve in the conclusion section badge", () => {
+    expect(conclusionSectionVerdict("approve")).toBe("approve");
+    expect(conclusionSectionVerdict("不能 approve。")).toBeNull();
+    expect(conclusionSectionVerdict("不能 approve。\n\nchanges-requested")).toBe(
+      "changes-requested",
+    );
   });
 });
 

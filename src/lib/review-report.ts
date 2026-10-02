@@ -352,6 +352,13 @@ function splitTableRow(line: string): string[] {
   return cells;
 }
 
+export function conclusionSectionVerdict(body: string): ParsedReviewReport["verdict"] {
+  const match = /\b(approve|changes-requested|comment)\b/.exec(body);
+  const token = match?.[1];
+  if (token === "approve" || token === "changes-requested" || token === "comment") return token;
+  return null;
+}
+
 function extractVerdict(body: string): ParsedReviewReport["verdict"] {
   return extractAggregatorVerdict(`## 结论\n${body}`);
 }
