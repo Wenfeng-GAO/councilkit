@@ -278,8 +278,7 @@ function hayMentionsFindingId(hay: string, id: string): boolean {
     const at = hay.indexOf(needle, from);
     if (at < 0) return false;
     const before = at > 0 ? hay.charAt(at - 1) : "";
-    const after = hay.charAt(at + needle.length);
-    if (idBoundaryBefore(before) && idBoundaryAfter(after)) return true;
+    if (idBoundaryBefore(before) && idBoundaryAfter(hay, at + needle.length)) return true;
     from = at + 1;
   }
   return false;
@@ -289,8 +288,10 @@ function idBoundaryBefore(char: string): boolean {
   return !/[a-z0-9._-]/i.test(char);
 }
 
-function idBoundaryAfter(char: string): boolean {
-  return char === "." || !/[a-z0-9._-]/i.test(char);
+function idBoundaryAfter(hay: string, at: number): boolean {
+  const char = hay.charAt(at);
+  if (char === "." && idBoundaryBefore(hay.charAt(at + 1))) return true;
+  return idBoundaryBefore(char);
 }
 
 function hayMentionsPath(hay: string, file: string): boolean {

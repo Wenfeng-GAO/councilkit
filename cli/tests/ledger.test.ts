@@ -632,6 +632,18 @@ describe("resolveClusterCloses finding ids", () => {
       resolveClusterCloses(bareCluster({ mentions: "`persist--lost`", body: "" }), findings),
     ).toEqual(["persist--lost"]);
   });
+
+  it("does not close an id when a dot continues into more id characters", () => {
+    expect(resolveClusterCloses(bareCluster({ mentions: "go.mod", body: "" }), findings)).toEqual(
+      [],
+    );
+    expect(resolveClusterCloses(bareCluster({ mentions: "F-1.2", body: "" }), findings)).toEqual(
+      [],
+    );
+    expect(
+      resolveClusterCloses(bareCluster({ mentions: "Repair F-1. Leave it.", body: "" }), findings),
+    ).toEqual(["F-1"]);
+  });
 });
 
 describe("resolveClusterCloses finding files", () => {
