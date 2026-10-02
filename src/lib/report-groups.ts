@@ -294,9 +294,8 @@ export function flattenFindings(report: ParsedReviewReport): FindingFingerprint[
     if (section.title !== "共识发现" && section.title !== "独有发现") continue;
     for (const finding of section.findings) {
       const text = finding.text.replace(/`/g, "").replace(/\s+/g, " ").trim();
-      const head = text.split(/[。.\n]/)[0]?.slice(0, 120) ?? text.slice(0, 120);
       out.push({
-        id: `${section.title}|${finding.severity ?? ""}|${head}`,
+        id: `${section.title}|${finding.severity ?? ""}|${text}`,
         severity: finding.severity ?? "",
         qualifier: finding.qualifier ?? "",
         text: finding.text,
