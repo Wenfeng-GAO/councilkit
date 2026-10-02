@@ -73,6 +73,17 @@ describe("parseReviewReport", () => {
   it("returns null for ordinary markdown", () => {
     expect(parseReviewReport("# 决策报告\n\nhello")).toBeNull();
   });
+
+  it("keeps a negated approve from becoming the report verdict", () => {
+    const negatedOnly = parseReviewReport(
+      "# Autonomous Review Report\n\n---\n\n## 结论\n\n不能 approve。\n",
+    );
+    const negatedThenReal = parseReviewReport(
+      "# Autonomous Review Report\n\n---\n\n## 结论\n\n不能 approve，维持 changes-requested。\n",
+    );
+    expect(negatedOnly?.verdict).toBeNull();
+    expect(negatedThenReal?.verdict).toBe("changes-requested");
+  });
 });
 
 describe("parseFindings", () => {
