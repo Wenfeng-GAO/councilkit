@@ -120,7 +120,7 @@ export function parseReviewReport(markdown: string): ParsedReviewReport | null {
     .join("\n\n");
   const sections = split.sections;
   const conclusion = sections.find((section) => section.title === "结论");
-  const verdict = extractVerdict(conclusion?.body ?? "");
+  const verdict = conclusionSectionVerdict(conclusion?.body ?? "");
 
   return { title: "Autonomous Review Report", meta, attempts, preface, sections, verdict };
 }
@@ -353,13 +353,6 @@ function splitTableRow(line: string): string[] {
 }
 
 export function conclusionSectionVerdict(body: string): ParsedReviewReport["verdict"] {
-  const match = /\b(approve|changes-requested|comment)\b/.exec(body);
-  const token = match?.[1];
-  if (token === "approve" || token === "changes-requested" || token === "comment") return token;
-  return null;
-}
-
-function extractVerdict(body: string): ParsedReviewReport["verdict"] {
   return extractAggregatorVerdict(`## 结论\n${body}`);
 }
 
