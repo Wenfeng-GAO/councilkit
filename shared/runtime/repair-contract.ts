@@ -60,6 +60,7 @@ export const testRunReceiptSchema = z
     dirtyTree: z.boolean(),
     skipped: z.boolean(),
     ranZeroTests: z.boolean(),
+    failed: z.boolean().optional(),
     role: z.enum(VERDICT_ROLES),
     executionSource: z.enum(EXECUTION_SOURCES).optional(),
     locations: z.array(text.max(400)).max(32).optional(),
@@ -201,6 +202,9 @@ export function evaluateVerificationAsset(
     if (!receipt.executionSource) {
       return { ok: false, reason: "command receipt missing execution source" };
     }
+    if (receipt.failed) {
+      return { ok: false, reason: "failing tests cannot prove pass" };
+    }
     if (receipt.skipped || receipt.ranZeroTests) {
       return { ok: false, reason: "zero tests or skipped tests cannot prove pass" };
     }
@@ -225,6 +229,7 @@ export function interpretTestLog(
 ): {
   skipped: boolean;
   ranZeroTests: boolean;
+  failed: boolean;
 } {
   const text = `${stdout}\n${stderr}`;
   const skipText = text.replace(/\bskipped\b[^\S\n]*[:=]?[^\S\n]*0\b|\b0[^\S\n]+skipped\b/gi, "");
@@ -238,7 +243,21 @@ export function interpretTestLog(
     /\bno tests?\b/i.test(text) ||
     /\bTest Files\s+0\b/i.test(text) ||
     /\btests\s+0\b/i.test(text);
-  return { skipped, ranZeroTests };
+  return { skipped, ranZeroTests, failed: logShowsFailures(text) };
+}
+
+const ANSI_COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
+function logShowsFailures(text: string): boolean {
+  ANSI_COLOR.lastIndex = 0;
+  const plain = text.replace(ANSI_COLOR, "");
+  if (/^[ \t]*[#ℹ][ \t]+(?:fail|cancelled)[ \t]+[1-9]\d*\b/im.test(plain)) return true;
+  if (/^[ \t]*Test Suites:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
+  if (/^[ \t]*Test Files[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
+  if (/^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
+  if (/^--- FAIL:/m.test(plain)) return true;
+  if (/^FAIL(?:\r?$|\t)/m.test(plain)) return true;
+  return false;
 }
 
 export function generateTaskCard(input: {

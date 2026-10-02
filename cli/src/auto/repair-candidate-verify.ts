@@ -345,6 +345,7 @@ export function receiptFromIsolatedLog(input: {
         dirtyTree: meta.dirtyTree,
         skipped: interpreted.skipped,
         ranZeroTests: interpreted.ranZeroTests,
+        failed: interpreted.failed,
         role: "independent_adjudicator",
         executionSource: "ck-isolated-run",
         cacheKey: meta.cacheKey,
