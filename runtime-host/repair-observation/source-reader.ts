@@ -136,7 +136,9 @@ export function readSourceWindow(input: {
   }
   const first = page[0];
   const droppedEarlierRecords = input.direction === "earlier" && records.length > page.length;
-  const isolatedLineResume = !windowAligned && scanStart > 0 ? scanStart : null;
+  const openedOnIsolatedLine = records.length === 0 && isolatedOversize > 0;
+  const isolatedLineResume =
+    scanStart > 0 && (!windowAligned || openedOnIsolatedLine) ? scanStart : null;
   const earlierOffset =
     isolatedLineResume ??
     (first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
