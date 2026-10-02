@@ -577,6 +577,90 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("does not treat a failing summary with exit 0 as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-fail-"));
+    homes.push(root);
+    const sha = "b".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "node --test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "node --test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+    const failing = [
+      [
+        "node-fail.log",
+        ["# tests 2", "# pass 1", "# fail 1", "# cancelled 0", "# skipped 0", "# todo 0", ""].join(
+          "\n",
+        ),
+      ],
+      [
+        "spec-fail.log",
+        ["ℹ tests 2", "ℹ pass 1", "ℹ fail 1", "ℹ cancelled 0", "ℹ skipped 0", "ℹ todo 0", ""].join(
+          "\n",
+        ),
+      ],
+      [
+        "cancelled.log",
+        ["ℹ tests 1", "ℹ pass 0", "ℹ fail 0", "ℹ cancelled 1", "ℹ skipped 0", "ℹ todo 0", ""].join(
+          "\n",
+        ),
+      ],
+      ["colored-fail.log", "\u001b[31mℹ fail \u001b[39m\u001b[31m1\u001b[39m\n"],
+      ["go-fail.log", "--- FAIL: TestReady (0.00s)\n"],
+      ["go-status.log", "FAIL\n"],
+      ["go-package-fail.log", "FAIL\texample.com/ready\t0.01s\n"],
+      ["jest-suites.log", "Test Suites: 1 failed, 1 total\n"],
+      ["jest-tests.log", "Tests:       1 failed, 4 passed, 5 total\n"],
+      ["vitest-files.log", " Test Files  1 failed (1)\n"],
+      ["vitest-tests.log", "      Tests  1 failed | 4 passed (5)\n"],
+    ] as const;
+    for (const [name, stdout] of failing) {
+      expect(evaluateVerificationAsset(receiptFor(name, stdout), "A1")).toEqual({
+        ok: false,
+        reason: "failing tests cannot prove pass",
+      });
+    }
+    const named = receiptFor(
+      "named-fail.log",
+      [
+        "ok 1 - fail 1 open",
+        "# tests 1",
+        "# pass 1",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "# todo 0",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(named, "A1")).toEqual({ ok: true, reason: "verified" });
+  });
+
   it("measures dirtyTree after a command mutates tracked source", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-mut-"));
     homes.push(root);
