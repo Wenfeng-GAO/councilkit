@@ -668,6 +668,23 @@ describe("candidate snapshot and verification cache", () => {
         "pytest-color.log",
         "\u001b[31mFAILED\u001b[0m test_foo.py::test_bar - AssertionError: boom\n",
       ],
+      [
+        "pytest-error-summary.log",
+        [
+          "==================================== ERRORS ====================================",
+          "_________________________ ERROR at setup of test_bar __________________________",
+          "E   RuntimeError: boom",
+          "=========================== short test summary info ============================",
+          "ERROR test_foo.py::test_bar - RuntimeError: boom",
+          "============================== 1 error in 0.03s ===============================",
+          "",
+        ].join("\n"),
+      ],
+      [
+        "pytest-errors-count.log",
+        "============================== 2 errors in 0.03s ==============================\n",
+      ],
+      ["pytest-error-line.log", "ERROR test_foo.py::test_bar - RuntimeError: boom\n"],
     ] as const;
     for (const [name, stdout] of failing) {
       expect([name, evaluateVerificationAsset(receiptFor(name, stdout), "A1")]).toEqual([
@@ -714,6 +731,19 @@ describe("candidate snapshot and verification cache", () => {
       ].join("\n"),
     );
     expect(evaluateVerificationAsset(pytestPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const pytestErrorWord = receiptFor(
+      "pytest-error-word.log",
+      [
+        "ERROR ready",
+        "============================== 1 xfailed, 1 passed in 0.01s ==============================",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(pytestErrorWord, "A1")).toEqual({
+      ok: true,
+      reason: "verified",
+    });
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
