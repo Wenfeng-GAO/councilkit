@@ -228,7 +228,11 @@ export function interpretTestLog(
 } {
   const text = `${stdout}\n${stderr}`;
   const skipText = text.replace(/\bskipped\b[^\S\n]*[:=]?[^\S\n]*0\b|\b0[^\S\n]+skipped\b/gi, "");
-  const skipped = /\bSKIP(?:PED)?\b/i.test(skipText) && exitCode === 0;
+  const todo =
+    /#\s*TODO\b/.test(text) ||
+    /\btodo\s+[1-9]\d*\b/i.test(text) ||
+    /\b[1-9]\d*\s+todo\b/i.test(text);
+  const skipped = (/\bSKIP(?:PED)?\b/i.test(skipText) || todo) && exitCode === 0;
   const ranZeroTests =
     /\b0\s+tests?\b/i.test(text) ||
     /\bno tests?\b/i.test(text) ||
