@@ -74,6 +74,7 @@ export function readSourceWindow(input: {
   let incompleteTail = false;
   let nextOffset = 0;
   let scanStart = 0;
+  let windowAligned = true;
 
   let fd: number;
   try {
@@ -113,6 +114,7 @@ export function readSourceWindow(input: {
       const end = input.fromOffset ?? st.size;
       const window = earlierWindowStart(fd, end);
       const start = window.start;
+      windowAligned = window.aligned;
       scanStart = start;
       const result = readForward(fd, start, end, input, !window.aligned, Number.POSITIVE_INFINITY);
       records.push(...result.records);
@@ -134,10 +136,14 @@ export function readSourceWindow(input: {
   }
   const first = page[0];
   const droppedEarlierRecords = input.direction === "earlier" && records.length > page.length;
+  const noKeptRecordBeforeCursor = records.length === 0 && scanStart > 0;
+  const openedInsideLine = !windowAligned && scanStart > 0 && !droppedEarlierRecords;
   const earlierOffset =
-    first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
-      ? first.byteOffset
-      : null;
+    noKeptRecordBeforeCursor || openedInsideLine
+      ? scanStart
+      : first && first.byteOffset > 0 && (scanStart > 0 || droppedEarlierRecords)
+        ? first.byteOffset
+        : null;
 
   return {
     records: page,
@@ -174,6 +180,12 @@ function earlierWindowStart(fd: number, end: number): { start: number; aligned: 
       if (buf[i] === 0x0a) return { start: chunkStart + i + 1, aligned: true };
     }
     pos = chunkStart;
+  }
+  if (floor > 0) {
+    const atFloor = Buffer.alloc(1);
+    if (readSync(fd, atFloor, 0, 1, floor - 1) === 1 && atFloor[0] === 0x0a) {
+      return { start: floor, aligned: true };
+    }
   }
   return { start: floor, aligned: floor === 0 };
 }

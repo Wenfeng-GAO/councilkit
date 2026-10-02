@@ -260,6 +260,70 @@ describe("source-reader bounded reads (U06/U07)", () => {
     expect(oldest.nextOffset).toBe(0);
   });
 
+  it("keeps a row that sits between an isolated line and the earlier cursor", () => {
+    const path = join(dir, "isolated-gap.jsonl");
+    const prefix = `${JSON.stringify({ type: "text", text: "prefix-0" })}\n`;
+    const gap = `${"x".repeat(2 * 1024 * 1024 - 1)}\n`;
+    const suffix0 = `${JSON.stringify({ type: "text", text: "suffix-0" })}\n`;
+    const suffix1 = `${JSON.stringify({ type: "text", text: "suffix-1" })}\n`;
+    const suffix2 = `${JSON.stringify({ type: "text", text: "suffix-2" })}\n`;
+    writeFileSync(path, `${prefix}${gap}${suffix0}${suffix1}${suffix2}`);
+    const readEarlier = (fromOffset: number) =>
+      readSourceWindow({
+        path,
+        sourceId: "s",
+        executionRef: "e#1.1",
+        round: 1,
+        roleKey: "builder",
+        expectedGeneration: null,
+        fromOffset,
+        receivedAt: "t",
+        limitRecords: 1,
+        direction: "earlier",
+      });
+    const end = Buffer.byteLength(`${prefix}${gap}${suffix0}${suffix1}`);
+    const nearest = readEarlier(end);
+    expect(nearest.records.map((row) => row.text)).toEqual(["suffix-1"]);
+    expect(nearest.earlierOffset).toBe(Buffer.byteLength(`${prefix}${gap}${suffix0}`));
+    const older = readEarlier(nearest.earlierOffset ?? 0);
+    expect(older.records.map((row) => row.text)).toEqual(["suffix-0"]);
+    const seen = new Set<string>(["suffix-1", "suffix-0"]);
+    let cursor = older.earlierOffset;
+    for (let guard = 0; cursor && guard < 8; guard += 1) {
+      const page = readEarlier(cursor);
+      for (const row of page.records) {
+        if (row.text) seen.add(row.text);
+      }
+      cursor = page.earlierOffset;
+    }
+    expect(seen).toEqual(new Set(["prefix-0", "suffix-0", "suffix-1"]));
+  });
+
+  it("keeps a 1MiB line when the earlier window starts on its newline", () => {
+    const path = join(dir, "exact-cap.jsonl");
+    const prefix = `${JSON.stringify({ type: "text", text: "prefix-0" })}\n`;
+    const gap = `${"x".repeat(2 * 1024 * 1024 - 1)}\n`;
+    const marker = '{"type":"text","text":"MID","pad":"';
+    const mid = `${marker}${"y".repeat(1024 * 1024 - marker.length - 2)}"}`;
+    expect(Buffer.byteLength(mid)).toBe(1024 * 1024);
+    const suffix = `${"z".repeat(524288)}`;
+    writeFileSync(path, `${prefix}${gap}${mid}\n${suffix}`);
+    const end = Buffer.byteLength(`${prefix}${gap}${mid}`) + 524288;
+    const page = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: null,
+      fromOffset: end,
+      receivedAt: "t",
+      limitRecords: 5,
+      direction: "earlier",
+    });
+    expect(page.records.map((row) => row.text)).toContain("MID");
+  });
+
   it("pages a multibyte event line without splitting a character", () => {
     const path = join(dir, "utf8-detail.jsonl");
     const payload = "中中中";
