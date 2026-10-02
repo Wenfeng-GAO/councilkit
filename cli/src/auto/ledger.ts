@@ -690,7 +690,10 @@ function declaredFindingIds(text: string): string[] {
 function quotedFindingId(text: string): string | null {
   return (
     declaredFindingIds(text).find(
-      (id) => /--/.test(id) || /^F-\d+$/i.test(id) || /^h-[0-9a-f]{12}$/i.test(id),
+      (id) =>
+        /^F-\d+$/i.test(id) ||
+        /^h-[0-9a-f]{12}$/i.test(id) ||
+        (/--/.test(id) && !id.startsWith("-")),
     ) ?? null
   );
 }
