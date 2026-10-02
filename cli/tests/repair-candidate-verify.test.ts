@@ -2,11 +2,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LedgerFinding } from "@shared/runtime/cli-ledger";
 import { evaluateVerificationAsset } from "@shared/runtime/repair-contract";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   EMPTY_EXTRA_PROBE_MANIFEST,
   bindCodeTraceAsset,
+  codeTraceFromReview,
   ensureCandidateSnapshot,
   extraProbeManifestVersion,
   hashTestAssetContents,
@@ -86,6 +88,47 @@ describe("candidate snapshot and verification cache", () => {
     expect(asset?.receipts[0]?.command).toBeUndefined();
     expect(asset?.receipts[0]?.executionSource).toBe("independent-reviewer-trace");
     expect(asset ? evaluateVerificationAsset(asset, "A-F-1-v1").ok : false).toBe(true);
+  });
+
+  it("binds a code trace to the full finding id when a shorter id is listed first", () => {
+    const sha = "d".repeat(40);
+    const traced = (id: string, location: string): LedgerFinding => ({
+      id,
+      severity: "major",
+      status: "open",
+      title: id,
+      text: id,
+      source: "consensus",
+      reviewer: "review-correctness",
+      files: [],
+      verification: {
+        outcome: "verified_closed",
+        candidateSha: sha,
+        runId: "ck-review-1",
+        attemptId: "attempt-1",
+        reviewer: "review-correctness",
+        method: "code_trace",
+        reason: "seen",
+        evidence: "seen",
+        locations: [location],
+        runComplete: true,
+      },
+    });
+    const findings = [
+      traced("F-1", "src/short.ts:1"),
+      traced("F-10", "src/long.ts:2"),
+      traced("auth", "src/auth.ts:3"),
+      traced("auth-2", "src/auth-2.ts:4"),
+    ];
+    expect(codeTraceFromReview(findings, "A-F-10-v1", sha)?.receipts[0]?.locations).toEqual([
+      "src/long.ts:2",
+    ]);
+    expect(codeTraceFromReview(findings, "A-auth-2-v1", sha)?.receipts[0]?.locations).toEqual([
+      "src/auth-2.ts:4",
+    ]);
+    expect(codeTraceFromReview(findings, "A-F-1-v1", sha)?.receipts[0]?.locations).toEqual([
+      "src/short.ts:1",
+    ]);
   });
 
   it("checks out a detached candidate snapshot when source HEAD differs", async () => {

@@ -397,7 +397,7 @@ export function codeTraceFromReview(
   snapshotSha: string,
 ): VerificationAsset | null {
   const findingId = assertionId.replace(/-v\d+$/, "").replace(/^A-/, "");
-  const row = findings.find((item) => item.id === findingId || assertionId.includes(item.id));
+  const row = findings.find((item) => item.id === findingId);
   const locations = row?.verification?.locations ?? [];
   const sha = row?.verification?.candidateSha ?? snapshotSha;
   if (!row || locations.length === 0) return null;
