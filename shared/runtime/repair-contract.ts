@@ -227,10 +227,14 @@ export function interpretTestLog(
   ranZeroTests: boolean;
 } {
   const text = `${stdout}\n${stderr}`;
-  const skipped = /\bSKIP(?:PED)?\b/i.test(text) || /\b\d+\s+skipped\b/i.test(text);
+  const skipText = text.replace(/\bskipped\b[^\S\n]*[:=]?[^\S\n]*0\b|\b0[^\S\n]+skipped\b/gi, "");
+  const skipped = /\bSKIP(?:PED)?\b/i.test(skipText) && exitCode === 0;
   const ranZeroTests =
-    /\b0\s+tests?\b/i.test(text) || /\bno tests?\b/i.test(text) || /\bTest Files\s+0\b/i.test(text);
-  return { skipped: skipped && exitCode === 0, ranZeroTests };
+    /\b0\s+tests?\b/i.test(text) ||
+    /\bno tests?\b/i.test(text) ||
+    /\bTest Files\s+0\b/i.test(text) ||
+    /(?:^|\n)\s*(?:#|ℹ)\s+tests\s+0\b/i.test(text);
+  return { skipped, ranZeroTests };
 }
 
 export function generateTaskCard(input: {
