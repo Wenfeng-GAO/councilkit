@@ -282,4 +282,38 @@ describe("evaluateRepairGate", () => {
     expect(extractAggregatorVerdict("## 结论\n\n不会。最终 approve\n")).toBe("approve");
     expect(extractAggregatorVerdict("## 结论\n\nnevertheless approve\n")).toBe("approve");
   });
+
+  it("stops a negation at a clause break before the verdict", () => {
+    expect(extractAggregatorVerdict("## 结论\n\n没有问题，但仍 changes-requested。\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不是问题，最终 approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\n未解决，最终 approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\n不是问题；最终 changes-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不是问题、最终 changes-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不是问题,最终 changes-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n没有问题;但仍 changes-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\n不会直接 approve\n")).toBe(null);
+
+    const prose = "## 结论\n\n没有问题，但仍 changes-requested。\n";
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(prose),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
 });
