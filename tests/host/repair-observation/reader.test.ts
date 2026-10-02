@@ -299,6 +299,31 @@ describe("source-reader bounded reads (U06/U07)", () => {
     expect(seen).toEqual(new Set(["prefix-0", "suffix-0", "suffix-1"]));
   });
 
+  it("keeps a 1MiB line when the earlier window starts on its newline", () => {
+    const path = join(dir, "exact-cap.jsonl");
+    const prefix = `${JSON.stringify({ type: "text", text: "prefix-0" })}\n`;
+    const gap = `${"x".repeat(2 * 1024 * 1024 - 1)}\n`;
+    const marker = '{"type":"text","text":"MID","pad":"';
+    const mid = `${marker}${"y".repeat(1024 * 1024 - marker.length - 2)}"}`;
+    expect(Buffer.byteLength(mid)).toBe(1024 * 1024);
+    const suffix = `${"z".repeat(524288)}`;
+    writeFileSync(path, `${prefix}${gap}${mid}\n${suffix}`);
+    const end = Buffer.byteLength(`${prefix}${gap}${mid}`) + 524288;
+    const page = readSourceWindow({
+      path,
+      sourceId: "s",
+      executionRef: "e#1.1",
+      round: 1,
+      roleKey: "builder",
+      expectedGeneration: null,
+      fromOffset: end,
+      receivedAt: "t",
+      limitRecords: 5,
+      direction: "earlier",
+    });
+    expect(page.records.map((row) => row.text)).toContain("MID");
+  });
+
   it("pages a multibyte event line without splitting a character", () => {
     const path = join(dir, "utf8-detail.jsonl");
     const payload = "中中中";
