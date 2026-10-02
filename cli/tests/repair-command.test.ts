@@ -960,7 +960,7 @@ describe("repair outer loop", () => {
             seedCompleteReview(childId, { open: false, against: SOURCE_ID });
             writeFileSync(
               join(home, "runs", childId, "report.md"),
-              "# review\n\nJury verdict: changes-requested\n",
+              "# review\n\n## 结论\n\nchanges-requested\n",
             );
             return { runId: childId };
           },
