@@ -490,4 +490,72 @@ describe("evaluateRepairGate", () => {
     expect(gate.passed).toBe(false);
     expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
+
+  it("does not read a verdict token from a fenced quote or a deeper heading", () => {
+    const quoted = [
+      "## 结论",
+      "",
+      "审查者原文：",
+      "",
+      "```",
+      "approve",
+      "```",
+      "",
+      "changes-requested",
+      "",
+    ].join("\n");
+    expect(extractAggregatorVerdict(quoted)).toBe("changes-requested");
+    expect(
+      extractAggregatorVerdict(
+        ["## 结论", "", "不能落地。", "", "```md", "approve", "```", ""].join("\n"),
+      ),
+    ).toBe(null);
+    expect(
+      extractAggregatorVerdict(
+        ["## 结论", "", "approve", "", "~~~", "comment", "~~~", ""].join("\n"),
+      ),
+    ).toBe("approve");
+    expect(
+      extractAggregatorVerdict(
+        [
+          "## 结论",
+          "",
+          "引用：",
+          "",
+          "```",
+          "## 结论",
+          "approve",
+          "```",
+          "",
+          "changes-requested",
+          "",
+        ].join("\n"),
+      ),
+    ).toBe("changes-requested");
+    expect(
+      extractAggregatorVerdict(
+        ["## 结论", "", "仍有阻塞。", "", "### 附录", "", "approve", ""].join("\n"),
+      ),
+    ).toBe(null);
+    expect(
+      extractAggregatorVerdict(["## 结论", "", "``` `not a fence`", "approve", ""].join("\n")),
+    ).toBe("approve");
+    expect(
+      extractAggregatorVerdict(
+        ["## 结论", "```", "## 过程对比", "approve", "```", "changes-requested"].join("\n"),
+      ),
+    ).toBe("changes-requested");
+
+    const quotedGate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(quoted),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(quotedGate.passed).toBe(false);
+    expect(quotedGate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
 });
