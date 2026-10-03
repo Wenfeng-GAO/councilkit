@@ -734,6 +734,35 @@ describe("candidate snapshot and verification cache", () => {
         ].join("\n"),
       ],
       [
+        "playwright-fail.log",
+        [
+          "Running 2 tests using 1 worker",
+          "",
+          "  ✘  1 example.spec.ts:3:1 › example fails (5ms)",
+          "  ✓  2 example.spec.ts:8:1 › example passes (2ms)",
+          "",
+          "  1) example.spec.ts:3:1 › example fails ────────────────────────────────────────────",
+          "",
+          "    Error: expect(received).toBe(expected)",
+          "",
+          "    Expected: 1",
+          "    Received: 2",
+          "",
+          "  1 failed",
+          "  1 passed (1.2s)",
+          "",
+        ].join("\n"),
+      ],
+      [
+        "playwright-color-fail.log",
+        [
+          "\u001b[31m  1 failed\u001b[39m",
+          "\u001b[31m    [chromium] › example.spec.ts:3:1 › example fails\u001b[39m",
+          "\u001b[32m  1 passed\u001b[39m\u001b[2m (1.2s)\u001b[22m",
+          "",
+        ].join("\n"),
+      ],
+      [
         "cargo-fail.log",
         [
           "running 1 test",
@@ -850,6 +879,40 @@ describe("candidate snapshot and verification cache", () => {
       ].join("\n"),
     );
     expect(evaluateVerificationAsset(cargoPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const playwrightPass = receiptFor(
+      "playwright-pass.log",
+      [
+        "Running 1 test using 1 worker",
+        "",
+        "  ✓  1 example.spec.ts:8:1 › example passes (2ms)",
+        "",
+        "  1 passed (0.4s)",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(playwrightPass, "A1")).toEqual({
+      ok: true,
+      reason: "verified",
+    });
+
+    const recoveredSentence = receiptFor(
+      "recovered-fail-sentence.log",
+      [
+        "# tests 1",
+        "# pass 1",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "# todo 0",
+        "1 failed to open the cache, then recovered",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(recoveredSentence, "A1")).toEqual({
+      ok: true,
+      reason: "verified",
+    });
   });
 
   it("accepts a go test log that also lists a package with no test files", () => {
