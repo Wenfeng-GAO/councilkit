@@ -373,9 +373,7 @@ describe("cli store", () => {
       rounds: 1,
       reporterAgentId: agents[0].id,
     });
-    const err = captureError(() =>
-      store.syncCouncilRoster("pr-jury", agents, agents[0].id),
-    );
+    const err = captureError(() => store.syncCouncilRoster("pr-jury", agents, agents[0].id));
     expect(err).toBeInstanceOf(CliError);
     expect(err.exitCode).toBe(EXIT.usage);
     const reread = makeStore(home).getCouncil(council.id);

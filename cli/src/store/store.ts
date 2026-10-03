@@ -253,9 +253,13 @@ export class Store {
     const idx = file.councils.findIndex((c) => c.id === council.id);
     if (idx < 0) throw errors.usage(`no council matches ref "${redactName(councilRef)}"`);
     const next: CouncilRecord = { ...council, agentIds: ids, reporterAgentId: reporterId };
-    file.councils[idx] = next;
+    const validated = councilRecordSchema.safeParse(next);
+    if (!validated.success) {
+      throw errors.usage(zodFailureMessage(validated.error.issues, "invalid council"));
+    }
+    file.councils[idx] = validated.data;
     this.writeCouncils(file);
-    return next;
+    return validated.data;
   }
 
   /** Council-scoped model choices keep shared Agent personas/bindings untouched. */
