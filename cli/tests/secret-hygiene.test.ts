@@ -37,6 +37,12 @@ describe("cli redact (pure)", () => {
     expect(containsSecret("clean text", CANARY_COOKIE)).toBe(false);
   });
 
+  it("sees a cookie pair again on the next check", () => {
+    const leaked = "councilkit_session=not-the-canary";
+    expect(containsSecret(leaked, "CANARY-SECRET-12345")).toBe(true);
+    expect(containsSecret(leaked, "CANARY-SECRET-12345")).toBe(true);
+  });
+
   it("redacts nested objects and tainted keys", () => {
     const out = redact({
       headers: { Cookie: CANARY_COOKIE, "x-councilkit-csrf": CANARY_CSRF },
