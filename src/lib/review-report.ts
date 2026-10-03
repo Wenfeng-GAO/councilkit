@@ -94,11 +94,7 @@ export function parseReviewReport(markdown: string): ParsedReviewReport | null {
 
   const dash = text.search(/\n---\n/);
   const header = dash >= 0 ? text.slice(0, dash) : text;
-  // Aggregators sometimes glue `## 概览` onto the previous sentence.
-  const rest = (dash >= 0 ? text.slice(dash + 5) : "").replace(
-    /([^\n#])(## (?:概览|共识发现|独有发现|分歧|结论|过程对比|附录))/g,
-    "$1\n$2",
-  );
+  const rest = unglueHeadings(dash >= 0 ? text.slice(dash + 5) : "");
 
   const meta: Record<string, string> = {};
   const leftover: string[] = [];
@@ -125,40 +121,38 @@ export function parseReviewReport(markdown: string): ParsedReviewReport | null {
 }
 
 export function splitH3Blocks(markdown: string): Array<{ title: string; body: string }> {
-  const lines = markdown.split("\n");
   const blocks: Array<{ title: string; body: string }> = [];
   let current: { title: string; lines: string[] } | null = null;
   const preface: string[] = [];
-  for (const line of lines) {
-    const heading = /^### (.+)$/.exec(line);
+  forEachMarkdownLine(markdown, (line, fenced) => {
+    const heading = fenced ? null : /^### (.+)$/.exec(line);
     if (heading) {
       if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
       current = { title: heading[1].trim(), lines: [] };
-      continue;
+      return;
     }
     if (current) current.lines.push(line);
     else if (line.trim().length > 0) preface.push(line);
-  }
+  });
   if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
   if (preface.length > 0) blocks.unshift({ title: "", body: preface.join("\n").trim() });
   return blocks.filter((block) => block.body.length > 0 || block.title.length > 0);
 }
 
 export function splitH2Sections(markdown: string): { lead: string; sections: ReviewSection[] } {
-  const lines = markdown.split("\n");
   const sections: ReviewSection[] = [];
   const lead: string[] = [];
   let current: { title: string; lines: string[] } | null = null;
-  for (const line of lines) {
-    const heading = /^## (.+)$/.exec(line);
+  forEachMarkdownLine(markdown, (line, fenced) => {
+    const heading = fenced ? null : /^## (.+)$/.exec(line);
     if (heading) {
       if (current) sections.push(toSection(current.title, current.lines.join("\n")));
       current = { title: heading[1].trim(), lines: [] };
-      continue;
+      return;
     }
     if (current) current.lines.push(line);
     else if (line.trim().length > 0) lead.push(line);
-  }
+  });
   if (current) sections.push(toSection(current.title, current.lines.join("\n")));
   return { lead: lead.join("\n").trim(), sections };
 }
@@ -206,12 +200,11 @@ export function parseFindingGroups(body: string): ReviewFindingGroup[] | null {
 }
 
 function splitReviewerBlocks(body: string): Array<{ title: string; body: string }> {
-  const lines = body.split("\n");
   const blocks: Array<{ title: string; body: string }> = [];
   let current: { title: string; lines: string[] } | null = null;
   const preface: string[] = [];
-  for (const line of lines) {
-    const heading = /^(?:### |\*\*)(.+?)(?:\*\*)?\s*$/.exec(line);
+  forEachMarkdownLine(body, (line, fenced) => {
+    const heading = fenced ? null : /^(?:### |\*\*)(.+?)(?:\*\*)?\s*$/.exec(line);
     const isHeading =
       heading !== null &&
       (line.startsWith("### ") ||
@@ -222,11 +215,11 @@ function splitReviewerBlocks(body: string): Array<{ title: string; body: string 
     if (isHeading && heading) {
       if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
       current = { title: heading[1].replace(/\*\*$/, "").trim(), lines: [] };
-      continue;
+      return;
     }
     if (current) current.lines.push(line);
     else if (line.trim().length > 0) preface.push(line);
-  }
+  });
   if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
   if (preface.length > 0) {
     blocks.unshift({ title: "", body: preface.join("\n").trim() });
@@ -294,15 +287,21 @@ function splitTopLevelList(body: string): string[] | null {
   if (!isListItem(trimmed)) return null;
   const items: string[] = [];
   let current: string[] = [];
-  for (const line of trimmed.split("\n")) {
-    if (isListItem(line)) {
+  let rejected = false;
+  forEachMarkdownLine(trimmed, (line, fenced) => {
+    if (rejected) return;
+    if (!fenced && isListItem(line)) {
       if (current.length > 0) items.push(current.join("\n"));
       current = [line];
-      continue;
+      return;
     }
-    if (current.length === 0) return null;
+    if (current.length === 0) {
+      rejected = true;
+      return;
+    }
     current.push(line);
-  }
+  });
+  if (rejected) return null;
   if (current.length > 0) items.push(current.join("\n"));
   return items.length > 0 ? items : null;
 }
@@ -353,6 +352,54 @@ function splitTableRow(line: string): string[] {
 
 export function conclusionSectionVerdict(body: string): ParsedReviewReport["verdict"] {
   return extractAggregatorVerdict(`## 结论\n${body}`);
+}
+
+const GLUED_HEADING = /([^\n#])(## (?:概览|共识发现|独有发现|分歧|结论|过程对比|附录))/g;
+
+type MarkdownFence = { char: string; length: number };
+
+function fenceOpens(line: string): MarkdownFence | null {
+  const open = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
+  const marker = open?.[2];
+  if (!marker) return null;
+  const info = open?.[3] ?? "";
+  if (marker[0] === "`" && info.includes("`")) return null;
+  return { char: marker[0] ?? "`", length: marker.length };
+}
+
+function fenceCloses(line: string, fence: MarkdownFence): boolean {
+  const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const marker = close?.[1];
+  return Boolean(marker && marker[0] === fence.char && marker.length >= fence.length);
+}
+
+function forEachMarkdownLine(
+  markdown: string,
+  visit: (line: string, fenced: boolean) => void,
+): void {
+  let fence: MarkdownFence | null = null;
+  for (const line of markdown.split("\n")) {
+    if (fence) {
+      visit(line, true);
+      if (fenceCloses(line, fence)) fence = null;
+      continue;
+    }
+    const open = fenceOpens(line);
+    if (open) {
+      fence = open;
+      visit(line, true);
+      continue;
+    }
+    visit(line, false);
+  }
+}
+
+function unglueHeadings(markdown: string): string {
+  const lines: string[] = [];
+  forEachMarkdownLine(markdown, (line, fenced) => {
+    lines.push(fenced ? line : line.replace(GLUED_HEADING, "$1\n$2"));
+  });
+  return lines.join("\n");
 }
 
 function slugify(title: string): string {
