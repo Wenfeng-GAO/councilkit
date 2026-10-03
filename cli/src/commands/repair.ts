@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { isPidAlive as defaultIsPidAlive } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { type RepairPackage, buildRepairPackage } from "@shared/runtime/repair-package";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
@@ -297,15 +298,6 @@ async function runRepairStatus(argv: string[], out: OutputSink): Promise<void> {
     },
     () => `${runId} ${run.status}${run.pipeline ? "" : " pipeline=null"}`,
   );
-}
-
-function defaultIsPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function runRepairProbe(argv: string[], out: OutputSink): Promise<void> {
