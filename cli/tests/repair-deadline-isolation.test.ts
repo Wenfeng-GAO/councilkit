@@ -105,6 +105,42 @@ describe("deadline supervisor", () => {
     expect(killed).toEqual([]);
   });
 
+  it("does not certify a due deadline when the recorded pid exists but cannot be signaled", () => {
+    let code: string | undefined;
+    try {
+      process.kill(1, 0);
+    } catch (error) {
+      code = (error as NodeJS.ErrnoException).code;
+    }
+    expect(code).toBe("EPERM");
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const running = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-eperm",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [1],
+      1,
+    );
+    const next = superviseDeadlineOnce({
+      execution: running,
+      nowMs: 10,
+      kill: (pid, signal) => {
+        killed.push({ pid, signal });
+      },
+    });
+    expect(next.state).toBe("unknown_writer");
+    expect(killed).toEqual([
+      { pid: 1, signal: "SIGTERM" },
+      { pid: 1, signal: "SIGKILL" },
+    ]);
+  });
+
   it("persists an execution record for later takeover", () => {
     const dir = mkdtempSync(join(tmpdir(), "ck-exec-"));
     const path = join(dir, "exec.json");
