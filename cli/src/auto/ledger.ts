@@ -233,7 +233,7 @@ export function parsePlanDocument(
   const used = new Set<string>();
   const clusters: PlanCluster[] = [];
   for (const block of splitClusterBlocks(markdown)) {
-    const cluster = clusterFromBlock(block.heading, block.body, used);
+    const cluster = clusterFromBlock(block.heading, block.body, block.machine, used);
     clusters.push(cluster);
   }
   return {
@@ -251,7 +251,9 @@ export function resolveClusterCloses(
   findings: readonly LedgerFinding[],
 ): string[] {
   if (cluster.closes.length > 0) return unique(cluster.closes);
-  const hay = `${cluster.title}\n${cluster.mentions}\n${cluster.body}`.toLowerCase();
+  const hay = textOutsideFences(
+    `${cluster.title}\n${cluster.mentions}\n${cluster.body}`,
+  ).toLowerCase();
   const hayTokens = tokens(hay);
   const matched: string[] = [];
   for (const finding of findings) {
@@ -361,6 +363,7 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
 }
 
 export function buildClusterPlanMarkdown(lock: PlanLockFile, cluster: PlanCluster): string {
+  const body = trimBlankEdges(cluster.body);
   const lines = [
     "# 修复方案",
     "",
@@ -370,7 +373,7 @@ export function buildClusterPlanMarkdown(lock: PlanLockFile, cluster: PlanCluste
     cluster.invariants.trim().length > 0 ? cluster.invariants.trim() : "（见集群正文）",
     "",
     "### 集群",
-    cluster.body.trim().length > 0 ? cluster.body.trim() : `- id: ${cluster.id}`,
+    body.trim().length > 0 ? body : `- id: ${cluster.id}`,
     "",
     "## 范围",
     cluster.files.length > 0
@@ -918,10 +921,24 @@ function tokenOverlap(a: Set<string>, b: Set<string>): number {
   return hit / Math.max(a.size, b.size);
 }
 
+function textOutsideFences(markdown: string): string {
+  const lines: string[] = [];
+  for (const row of markdownLines(markdown)) {
+    if (!row.fenced) lines.push(row.line);
+  }
+  return lines.join("\n");
+}
+
+function trimBlankEdges(text: string): string {
+  return text.replace(/^(?:[ \t]*\n)+/, "").replace(/\n+$/, "");
+}
+
 const ORDER_HEADING = /^## 落地顺序\s*$/;
 const ORDER_STOP = /^## (?:本轮不落地|合并门槛|分歧|结论)\s*$/;
 
-function splitClusterBlocks(markdown: string): Array<{ heading: string; body: string }> {
+function splitClusterBlocks(
+  markdown: string,
+): Array<{ heading: string; body: string; machine: string }> {
   const rows = [...markdownLines(markdown)];
   let start = -1;
   for (const [index, row] of rows.entries()) {
@@ -932,24 +949,43 @@ function splitClusterBlocks(markdown: string): Array<{ heading: string; body: st
     if (!row.fenced && ORDER_STOP.test(row.line)) break;
     region.push(row);
   }
-  const blocks: Array<{ heading: string; body: string }> = [];
-  let current: { heading: string; lines: string[] } | null = null;
+  const blocks: Array<{ heading: string; body: string; machine: string }> = [];
+  let current: { heading: string; lines: string[]; machine: string[] } | null = null;
   for (const { line, fenced } of region) {
-    if (fenced) continue;
-    const heading = CLUSTER_HEADING.exec(line);
+    const heading = fenced ? null : CLUSTER_HEADING.exec(line);
     if (heading) {
-      if (current) blocks.push({ heading: current.heading, body: current.lines.join("\n").trim() });
-      current = { heading: heading[1].trim(), lines: [] };
+      if (current) blocks.push(finishClusterBlock(current));
+      current = { heading: heading[1].trim(), lines: [], machine: [] };
       continue;
     }
-    if (current) current.lines.push(line);
+    if (current) {
+      current.lines.push(line);
+      if (!fenced) current.machine.push(line);
+    }
   }
-  if (current) blocks.push({ heading: current.heading, body: current.lines.join("\n").trim() });
+  if (current) blocks.push(finishClusterBlock(current));
   return blocks.filter((block) => block.heading.length > 0);
 }
 
-function clusterFromBlock(heading: string, body: string, used: Set<string>): PlanCluster {
-  const keys = parseKeyedItems(body);
+function finishClusterBlock(current: {
+  heading: string;
+  lines: string[];
+  machine: string[];
+}): { heading: string; body: string; machine: string } {
+  return {
+    heading: current.heading,
+    body: trimBlankEdges(current.lines.join("\n")),
+    machine: current.machine.join("\n"),
+  };
+}
+
+function clusterFromBlock(
+  heading: string,
+  body: string,
+  machine: string,
+  used: Set<string>,
+): PlanCluster {
+  const keys = parseKeyedItems(machine);
   const rawId = keys.id ?? heading;
   const id = uniqueId(slugify(rawId).slice(0, 64) || "cluster", used);
   used.add(id);
@@ -957,7 +993,7 @@ function clusterFromBlock(heading: string, body: string, used: Set<string>): Pla
     id,
     title: heading.slice(0, 200) || id,
     closes: splitCsv(keys.closes),
-    files: unique([...splitCsv(keys.files), ...extractPaths(body)]),
+    files: unique([...splitCsv(keys.files), ...extractPaths(machine)]),
     gates: splitCsv(keys.gates),
     policy: keys.policy ?? "",
     invariants: keys.invariants ?? "",
