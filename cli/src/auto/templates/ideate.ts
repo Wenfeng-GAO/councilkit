@@ -2,6 +2,7 @@
  * ideate prompt templates and UTF-8 budgets. Construction failures return a
  * structured error instead of throwing past completed artifacts.
  */
+import { markdownLines } from "@shared/runtime/aggregator-verdict";
 
 export const IDEATE_PROMPT_BUDGET = 128 * 1024;
 export const IDEATE_INPUT_BUDGET = 16 * 1024;
@@ -212,6 +213,14 @@ export function extractSuccessfulProposal(
   return { proposalRef, summary, body };
 }
 
+const REPORT_HEADING = /^ {0,3}## (.*)$/;
+
 export function missingReportHeadings(markdown: string): string[] {
-  return IDEATE_REPORT_HEADINGS.filter((heading) => !markdown.includes(heading));
+  const present = new Set<string>();
+  for (const { line, fenced } of markdownLines(markdown)) {
+    if (fenced) continue;
+    const title = REPORT_HEADING.exec(line)?.[1]?.trim() ?? "";
+    if (title.length > 0) present.add(`## ${title}`);
+  }
+  return IDEATE_REPORT_HEADINGS.filter((heading) => !present.has(heading));
 }

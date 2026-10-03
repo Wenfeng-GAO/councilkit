@@ -1,8 +1,8 @@
 import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from "../report/render";
 import { formatDurationMs } from "./duration";
 import type { AttemptResult } from "./runner";
+import { missingReportHeadings } from "./templates/ideate";
 import type { IdeateIntegrity } from "./transcript";
-import { IDEATE_REPORT_HEADINGS } from "./templates/ideate";
 
 export interface IdeateReportSeat {
   attemptId: string;
@@ -61,7 +61,7 @@ export function renderIdeateReport(input: IdeateReportInput): string {
   lines.push("## 决策正文", "");
   if (input.aggregation?.status === "success" && input.aggregation.output.trim().length > 0) {
     lines.push(input.aggregation.output.trim(), "");
-    const missing = IDEATE_REPORT_HEADINGS.filter((heading) => !input.aggregation?.output.includes(heading));
+    const missing = missingReportHeadings(input.aggregation.output);
     if (missing.length > 0) {
       lines.push(`> 关键章节缺失：${missing.join("、")}`, "");
     }
