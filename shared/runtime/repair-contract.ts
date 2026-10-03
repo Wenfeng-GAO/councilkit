@@ -232,18 +232,38 @@ export function interpretTestLog(
   failed: boolean;
 } {
   const text = `${stdout}\n${stderr}`;
-  const skipText = text.replace(/\bskipped\b[^\S\n]*[:=]?[^\S\n]*0\b|\b0[^\S\n]+skipped\b/gi, "");
+  const scanned = textWithoutGoPackagesThatLackTestFiles(text);
+  const skipText = scanned.replace(
+    /\bskipped\b[^\S\n]*[:=]?[^\S\n]*0\b|\b0[^\S\n]+skipped\b/gi,
+    "",
+  );
   const todo =
-    /#\s*TODO\b/.test(text) ||
-    /\btodo\s+[1-9]\d*\b/i.test(text) ||
-    /\b[1-9]\d*\s+todo\b/i.test(text);
+    /#\s*TODO\b/.test(scanned) ||
+    /\btodo\s+[1-9]\d*\b/i.test(scanned) ||
+    /\b[1-9]\d*\s+todo\b/i.test(scanned);
   const skipped = (/\bSKIP(?:PED)?\b/i.test(skipText) || todo) && exitCode === 0;
+  const failed = logShowsFailures(text);
   const ranZeroTests =
-    /\b0\s+tests?\b/i.test(text) ||
-    /\bno tests?\b/i.test(text) ||
-    /\bTest Files\s+0\b/i.test(text) ||
-    /\btests\s+0\b/i.test(text);
-  return { skipped, ranZeroTests, failed: logShowsFailures(text) };
+    /\b0\s+tests?\b/i.test(scanned) ||
+    /\bno tests?\b/i.test(scanned) ||
+    /\bTest Files\s+0\b/i.test(scanned) ||
+    /\btests\s+0\b/i.test(scanned) ||
+    (scanned !== text &&
+      !failed &&
+      !/^ok\s+\S/m.test(scanned) &&
+      !/(?<!\\)"Action"\s*:\s*"pass"/.test(scanned) &&
+      !/\btests\s+[1-9]\d*\b/i.test(scanned) &&
+      !/\b[1-9]\d*\s+passed\b/i.test(scanned));
+  return { skipped, ranZeroTests, failed };
+}
+
+function textWithoutGoPackagesThatLackTestFiles(text: string): string {
+  if (!/\[no test files\]/i.test(text)) return text;
+  const kept = text.split("\n").filter((line) => {
+    const packageSkip = /"Action"\s*:\s*"skip"/.test(line) && !/"Test"\s*:/.test(line);
+    return !packageSkip;
+  });
+  return kept.join("\n").replace(/\[no test files\]/gi, "");
 }
 
 const ANSI_COLOR = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");

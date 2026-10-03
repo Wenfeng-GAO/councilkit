@@ -843,6 +843,151 @@ describe("candidate snapshot and verification cache", () => {
     expect(evaluateVerificationAsset(cargoPass, "A1")).toEqual({ ok: true, reason: "verified" });
   });
 
+  it("accepts a go test log that also lists a package with no test files", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-go-"));
+    homes.push(root);
+    const sha = "c".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "go test ./...",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "go test ./...",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const mixed = receiptFor(
+      "go-mixed.log",
+      ["ok  \texample.com/ready\t0.012s", "?   \texample.com/util\t[no test files]", ""].join("\n"),
+    );
+    expect(mixed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const only = receiptFor("go-no-files.log", "?   \texample.com/util\t[no test files]\n");
+    expect(only.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(only, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
+  it("accepts a go test -json log that also skips a package with no test files", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-go-json-"));
+    homes.push(root);
+    const sha = "d".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "go test -json ./...",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "go test -json ./...",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const mixed = receiptFor(
+      "go-json-mixed.log",
+      [
+        '{"Action":"output","Package":"example.com/util","Output":"?   \\texample.com/util\\t[no test files]\\n"}',
+        '{"Action":"skip","Package":"example.com/util","Elapsed":0}',
+        '{"Action":"run","Package":"example.com/ready","Test":"TestReady"}',
+        '{"Action":"pass","Package":"example.com/ready","Test":"TestReady","Elapsed":0}',
+        '{"Action":"pass","Package":"example.com/ready","Elapsed":0}',
+        "",
+      ].join("\n"),
+    );
+    expect(mixed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const only = receiptFor(
+      "go-json-no-files.log",
+      [
+        '{"Action":"output","Package":"example.com/util","Output":"?   \\texample.com/util\\t[no test files]\\n"}',
+        '{"Action":"skip","Package":"example.com/util","Elapsed":0}',
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(only, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const skippedTest = receiptFor(
+      "go-json-skip-test.log",
+      [
+        '{"Action":"skip","Package":"example.com/ready","Test":"TestLater","Elapsed":0}',
+        '{"Action":"pass","Package":"example.com/ready","Test":"TestReady","Elapsed":0}',
+        '{"Action":"pass","Package":"example.com/ready","Elapsed":0}',
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(skippedTest, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const skippedBesideGap = receiptFor(
+      "go-json-skip-beside-gap.log",
+      [
+        '{"Action":"output","Package":"example.com/util","Output":"?   \\texample.com/util\\t[no test files]\\n"}',
+        '{"Action":"skip","Package":"example.com/util","Elapsed":0}',
+        '{"Action":"skip","Package":"example.com/ready","Test":"TestLater","Elapsed":0}',
+        '{"Action":"pass","Package":"example.com/ready","Test":"TestReady","Elapsed":0}',
+        '{"Action":"pass","Package":"example.com/ready","Elapsed":0}',
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(skippedBesideGap, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("measures dirtyTree after a command mutates tracked source", async () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-mut-"));
     homes.push(root);
