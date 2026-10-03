@@ -17,13 +17,38 @@ export function extractAggregatorVerdict(markdown: string | null | undefined): A
   return verdictInProse(body);
 }
 
-const NEGATION_BEFORE =
-  /(?:(?:不会|不再|不能|不要|不可|不应|不是|并非|并未|并不|没有|未)[^\n。！？!?，,；;、]{0,6}|不|(?:^|[^A-Za-z])(?:not|never|no|cannot|(?:ca|do|wo|should|would|could|does|did|must|is|are|was|were|has|have|had)n['\u2019]?t)(?:\s+[A-Za-z]+){0,2})\s*$/i;
+const CHINESE_NEGATION =
+  "(?:不会|不再|不能|不要|不可|不应|不是|并非|并未|并不|没有|未)[^\\n。！？!?，,；;、]{0,6}|不";
+const ENGLISH_GAP = "(?:\\s+(?!and\\b|but\\b)[A-Za-z]+){0,2}";
+const N_T_CONTRACTION =
+  "(?:ca|do|wo|should|would|could|does|did|must|is|are|was|were|has|have|had)n['’]?t";
+const VERBAL_NEGATION = `(?:^|[^A-Za-z])(?:not|never|cannot|${N_T_CONTRACTION})${ENGLISH_GAP}`;
+const WILLING_NOUN =
+  "hesitation|reservations|reservation|qualms|objection|objections|scruple|scruples|reluctance";
+const NO_NEGATION = `(?:^|[^A-Za-z])no(?!\\s+(?:${WILLING_NOUN})\\b)${ENGLISH_GAP}`;
+const NEGATION_BEFORE = new RegExp(
+  `(?:${CHINESE_NEGATION}|${VERBAL_NEGATION}|${NO_NEGATION})\\s*$`,
+  "i",
+);
+
+function lastNegationContext(before: string): string {
+  let index = before.length;
+  while (index > 0 && /\s/.test(before[index - 1] ?? "")) index -= 1;
+  let start = index;
+  let seen = 0;
+  while (start > 0 && seen < 3) {
+    while (start > 0 && !/\s/.test(before[start - 1] ?? "")) start -= 1;
+    seen += 1;
+    if (seen === 3 || start === 0) break;
+    while (start > 0 && /\s/.test(before[start - 1] ?? "")) start -= 1;
+  }
+  return before.slice(start);
+}
 
 function verdictInProse(body: string): AggregatorVerdict {
   for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/gi)) {
     const index = match.index ?? 0;
-    const before = body.slice(Math.max(0, index - 16), index).replace(/[`"*]/g, "");
+    const before = lastNegationContext(body.slice(0, index).replace(/[`"*]/g, ""));
     if (NEGATION_BEFORE.test(before)) continue;
     return asVerdict(match[1]);
   }
