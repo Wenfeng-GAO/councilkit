@@ -480,6 +480,9 @@ describe("candidate snapshot and verification cache", () => {
         "<testsuites>",
         '\t<testcase name="a" time="0.000540" classname="test"/>',
         "\t<!-- tests 1 -->",
+        "\t<!-- pass 1 -->",
+        "\t<!-- fail 0 -->",
+        "\t<!-- cancelled 0 -->",
         "\t<!-- skipped 0 -->",
         "</testsuites>",
         "",
@@ -685,6 +688,65 @@ describe("candidate snapshot and verification cache", () => {
         "============================== 2 errors in 0.03s ==============================\n",
       ],
       ["pytest-error-line.log", "ERROR test_foo.py::test_bar - RuntimeError: boom\n"],
+      [
+        "junit-fail.log",
+        [
+          '<?xml version="1.0" encoding="utf-8"?>',
+          "<testsuites>",
+          '\t<testcase name="boom" time="0.000933" classname="test" failure="Expected values to be strictly equal:1 !== 2">',
+          '\t\t<failure type="testCodeFailure" message="Expected values to be strictly equal:1 !== 2">',
+          "\t\t</failure>",
+          "\t</testcase>",
+          "\t<!-- tests 1 -->",
+          "\t<!-- suites 0 -->",
+          "\t<!-- pass 0 -->",
+          "\t<!-- fail 1 -->",
+          "\t<!-- cancelled 0 -->",
+          "\t<!-- skipped 0 -->",
+          "\t<!-- todo 0 -->",
+          "</testsuites>",
+          "",
+        ].join("\n"),
+      ],
+      [
+        "junit-cancelled.log",
+        ["\t<!-- tests 1 -->", "\t<!-- fail 0 -->", "\t<!-- cancelled 1 -->", ""].join("\n"),
+      ],
+      [
+        "dot-fail.log",
+        [
+          "X",
+          "",
+          "Failed tests:",
+          "",
+          "✖ boom (0.916664ms)",
+          "  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+          "",
+        ].join("\n"),
+      ],
+      [
+        "cargo-fail.log",
+        [
+          "running 1 test",
+          "test tests::boom ... FAILED",
+          "",
+          "failures:",
+          "",
+          "---- tests::boom stdout ----",
+          "thread 'tests::boom' panicked at src/lib.rs:4:17:",
+          "assertion `left == right` failed",
+          "  left: 1",
+          " right: 2",
+          "",
+          "failures:",
+          "    tests::boom",
+          "",
+          "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "",
+          "error: test failed, to rerun pass `--lib`",
+          "",
+        ].join("\n"),
+      ],
     ] as const;
     for (const [name, stdout] of failing) {
       expect([name, evaluateVerificationAsset(receiptFor(name, stdout), "A1")]).toEqual([
@@ -744,6 +806,41 @@ describe("candidate snapshot and verification cache", () => {
       ok: true,
       reason: "verified",
     });
+
+    const junitZeroFail = receiptFor(
+      "junit-zero-fail.log",
+      [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<testsuites>",
+        '\t<testcase name="ok" time="0.000423" classname="test"/>',
+        "\t<!-- tests 1 -->",
+        "\t<!-- pass 1 -->",
+        "\t<!-- fail 0 -->",
+        "\t<!-- cancelled 0 -->",
+        "\t<!-- skipped 0 -->",
+        "</testsuites>",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(junitZeroFail, "A1")).toEqual({
+      ok: true,
+      reason: "verified",
+    });
+
+    const dotPass = receiptFor("dot-pass.log", ".\n");
+    expect(evaluateVerificationAsset(dotPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const cargoPass = receiptFor(
+      "cargo-pass.log",
+      [
+        "running 1 test",
+        "test tests::ok ... ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+      ].join("\n"),
+    );
+    expect(evaluateVerificationAsset(cargoPass, "A1")).toEqual({ ok: true, reason: "verified" });
   });
 
   it("measures dirtyTree after a command mutates tracked source", async () => {
