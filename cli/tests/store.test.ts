@@ -354,4 +354,29 @@ describe("cli store", () => {
     chmodSync(home, 0o700);
     expect(makeStore(home).getAgent(a.id).name).toBe("survivor");
   });
+
+  it("refuses to grow a full council past the roster cap", () => {
+    const store = makeStore(home);
+    const agents = Array.from({ length: 9 }, (_, index) =>
+      store.createAgent({
+        name: `seat-${index}`,
+        personaPrompt: "p",
+        modelId: "m",
+        color: "#000001",
+        driverSelection: KIMI,
+      }),
+    );
+    const council = store.createCouncil({
+      name: "pr-jury",
+      topic: "t",
+      agentIds: agents.slice(0, 8).map((agent) => agent.id),
+      rounds: 1,
+      reporterAgentId: agents[0].id,
+    });
+    const err = captureError(() => store.syncCouncilRoster("pr-jury", agents, agents[0].id));
+    expect(err).toBeInstanceOf(CliError);
+    expect(err.exitCode).toBe(EXIT.usage);
+    const reread = makeStore(home).getCouncil(council.id);
+    expect(reread.agentIds).toEqual(agents.slice(0, 8).map((agent) => agent.id));
+  });
 });
