@@ -252,6 +252,9 @@ function logShowsFailures(text: string): boolean {
   ANSI_COLOR.lastIndex = 0;
   const plain = text.replace(ANSI_COLOR, "");
   if (/^[ \t]*[#ℹ][ \t]+(?:fail|cancelled)[ \t]+[1-9]\d*\b/im.test(plain)) return true;
+  if (/^[ \t]*<!--[ \t]+(?:fail|cancelled)[ \t]+[1-9]\d*\b/im.test(plain)) return true;
+  if (/^Failed tests:$/m.test(plain)) return true;
+  if (/^test result: FAILED\b/m.test(plain)) return true;
   if (/^[ \t]*Test Suites:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^[ \t]*Test Files[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
