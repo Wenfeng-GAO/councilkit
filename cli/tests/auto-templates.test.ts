@@ -469,4 +469,31 @@ describe("cli auto templates — plan prompts", () => {
     expect(extractVerdictToken(conclusion("COMMENT"))).toBe("comment");
     expect(extractVerdictToken(conclusion("最终 Approve"))).toBe(null);
   });
+
+  it("reads the last plan conclusion token when an earlier section quotes one", () => {
+    const markdown = [
+      "## 概览",
+      "审查者原文：",
+      "## 结论",
+      "approve",
+      "## 共识计划",
+      "# 修复方案",
+      "",
+      "## 不变量",
+      "1. jsonl never torn",
+      "## 落地顺序",
+      "### 集群 1: log",
+      "## 分歧",
+      "无",
+      "## 结论",
+      "",
+      "changes-requested",
+      "",
+    ].join("\n");
+    expect(extractVerdictToken(markdown)).toBe("changes-requested");
+    expect(extractVerdictToken(markdown.replace("changes-requested", "Approve"))).toBe("approve");
+    expect(extractVerdictToken(markdown.replace("changes-requested", "最终 changes-requested"))).toBe(
+      null,
+    );
+  });
 });
