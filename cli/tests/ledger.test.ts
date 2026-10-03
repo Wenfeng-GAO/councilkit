@@ -111,6 +111,37 @@ describe("ledger extract", () => {
     expect(file.findings.some((row) => row.title.includes("Verdict"))).toBe(false);
   });
 
+  it("does not record a fenced example as its own finding", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] real leak in session cookie",
+        "",
+        "```md",
+        "## 共识发现",
+        "- [critical] this is only an example",
+        "```",
+        "",
+        "- [minor] trailing nit stays",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-fenced",
+      extractedAt: "2026-10-03T00:00:00.000Z",
+    });
+    expect(file.findings.map((row) => ({ severity: row.severity, title: row.title }))).toEqual([
+      { severity: "major", title: "real leak in session cookie" },
+      { severity: "minor", title: "trailing nit stays" },
+    ]);
+  });
+
   it("does not mint misc-- ids for pathless findings", () => {
     const file = extractFindingsFromReport({
       markdown: SAMPLE,
