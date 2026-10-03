@@ -86,7 +86,7 @@ function stripGitSuffix(value: string): string {
 export function remoteMatchesProject(remote: string, project: string): boolean {
   const path = projectFromRemote(remote);
   if (path === null) return false;
-  return path === project;
+  return path.toLowerCase() === project.toLowerCase();
 }
 
 export function resolveGitDir(path: string): string {
