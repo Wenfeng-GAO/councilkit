@@ -397,6 +397,91 @@ describe("candidate snapshot and verification cache", () => {
     expect(evaluateVerificationAsset(logged, "A1")).toEqual({ ok: true, reason: "verified" });
   });
 
+  it("does not treat a cargo ignored test as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-cargo-ignored-"));
+    homes.push(root);
+    const sha = "d".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "cargo test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "cargo test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const prose = receiptFor(
+      "cargo-ignored-word.log",
+      [
+        "running 1 test",
+        "test tests::ok ... ok",
+        "ignored the stale cache",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+      ].join("\n"),
+    );
+    expect(prose.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const mixed = receiptFor(
+      "cargo-ignored.log",
+      [
+        "running 2 tests",
+        "test tests::kept ... ok",
+        "test tests::later ... ignored",
+        "",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+      ].join("\n"),
+    );
+    expect(mixed.receipts[0]?.failed).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const only = receiptFor(
+      "cargo-only-ignored.log",
+      [
+        "running 1 test",
+        "test tests::later ... ignored, needs a fixture",
+        "",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+      ].join("\n"),
+    );
+    expect(only.receipts[0]?.ranZeroTests).toBe(false);
+    expect(only.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(only, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("reads node:test summaries by skip count and test count", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-node-"));
     homes.push(root);
