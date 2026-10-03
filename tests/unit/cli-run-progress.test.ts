@@ -1,5 +1,6 @@
 import {
   applyLiveHeartbeat,
+  isPidAlive,
   liveStateFromRecords,
   mapSquadObserveStatus,
   mergeLiveProgress,
@@ -576,3 +577,21 @@ describe("reconcileRunningStatus", () => {
     ).toBe("running");
   });
 });
+
+describe("isPidAlive", () => {
+  it("keeps a pid that exists when this process cannot signal it", () => {
+    expect(isPidAlive(process.pid)).toBe(true);
+    expect(isPidAlive(2_147_483_646)).toBe(false);
+    expect(killErrno(1)).toBe("EPERM");
+    expect(isPidAlive(1)).toBe(true);
+  });
+});
+
+function killErrno(pid: number): string | undefined {
+  try {
+    process.kill(pid, 0);
+    return undefined;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code;
+  }
+}
