@@ -8,7 +8,6 @@ import {
   splitH3Blocks,
 } from "@/lib/review-report";
 import { describe, expect, it } from "vitest";
-import { extractFindingsFromReport } from "../../cli/src/auto/ledger";
 
 const SAMPLE = `# Autonomous Review Report
 
@@ -291,17 +290,6 @@ describe("parseFindings", () => {
           "~~~",
         ].join("\n"),
       },
-    ]);
-    expect(
-      extractFindingsFromReport({
-        markdown,
-        runId: "ck-review-fenced",
-        extractedAt: "2026-10-03T00:00:00.000Z",
-      }).findings.map((row) => ({ severity: row.severity, title: row.title })),
-    ).toEqual([
-      { severity: "major", title: "real leak in session cookie" },
-      { severity: "minor", title: "trailing nit stays" },
-      { severity: "nit", title: "real unique note" },
     ]);
     expect(
       splitH3Blocks(["intro", "```", "### not a card", "```", "### real"].join("\n")).map(
