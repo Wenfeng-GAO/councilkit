@@ -237,12 +237,16 @@ export function interpretTestLog(
     /#\s*TODO\b/.test(scanned) ||
     /\btodo\s+[1-9]\d*\b/i.test(scanned) ||
     /\b[1-9]\d*\s+todo\b/i.test(scanned);
+  const cargoIgnored =
+    /^test[ \t]+\S+[ \t]+\.\.\.[ \t]+ignored\b/m.test(scanned) ||
+    /^test result:.*\b[1-9]\d* ignored\b/m.test(scanned);
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
       /^---[ \t]+SKIP\b/m.test(scanned) ||
       /#[ \t]+SKIP\b/.test(scanned) ||
       /(?<!\\)"Action"\s*:\s*"skip"/.test(scanned) ||
+      cargoIgnored ||
       todo) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
