@@ -18,7 +18,7 @@ export function extractAggregatorVerdict(markdown: string | null | undefined): A
 }
 
 const NEGATION_BEFORE =
-  /(?:(?:不会|不再|不能|不要|不可|不应|不是|并非|并未|并不|没有|未)[^\n。！？!?，,；;、]{0,6}|不|(?:^|[^A-Za-z])(?:not|never|no|cannot|(?:ca|do|wo|should|would|could|does|did|must)n['\u2019]?t)(?:\s+[A-Za-z]+){0,2})\s*$/i;
+  /(?:(?:不会|不再|不能|不要|不可|不应|不是|并非|并未|并不|没有|未)[^\n。！？!?，,；;、]{0,6}|不|(?:^|[^A-Za-z])(?:not|never|no|cannot|(?:ca|do|wo|should|would|could|does|did|must|is|are|was|were|has|have|had)n['\u2019]?t)(?:\s+[A-Za-z]+){0,2})\s*$/i;
 
 function verdictInProse(body: string): AggregatorVerdict {
   for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/gi)) {

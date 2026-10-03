@@ -353,6 +353,39 @@ describe("evaluateRepairGate", () => {
     expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
 
+  it("treats be and have n't contractions before a verdict token as negation", () => {
+    expect(extractAggregatorVerdict("## 结论\n\nisn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nisn’t approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\naren't changes-requested\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nwasn't an approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nweren't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nhasn't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nhaven't approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nhadn't `approve`。\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nis approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nare changes-requested\n")).toBe(
+      "changes-requested",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nwas approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nhave comment\n")).toBe("comment");
+    expect(extractAggregatorVerdict("## 结论\n\nisn't approve，维持 changes-requested。\n")).toBe(
+      "changes-requested",
+    );
+
+    const prose = "## 结论\n\nisn't approve，维持 changes-requested。\n";
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(prose),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
+
   it("reads a capitalized conclusion token as that verdict", () => {
     expect(extractAggregatorVerdict("## 结论\n\nChanges-requested\n")).toBe("changes-requested");
     expect(extractAggregatorVerdict("## 结论\n\nApprove\n")).toBe("approve");
