@@ -233,15 +233,18 @@ export function interpretTestLog(
 } {
   const text = `${stdout}\n${stderr}`;
   const scanned = textWithoutGoPackagesThatLackTestFiles(text);
-  const skipText = scanned.replace(
-    /\bskipped\b[^\S\n]*[:=]?[^\S\n]*0\b|\b0[^\S\n]+skipped\b/gi,
-    "",
-  );
   const todo =
     /#\s*TODO\b/.test(scanned) ||
     /\btodo\s+[1-9]\d*\b/i.test(scanned) ||
     /\b[1-9]\d*\s+todo\b/i.test(scanned);
-  const skipped = (/\bSKIP(?:PED)?\b/i.test(skipText) || todo) && exitCode === 0;
+  const skipped =
+    (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
+      /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
+      /^---[ \t]+SKIP\b/m.test(scanned) ||
+      /#[ \t]+SKIP\b/.test(scanned) ||
+      /(?<!\\)"Action"\s*:\s*"skip"/.test(scanned) ||
+      todo) &&
+    exitCode === 0;
   const failed = logShowsFailures(text);
   const ranZeroTests =
     /\b0\s+tests?\b/i.test(scanned) ||

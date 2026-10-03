@@ -325,6 +325,78 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("accepts a passing log that only mentions the word skip", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-skip-word-"));
+    homes.push(root);
+    const sha = "1".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, command: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command,
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command,
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const named = receiptFor(
+      "node-skip-word.log",
+      "node --test",
+      [
+        "TAP version 13",
+        "# Subtest: do not skip a warm cache",
+        "ok 1 - do not skip a warm cache",
+        "1..1",
+        "# tests 1",
+        "# suites 0",
+        "# pass 1",
+        "# fail 0",
+        "# cancelled 0",
+        "# skipped 0",
+        "# todo 0",
+        "",
+      ].join("\n"),
+    );
+    expect(named.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(named, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const logged = receiptFor(
+      "go-skip-word.log",
+      "go test ./ready",
+      [
+        "=== RUN   TestReady",
+        "    ready_test.go:4: skip optional lookup",
+        "--- PASS: TestReady (0.00s)",
+        "PASS",
+        "ok  \texample.com/ready\t0.01s",
+        "",
+      ].join("\n"),
+    );
+    expect(logged.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(logged, "A1")).toEqual({ ok: true, reason: "verified" });
+  });
+
   it("reads node:test summaries by skip count and test count", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-node-"));
     homes.push(root);
