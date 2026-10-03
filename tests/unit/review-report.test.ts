@@ -86,6 +86,31 @@ describe("parseReviewReport", () => {
     expect(negatedThenReal?.verdict).toBe("changes-requested");
   });
 
+  it("reads the last synthesis conclusion when an earlier section quotes one", () => {
+    const markdown = [
+      "# Autonomous Review Report",
+      "",
+      "---",
+      "",
+      "## 概览",
+      "审查者原文：",
+      "## 结论",
+      "approve",
+      "## 分歧",
+      "无",
+      "## 结论",
+      "changes-requested",
+      "## 过程对比",
+      "",
+      "## 附录:各审查者交付物",
+      "```md",
+      "## 结论",
+      "approve",
+      "```",
+    ].join("\n");
+    expect(parseReviewReport(markdown)?.verdict).toBe("changes-requested");
+  });
+
   it("skips a negated approve in the conclusion section badge", () => {
     expect(conclusionSectionVerdict("approve")).toBe("approve");
     expect(conclusionSectionVerdict("不能 approve。")).toBeNull();

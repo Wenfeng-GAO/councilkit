@@ -119,8 +119,7 @@ export function parseReviewReport(markdown: string): ParsedReviewReport | null {
     .filter((part) => part.length > 0)
     .join("\n\n");
   const sections = split.sections;
-  const conclusion = sections.find((section) => section.title === "结论");
-  const verdict = conclusionSectionVerdict(conclusion?.body ?? "");
+  const verdict = extractAggregatorVerdict(text);
 
   return { title: "Autonomous Review Report", meta, attempts, preface, sections, verdict };
 }

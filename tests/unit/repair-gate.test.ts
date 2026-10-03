@@ -381,4 +381,39 @@ describe("evaluateRepairGate", () => {
     expect(gate.passed).toBe(false);
     expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
+
+  it("reads the last synthesis conclusion when an earlier section quotes one", () => {
+    const markdown = [
+      "# Autonomous Review Report",
+      "",
+      "## 概览",
+      "审查者原文：",
+      "## 结论",
+      "approve",
+      "## 分歧",
+      "无",
+      "## 结论",
+      "changes-requested",
+      "## 过程对比",
+      "",
+      "## 附录:各审查者交付物",
+      "```md",
+      "## 结论",
+      "approve",
+      "```",
+    ].join("\n");
+    expect(extractAggregatorVerdict(markdown)).toBe("changes-requested");
+
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(markdown),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
 });

@@ -2,8 +2,10 @@ export type AggregatorVerdict = "approve" | "changes-requested" | "comment" | nu
 
 export function extractAggregatorVerdict(markdown: string | null | undefined): AggregatorVerdict {
   if (!markdown) return null;
-  const text = markdown.replace(/\r\n/g, "\n");
-  const heading = /^## 结论[^\S\n]*$/m.exec(text);
+  const normalized = markdown.replace(/\r\n/g, "\n");
+  const cut = normalized.search(/^## (?:过程对比|附录:各审查者交付物)[^\S\n]*$/m);
+  const text = cut < 0 ? normalized : normalized.slice(0, cut);
+  const heading = [...text.matchAll(/^## 结论[^\S\n]*$/gm)].at(-1);
   if (heading?.index === undefined) return null;
   const after = text.slice(heading.index + heading[0].length).replace(/^\n+/, "");
   const next = /^## /m.exec(after);
