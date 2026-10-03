@@ -73,8 +73,7 @@ function createCouncil(argv: string[], out: OutputSink): Promise<void> {
     rounds,
     reporterAgentId: reporterId,
   });
-  finishCouncil(out, council);
-  return Promise.resolve();
+  return finishCouncil(out, council);
 }
 
 function listCouncils(argv: string[], out: OutputSink): Promise<void> {
@@ -82,7 +81,7 @@ function listCouncils(argv: string[], out: OutputSink): Promise<void> {
   const store = new Store();
   const councils = store.listCouncils();
   const view = { councils: councils.map(councilView) };
-  out.finish(view, (d) => {
+  return out.finish(view, (d) => {
     const list = (d as { councils: ReturnType<typeof councilView>[] }).councils;
     if (list.length === 0)
       return "no councils stored. create one with `councilkit council create`.";
@@ -93,7 +92,6 @@ function listCouncils(argv: string[], out: OutputSink): Promise<void> {
       )
       .join("\n");
   });
-  return Promise.resolve();
 }
 
 function showCouncil(argv: string[], out: OutputSink): Promise<void> {
@@ -104,8 +102,7 @@ function showCouncil(argv: string[], out: OutputSink): Promise<void> {
   const ref = positionals[0];
   if (!ref) throw errors.usage("councilkit council show requires a council name or id");
   const store = new Store();
-  finishCouncil(out, store.getCouncil(ref));
-  return Promise.resolve();
+  return finishCouncil(out, store.getCouncil(ref));
 }
 
 function deleteCouncil(argv: string[], out: OutputSink): Promise<void> {
@@ -118,8 +115,7 @@ function deleteCouncil(argv: string[], out: OutputSink): Promise<void> {
   const store = new Store();
   const res = store.deleteCouncil(ref);
   const view = { deleted: true, id: res.deletedId };
-  out.finish(view, (d) => `deleted council ${JSON.stringify((d as typeof view).id)}`);
-  return Promise.resolve();
+  return out.finish(view, (d) => `deleted council ${JSON.stringify((d as typeof view).id)}`);
 }
 
 function councilView(c: CouncilRecord) {
@@ -135,8 +131,8 @@ function councilView(c: CouncilRecord) {
   };
 }
 
-function finishCouncil(out: OutputSink, council: CouncilRecord): void {
-  out.finish(councilView(council), (d) => {
+function finishCouncil(out: OutputSink, council: CouncilRecord): Promise<void> {
+  return out.finish(councilView(council), (d) => {
     const c = d as ReturnType<typeof councilView>;
     return [
       `id: ${c.id}`,

@@ -70,8 +70,7 @@ function createAgent(argv: string[], out: OutputSink): Promise<void> {
     enabled: values.disabled !== true,
     driverSelection,
   });
-  finishAgent(out, agent, values.json === true);
-  return Promise.resolve();
+  return finishAgent(out, agent, values.json === true);
 }
 
 function listAgents(argv: string[], out: OutputSink): Promise<void> {
@@ -79,14 +78,13 @@ function listAgents(argv: string[], out: OutputSink): Promise<void> {
   const store = new Store();
   const agents = store.listAgents();
   const view = { agents: agents.map(agentView) };
-  out.finish(view, (d) => {
+  return out.finish(view, (d) => {
     const list = (d as { agents: ReturnType<typeof agentView>[] }).agents;
     if (list.length === 0) return "no agents stored. create one with `councilkit agent create`.";
     return list
       .map((a) => `${a.id}  ${a.name}  [${a.driverId}]  model=${a.modelId}  enabled=${a.enabled}`)
       .join("\n");
   });
-  return Promise.resolve();
 }
 
 function showAgent(argv: string[], out: OutputSink): Promise<void> {
@@ -98,8 +96,7 @@ function showAgent(argv: string[], out: OutputSink): Promise<void> {
   if (!ref) throw errors.usage("councilkit agent show requires an agent name or id");
   const store = new Store();
   const agent = store.getAgent(ref);
-  finishAgent(out, agent, values.json === true);
-  return Promise.resolve();
+  return finishAgent(out, agent, values.json === true);
 }
 
 function deleteAgent(argv: string[], out: OutputSink): Promise<void> {
@@ -112,8 +109,7 @@ function deleteAgent(argv: string[], out: OutputSink): Promise<void> {
   const store = new Store();
   const res = store.deleteAgent(ref);
   const view = { deleted: true, id: res.deletedId };
-  out.finish(view, (d) => `deleted agent ${JSON.stringify((d as typeof view).id)}`);
-  return Promise.resolve();
+  return out.finish(view, (d) => `deleted agent ${JSON.stringify((d as typeof view).id)}`);
 }
 
 function agentView(a: AgentRecord) {
@@ -128,9 +124,9 @@ function agentView(a: AgentRecord) {
   };
 }
 
-function finishAgent(out: OutputSink, agent: AgentRecord, json: boolean): void {
+function finishAgent(out: OutputSink, agent: AgentRecord, json: boolean): Promise<void> {
   void json;
-  out.finish(agentView(agent), (d) =>
+  return out.finish(agentView(agent), (d) =>
     [
       `id: ${(d as ReturnType<typeof agentView>).id}`,
       `name: ${(d as ReturnType<typeof agentView>).name}`,

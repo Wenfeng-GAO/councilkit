@@ -64,7 +64,7 @@ export async function runDoctor(argv: string[], out: OutputSink): Promise<void> 
     drivers: driverSummary,
   };
 
-  out.finish(result, (d) => renderHuman(d as typeof result));
+  await out.finish(result, (d) => renderHuman(d as typeof result));
 }
 
 async function probeCatalog(
