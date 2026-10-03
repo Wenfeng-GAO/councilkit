@@ -689,6 +689,15 @@ describe("candidate snapshot and verification cache", () => {
       ],
       ["pytest-error-line.log", "ERROR test_foo.py::test_bar - RuntimeError: boom\n"],
       [
+        "pytest-quiet-error.log",
+        [
+          "ERROR test_syntax.py",
+          "!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!",
+          "1 error in 0.11s",
+          "",
+        ].join("\n"),
+      ],
+      [
         "junit-fail.log",
         [
           '<?xml version="1.0" encoding="utf-8"?>',
