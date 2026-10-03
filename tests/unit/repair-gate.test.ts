@@ -394,6 +394,13 @@ describe("evaluateRepairGate", () => {
     expect(extractAggregatorVerdict("## 结论\n\nwould not automatically approve\n")).toBe(null);
     expect(extractAggregatorVerdict("## 结论\n\nshould really approve\n")).toBe("approve");
     expect(extractAggregatorVerdict("## 结论\n\nnot the issue. I approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nI have no reservations and approve\n")).toBe(
+      "approve",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nI will not hesitate and approve\n")).toBe(
+      "approve",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nshouldn't actually approve\n")).toBe(null);
     expect(
       extractAggregatorVerdict("## 结论\n\nshouldn't really approve，维持 changes-requested。\n"),
     ).toBe("changes-requested");
