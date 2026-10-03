@@ -1,4 +1,5 @@
 /** Compact, poll-safe summary of one attempt's final output. */
+import { markdownLines } from "./aggregator-verdict";
 
 export const SEAT_RESULT_SUMMARY_MAX = 240;
 
@@ -19,14 +20,15 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
   if (text.length === 0) {
     return { parseStatus: "empty", summary: null, findingCount: null, blockingCount: null };
   }
-  const matches = [...text.matchAll(SEVERITY_RE)];
+  const visible = textOutsideFences(text);
+  const matches = [...visible.matchAll(SEVERITY_RE)];
   const findingCount = matches.length;
   const blockingCount = matches.filter((row) => {
     const severity = row[1]?.toLowerCase();
     return severity === "critical" || severity === "major";
   }).length;
-  const structured = findingCount > 0 || REVIEW_HEADING_RE.test(text);
-  const summary = clipSeatSummary(extractOverview(text) ?? firstParagraph(text));
+  const structured = findingCount > 0 || REVIEW_HEADING_RE.test(visible);
+  const summary = clipSeatSummary(extractOverview(visible) ?? firstParagraph(visible));
   if (structured) {
     return { parseStatus: "parsed", summary, findingCount, blockingCount };
   }
@@ -41,6 +43,14 @@ export function clipSeatSummary(value: string | null): string | null {
   return chars.length > SEAT_RESULT_SUMMARY_MAX
     ? chars.slice(0, SEAT_RESULT_SUMMARY_MAX).join("")
     : trimmed;
+}
+
+function textOutsideFences(text: string): string {
+  const lines: string[] = [];
+  for (const row of markdownLines(text)) {
+    if (!row.fenced) lines.push(row.line);
+  }
+  return lines.join("\n");
 }
 
 function extractOverview(text: string): string | null {
