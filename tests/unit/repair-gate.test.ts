@@ -386,6 +386,47 @@ describe("evaluateRepairGate", () => {
     expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
   });
 
+  it("reads a long negation and keeps independent sentences", () => {
+    expect(extractAggregatorVerdict("## 结论\n\nshouldn't really approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nshouldn't actually approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\ncannot reasonably approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnot automatically approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nhaven't actually approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nwould not automatically approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nshould really approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nnot the issue. I approve\n")).toBe("approve");
+    expect(extractAggregatorVerdict("## 结论\n\nI have no reservations and approve\n")).toBe(
+      "approve",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nI will not hesitate and approve\n")).toBe(
+      "approve",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nI have no hesitation to approve\n")).toBe(
+      "approve",
+    );
+    expect(extractAggregatorVerdict("## 结论\n\nWe should not merge or approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnot approve or comment\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnot ready to approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nno reason to approve\n")).toBe(null);
+    expect(extractAggregatorVerdict("## 结论\n\nnot hesitate but approve\n")).toBe("approve");
+    expect(
+      extractAggregatorVerdict("## 结论\n\nshouldn't really approve，维持 changes-requested。\n"),
+    ).toBe("changes-requested");
+
+    const prose = "## 结论\n\nshouldn't really approve，维持 changes-requested。\n";
+    const gate = evaluateRepairGate(
+      baseInput({
+        review: {
+          ...baseInput().review,
+          aggregatorVerdict: extractAggregatorVerdict(prose),
+          findings: [verified("F-nit")],
+        },
+      }),
+    );
+    expect(gate.passed).toBe(false);
+    expect(gate.reasons.map((row) => row.code)).toEqual(["verdict_contradiction"]);
+  });
+
   it("reads a capitalized conclusion token as that verdict", () => {
     expect(extractAggregatorVerdict("## 结论\n\nChanges-requested\n")).toBe("changes-requested");
     expect(extractAggregatorVerdict("## 结论\n\nApprove\n")).toBe("approve");
