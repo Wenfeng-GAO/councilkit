@@ -23,7 +23,7 @@ const NEGATION_BEFORE =
 function verdictInProse(body: string): AggregatorVerdict {
   for (const match of body.matchAll(/\b(approve|changes-requested|comment)\b/gi)) {
     const index = match.index ?? 0;
-    const before = body.slice(Math.max(0, index - 16), index).replace(/[`"*]/g, "");
+    const before = body.slice(0, index).replace(/[`"*]/g, "");
     if (NEGATION_BEFORE.test(before)) continue;
     return asVerdict(match[1]);
   }
