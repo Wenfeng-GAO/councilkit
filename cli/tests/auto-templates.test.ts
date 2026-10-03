@@ -496,4 +496,21 @@ describe("cli auto templates — plan prompts", () => {
       null,
     );
   });
+
+  it("does not read a plan token from a section after the conclusion", () => {
+    const markdown = [
+      "## 结论",
+      "",
+      "方案仍有阻塞，不能直接落地。",
+      "",
+      "## 附录",
+      "",
+      "approve",
+      "",
+    ].join("\n");
+    expect(extractVerdictToken(markdown)).toBe(null);
+    expect(
+      extractVerdictToken(["## 结论", "approve", "", "## 附录", "comment"].join("\n")),
+    ).toBe("approve");
+  });
 });
