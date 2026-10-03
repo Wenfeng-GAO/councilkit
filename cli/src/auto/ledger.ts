@@ -363,6 +363,7 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
 }
 
 export function buildClusterPlanMarkdown(lock: PlanLockFile, cluster: PlanCluster): string {
+  const body = trimBlankEdges(cluster.body);
   const lines = [
     "# 修复方案",
     "",
@@ -372,7 +373,7 @@ export function buildClusterPlanMarkdown(lock: PlanLockFile, cluster: PlanCluste
     cluster.invariants.trim().length > 0 ? cluster.invariants.trim() : "（见集群正文）",
     "",
     "### 集群",
-    cluster.body.trim().length > 0 ? cluster.body.trim() : `- id: ${cluster.id}`,
+    body.trim().length > 0 ? body : `- id: ${cluster.id}`,
     "",
     "## 范围",
     cluster.files.length > 0

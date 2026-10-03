@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { markdownLines } from "@shared/runtime/aggregator-verdict";
 import { isFindingBlocking, isFindingVerifiedClosed } from "@shared/runtime/cli-ledger";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildFindingGroups, hashFindingsBytes } from "../src/auto/finding-groups";
@@ -853,6 +854,9 @@ describe("plan.lock parse", () => {
     expect(cluster?.files).toEqual(["pkg/eventlog/log.go"]);
     expect(cluster?.closes).toEqual([]);
     expect(cluster?.body).toContain("func Write() {}");
+    const handed = buildClusterPlanMarkdown(lock, cluster as PlanCluster);
+    expect(handed).toContain("func Write() {}");
+    expect([...markdownLines(handed)].find((row) => row.line === "## 范围")?.fenced).toBe(false);
     expect(
       resolveClusterCloses(cluster as PlanCluster, [
         finding({ id: "F-2", title: "zzzz unique", files: ["not/listed.go"] }),
