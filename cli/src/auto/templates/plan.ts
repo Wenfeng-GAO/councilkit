@@ -216,7 +216,7 @@ export function extractVerdictToken(
   const last = headings.at(-1);
   if (last?.index === undefined) return null;
   const after = markdown.slice(last.index + last[0].length).replace(/^\n+/, "");
-  const nextHeading = /^## /m.exec(after);
+  const nextHeading = /^#{2,6} /m.exec(after);
   const body = nextHeading?.index === undefined ? after : after.slice(0, nextHeading.index);
   const token = /^([A-Za-z-]+)\s*$/m.exec(body)?.[1]?.toLowerCase();
   if (token === "approve" || token === "changes-requested" || token === "comment") return token;

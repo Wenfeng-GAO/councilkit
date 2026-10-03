@@ -492,9 +492,9 @@ describe("cli auto templates — plan prompts", () => {
     ].join("\n");
     expect(extractVerdictToken(markdown)).toBe("changes-requested");
     expect(extractVerdictToken(markdown.replace("changes-requested", "Approve"))).toBe("approve");
-    expect(extractVerdictToken(markdown.replace("changes-requested", "最终 changes-requested"))).toBe(
-      null,
-    );
+    expect(
+      extractVerdictToken(markdown.replace("changes-requested", "最终 changes-requested")),
+    ).toBe(null);
   });
 
   it("does not read a plan token from a section after the conclusion", () => {
@@ -509,9 +509,9 @@ describe("cli auto templates — plan prompts", () => {
       "",
     ].join("\n");
     expect(extractVerdictToken(markdown)).toBe(null);
-    expect(
-      extractVerdictToken(["## 结论", "approve", "", "## 附录", "comment"].join("\n")),
-    ).toBe("approve");
+    expect(extractVerdictToken(["## 结论", "approve", "", "## 附录", "comment"].join("\n"))).toBe(
+      "approve",
+    );
     expect(extractVerdictToken(markdown.replace("## 附录", "### 附录"))).toBe(null);
   });
 });
