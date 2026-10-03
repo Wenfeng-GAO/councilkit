@@ -111,6 +111,27 @@ describe("resolveLocalRepo", () => {
     expect(resolved.path).toBe(repo);
   });
 
+  it("reuses a remembered clone when a later PR only changes the project key case", async () => {
+    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:acme/repo.git"], {
+      cwd: repo,
+    });
+    const remembered = await resolveLocalRepo({
+      pr: "https://github.com/Acme/Repo/pull/9",
+      cwd: repo,
+      runCommand: defaultRunCommand,
+    });
+    expect(remembered.source).toBe("cwd");
+
+    const again = await resolveLocalRepo({
+      pr: "https://github.com/acme/repo/pull/10",
+      cwd: tmpdir(),
+      runCommand: defaultRunCommand,
+    });
+    expect(again.source).toBe("config");
+    expect(again.path).toBe(repo);
+    expect(again.project).toBe("acme/repo");
+  });
+
   it("refuses a cwd checkout whose remote path only suffixes the PR project", async () => {
     expect(remoteMatchesProject("git@github.com:acme/repo.git", "acme/repo")).toBe(true);
     expect(remoteMatchesProject("git@github.com:evil/acme/repo.git", "acme/repo")).toBe(false);
