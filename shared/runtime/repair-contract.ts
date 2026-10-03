@@ -283,6 +283,8 @@ function logShowsFailures(text: string): boolean {
   if (/^[ \t]*FAILED[ \t]+\S/m.test(plain)) return true;
   if (/^[ \t]*ERROR[ \t]+\S+::\S/m.test(plain)) return true;
   if (/^=+[ \t][^\n]*\b[1-9]\d*[ \t]+(?:failed|errors?)\b/m.test(plain)) return true;
+  if (/^[ \t]*[1-9]\d*[ \t]+errors?[ \t]+in[ \t]/im.test(plain)) return true;
+  if (/^[ \t]*!+[ \t]*Interrupted:[^\n]*\b[1-9]\d*[ \t]+errors?\b/im.test(plain)) return true;
   if (/(?<!\\)"Action"\s*:\s*"fail"/.test(plain)) return true;
   return false;
 }
