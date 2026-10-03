@@ -5,7 +5,7 @@
  * The point is to lock the *approach* (delete / fail-closed / gate) before
  * any agent is allowed to add retries, WaitGroups, or new locks.
  */
-import { conclusionWindow } from "@shared/runtime/aggregator-verdict";
+import { conclusionWindow, markdownLines } from "@shared/runtime/aggregator-verdict";
 import { buildAccessHint } from "./review";
 
 export const PLAN_RUN_FILE = "plan.md";
@@ -220,13 +220,25 @@ export function extractVerdictToken(
   return null;
 }
 
-/** Pull the consensus plan section out of an aggregator deliverable. */
+const CONSENSUS_PLAN = /^## 共识计划\s*$/;
+const CONSENSUS_PLAN_STOP = /^## (?:分歧|结论|概览|独有发现|共识发现)\s*$/;
+
 export function extractConsensusPlan(markdown: string): string | null {
-  const start = markdown.search(/^## 共识计划\s*$/m);
-  if (start < 0) return null;
-  const afterHeading = markdown.slice(start).replace(/^## 共识计划\s*\n*/, "");
-  const end = afterHeading.search(/^## (?:分歧|结论|概览|独有发现|共识发现)\s*$/m);
-  const body = (end < 0 ? afterHeading : afterHeading.slice(0, end)).trim();
+  const sections: string[][] = [];
+  let current: string[] | null = null;
+  for (const { line, fenced } of markdownLines(markdown)) {
+    if (!fenced && CONSENSUS_PLAN.test(line)) {
+      current = [];
+      sections.push(current);
+      continue;
+    }
+    if (!fenced && current && CONSENSUS_PLAN_STOP.test(line)) {
+      current = null;
+      continue;
+    }
+    if (current) current.push(line);
+  }
+  const body = (sections[sections.length - 1] ?? []).join("\n").trim();
   return body.length > 0 ? body : null;
 }
 
