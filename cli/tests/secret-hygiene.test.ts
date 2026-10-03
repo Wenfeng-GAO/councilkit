@@ -30,11 +30,20 @@ describe("cli redact (pure)", () => {
     expect(after).not.toContain(CANARY_COOKIE);
     expect(after).not.toContain("CANARY-SECRET-12345");
     expect(after).toContain(REDACT_PLACEHOLDER);
+    expect(redact(`a ${CANARY_COOKIE}; b ${CANARY_COOKIE}`)).toBe(
+      `a ${REDACT_PLACEHOLDER}; b ${REDACT_PLACEHOLDER}`,
+    );
   });
 
   it("containsSecret detects a surviving canary", () => {
     expect(containsSecret(`hello ${CANARY_COOKIE}`, CANARY_COOKIE)).toBe(true);
     expect(containsSecret("clean text", CANARY_COOKIE)).toBe(false);
+  });
+
+  it("sees a cookie pair again on the next check", () => {
+    const leaked = "councilkit_session=not-the-canary";
+    expect(containsSecret(leaked, "CANARY-SECRET-12345")).toBe(true);
+    expect(containsSecret(leaked, "CANARY-SECRET-12345")).toBe(true);
   });
 
   it("redacts nested objects and tainted keys", () => {
