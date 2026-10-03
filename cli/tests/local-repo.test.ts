@@ -93,6 +93,24 @@ describe("resolveLocalRepo", () => {
     expect(second.path).toBe(first.path);
   });
 
+  it("matches a checkout when the remote path and the PR project differ only by case", async () => {
+    expect(remoteMatchesProject("git@github.com:acme/repo.git", "Acme/Repo")).toBe(true);
+    expect(remoteMatchesProject("https://github.com/Acme/Repo.git", "acme/repo")).toBe(true);
+    expect(remoteMatchesProject("git@github.com:evil/Acme/Repo.git", "acme/repo")).toBe(false);
+
+    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:acme/repo.git"], {
+      cwd: repo,
+    });
+    const resolved = await resolveLocalRepo({
+      pr: "https://github.com/Acme/Repo/pull/9",
+      cwd: repo,
+      runCommand: defaultRunCommand,
+    });
+    expect(resolved.source).toBe("cwd");
+    expect(resolved.project).toBe("Acme/Repo");
+    expect(resolved.path).toBe(repo);
+  });
+
   it("refuses a cwd checkout whose remote path only suffixes the PR project", async () => {
     expect(remoteMatchesProject("git@github.com:acme/repo.git", "acme/repo")).toBe(true);
     expect(remoteMatchesProject("git@github.com:evil/acme/repo.git", "acme/repo")).toBe(false);
