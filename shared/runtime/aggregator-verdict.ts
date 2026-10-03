@@ -16,15 +16,12 @@ function fenceOpen(line: string): { char: string; length: number } | null {
   return { char: marker[0] ?? "`", length: marker.length };
 }
 
-/** Last `## 结论` body. Fenced lines are not headings and not verdict text. */
-export function conclusionWindow(markdown: string, stopAtAppendix: boolean): string | null {
+export function* markdownLines(markdown: string): Generator<{ line: string; fenced: boolean }> {
   const lines = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   let fence: { char: string; length: number } | null = null;
-  let collecting = false;
-  let sawConclusion = false;
-  const kept: string[] = [];
   for (const line of lines) {
     if (fence) {
+      yield { line, fenced: true };
       const close = FENCE_CLOSE.exec(line);
       if (close?.[1] && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
       continue;
@@ -32,8 +29,19 @@ export function conclusionWindow(markdown: string, stopAtAppendix: boolean): str
     const open = fenceOpen(line);
     if (open) {
       fence = open;
+      yield { line, fenced: true };
       continue;
     }
+    yield { line, fenced: false };
+  }
+}
+
+export function conclusionWindow(markdown: string, stopAtAppendix: boolean): string | null {
+  let collecting = false;
+  let sawConclusion = false;
+  const kept: string[] = [];
+  for (const { line, fenced } of markdownLines(markdown)) {
+    if (fenced) continue;
     if (stopAtAppendix && APPENDIX.test(line)) break;
     if (CONCLUSION.test(line)) {
       sawConclusion = true;

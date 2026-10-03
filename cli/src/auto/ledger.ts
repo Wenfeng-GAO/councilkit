@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ReviewFinding, parseReviewReport } from "@/lib/review-report";
+import { markdownLines } from "@shared/runtime/aggregator-verdict";
 import {
   CLI_RUN_FINDINGS_FILE,
   CLI_RUN_LANDINGS_FILE,
@@ -917,14 +918,24 @@ function tokenOverlap(a: Set<string>, b: Set<string>): number {
   return hit / Math.max(a.size, b.size);
 }
 
+const ORDER_HEADING = /^## 落地顺序\s*$/;
+const ORDER_STOP = /^## (?:本轮不落地|合并门槛|分歧|结论)\s*$/;
+
 function splitClusterBlocks(markdown: string): Array<{ heading: string; body: string }> {
-  const start = markdown.search(/^## 落地顺序\s*$/m);
-  const region = start >= 0 ? markdown.slice(start) : markdown;
-  const end = region.search(/^## (?:本轮不落地|合并门槛|分歧|结论)\s*$/m);
-  const body = (end < 0 ? region : region.slice(0, end)).split("\n");
+  const rows = [...markdownLines(markdown)];
+  let start = -1;
+  for (const [index, row] of rows.entries()) {
+    if (!row.fenced && ORDER_HEADING.test(row.line)) start = index;
+  }
+  const region: Array<{ line: string; fenced: boolean }> = [];
+  for (const row of rows.slice(start + 1)) {
+    if (!row.fenced && ORDER_STOP.test(row.line)) break;
+    region.push(row);
+  }
   const blocks: Array<{ heading: string; body: string }> = [];
   let current: { heading: string; lines: string[] } | null = null;
-  for (const line of body) {
+  for (const { line, fenced } of region) {
+    if (fenced) continue;
     const heading = CLUSTER_HEADING.exec(line);
     if (heading) {
       if (current) blocks.push({ heading: current.heading, body: current.lines.join("\n").trim() });
@@ -987,14 +998,26 @@ function parseKeyedItems(body: string): Record<string, string> {
   return out;
 }
 
+const DEFERRED_HEADING = /^## 本轮不落地\s*$/;
+
 function parseDeferred(markdown: string): Array<{ title: string; reason: string }> {
-  const start = markdown.search(/^## 本轮不落地\s*$/m);
-  if (start < 0) return [];
-  const after = markdown.slice(start).replace(/^## 本轮不落地\s*\n*/, "");
-  const end = after.search(/^## /m);
-  const body = (end < 0 ? after : after.slice(0, end)).trim();
+  let collecting = false;
+  const lines: string[] = [];
+  for (const { line, fenced } of markdownLines(markdown)) {
+    if (fenced) continue;
+    if (DEFERRED_HEADING.test(line)) {
+      collecting = true;
+      lines.length = 0;
+      continue;
+    }
+    if (collecting && /^## /.test(line)) {
+      collecting = false;
+      continue;
+    }
+    if (collecting) lines.push(line);
+  }
   const rows: Array<{ title: string; reason: string }> = [];
-  for (const line of body.split("\n")) {
+  for (const line of lines) {
     const match = /^- (.+)$/.exec(line);
     if (!match) continue;
     const raw = match[1].trim();
