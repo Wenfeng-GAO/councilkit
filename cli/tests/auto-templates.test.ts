@@ -512,5 +512,6 @@ describe("cli auto templates — plan prompts", () => {
     expect(
       extractVerdictToken(["## 结论", "approve", "", "## 附录", "comment"].join("\n")),
     ).toBe("approve");
+    expect(extractVerdictToken(markdown.replace("## 附录", "### 附录"))).toBe(null);
   });
 });
