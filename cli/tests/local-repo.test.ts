@@ -92,4 +92,21 @@ describe("resolveLocalRepo", () => {
     expect(second.source).toBe("config");
     expect(second.path).toBe(first.path);
   });
+
+  it("refuses a cwd checkout whose remote path only suffixes the PR project", async () => {
+    expect(remoteMatchesProject("git@github.com:acme/repo.git", "acme/repo")).toBe(true);
+    expect(remoteMatchesProject("git@github.com:evil/acme/repo.git", "acme/repo")).toBe(false);
+    expect(remoteMatchesProject("git@github.com:acme/repo.git", "repo")).toBe(false);
+
+    execFileSync("git", ["remote", "set-url", "origin", "git@github.com:evil/acme/repo.git"], {
+      cwd: repo,
+    });
+    await expect(
+      resolveLocalRepo({
+        pr: "https://github.com/acme/repo/pull/9",
+        cwd: repo,
+        runCommand: defaultRunCommand,
+      }),
+    ).rejects.toThrow("no local clone for acme/repo");
+  });
 });
