@@ -51,4 +51,32 @@ comment
       blockingCount: 0,
     });
   });
+
+  it("ignores a fenced review example when counting findings and reading the overview", () => {
+    const output = [
+      "旧报告摘录：",
+      "",
+      "```md",
+      "## 概览",
+      "示例概述，不该出现在席位摘要里。",
+      "## 发现",
+      "- [critical] 示例缺陷",
+      "- [major] 另一条示例",
+      "```",
+      "",
+      "## 概览",
+      "",
+      "本席没有阻塞项。",
+      "",
+      "## 发现",
+      "",
+      "- [nit] 措辞可以更短",
+    ].join("\n");
+    expect(summarizeSeatOutput(output)).toEqual({
+      parseStatus: "parsed",
+      summary: "本席没有阻塞项。",
+      findingCount: 1,
+      blockingCount: 0,
+    });
+  });
 });
