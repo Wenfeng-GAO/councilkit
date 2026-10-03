@@ -146,7 +146,7 @@ export async function runRun(argv: string[], out: OutputSink): Promise<void> {
       signal: controller.signal,
       onProgress: (ev) => out.progress(progressMessage(ev)),
     });
-    out.finish(outcome, (d) => renderHuman(d as typeof outcome));
+    await out.finish(outcome, (d) => renderHuman(d as typeof outcome));
     // Surface the exit code to the main layer via a thrown sentinel.
     throw new RunExit(outcome.exitCode);
   } finally {

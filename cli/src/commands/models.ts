@@ -57,7 +57,7 @@ export async function runModels(argv: string[], out: OutputSink): Promise<void> 
   }
 
   const result = { origin: CANONICAL_ORIGIN, models: entries };
-  out.finish(result, (d) => renderHuman(d as typeof result));
+  await out.finish(result, (d) => renderHuman(d as typeof result));
 }
 
 interface ModelEntry {
