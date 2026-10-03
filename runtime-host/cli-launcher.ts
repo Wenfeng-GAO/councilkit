@@ -9,6 +9,7 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
+import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
 import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
 import { resolveHostMode } from "./config";
@@ -253,12 +254,4 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-export function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { isPidAlive };

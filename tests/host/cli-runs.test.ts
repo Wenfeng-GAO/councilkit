@@ -585,7 +585,52 @@ describe("cli-runs route", () => {
     expect(body.error.code).toBe("EXECUTION_CONFLICT");
     expect(body.error.message).toContain("already running");
   });
+
+  it("POST /actions still 409 when the pipeline pid exists but cannot be signaled", async () => {
+    expect(killErrno(1)).toBe("EPERM");
+    seed();
+    const dir = join(home, "runs", RUN_ID);
+    const transcript = readFileSync(join(dir, "transcript.jsonl"), "utf8");
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${transcript}${JSON.stringify({
+        kind: "review.finished",
+        version: 1,
+        status: "completed",
+        endedAt: "2026-08-01T01:00:00.000Z",
+        incomplete: false,
+      })}\n`,
+    );
+    writeFileSync(join(dir, "pipeline.pid"), "1\n");
+    host = await createTestHost({
+      routesFactory: (services) => {
+        services.cliRunLauncher = {
+          start: () => ({ pid: 12604 }),
+        };
+        return cliRunsRoutes(services);
+      },
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/actions`, {
+      method: "POST",
+      headers: authedHeaders(host),
+      body: JSON.stringify({ action: "fix" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { ok: false; error: { code: string; message: string } };
+    expect(body.error.code).toBe("EXECUTION_CONFLICT");
+    expect(body.error.message).toContain("already running");
+    expect(readFileSync(join(dir, "pipeline.pid"), "utf8")).toBe("1\n");
+  });
 });
+
+function killErrno(pid: number): string | undefined {
+  try {
+    process.kill(pid, 0);
+    return undefined;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code;
+  }
+}
 
 const GH_PR = "https://github.com/acme/repo/pull/1";
 
