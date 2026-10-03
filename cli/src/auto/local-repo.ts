@@ -197,15 +197,19 @@ function readRepos(env: NodeJS.ProcessEnv): ReposFile {
   }
 }
 
+function sameProjectKey(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
 function lookupRepo(project: string, env: NodeJS.ProcessEnv): string | null {
-  const hit = readRepos(env).repos.find((r) => r.project === project);
+  const hit = readRepos(env).repos.find((r) => sameProjectKey(r.project, project));
   return hit?.path ?? null;
 }
 
 function rememberRepo(project: string, path: string, env: NodeJS.ProcessEnv): void {
   ensureHome(env);
   const file = readRepos(env);
-  const idx = file.repos.findIndex((r) => r.project === project);
+  const idx = file.repos.findIndex((r) => sameProjectKey(r.project, project));
   if (idx >= 0) file.repos[idx] = { project, path };
   else file.repos.push({ project, path });
   atomicWriteJson(reposPath(env), file);
