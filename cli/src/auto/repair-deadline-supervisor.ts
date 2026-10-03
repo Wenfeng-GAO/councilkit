@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import {
   type RepairExecution,
   certifyDeadlineEnforced,
@@ -34,7 +35,7 @@ export function superviseDeadlineOnce(input: {
 }): RepairExecution {
   const result = enforceDeadline(input.execution, input.nowMs);
   if (!result.due) return result.execution;
-  const alive = input.isPidAlive ?? defaultAlive;
+  const alive = input.isPidAlive ?? isPidAlive;
   if (input.execution.pids.length === 0) {
     return markUnknownWriter(input.execution);
   }
@@ -115,15 +116,6 @@ export async function runDeadlineSupervisorLoop(input: {
     }
     const remaining = Math.max(20, next.deadlineAtMs - nowMs());
     await sleep(Math.min(remaining, 1_000));
-  }
-}
-
-function defaultAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 
