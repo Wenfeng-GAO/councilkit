@@ -212,8 +212,11 @@ export function buildPlanAggregatePrompt(input: {
 export function extractVerdictToken(
   markdown: string,
 ): "approve" | "changes-requested" | "comment" | null {
-  const match = /^## 结论\s*\n+([A-Za-z-]+)\s*$/m.exec(markdown);
-  const token = match?.[1]?.toLowerCase();
+  const headings = [...markdown.matchAll(/^## 结论[^\S\n]*$/gm)];
+  const last = headings.at(-1);
+  if (last?.index === undefined) return null;
+  const after = markdown.slice(last.index + last[0].length).replace(/^\n+/, "");
+  const token = /^([A-Za-z-]+)\s*$/m.exec(after)?.[1]?.toLowerCase();
   if (token === "approve" || token === "changes-requested" || token === "comment") return token;
   return null;
 }
