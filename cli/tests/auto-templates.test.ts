@@ -514,4 +514,22 @@ describe("cli auto templates — plan prompts", () => {
     );
     expect(extractVerdictToken(markdown.replace("## 附录", "### 附录"))).toBe(null);
   });
+
+  it("does not read a plan token from a fenced quote", () => {
+    const quoted = ["## 结论", "", "```", "approve", "```", "", "changes-requested", ""].join("\n");
+    expect(extractVerdictToken(quoted)).toBe("changes-requested");
+    expect(
+      extractVerdictToken(
+        ["## 结论", "", "不能落地。", "", "```md", "approve", "```", ""].join("\n"),
+      ),
+    ).toBe(null);
+    expect(
+      extractVerdictToken(
+        ["## 结论", "", "引用：", "", "```", "## 结论", "approve", "```", "", "comment", ""].join(
+          "\n",
+        ),
+      ),
+    ).toBe("comment");
+    expect(extractVerdictToken(["## 过程对比", "## 结论", "approve"].join("\n"))).toBe("approve");
+  });
 });

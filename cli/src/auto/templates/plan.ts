@@ -5,6 +5,7 @@
  * The point is to lock the *approach* (delete / fail-closed / gate) before
  * any agent is allowed to add retries, WaitGroups, or new locks.
  */
+import { conclusionWindow } from "@shared/runtime/aggregator-verdict";
 import { buildAccessHint } from "./review";
 
 export const PLAN_RUN_FILE = "plan.md";
@@ -212,12 +213,8 @@ export function buildPlanAggregatePrompt(input: {
 export function extractVerdictToken(
   markdown: string,
 ): "approve" | "changes-requested" | "comment" | null {
-  const headings = [...markdown.matchAll(/^## 结论[^\S\n]*$/gm)];
-  const last = headings.at(-1);
-  if (last?.index === undefined) return null;
-  const after = markdown.slice(last.index + last[0].length).replace(/^\n+/, "");
-  const nextHeading = /^#{2,6} /m.exec(after);
-  const body = nextHeading?.index === undefined ? after : after.slice(0, nextHeading.index);
+  const body = conclusionWindow(markdown, false);
+  if (!body) return null;
   const token = /^([A-Za-z-]+)\s*$/m.exec(body)?.[1]?.toLowerCase();
   if (token === "approve" || token === "changes-requested" || token === "comment") return token;
   return null;
