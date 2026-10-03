@@ -10,8 +10,10 @@
 
 const COOKIE_PAIR_PREFIX = "councilkit_session=";
 const CSRF_KEY_PATTERN = /x-councilkit-csrf\b/gi;
-/** The cookie pair value: `councilkit_session=<token>` up to the next `;` or end. */
-const COOKIE_PAIR_PATTERN = /councilkit_session=[^;]+/g;
+
+function cookiePairPattern(): RegExp {
+  return /councilkit_session=[^;]+/g;
+}
 
 export const REDACT_PLACEHOLDER = "[redacted]";
 
@@ -49,7 +51,7 @@ function redactString(input: string): string {
   if (input.startsWith(COOKIE_PAIR_PREFIX) || input === "councilkit_session") {
     return REDACT_PLACEHOLDER;
   }
-  let out = input.replace(COOKIE_PAIR_PATTERN, REDACT_PLACEHOLDER);
+  let out = input.replace(cookiePairPattern(), REDACT_PLACEHOLDER);
   out = out.replace(CSRF_KEY_PATTERN, REDACT_PLACEHOLDER);
   if (liveSecrets.size > 0) {
     for (const secret of liveSecrets) {
@@ -114,5 +116,5 @@ export function summarizeZodIssue(issue: {
  * conservative: the literal secret OR the cookie pair footprint. */
 export function containsSecret(input: string, secret: string): boolean {
   if (secret.length > 0 && input.includes(secret)) return true;
-  return COOKIE_PAIR_PATTERN.test(input) || /x-councilkit-csrf/i.test(input);
+  return cookiePairPattern().test(input) || /x-councilkit-csrf/i.test(input);
 }

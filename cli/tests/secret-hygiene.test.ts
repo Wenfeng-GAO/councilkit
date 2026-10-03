@@ -30,6 +30,9 @@ describe("cli redact (pure)", () => {
     expect(after).not.toContain(CANARY_COOKIE);
     expect(after).not.toContain("CANARY-SECRET-12345");
     expect(after).toContain(REDACT_PLACEHOLDER);
+    expect(redact(`a ${CANARY_COOKIE}; b ${CANARY_COOKIE}`)).toBe(
+      `a ${REDACT_PLACEHOLDER}; b ${REDACT_PLACEHOLDER}`,
+    );
   });
 
   it("containsSecret detects a surviving canary", () => {
