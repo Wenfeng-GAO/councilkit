@@ -737,6 +737,55 @@ describe("plan.lock parse", () => {
     );
     expect(closes.length).toBeGreaterThan(0);
   });
+
+  it("ignores fenced plan headings when reading clusters and deferred items", () => {
+    const lock = parsePlanDocument(
+      [
+        "# 修复方案",
+        "## 不变量",
+        "1. keep",
+        "```md",
+        "## 落地顺序",
+        "### 集群 1: fake",
+        "- id: fake",
+        "## 本轮不落地",
+        "- fake item: no",
+        "```",
+        "## 落地顺序",
+        "### 集群 1: eventlog-short-write",
+        "- id: eventlog-short-write",
+        "- files: pkg/eventlog/log.go",
+        "```",
+        "### 集群 2: phantom",
+        "- id: phantom",
+        "## 本轮不落地",
+        "- phantom: no",
+        "```",
+        "- 方针: 删除",
+        "### 集群 2: waitgroup-leak",
+        "- id: waitgroup-leak",
+        "- files: internal/foo.go",
+        "## 本轮不落地",
+        "- lastSeq > head: 产品合同",
+        "```",
+        "- fenced item: no",
+        "```",
+        "## 合并门槛",
+        "- 阻塞不变量有测试",
+      ].join("\n"),
+      {
+        sourceRunId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+        approvedAt: "2026-08-20T00:00:00.000Z",
+        verdict: "approve",
+      },
+    );
+    expect(lock.clusters.map((cluster) => cluster.id)).toEqual([
+      "eventlog-short-write",
+      "waitgroup-leak",
+    ]);
+    expect(lock.clusters[0]?.files).toEqual(["pkg/eventlog/log.go"]);
+    expect(lock.deferred).toEqual([{ title: "lastSeq > head", reason: "产品合同" }]);
+  });
 });
 
 describe("ledger persist", () => {

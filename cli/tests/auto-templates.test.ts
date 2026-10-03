@@ -532,4 +532,57 @@ describe("cli auto templates — plan prompts", () => {
     ).toBe("comment");
     expect(extractVerdictToken(["## 过程对比", "## 结论", "approve"].join("\n"))).toBe("approve");
   });
+
+  it("reads the last consensus plan and keeps text after a fenced heading", () => {
+    const markdown = [
+      "## 概览",
+      "审查者原文：",
+      "## 共识计划",
+      "# 修复方案",
+      "## 不变量",
+      "1. quoted wrong",
+      "## 结论",
+      "approve",
+      "```md",
+      "## 共识计划",
+      "# 修复方案",
+      "## 不变量",
+      "1. fenced wrong",
+      "## 结论",
+      "approve",
+      "```",
+      "## 共识计划",
+      "# 修复方案",
+      "",
+      "## 不变量",
+      "1. jsonl never torn",
+      "## 落地顺序",
+      "### 集群 1: log",
+      "```",
+      "## 分歧",
+      "quoted split",
+      "```",
+      "keep this cluster",
+      "## 分歧",
+      "无",
+      "## 结论",
+      "approve",
+    ].join("\n");
+    const plan = extractConsensusPlan(markdown);
+    expect(plan).toBe(
+      [
+        "# 修复方案",
+        "",
+        "## 不变量",
+        "1. jsonl never torn",
+        "## 落地顺序",
+        "### 集群 1: log",
+        "```",
+        "## 分歧",
+        "quoted split",
+        "```",
+        "keep this cluster",
+      ].join("\n"),
+    );
+  });
 });
