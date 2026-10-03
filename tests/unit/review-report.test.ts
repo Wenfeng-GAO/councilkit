@@ -5,8 +5,10 @@ import {
   parseFindings,
   parseReviewReport,
   sortReviewFindings,
+  splitH3Blocks,
 } from "@/lib/review-report";
 import { describe, expect, it } from "vitest";
+import { extractFindingsFromReport } from "../../cli/src/auto/ledger";
 
 const SAMPLE = `# Autonomous Review Report
 
@@ -213,6 +215,99 @@ describe("parseFindings", () => {
     );
     expect(parsed?.sections.map((section) => section.title)).toEqual(["概览", "结论"]);
     expect(parsed?.preface).toContain("先核对元数据。");
+  });
+
+  it("keeps a fenced example out of the finding ledger", () => {
+    const markdown = [
+      "# Autonomous Review Report",
+      "",
+      "---",
+      "",
+      "## 共识发现",
+      "",
+      "- [major] real leak in session cookie",
+      "",
+      "```md",
+      "## 共识发现",
+      "- [critical] this is only an example",
+      "```",
+      "",
+      "- [minor] trailing nit stays",
+      "",
+      "## 独有发现",
+      "",
+      "**review-security**",
+      "",
+      "- [nit] real unique note",
+      "",
+      "~~~",
+      "**review-example**",
+      "",
+      "- [critical] quoted unique example",
+      "~~~",
+      "",
+      "## 结论",
+      "",
+      "changes-requested",
+    ].join("\n");
+    const parsed = parseReviewReport(markdown);
+    expect(parsed?.sections.map((section) => section.title)).toEqual([
+      "共识发现",
+      "独有发现",
+      "结论",
+    ]);
+    expect(parsed?.verdict).toBe("changes-requested");
+    const consensus = parsed?.sections.find((section) => section.title === "共识发现");
+    expect(consensus?.findings).toEqual([
+      {
+        severity: "major",
+        qualifier: null,
+        text: [
+          "real leak in session cookie",
+          "```md",
+          "## 共识发现",
+          "- [critical] this is only an example",
+          "```",
+        ].join("\n"),
+      },
+      {
+        severity: "minor",
+        qualifier: null,
+        text: "trailing nit stays",
+      },
+    ]);
+    const unique = parsed?.sections.find((section) => section.title === "独有发现");
+    expect(unique?.groups?.map((group) => group.title)).toEqual(["review-security"]);
+    expect(unique?.groups?.[0]?.findings).toEqual([
+      {
+        severity: "nit",
+        qualifier: null,
+        text: [
+          "real unique note",
+          "~~~",
+          "**review-example**",
+          "",
+          "- [critical] quoted unique example",
+          "~~~",
+        ].join("\n"),
+      },
+    ]);
+    expect(
+      extractFindingsFromReport({
+        markdown,
+        runId: "ck-review-fenced",
+        extractedAt: "2026-10-03T00:00:00.000Z",
+      }).findings.map((row) => ({ severity: row.severity, title: row.title })),
+    ).toEqual([
+      { severity: "major", title: "real leak in session cookie" },
+      { severity: "minor", title: "trailing nit stays" },
+      { severity: "nit", title: "real unique note" },
+    ]);
+    expect(
+      splitH3Blocks(["intro", "```", "### not a card", "```", "### real"].join("\n")).map(
+        (block) => block.title,
+      ),
+    ).toEqual(["", "real"]);
   });
 
   it("does not split #### appendix headings into top-level chapters", () => {
