@@ -829,6 +829,36 @@ describe("plan.lock parse", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("does not let a trimmed indented fence swallow later cluster fields", () => {
+    const lock = parsePlanDocument(
+      [
+        "## 落地顺序",
+        "### 集群 1: eventlog-short-write",
+        "    ```",
+        "    func Write() {}",
+        "    ```",
+        "- id: eventlog-short-write",
+        "- files: pkg/eventlog/log.go",
+        "note F-2 remains",
+      ].join("\n"),
+      {
+        sourceRunId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+        approvedAt: "2026-08-20T00:00:00.000Z",
+        verdict: "approve",
+      },
+    );
+    const cluster = lock.clusters[0];
+    expect(cluster?.id).toBe("eventlog-short-write");
+    expect(cluster?.files).toEqual(["pkg/eventlog/log.go"]);
+    expect(cluster?.closes).toEqual([]);
+    expect(cluster?.body).toContain("func Write() {}");
+    expect(
+      resolveClusterCloses(cluster as PlanCluster, [
+        finding({ id: "F-2", title: "zzzz unique", files: ["not/listed.go"] }),
+      ]),
+    ).toEqual(["F-2"]);
+  });
 });
 
 describe("ledger persist", () => {
