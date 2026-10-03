@@ -1,15 +1,60 @@
 export type AggregatorVerdict = "approve" | "changes-requested" | "comment" | null;
 
+const FENCE_OPEN = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+const NEXT_HEADING = /^#{2,6} /;
+const CONCLUSION = /^## 结论[^\S\n]*$/;
+const APPENDIX = /^## (?:过程对比|附录:各审查者交付物)[^\S\n]*$/;
+
+function fenceOpen(line: string): { char: string; length: number } | null {
+  const open = FENCE_OPEN.exec(line);
+  const marker = open?.[2];
+  if (!marker) return null;
+  const info = open?.[3] ?? "";
+  // A backtick fence whose info contains a backtick is paragraph text.
+  if (marker[0] === "`" && info.includes("`")) return null;
+  return { char: marker[0] ?? "`", length: marker.length };
+}
+
+/** Last `## 结论` body. Fenced lines are not headings and not verdict text. */
+export function conclusionWindow(markdown: string, stopAtAppendix: boolean): string | null {
+  const lines = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  let fence: { char: string; length: number } | null = null;
+  let collecting = false;
+  let sawConclusion = false;
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (fence) {
+      const close = FENCE_CLOSE.exec(line);
+      if (close?.[1] && close[1][0] === fence.char && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const open = fenceOpen(line);
+    if (open) {
+      fence = open;
+      continue;
+    }
+    if (stopAtAppendix && APPENDIX.test(line)) break;
+    if (CONCLUSION.test(line)) {
+      sawConclusion = true;
+      collecting = true;
+      kept.length = 0;
+      continue;
+    }
+    if (NEXT_HEADING.test(line)) {
+      collecting = false;
+      continue;
+    }
+    if (collecting) kept.push(line);
+  }
+  if (!sawConclusion) return null;
+  return kept.join("\n").replace(/^\n+/, "");
+}
+
 export function extractAggregatorVerdict(markdown: string | null | undefined): AggregatorVerdict {
   if (!markdown) return null;
-  const normalized = markdown.replace(/\r\n/g, "\n");
-  const cut = normalized.search(/^## (?:过程对比|附录:各审查者交付物)[^\S\n]*$/m);
-  const text = cut < 0 ? normalized : normalized.slice(0, cut);
-  const heading = [...text.matchAll(/^## 结论[^\S\n]*$/gm)].at(-1);
-  if (heading?.index === undefined) return null;
-  const after = text.slice(heading.index + heading[0].length).replace(/^\n+/, "");
-  const next = /^## /m.exec(after);
-  const body = next?.index === undefined ? after : after.slice(0, next.index);
+  const body = conclusionWindow(markdown, true);
+  if (body === null) return null;
   for (const line of body.split("\n")) {
     const bare = asVerdict(line.trim());
     if (bare) return bare;
