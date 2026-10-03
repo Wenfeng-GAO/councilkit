@@ -7,9 +7,9 @@ import { buildFindingGroups, hashFindingsBytes } from "../src/auto/finding-group
 import {
   againstDiffRange,
   applyReviewerVerifications,
+  buildClusterPlanMarkdown,
   classifyAgainstPrior,
   classifyAgainstPriorWithAliases,
-  buildClusterPlanMarkdown,
   extractFindingsFromReport,
   formatLedgerForPrompt,
   markFindingsRepairClaimed,
@@ -824,10 +824,9 @@ describe("plan.lock parse", () => {
       "func Write(buf []byte) {}",
     );
     expect(
-      resolveClusterCloses(
-        cluster as PlanCluster,
-        [finding({ id: "F-9", title: "phantom leak", files: ["evil/phantom.go"] })],
-      ),
+      resolveClusterCloses(cluster as PlanCluster, [
+        finding({ id: "F-9", title: "phantom leak", files: ["evil/phantom.go"] }),
+      ]),
     ).toEqual([]);
   });
 });

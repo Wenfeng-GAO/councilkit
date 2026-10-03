@@ -251,7 +251,9 @@ export function resolveClusterCloses(
   findings: readonly LedgerFinding[],
 ): string[] {
   if (cluster.closes.length > 0) return unique(cluster.closes);
-  const hay = `${cluster.title}\n${cluster.mentions}\n${cluster.body}`.toLowerCase();
+  const hay = textOutsideFences(
+    `${cluster.title}\n${cluster.mentions}\n${cluster.body}`,
+  ).toLowerCase();
   const hayTokens = tokens(hay);
   const matched: string[] = [];
   for (const finding of findings) {
@@ -918,6 +920,14 @@ function tokenOverlap(a: Set<string>, b: Set<string>): number {
   return hit / Math.max(a.size, b.size);
 }
 
+function textOutsideFences(markdown: string): string {
+  const lines: string[] = [];
+  for (const row of markdownLines(markdown)) {
+    if (!row.fenced) lines.push(row.line);
+  }
+  return lines.join("\n");
+}
+
 const ORDER_HEADING = /^## 落地顺序\s*$/;
 const ORDER_STOP = /^## (?:本轮不落地|合并门槛|分歧|结论)\s*$/;
 
@@ -935,8 +945,7 @@ function splitClusterBlocks(markdown: string): Array<{ heading: string; body: st
   const blocks: Array<{ heading: string; body: string }> = [];
   let current: { heading: string; lines: string[] } | null = null;
   for (const { line, fenced } of region) {
-    if (fenced) continue;
-    const heading = CLUSTER_HEADING.exec(line);
+    const heading = fenced ? null : CLUSTER_HEADING.exec(line);
     if (heading) {
       if (current) blocks.push({ heading: current.heading, body: current.lines.join("\n").trim() });
       current = { heading: heading[1].trim(), lines: [] };
@@ -949,7 +958,8 @@ function splitClusterBlocks(markdown: string): Array<{ heading: string; body: st
 }
 
 function clusterFromBlock(heading: string, body: string, used: Set<string>): PlanCluster {
-  const keys = parseKeyedItems(body);
+  const machine = textOutsideFences(body);
+  const keys = parseKeyedItems(machine);
   const rawId = keys.id ?? heading;
   const id = uniqueId(slugify(rawId).slice(0, 64) || "cluster", used);
   used.add(id);
@@ -957,7 +967,7 @@ function clusterFromBlock(heading: string, body: string, used: Set<string>): Pla
     id,
     title: heading.slice(0, 200) || id,
     closes: splitCsv(keys.closes),
-    files: unique([...splitCsv(keys.files), ...extractPaths(body)]),
+    files: unique([...splitCsv(keys.files), ...extractPaths(machine)]),
     gates: splitCsv(keys.gates),
     policy: keys.policy ?? "",
     invariants: keys.invariants ?? "",
