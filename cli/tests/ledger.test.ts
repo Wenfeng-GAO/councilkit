@@ -9,6 +9,7 @@ import {
   applyReviewerVerifications,
   classifyAgainstPrior,
   classifyAgainstPriorWithAliases,
+  buildClusterPlanMarkdown,
   extractFindingsFromReport,
   formatLedgerForPrompt,
   markFindingsRepairClaimed,
@@ -785,6 +786,49 @@ describe("plan.lock parse", () => {
     ]);
     expect(lock.clusters[0]?.files).toEqual(["pkg/eventlog/log.go"]);
     expect(lock.deferred).toEqual([{ title: "lastSeq > head", reason: "产品合同" }]);
+  });
+
+  it("keeps a cluster code sample and ignores fenced machine fields", () => {
+    const lock = parsePlanDocument(
+      [
+        "# 修复方案",
+        "## 落地顺序",
+        "### 集群 1: eventlog-short-write",
+        "- id: eventlog-short-write",
+        "- files: pkg/eventlog/log.go",
+        "```go",
+        "func Write(buf []byte) {}",
+        "```",
+        "```md",
+        "### 集群 9: phantom",
+        "- id: phantom",
+        "- files: evil/phantom.go",
+        "- closes: F-9",
+        "```",
+        "- 方针: 保留示例",
+        "## 本轮不落地",
+        "- lastSeq > head: 产品合同",
+      ].join("\n"),
+      {
+        sourceRunId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+        approvedAt: "2026-08-20T00:00:00.000Z",
+        verdict: "approve",
+      },
+    );
+    const cluster = lock.clusters[0];
+    expect(lock.clusters.map((row) => row.id)).toEqual(["eventlog-short-write"]);
+    expect(cluster?.files).toEqual(["pkg/eventlog/log.go"]);
+    expect(cluster?.closes).toEqual([]);
+    expect(cluster?.body).toContain("func Write(buf []byte) {}");
+    expect(buildClusterPlanMarkdown(lock, cluster as PlanCluster)).toContain(
+      "func Write(buf []byte) {}",
+    );
+    expect(
+      resolveClusterCloses(
+        cluster as PlanCluster,
+        [finding({ id: "F-9", title: "phantom leak", files: ["evil/phantom.go"] })],
+      ),
+    ).toEqual([]);
   });
 });
 
