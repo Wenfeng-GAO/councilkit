@@ -585,4 +585,40 @@ describe("cli auto templates — plan prompts", () => {
       ].join("\n"),
     );
   });
+
+  it("does not treat a fenced plan heading as a consensus plan", () => {
+    const quoted = [
+      "## 共识计划",
+      "陪审团拒绝把模板引用当成可落地的方案。这段说明故意写长，避免被长度门槛误伤。",
+      "```md",
+      "# 修复方案",
+      "## 不变量",
+      "1. quoted only",
+      "## 落地顺序",
+      "### 集群 1: fake",
+      "```",
+      "~~~",
+      "# Fix Plan",
+      "~~~",
+      "## 结论",
+      "changes-requested",
+    ].join("\n");
+    const consensus = extractConsensusPlan(quoted) ?? "";
+    expect(consensus).toContain("模板引用");
+    expect(looksLikePlanDocument(consensus)).toBe(false);
+
+    const real = [
+      "## 共识计划",
+      "# 修复方案",
+      "## 不变量",
+      "1. jsonl never torn",
+      "```",
+      "## 落地顺序",
+      "### 集群 1: quoted",
+      "```",
+      "## 结论",
+      "approve",
+    ].join("\n");
+    expect(looksLikePlanDocument(extractConsensusPlan(real) ?? "")).toBe(true);
+  });
 });

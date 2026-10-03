@@ -245,10 +245,16 @@ export function extractConsensusPlan(markdown: string): string | null {
 export function looksLikePlanDocument(markdown: string): boolean {
   const text = markdown.trim();
   if (text.length < 40) return false;
-  return (
-    /^# 修复方案\b/m.test(text) ||
-    /^# Fix Plan\b/m.test(text) ||
-    /^## 不变量\s*$/m.test(text) ||
-    /^## 落地顺序\s*$/m.test(text)
-  );
+  for (const { line, fenced } of markdownLines(text)) {
+    if (fenced) continue;
+    if (
+      /^# 修复方案\b/.test(line) ||
+      /^# Fix Plan\b/.test(line) ||
+      /^## 不变量\s*$/.test(line) ||
+      /^## 落地顺序\s*$/.test(line)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
