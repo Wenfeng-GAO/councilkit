@@ -2150,4 +2150,174 @@ describe("candidate snapshot and verification cache", () => {
       reason: "failing tests cannot prove pass",
     });
   });
+
+  it("reads a ctest log by its failed, skipped, and empty summaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-ctest-"));
+    homes.push(root);
+    const sha = "5".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "ctest --test-dir build --output-on-failure",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "ctest --test-dir build --output-on-failure",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "ctest-pass.log",
+      [
+        "Test project /tmp/probe",
+        "    Start 1: passes",
+        "1/1 Test #1: passes ...........................   Passed    0.00 sec",
+        "",
+        "100% tests passed, 0 tests failed out of 1",
+        "",
+        "Total Test time (real) =   0.00 sec",
+        "0 tests failed out of the draft, then recovered",
+        "The following tests FAILED to start, then recovered",
+        "***Failed to open the cache, then recovered",
+        "later (Skipped) stays a note",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const fail = receiptFor(
+      "ctest-fail.log",
+      [
+        "Test project /tmp/probe",
+        "    Start 1: boom",
+        "1/2 Test #1: boom .............................***Failed    0.00 sec",
+        "",
+        "    Start 2: passes",
+        "2/2 Test #2: passes ...........................   Passed    0.00 sec",
+        "",
+        "50% tests passed, 1 tests failed out of 2",
+        "",
+        "Total Test time (real) =   0.00 sec",
+        "",
+        "The following tests FAILED:",
+        "\t  1 - boom (Failed)",
+        "Errors while running CTest",
+        "",
+      ].join("\n"),
+    );
+    expect(fail.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(fail, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const skip = receiptFor(
+      "ctest-skip.log",
+      [
+        "Test project /tmp/probe",
+        "    Start 1: later",
+        "1/1 Test #1: later ............................***Skipped   0.00 sec",
+        "",
+        "100% tests passed, 0 tests failed out of 1",
+        "",
+        "Total Test time (real) =   0.00 sec",
+        "",
+        "The following tests did not run:",
+        "\t  1 - later (Skipped)",
+        "",
+      ].join("\n"),
+    );
+    expect(skip.receipts[0]?.failed).toBe(false);
+    expect(skip.receipts[0]?.ranZeroTests).toBe(false);
+    expect(skip.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skip, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const mixed = receiptFor(
+      "ctest-skip-mixed.log",
+      [
+        "Test project /tmp/probe",
+        "    Start 1: passes",
+        "1/2 Test #1: passes ...........................   Passed    0.00 sec",
+        "    Start 2: later",
+        "2/2 Test #2: later ............................***Skipped   0.00 sec",
+        "",
+        "100% tests passed, 0 tests failed out of 2",
+        "",
+        "Total Test time (real) =   0.00 sec",
+        "",
+        "The following tests did not run:",
+        "\t  2 - later (Skipped)",
+        "",
+      ].join("\n"),
+    );
+    expect(mixed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const disabled = receiptFor(
+      "ctest-disabled.log",
+      [
+        "Test project /tmp/probe",
+        "    Start 1: passes",
+        "1/2 Test #1: passes ...........................   Passed    0.00 sec",
+        "    Start 2: later",
+        "2/2 Test #2: later ............................***Not Run (Disabled)   0.00 sec",
+        "",
+        "100% tests passed, 0 tests failed out of 1",
+        "",
+        "Total Test time (real) =   0.00 sec",
+        "",
+        "The following tests did not run:",
+        "\t  2 - later (Disabled)",
+        "",
+      ].join("\n"),
+    );
+    expect(disabled.receipts[0]?.ranZeroTests).toBe(false);
+    expect(disabled.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(disabled, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const empty = receiptFor(
+      "ctest-empty.log",
+      ["Test project /tmp/probe", "No tests were found!!!", ""].join("\n"),
+    );
+    expect(empty.receipts[0]?.failed).toBe(false);
+    expect(empty.receipts[0]?.skipped).toBe(false);
+    expect(empty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(empty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
 });
