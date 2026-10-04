@@ -238,7 +238,7 @@ export function interpretTestLog(
   const todo =
     /#\s*TODO\b/.test(todoText) ||
     /^[ \t]*(?:#[ \t]*|\u2139[ \t]*|<!--[ \t]*)todo[ \t]+[1-9]\d*\b/im.test(todoText) ||
-    /^[ \t]*[1-9]\d*[ \t]+todo\b/im.test(todoText);
+    /^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+todo\b/im.test(todoText);
   const cargoIgnored =
     /^test[ \t]+\S+[ \t]+\.\.\.[ \t]+ignored\b/m.test(scanned) ||
     /^test result:.*\b[1-9]\d* ignored\b/m.test(scanned);
