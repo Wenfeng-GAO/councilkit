@@ -263,6 +263,7 @@ export function interpretTestLog(
       !/\b[1-9]\d*[ \t]+(?:xpassed|passed)\b/.test(summary)
     );
   });
+  const summarySkipOrTodo = /^[ \t]*[1-9]\d*[ \t]+(?:skip|todo)[ \t]*$/im.test(todoText);
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -272,7 +273,8 @@ export function interpretTestLog(
       cargoIgnored ||
       todo ||
       mochaPending ||
-      pytestXfailOnly) &&
+      pytestXfailOnly ||
+      summarySkipOrTodo) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
   const lines = scanned.split("\n");
@@ -316,7 +318,8 @@ function logShowsFailures(text: string): boolean {
   if (/^[ \t]*Test Suites:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^[ \t]*Test Files[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
-  if (/^[ \t]*[1-9]\d*[ \t]+fail(?:ed|ing)[ \t]*$/im.test(plain)) return true;
+  if (/^[ \t]*[1-9]\d*[ \t]+fail(?:ed|ing)?[ \t]*$/im.test(plain)) return true;
+  if (/^[ \t]*[1-9]\d*[ \t]+errors?[ \t]*$/im.test(plain)) return true;
   if (/^[ \t]*[1-9]\d*[ \t]+flaky[ \t]*$/im.test(plain)) return true;
   if (/^--- FAIL:/m.test(plain)) return true;
   if (/^FAIL(?:\r?$|\t)/m.test(plain)) return true;
