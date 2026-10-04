@@ -292,7 +292,7 @@ function logShowsFailures(text: string): boolean {
   if (/^[ \t]*Test Suites:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^[ \t]*Test Files[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
   if (/^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+failed\b/im.test(plain)) return true;
-  if (/^[ \t]*[1-9]\d*[ \t]+failed[ \t]*$/im.test(plain)) return true;
+  if (/^[ \t]*[1-9]\d*[ \t]+fail(?:ed|ing)[ \t]*$/im.test(plain)) return true;
   if (/^--- FAIL:/m.test(plain)) return true;
   if (/^FAIL(?:\r?$|\t)/m.test(plain)) return true;
   if (/^[ \t]*FAILED[ \t]+\S/m.test(plain)) return true;
