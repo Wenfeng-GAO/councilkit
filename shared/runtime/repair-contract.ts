@@ -283,14 +283,25 @@ export function interpretTestLog(
   let rspecPending = false;
   let rspecRanNothing = false;
   let rspecFailed = false;
+  let minitestSkipped = false;
+  let minitestRanNothing = false;
+  let minitestFailed = false;
   const rspecTotals =
     /^[ \t]*(\d+)[ \t]+examples?,[ \t]+(\d+)[ \t]+failures?(?:,[ \t]+(\d+)[ \t]+pending)?(?:,[ \t]+(\d+)[ \t]+errors?[ \t]+occurred[ \t]+outside[ \t]+of[ \t]+examples)?[ \t]*$/;
+  const minitestTotals =
+    /^[ \t]*(\d+)[ \t]+(?:runs|tests),[ \t]+\d+[ \t]+assertions,[ \t]+(\d+)[ \t]+failures,[ \t]+(\d+)[ \t]+errors,[ \t]+(\d+)[ \t]+skips(?:,[ \t]+\d+[ \t]+warnings)?[ \t]*$/;
   for (const line of todoText.split("\n")) {
     const summary = rspecTotals.exec(line);
-    if (!summary) continue;
-    if (Number(summary[1]) === 0) rspecRanNothing = true;
-    if (Number(summary[2]) > 0 || Number(summary[4] ?? 0) > 0) rspecFailed = true;
-    if (Number(summary[3] ?? 0) > 0) rspecPending = true;
+    if (summary) {
+      if (Number(summary[1]) === 0) rspecRanNothing = true;
+      if (Number(summary[2]) > 0 || Number(summary[4] ?? 0) > 0) rspecFailed = true;
+      if (Number(summary[3] ?? 0) > 0) rspecPending = true;
+    }
+    const minitest = minitestTotals.exec(line);
+    if (!minitest) continue;
+    if (Number(minitest[1]) === 0) minitestRanNothing = true;
+    if (Number(minitest[2]) > 0 || Number(minitest[3]) > 0) minitestFailed = true;
+    if (Number(minitest[4]) > 0) minitestSkipped = true;
   }
   const proveRanNothing = /^[ \t]*Result:[ \t]+NOTESTS[ \t]*$/m.test(todoText);
   const skipped =
@@ -307,9 +318,10 @@ export function interpretTestLog(
       summarySkipOrTodo ||
       ctestNotRun ||
       gtestNotRun ||
-      rspecPending) &&
+      rspecPending ||
+      minitestSkipped) &&
     exitCode === 0;
-  const failed = logShowsFailures(text) || rspecFailed;
+  const failed = logShowsFailures(text) || rspecFailed || minitestFailed;
   const lines = scanned.split("\n");
   const ranSomeHarness = lines.some((line) => /^running[ \t]+[1-9]\d*[ \t]+tests?\b/i.test(line));
   const zeroCountText = ranSomeHarness
@@ -323,6 +335,7 @@ export function interpretTestLog(
     mochaZeroPassing ||
     denoRanNothing ||
     rspecRanNothing ||
+    minitestRanNothing ||
     proveRanNothing ||
     (scanned !== text &&
       !failed &&
