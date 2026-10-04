@@ -57,6 +57,23 @@ describe("classifyDriverTerminal", () => {
     expect(terminal?.errorClass).not.toBe("transport");
   });
 
+  it("does not treat a port, version, or glued 401 or 429 as auth or rate", () => {
+    const quiet = (stderr: string) => classifyDriverTerminal({ stdout: "", stderr, exitCode: 0 });
+    expect(quiet("listening on 127.0.0.1:401")).toBeNull();
+    expect(quiet("listening on 127.0.0.1:429")).toBeNull();
+    expect(quiet("go1.401")).toBeNull();
+    expect(quiet("1401")).toBeNull();
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "error: 401", exitCode: 1 })?.errorClass,
+    ).toBe("auth");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "status:429", exitCode: 1 })?.errorClass,
+    ).toBe("rate");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 401", exitCode: 1 })?.errorClass,
+    ).toBe("auth");
+  });
+
   it("still flags a later turn.failed network error", () => {
     const terminal = classifyDriverTerminal({
       stdout: [
