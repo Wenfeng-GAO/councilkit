@@ -99,6 +99,41 @@ describe("classifyDriverTerminal", () => {
     ).toBe("transport");
   });
 
+  it("classifies a free-standing parenthesized status and ignores a source location", () => {
+    const classified = (stderr: string) =>
+      classifyDriverTerminal({ stdout: "", stderr, exitCode: 1 });
+    expect(classified("HTTP status (401)")).toEqual({
+      errorClass: "auth",
+      retryable: false,
+      message: "HTTP status (401)",
+    });
+    expect(classified("request failed (401)")).toEqual({
+      errorClass: "auth",
+      retryable: false,
+      message: "request failed (401)",
+    });
+    expect(classified("HTTP status (429)")).toEqual({
+      errorClass: "rate",
+      retryable: true,
+      message: "HTTP status (429)",
+    });
+    expect(classified("HTTP status (502)")).toEqual({
+      errorClass: "transport",
+      retryable: true,
+      message: "HTTP status (502)",
+    });
+    expect(classified("HTTP status (503)")).toEqual({
+      errorClass: "transport",
+      retryable: true,
+      message: "HTTP status (503)",
+    });
+    expect(classified("src/foo.ts(401,12): error TS2345")).toBeNull();
+    expect(classified('File "app.py", line 401, in main')).toBeNull();
+    expect(classified("src/foo.ts(429,8): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts(502,3): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts(503,1): error TS2345")).toBeNull();
+  });
+
   it("still flags a later turn.failed network error", () => {
     const terminal = classifyDriverTerminal({
       stdout: [
