@@ -2320,4 +2320,130 @@ describe("candidate snapshot and verification cache", () => {
       reason: "zero tests or skipped tests cannot prove pass",
     });
   });
+
+  it("reads a deno log by its ignored and empty summaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-deno-"));
+    homes.push(root);
+    const sha = "4".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "deno test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "deno test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "deno-pass.log",
+      [
+        "running 1 test from ./add_test.ts",
+        "addition ... ok (1ms)",
+        "",
+        "ok | 1 passed | 0 failed (2ms)",
+        "the runner ignored 1 stale cache line",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const mixed = receiptFor(
+      "deno-ignored.log",
+      [
+        "running 2 tests from ./add_test.ts",
+        "addition ... ok (1ms)",
+        "subtraction ... ignored (0ms)",
+        "",
+        "ok | 1 passed | 0 failed | 1 ignored (3ms)",
+        "",
+      ].join("\n"),
+    );
+    expect(mixed.receipts[0]?.failed).toBe(false);
+    expect(mixed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const only = receiptFor(
+      "deno-ignored-only.log",
+      [
+        "running 1 test from ./add_test.ts",
+        "subtraction ... ignored (0ms)",
+        "",
+        "ok | 0 passed | 0 failed | 1 ignored (1ms)",
+        "",
+      ].join("\n"),
+    );
+    expect(only.receipts[0]?.failed).toBe(false);
+    expect(only.receipts[0]?.ranZeroTests).toBe(false);
+    expect(only.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(only, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const steps = receiptFor(
+      "deno-ignored-steps.log",
+      "ok | 1 passed (1 step) | 0 failed | 1 ignored (1 step) (8ms)\n",
+    );
+    expect(steps.receipts[0]?.ranZeroTests).toBe(false);
+    expect(steps.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(steps, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "deno-ignored-color.log",
+      "\u001b[32mok\u001b[0m | 1 passed | 0 failed | 2 ignored \u001b[90m(5ms)\u001b[0m\n",
+    );
+    expect(colored.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const empty = receiptFor("deno-empty.log", "ok | 0 passed | 0 failed (0ms)\n");
+    expect(empty.receipts[0]?.failed).toBe(false);
+    expect(empty.receipts[0]?.skipped).toBe(false);
+    expect(empty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(empty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const fail = receiptFor("deno-fail.log", "FAILED | 0 passed | 1 failed (4ms)\n");
+    expect(fail.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(fail, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+  });
 });
