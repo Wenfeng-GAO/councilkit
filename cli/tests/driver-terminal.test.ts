@@ -74,6 +74,31 @@ describe("classifyDriverTerminal", () => {
     ).toBe("auth");
   });
 
+  it("does not read a source location or a named port or version as a status code", () => {
+    const quiet = (stderr: string) => classifyDriverTerminal({ stdout: "", stderr, exitCode: 0 });
+    expect(quiet('File "app.py", line 401, in main')).toBeNull();
+    expect(quiet("src/foo.ts(401,12): error TS2345")).toBeNull();
+    expect(quiet("listening on port 401")).toBeNull();
+    expect(quiet("client version 401")).toBeNull();
+    expect(quiet('File "app.py", line 429, in fetch')).toBeNull();
+    expect(quiet("listening on port 429")).toBeNull();
+    expect(quiet('{"version":"401"}')).toBeNull();
+    expect(quiet("listening on http://127.0.0.1:502")).toBeNull();
+    expect(quiet("https://127.0.0.1:503/health")).toBeNull();
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: '{"status":401}', exitCode: 1 })?.errorClass,
+    ).toBe("auth");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: '{"status":429}', exitCode: 1 })?.errorClass,
+    ).toBe("rate");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 502", exitCode: 1 })?.errorClass,
+    ).toBe("transport");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "status: 503", exitCode: 1 })?.errorClass,
+    ).toBe("transport");
+  });
+
   it("still flags a later turn.failed network error", () => {
     const terminal = classifyDriverTerminal({
       stdout: [

@@ -11,13 +11,30 @@ export type DriverTerminal = {
 };
 
 const QUOTA = /usage[_\s-]?limit|quota[_\s-]?exceeded|insufficient[_\s-]?quota/i;
-const AUTH =
-  /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key|(?:\b(?:status|error)[:\s]+|(?<![A-Za-z0-9.:]))401\b/i;
+const AUTH_PHRASE = /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key/i;
 const MODEL = /unsupported model|unknown model|model[_ ]not[_ ]found|invalid model/i;
-const RATE =
-  /rate[_ ]limit|too many requests|(?:\b(?:status|error)[:\s]+|(?<![A-Za-z0-9.:]))429\b/i;
-const TRANSPORT =
-  /econnreset|etimedout|socket hang up|network error|bad gateway|service unavailable|\b(?:http(?:s)?[^\n]{0,48}|\bstatus[:\s]+|\berror[:\s]+)(?:502|503)\b/i;
+const RATE_PHRASE = /rate[_ ]limit|too many requests/i;
+const TRANSPORT_PHRASE =
+  /econnreset|etimedout|socket hang up|network error|bad gateway|service unavailable/i;
+
+const STATUS_LABEL = /\b(?:status(?:[_\s-]?code)?|error)["']?\s*[:=]\s*["']?\s*$/i;
+const GLUED_NUMBER = /[A-Za-z0-9.:(]$/;
+const LOCATION_WORD = /(?:^|[^A-Za-z])(?:lines?|ports?|versions?)\b[\s"'=:]*$/i;
+
+function mentionsStatusCode(text: string, code: "401" | "429" | "502" | "503"): boolean {
+  const re = new RegExp(String.raw`(?<![A-Za-z0-9])${code}(?![A-Za-z0-9])`, "g");
+  for (const match of text.matchAll(re)) {
+    if (numberIsHttpStatus(text.slice(0, match.index ?? 0))) return true;
+  }
+  return false;
+}
+
+function numberIsHttpStatus(before: string): boolean {
+  if (STATUS_LABEL.test(before)) return true;
+  if (GLUED_NUMBER.test(before)) return false;
+  if (LOCATION_WORD.test(before)) return false;
+  return true;
+}
 
 const SK_TOKEN = /sk-[A-Za-z0-9_-]{8,}/g;
 const COOKIE_HEADER = /Cookie:\s*[^\r\n]+/gi;
@@ -47,10 +64,16 @@ export function redactDriverDiagnostic(text: string): string {
 
 function pickClass(text: string): DriverErrorClass | null {
   if (QUOTA.test(text)) return "quota";
-  if (AUTH.test(text)) return "auth";
+  if (AUTH_PHRASE.test(text) || mentionsStatusCode(text, "401")) return "auth";
   if (MODEL.test(text)) return "model";
-  if (RATE.test(text)) return "rate";
-  if (TRANSPORT.test(text)) return "transport";
+  if (RATE_PHRASE.test(text) || mentionsStatusCode(text, "429")) return "rate";
+  if (
+    TRANSPORT_PHRASE.test(text) ||
+    mentionsStatusCode(text, "502") ||
+    mentionsStatusCode(text, "503")
+  ) {
+    return "transport";
+  }
   return null;
 }
 
