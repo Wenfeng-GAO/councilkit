@@ -367,7 +367,9 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
       const probeOk = new Map<string, boolean>();
       await Promise.all(
         probeTargets.map(async (agent) => {
-          const ok = await probeAgent(agent, controller.signal, spawnImpl, probeCwd);
+          const cwd = join(probeCwd, agent.id);
+          mkdirSync(cwd, { recursive: true, mode: 0o700 });
+          const ok = await probeAgent(agent, controller.signal, spawnImpl, cwd);
           probeOk.set(agent.id, ok);
         }),
       );
