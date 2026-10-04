@@ -128,6 +128,16 @@ describe("classifyDriverTerminal", () => {
       message: "HTTP status (503)",
     });
     expect(classified("src/foo.ts(401,12): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts (401,12): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts (401, 12): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts (429,8): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts (502,3): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts (503,1): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts (401)")).toEqual({
+      errorClass: "auth",
+      retryable: false,
+      message: "src/foo.ts (401)",
+    });
     expect(classified('File "app.py", line 401, in main')).toBeNull();
     expect(classified("src/foo.ts(429,8): error TS2345")).toBeNull();
     expect(classified("src/foo.ts(502,3): error TS2345")).toBeNull();
