@@ -18,7 +18,8 @@ const TRANSPORT_PHRASE =
   /econnreset|etimedout|socket hang up|network error|bad gateway|service unavailable/i;
 
 const STATUS_LABEL = /\b(?:status(?:[_\s-]?code)?|error)["']?\s*[:=]\s*["']?\s*$/i;
-const GLUED_NUMBER = /[A-Za-z0-9.:(]$/;
+const GLUED_NUMBER = /[A-Za-z0-9.:]$/;
+const ATTACHED_PAREN = /[A-Za-z0-9./\\_]\($/;
 const LOCATION_WORD = /(?:^|[^A-Za-z])(?:lines?|ports?|versions?)\b[\s"'=:]*$/i;
 
 function mentionsStatusCode(text: string, code: "401" | "429" | "502" | "503"): boolean {
@@ -31,7 +32,7 @@ function mentionsStatusCode(text: string, code: "401" | "429" | "502" | "503"): 
 
 function numberIsHttpStatus(before: string): boolean {
   if (STATUS_LABEL.test(before)) return true;
-  if (GLUED_NUMBER.test(before)) return false;
+  if (GLUED_NUMBER.test(before) || ATTACHED_PAREN.test(before)) return false;
   if (LOCATION_WORD.test(before)) return false;
   return true;
 }
