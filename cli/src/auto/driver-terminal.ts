@@ -11,9 +11,11 @@ export type DriverTerminal = {
 };
 
 const QUOTA = /usage[_\s-]?limit|quota[_\s-]?exceeded|insufficient[_\s-]?quota/i;
-const AUTH = /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key|401\b/i;
+const AUTH =
+  /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key|(?:\b(?:status|error)[:\s]+|(?<![A-Za-z0-9.:]))401\b/i;
 const MODEL = /unsupported model|unknown model|model[_ ]not[_ ]found|invalid model/i;
-const RATE = /rate[_ ]limit|too many requests|429\b/i;
+const RATE =
+  /rate[_ ]limit|too many requests|(?:\b(?:status|error)[:\s]+|(?<![A-Za-z0-9.:]))429\b/i;
 const TRANSPORT =
   /econnreset|etimedout|socket hang up|network error|bad gateway|service unavailable|\b(?:http(?:s)?[^\n]{0,48}|\bstatus[:\s]+|\berror[:\s]+)(?:502|503)\b/i;
 
