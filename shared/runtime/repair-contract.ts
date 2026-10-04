@@ -233,10 +233,12 @@ export function interpretTestLog(
 } {
   const text = `${stdout}\n${stderr}`;
   const scanned = textWithoutGoPackagesThatLackTestFiles(text);
+  ANSI_COLOR.lastIndex = 0;
+  const todoText = scanned.replace(ANSI_COLOR, "");
   const todo =
-    /#\s*TODO\b/.test(scanned) ||
-    /\btodo\s+[1-9]\d*\b/i.test(scanned) ||
-    /\b[1-9]\d*\s+todo\b/i.test(scanned);
+    /#\s*TODO\b/.test(todoText) ||
+    /^[ \t]*(?:#[ \t]*|\u2139[ \t]*|<!--[ \t]*)todo[ \t]+[1-9]\d*\b/im.test(todoText) ||
+    /^[ \t]*Tests:?[ \t].*\b[1-9]\d*[ \t]+todo\b/im.test(todoText);
   const cargoIgnored =
     /^test[ \t]+\S+[ \t]+\.\.\.[ \t]+ignored\b/m.test(scanned) ||
     /^test result:.*\b[1-9]\d* ignored\b/m.test(scanned);

@@ -737,6 +737,191 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("accepts a passing node:test log whose title contains a todo count", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-todo-name-"));
+    homes.push(root);
+    const sha = "e".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "node --test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "node --test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const tapName = receiptFor(
+      "todo-name-tap.log",
+      [
+        "TAP version 13",
+        "# Subtest: todo 1 stays open",
+        "ok 1 - todo 1 stays open",
+        "1..1",
+        "# tests 1",
+        "# pass 1",
+        "# fail 0",
+        "# skipped 0",
+        "# todo 0",
+        "",
+      ].join("\n"),
+    );
+    expect(tapName.receipts[0]?.skipped).toBe(false);
+    expect(tapName.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(tapName, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const reverseName = receiptFor(
+      "todo-name-reverse.log",
+      [
+        "# Subtest: records 1 todo for later",
+        "ok 1 - records 1 todo for later",
+        "# tests 1",
+        "# pass 1",
+        "# fail 0",
+        "# skipped 0",
+        "# todo 0",
+        "",
+      ].join("\n"),
+    );
+    expect(reverseName.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(reverseName, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const coloredTodo = receiptFor(
+      "todo-colored.log",
+      "\u001b[34mℹ tests 1\u001b[39m\n\u001b[34mℹ todo 1\u001b[39m\n",
+    );
+    expect(coloredTodo.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(coloredTodo, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const junitTodo = receiptFor(
+      "todo-junit.log",
+      [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        "<testsuites>",
+        '\t<testcase name="later" time="0.000111" classname="test"/>',
+        "\t<!-- todo 1 -->",
+        "</testsuites>",
+        "",
+      ].join("\n"),
+    );
+    expect(junitTodo.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(junitTodo, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
+  it("does not treat a vitest or jest todo summary as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-todo-summary-"));
+    homes.push(root);
+    const sha = "7".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, command: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command,
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command,
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const vitestTodo = receiptFor(
+      "vitest-todo.log",
+      "vitest run",
+      [
+        " ✓ example.test.ts > records 1 todo for later",
+        "",
+        " Test Files  1 passed (1)",
+        "      Tests  1 passed | 1 todo (2)",
+        "",
+      ].join("\n"),
+    );
+    expect(vitestTodo.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(vitestTodo, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const jestTodo = receiptFor(
+      "jest-todo.log",
+      "jest",
+      [
+        "PASS ./todo.test.js",
+        "  ✓ records 1 todo for later (1 ms)",
+        "  ✎ todo later",
+        "",
+        "Test Suites: 1 passed, 1 total",
+        "Tests:       1 todo, 1 passed, 2 total",
+        "",
+      ].join("\n"),
+    );
+    expect(jestTodo.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(jestTodo, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const jestName = receiptFor(
+      "jest-todo-name.log",
+      "jest",
+      [
+        "PASS ./todo.test.js",
+        "  ✓ records 1 todo for later (1 ms)",
+        "",
+        "Test Suites: 1 passed, 1 total",
+        "Tests:       1 passed, 1 total",
+        "",
+      ].join("\n"),
+    );
+    expect(jestName.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(jestName, "A1")).toEqual({ ok: true, reason: "verified" });
+  });
+
   it("does not treat a failing summary with exit 0 as proof", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-fail-"));
     homes.push(root);
