@@ -130,6 +130,7 @@ describe("classifyDriverTerminal", () => {
     expect(classified("src/foo.ts(401,12): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (401,12): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (401, 12): error TS2345")).toBeNull();
+    expect(classified("src/foo.ts( 401,12): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (429,8): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (502,3): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (503,1): error TS2345")).toBeNull();
