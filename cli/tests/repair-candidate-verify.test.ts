@@ -2768,4 +2768,114 @@ describe("candidate snapshot and verification cache", () => {
       reason: "failing tests cannot prove pass",
     });
   });
+
+  it("does not treat a prove NOTESTS summary as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-prove-"));
+    homes.push(root);
+    const sha = "b".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string, exitCode = 0) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "prove -Q",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "prove -Q",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "prove-pass.log",
+      [
+        "All tests successful.",
+        "Files=1, Tests=1,  0 wallclock secs ( 0.01 usr  0.00 sys +  0.03 cusr  0.00 csys =  0.04 CPU)",
+        "Result: PASS",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const prose = receiptFor(
+      "prove-prose.log",
+      [
+        "All tests successful.",
+        "Files=1, Tests=1,  0 wallclock secs ( 0.01 usr  0.00 sys +  0.03 cusr  0.00 csys =  0.04 CPU)",
+        "Result: PASS",
+        "the draft quoted Result: NOTESTS before the run",
+        "",
+      ].join("\n"),
+    );
+    expect(prose.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const quiet = receiptFor(
+      "prove-notests.log",
+      [
+        "Files=1, Tests=0,  0 wallclock secs ( 0.01 usr  0.00 sys +  0.03 cusr  0.00 csys =  0.04 CPU)",
+        "Result: NOTESTS",
+        "",
+      ].join("\n"),
+    );
+    expect(quiet.receipts[0]?.failed).toBe(false);
+    expect(quiet.receipts[0]?.skipped).toBe(false);
+    expect(quiet.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(quiet, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const skippedFile = receiptFor(
+      "prove-skip-all.log",
+      [
+        "t/allskip.t .. skipped: no db",
+        "Files=1, Tests=0,  0 wallclock secs ( 0.00 usr  0.00 sys +  0.02 cusr  0.00 csys =  0.02 CPU)",
+        "Result: NOTESTS",
+        "",
+      ].join("\n"),
+    );
+    expect(skippedFile.receipts[0]?.skipped).toBe(false);
+    expect(skippedFile.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(skippedFile, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const failed = receiptFor(
+      "prove-fail.log",
+      [
+        "Files=1, Tests=1,  0 wallclock secs ( 0.01 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.02 CPU)",
+        "Result: FAIL",
+        "",
+      ].join("\n"),
+      1,
+    );
+    expect(failed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(failed, "A1")).toEqual({
+      ok: false,
+      reason: "command exited 1",
+    });
+  });
 });
