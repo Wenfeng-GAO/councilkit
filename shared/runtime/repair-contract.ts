@@ -264,6 +264,9 @@ export function interpretTestLog(
     );
   });
   const summarySkipOrTodo = /^[ \t]*[1-9]\d*[ \t]+(?:skip|todo)[ \t]*$/im.test(todoText);
+  const ctestNotRun =
+    /\*{3}Skipped[ \t]+\d+(?:\.\d+)?[ \t]+sec\b/.test(scanned) ||
+    /\*{3}Not Run[ \t]+\(/.test(scanned);
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -274,7 +277,8 @@ export function interpretTestLog(
       todo ||
       mochaPending ||
       pytestXfailOnly ||
-      summarySkipOrTodo) &&
+      summarySkipOrTodo ||
+      ctestNotRun) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
   const lines = scanned.split("\n");
@@ -283,7 +287,7 @@ export function interpretTestLog(
     ? lines.filter((line) => !/^running[ \t]+0[ \t]+tests?\b/i.test(line)).join("\n")
     : scanned;
   const ranZeroTests =
-    /\b0\s+tests?\b/i.test(zeroCountText) ||
+    /\b0\s+tests?\b(?![^\S\n]+failed\b)/i.test(zeroCountText) ||
     /\bno tests?\b/i.test(scanned) ||
     /\bTest Files\s+0\b/i.test(scanned) ||
     /\btests\s+0\b/i.test(scanned) ||
@@ -328,6 +332,10 @@ function logShowsFailures(text: string): boolean {
   if (/^=+[ \t][^\n]*\b[1-9]\d*[ \t]+(?:failed|errors?)\b/m.test(plain)) return true;
   if (/^[ \t]*[1-9]\d*[ \t]+errors?[ \t]+in[ \t]/im.test(plain)) return true;
   if (/^[ \t]*!+[ \t]*Interrupted:[^\n]*\b[1-9]\d*[ \t]+errors?\b/im.test(plain)) return true;
+  if (/\*{3}Failed[ \t]+\d+(?:\.\d+)?[ \t]+sec\b/.test(plain)) return true;
+  if (/^The following tests FAILED:[ \t]*$/m.test(plain)) return true;
+  if (/^[^\n]*\b[1-9]\d*[ \t]+tests[ \t]+failed[ \t]+out[ \t]+of[ \t]+[1-9]\d*\b/m.test(plain))
+    return true;
   if (/(?<!\\)"Action"\s*:\s*"fail"/.test(plain)) return true;
   return false;
 }
