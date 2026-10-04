@@ -275,6 +275,11 @@ export function interpretTestLog(
   const ctestNotRun =
     /\*{3}Skipped[ \t]+\d+(?:\.\d+)?[ \t]+sec\b/.test(scanned) ||
     /\*{3}Not Run[ \t]+\(/.test(scanned);
+  const gtestNotRun =
+    /^[ \t]*\[[ \t]+SKIPPED[ \t]+\][ \t]+[1-9]\d*[ \t]+tests?(?:\.[ \t]*|,[ \t]*listed below:[ \t]*)$/im.test(
+      todoText,
+    ) ||
+    /^[ \t]*YOU HAVE[ \t]+[1-9]\d*[ \t]+DISABLED[ \t]+TESTS?[ \t]*$/im.test(todoText);
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -287,7 +292,8 @@ export function interpretTestLog(
       mochaPending ||
       pytestXfailOnly ||
       summarySkipOrTodo ||
-      ctestNotRun) &&
+      ctestNotRun ||
+      gtestNotRun) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
   const lines = scanned.split("\n");
@@ -344,6 +350,7 @@ function logShowsFailures(text: string): boolean {
   if (/^[ \t]*!+[ \t]*Interrupted:[^\n]*\b[1-9]\d*[ \t]+errors?\b/im.test(plain)) return true;
   if (/\*{3}Failed[ \t]+\d+(?:\.\d+)?[ \t]+sec\b/.test(plain)) return true;
   if (/^The following tests FAILED:[ \t]*$/m.test(plain)) return true;
+  if (/^[ \t]*\[[ \t]+FAILED[ \t]+\][ \t]+\S/m.test(plain)) return true;
   if (/^[^\n]*\b[1-9]\d*[ \t]+tests[ \t]+failed[ \t]+out[ \t]+of[ \t]+[1-9]\d*\b/m.test(plain))
     return true;
   if (/(?<!\\)"Action"\s*:\s*"fail"/.test(plain)) return true;
