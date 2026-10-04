@@ -553,6 +553,97 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("does not treat a playwright flaky test as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-pw-flaky-"));
+    homes.push(root);
+    const sha = "6".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "npx playwright test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "npx playwright test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const title = receiptFor(
+      "playwright-flaky-title.log",
+      [
+        "Running 1 test using 1 worker",
+        "",
+        "  ✓  1 example.spec.ts:8:1 › second flaky (2ms)",
+        "",
+        "  1 passed (0.4s)",
+        "",
+      ].join("\n"),
+    );
+    expect(title.receipts[0]?.failed).toBe(false);
+    expect(title.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(title, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const prose = receiptFor(
+      "playwright-flaky-prose.log",
+      ["  1 passed (0.4s)", "1 flaky dependency recovered", ""].join("\n"),
+    );
+    expect(prose.receipts[0]?.failed).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const mixed = receiptFor(
+      "playwright-flaky.log",
+      [
+        "Running 3 tests using 1 worker",
+        "",
+        "  ✓  1 example.spec.ts:4:2 › first passes (4ms)",
+        "  x  2 example.spec.ts:5:2 › second flaky (6ms)",
+        "  ✓  3 example.spec.ts:5:2 › second flaky (5ms)",
+        "",
+        "  1 flaky",
+        "    example.spec.ts:5:2 › second flaky",
+        "  2 passed (4s)",
+        "",
+      ].join("\n"),
+    );
+    expect(mixed.receipts[0]?.skipped).toBe(false);
+    expect(mixed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(mixed.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "playwright-flaky-color.log",
+      "\u001b[33m  1 flaky\u001b[39m\n\u001b[32m  1 passed\u001b[39m\u001b[2m (1.2s)\u001b[22m\n",
+    );
+    expect(colored.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+  });
+
   it("accepts a passing cargo test that also ran an empty harness", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-cargo-harness-"));
     homes.push(root);
