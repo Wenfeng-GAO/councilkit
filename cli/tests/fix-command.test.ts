@@ -1,9 +1,17 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunCommand } from "../src/auto/checkout-pr";
-import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
+import { DRIVER_PROBE_PROMPT, GROK_ISOLATED_HOME_DIR } from "../src/auto/driver-commands";
 import { acquireWriterLease } from "../src/auto/repair-lease";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { FixExit, runFix } from "../src/commands/fix";
@@ -283,6 +291,69 @@ describe("cli fix command", () => {
       clusters: Array<{ id: string }>;
     };
     expect(lock.clusters[0]?.id).toBe("eventlog-short-write");
+  });
+
+  it("keeps a second grok probe home after the first probe finishes", async () => {
+    const store = new Store();
+    const adversarial = store.createAgent({
+      name: "review-adversarial",
+      personaPrompt: "adversarial",
+      modelId: "grok-4.6",
+      color: "#444444",
+      driverSelection: { driverId: "grok-stream-json", options: {} },
+    });
+    const correctness = store.createAgent({
+      name: "review-correctness",
+      personaPrompt: "correctness",
+      modelId: "grok-4.5",
+      color: "#222222",
+      driverSelection: { driverId: "grok-stream-json", options: {} },
+    });
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "jury",
+      agentIds: [adversarial.id, correctness.id],
+      rounds: 1,
+      reporterAgentId: adversarial.id,
+    });
+    seedReview();
+    const fake = fakeSpawn();
+    const cwds: string[] = [];
+    const sockets: string[] = [];
+    let releaseSecond: () => void = () => {};
+    const secondEntered = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    let firstCwd = "";
+    let secondHomeSurvived = false;
+    const impl: SpawnImpl = async (input) => {
+      if (input.prompt !== DRIVER_PROBE_PROMPT) return fake.impl(input);
+      const home = join(input.cwd, GROK_ISOLATED_HOME_DIR);
+      mkdirSync(home, { recursive: true, mode: 0o700 });
+      writeFileSync(join(home, "marker"), input.cwd, { encoding: "utf8" });
+      const socketAt = input.argv.indexOf("--leader-socket");
+      cwds.push(input.cwd);
+      sockets.push(socketAt >= 0 ? (input.argv[socketAt + 1] ?? "") : "");
+      if (cwds.length === 1) {
+        firstCwd = input.cwd;
+        await secondEntered;
+        return envelope(input, "ok");
+      }
+      releaseSecond();
+      const marker = join(firstCwd, GROK_ISOLATED_HOME_DIR, "marker");
+      const deadline = Date.now() + 1000;
+      while (existsSync(marker) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      secondHomeSurvived = existsSync(join(input.cwd, GROK_ISOLATED_HOME_DIR, "marker"));
+      return envelope(input, "ok");
+    };
+    const code = await capturing(["--run", RUN_ID, "--plan-only"], impl);
+    expect(code).toBe(0);
+    expect(cwds).toHaveLength(2);
+    expect(new Set(cwds).size).toBe(2);
+    expect(new Set(sockets).size).toBe(2);
+    expect(secondHomeSurvived).toBe(true);
   });
 
   it("does not apply when the plan jury never approves", async () => {
