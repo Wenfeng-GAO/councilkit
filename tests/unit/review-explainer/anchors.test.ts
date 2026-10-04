@@ -12,6 +12,7 @@ interface Anchor {
   side?: "old" | "new";
   path?: string;
   line?: number;
+  endLine?: number;
   snippet?: string;
 }
 
@@ -97,5 +98,32 @@ describe("A02 resolveFindingAnchor", () => {
     });
     const renamed = Array.isArray(staleRename) ? staleRename[0] : staleRename;
     expect(renamed.path === "src/old_name.go" && renamed.status === "ok").toBe(false);
+  });
+
+  it("keeps a cited end line on a resolved anchor and drops a backwards range", async () => {
+    const { parsed, resolveFindingAnchor } = await resolve();
+    const spanned = resolveFindingAnchor({
+      findingId: FINDING.busy,
+      parsedDiff: parsed,
+      side: "new",
+      path: "src/busy.go",
+      line: 7,
+      endLine: 9,
+      snippet: BUSY_SNIPPET,
+    });
+    const span = Array.isArray(spanned) ? spanned[0] : spanned;
+    expect(span).toMatchObject({ status: "resolved", line: 7, endLine: 9 });
+
+    const backwards = resolveFindingAnchor({
+      findingId: FINDING.busy,
+      parsedDiff: parsed,
+      side: "new",
+      path: "src/busy.go",
+      line: 7,
+      endLine: 3,
+      snippet: BUSY_SNIPPET,
+    });
+    const back = Array.isArray(backwards) ? backwards[0] : backwards;
+    expect(back).toMatchObject({ status: "resolved", line: 7, endLine: 7 });
   });
 });
