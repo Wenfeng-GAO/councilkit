@@ -482,6 +482,103 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("accepts a passing cargo test that also ran an empty harness", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-cargo-harness-"));
+    homes.push(root);
+    const sha = "9".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "cargo test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "cargo test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const docHarness = receiptFor(
+      "cargo-doc-harness.log",
+      [
+        "",
+        "running 1 test",
+        "test tests::ok ... ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+        "",
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+      ].join("\n"),
+    );
+    expect(docHarness.receipts[0]?.failed).toBe(false);
+    expect(docHarness.receipts[0]?.skipped).toBe(false);
+    expect(docHarness.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(docHarness, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const docTest = receiptFor(
+      "cargo-doc-test.log",
+      [
+        "",
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+        "",
+        "running 1 test",
+        "test src/lib.rs - ready (line 1) ... ok",
+        "",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "",
+      ].join("\n"),
+    );
+    expect(docTest.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(docTest, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const empty = receiptFor(
+      "cargo-empty-harness.log",
+      [
+        "",
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+        "",
+        "running 0 tests",
+        "",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "",
+      ].join("\n"),
+    );
+    expect(empty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(empty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("reads node:test summaries by skip count and test count", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-node-"));
     homes.push(root);

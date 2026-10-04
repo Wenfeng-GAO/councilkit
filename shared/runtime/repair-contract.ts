@@ -252,8 +252,13 @@ export function interpretTestLog(
       todo) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
+  const lines = scanned.split("\n");
+  const ranSomeHarness = lines.some((line) => /^running[ \t]+[1-9]\d*[ \t]+tests?\b/i.test(line));
+  const zeroCountText = ranSomeHarness
+    ? lines.filter((line) => !/^running[ \t]+0[ \t]+tests?\b/i.test(line)).join("\n")
+    : scanned;
   const ranZeroTests =
-    /\b0\s+tests?\b/i.test(scanned) ||
+    /\b0\s+tests?\b/i.test(zeroCountText) ||
     /\bno tests?\b/i.test(scanned) ||
     /\bTest Files\s+0\b/i.test(scanned) ||
     /\btests\s+0\b/i.test(scanned) ||
