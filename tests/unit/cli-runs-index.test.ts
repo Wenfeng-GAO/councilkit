@@ -520,3 +520,113 @@ describe("listCliRuns stale running overlay", () => {
     expect(runs[0]?.pipeline?.phase).toBe("done");
   });
 });
+
+describe("readCliRun seat progress from a long transcript", () => {
+  let home: string;
+  let oldHome: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ck-long-transcript-"));
+    oldHome = process.env.COUNCILKIT_HOME;
+    process.env.COUNCILKIT_HOME = home;
+  });
+
+  afterEach(() => {
+    if (oldHome === undefined) process.env.COUNCILKIT_HOME = undefined;
+    else process.env.COUNCILKIT_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("keeps completed seats when attempt records are larger than the status head", () => {
+    const dir = join(home, "runs", REVIEW_ID);
+    mkdirSync(dir, { recursive: true });
+    const seat = {
+      attemptId: "attempt-0",
+      agentId: "a",
+      agentName: "review-security",
+      driverId: "grok-stream-json",
+      modelId: "grok-4.6",
+    };
+    const body = "x".repeat(300 * 1024);
+    const lines = [
+      {
+        kind: "review.started",
+        version: 1,
+        runId: REVIEW_ID,
+        startedAt: "2026-10-04T00:00:00.000Z",
+        task: { pr: "https://github.com/acme/repo/pull/9" },
+        attempts: [seat],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "b",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      },
+      {
+        kind: "attempt.finished",
+        version: 1,
+        attemptId: "attempt-0",
+        agentName: "review-security",
+        driverId: "grok-stream-json",
+        status: "success",
+        output: body,
+        exitCode: 0,
+        durationMs: 1200,
+      },
+      {
+        kind: "aggregation.finished",
+        version: 1,
+        attemptId: "aggregator",
+        agentName: "review-adversarial",
+        driverId: "grok-stream-json",
+        status: "success",
+        output: body,
+        exitCode: 0,
+        durationMs: 800,
+      },
+      {
+        kind: "review.finished",
+        version: 1,
+        status: "completed",
+        endedAt: "2026-10-04T00:05:00.000Z",
+        incomplete: false,
+      },
+    ];
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${lines.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    );
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "completed",
+        progress: { phase: "done", attempts: [], updatedAt: "2026-10-04T00:05:00.000Z" },
+        pipeline: {
+          phase: "done",
+          round: 1,
+          maxRounds: 2,
+          planVerdict: "approve",
+          applyStatus: "success",
+          followUpRunId: null,
+          summary: null,
+          updatedAt: "2026-10-04T00:05:00.000Z",
+        },
+      })}\n`,
+    );
+
+    const run = readCliRun(REVIEW_ID, process.env);
+    const attempts = run?.progress?.attempts ?? [];
+    expect(attempts.find((row) => row.attemptId === "attempt-0")).toMatchObject({
+      status: "success",
+      durationMs: 1200,
+    });
+    expect(attempts.find((row) => row.attemptId === "aggregator")).toMatchObject({
+      status: "success",
+      durationMs: 800,
+    });
+    expect(run?.status).toBe("completed");
+  });
+});

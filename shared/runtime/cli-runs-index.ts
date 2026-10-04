@@ -228,17 +228,24 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
 
   const transcriptPath = join(dir, "transcript.jsonl");
   const transcriptStat = safeLstat(transcriptPath);
-  const transcriptText =
-    transcriptStat?.isFile() && !transcriptStat.isSymbolicLink()
-      ? readCapped(transcriptPath, 256 * 1024).text
-      : "";
-  const tailText = readCapped(transcriptPath, 64 * 1024, true).text;
+  const transcriptReadable = Boolean(transcriptStat?.isFile() && !transcriptStat.isSymbolicLink());
+  const transcriptText = transcriptReadable
+    ? readCapped(transcriptPath, TRANSCRIPT_HEAD_BYTES).text
+    : "";
+  const tailText = transcriptReadable
+    ? readCapped(transcriptPath, TRANSCRIPT_TAIL_BYTES, true).text
+    : "";
   const parsed = parseTranscriptMeta(`${transcriptText}\n${tailText}`, runId);
   const live = readLiveState(join(dir, CLI_RUN_STATUS_FILE));
+  const refillSeats = live === null || live.progress.attempts.length === 0;
+  let progressRecords = parseTranscriptRecords(transcriptText);
+  if (refillSeats && transcriptReadable && (transcriptStat?.size ?? 0) > TRANSCRIPT_HEAD_BYTES) {
+    const scanned = scanTranscriptLinePrefixes(transcriptPath);
+    if (scanned.length > 0) progressRecords = scanned;
+  }
   const derived = mergeLiveProgress(
     live?.progress ?? null,
-    liveStateFromRecords(parseTranscriptRecords(transcriptText), live?.progress.updatedAt ?? null)
-      ?.progress ?? null,
+    liveStateFromRecords(progressRecords, live?.progress.updatedAt ?? null)?.progress ?? null,
   );
   const planPath = join(dir, CLI_RUN_PLAN_FILE);
   const planStat = safeLstat(planPath);
@@ -460,6 +467,126 @@ function readLiveState(path: string): ReturnType<typeof parseLiveStateJson> {
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
   const { text } = readCapped(path, 64 * 1024);
   return parseLiveStateJson(text);
+}
+
+const TRANSCRIPT_HEAD_BYTES = 256 * 1024;
+const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
+const TRANSCRIPT_LINE_PREFIX_BYTES = 8 * 1024;
+const TRANSCRIPT_LINE_SUFFIX_BYTES = 8 * 1024;
+
+function scanTranscriptLinePrefixes(path: string): unknown[] {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return [];
+    const records: unknown[] = [];
+    const chunk = Buffer.alloc(64 * 1024);
+    let held = Buffer.alloc(0);
+    let suffix = Buffer.alloc(0);
+    let overflow = false;
+    let offset = 0;
+    const noteSuffix = (piece: Buffer): void => {
+      if (piece.length === 0) return;
+      suffix = Buffer.concat([suffix, piece]);
+      if (suffix.length > TRANSCRIPT_LINE_SUFFIX_BYTES) {
+        suffix = suffix.subarray(suffix.length - TRANSCRIPT_LINE_SUFFIX_BYTES);
+      }
+    };
+    const take = (line: Buffer, partial: boolean, lineSuffix: Buffer): void => {
+      const record = recordFromTranscriptLine(line, partial, lineSuffix);
+      if (record !== null) records.push(record);
+    };
+    while (offset < stat.size) {
+      const count = readSync(fd, chunk, 0, chunk.length, offset);
+      if (count <= 0) break;
+      offset += count;
+      const data = chunk.subarray(0, count);
+      let index = 0;
+      while (index < data.length) {
+        const newline = data.indexOf(0x0a, index);
+        const end = newline === -1 ? data.length : newline;
+        const piece = data.subarray(index, end);
+        noteSuffix(piece);
+        if (!overflow) {
+          const room = TRANSCRIPT_LINE_PREFIX_BYTES - held.length;
+          if (room <= 0) overflow = true;
+          else if (piece.length <= room) held = Buffer.concat([held, piece]);
+          else {
+            held = Buffer.concat([held, piece.subarray(0, room)]);
+            overflow = true;
+          }
+        }
+        if (newline === -1) break;
+        take(held, overflow, suffix);
+        held = Buffer.alloc(0);
+        suffix = Buffer.alloc(0);
+        overflow = false;
+        index = newline + 1;
+      }
+    }
+    if (held.length > 0) take(held, overflow, suffix);
+    return records;
+  } catch {
+    return [];
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function recordFromTranscriptLine(line: Buffer, partial: boolean, suffix: Buffer): unknown | null {
+  if (line.length === 0) return null;
+  const text = line.toString("utf8").trim();
+  if (text.length === 0) return null;
+  if (!partial) {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return salvageTranscriptPrefix(text, suffix.toString("utf8"));
+}
+
+function salvageTranscriptPrefix(prefix: string, suffix: string): unknown | null {
+  const kind =
+    /^\{"kind":"(attempt\.finished|aggregation\.finished|review\.finished|ideate\.finished|review\.resumed)"/.exec(
+      prefix,
+    )?.[1];
+  if (kind === "attempt.finished" || kind === "aggregation.finished") {
+    const attemptId = /"attemptId":"([^"\\]+)"/.exec(prefix)?.[1];
+    const status = /"status":"(success|failure)"/.exec(prefix)?.[1];
+    if (!attemptId || (status !== "success" && status !== "failure")) return null;
+    const duration = /"durationMs":(\d+)/.exec(`${prefix}${suffix}`);
+    const record: Record<string, unknown> = {
+      kind,
+      attemptId,
+      status,
+      durationMs: duration ? Number(duration[1]) : 0,
+      output: null,
+    };
+    if (/"willRetry":true/.test(prefix) || /"willRetry":true/.test(suffix)) record.willRetry = true;
+    return record;
+  }
+  if (kind === "review.finished" || kind === "ideate.finished") {
+    const status = /"status":"(completed|failed|interrupted)"/.exec(prefix)?.[1];
+    if (!status) return null;
+    return { kind, status };
+  }
+  if (kind === "review.resumed") {
+    const ids = /"rerunAttemptIds":(\[[^\]]*\])/.exec(prefix)?.[1];
+    if (!ids) return null;
+    try {
+      const rerunAttemptIds = JSON.parse(ids) as unknown;
+      if (!Array.isArray(rerunAttemptIds) || rerunAttemptIds.some((id) => typeof id !== "string")) {
+        return null;
+      }
+      return { kind, rerunAttemptIds };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function parseTranscriptRecords(text: string): unknown[] {
