@@ -1617,4 +1617,51 @@ describe("candidate snapshot and verification cache", () => {
     const after = await inspectCandidateSnapshot({ cwd: root, expectedSha: sha });
     expect(after).toMatchObject({ ok: true, dirtyTree: true, head: sha.toLowerCase() });
   });
+
+  it("keeps a stderr failure summary on its own line when stdout has no trailing newline", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-stderr-"));
+    homes.push(root);
+    const sha = "a".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string, stderr: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr,
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "npx mocha",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "npx mocha",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const gluedFailure = receiptFor("mocha-stderr-fail.log", "  1 passing (2ms)", "  1 failing\n");
+    expect(gluedFailure.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(gluedFailure, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const stdoutOnly = receiptFor("mocha-stdout-no-nl.log", "  1 passing (2ms)", "");
+    expect(stdoutOnly.receipts[0]?.failed).toBe(false);
+    expect(evaluateVerificationAsset(stdoutOnly, "A1")).toEqual({ ok: true, reason: "verified" });
+  });
 });
