@@ -2878,4 +2878,207 @@ describe("candidate snapshot and verification cache", () => {
       reason: "command exited 1",
     });
   });
+
+  it("reads a minitest log by its skipped, empty, and failed summaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-minitest-"));
+    homes.push(root);
+    const sha = "8".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "ruby -Itest test/widget_test.rb",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "ruby -Itest test/widget_test.rb",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "minitest-pass.log",
+      [
+        "Run options: --seed 1234",
+        "",
+        "# Running:",
+        "",
+        ".",
+        "",
+        "Finished in 0.000123s, 8130.0813 runs/s, 8130.0813 assertions/s.",
+        "",
+        "1 runs, 1 assertions, 0 failures, 0 errors, 0 skips",
+        "the draft quoted 1 runs, 0 assertions, 0 failures, 0 errors, 1 skips before the run",
+        "the draft quoted 0 runs, 0 assertions, 0 failures, 0 errors, 0 skips before the run",
+        "the draft quoted 1 runs, 1 assertions, 1 failures, 0 errors, 0 skips before the run",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const warnings = receiptFor(
+      "minitest-warnings.log",
+      [
+        "Finished in 0.000200s, 5000.0000 runs/s, 5000.0000 assertions/s.",
+        "",
+        "1 runs, 1 assertions, 0 failures, 0 errors, 0 skips, 1 warnings",
+        "",
+      ].join("\n"),
+    );
+    expect(warnings.receipts[0]?.failed).toBe(false);
+    expect(warnings.receipts[0]?.skipped).toBe(false);
+    expect(warnings.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(warnings, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const skipped = receiptFor(
+      "minitest-skip.log",
+      [
+        "Run options: --seed 1234",
+        "",
+        "# Running:",
+        "",
+        "S",
+        "",
+        "Finished in 0.000123s, 8130.0813 runs/s, 0.0000 assertions/s.",
+        "",
+        "1 runs, 0 assertions, 0 failures, 0 errors, 1 skips",
+        "",
+        "You have skipped tests. Run with --verbose for details.",
+        "",
+      ].join("\n"),
+    );
+    expect(skipped.receipts[0]?.failed).toBe(false);
+    expect(skipped.receipts[0]?.ranZeroTests).toBe(false);
+    expect(skipped.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skipped, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const mixed = receiptFor(
+      "minitest-skip-mixed.log",
+      [
+        "Finished in 0.000200s, 10000.0000 runs/s, 5000.0000 assertions/s.",
+        "",
+        "2 runs, 1 assertions, 0 failures, 0 errors, 1 skips",
+        "",
+      ].join("\n"),
+    );
+    expect(mixed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const reporters = receiptFor(
+      "minitest-reporters-skip.log",
+      [
+        "Finished tests in 0.000180s, 5555.5556 tests/s, 0.0000 assertions/s.",
+        "1 tests, 0 assertions, 0 failures, 0 errors, 1 skips",
+        "",
+      ].join("\n"),
+    );
+    expect(reporters.receipts[0]?.ranZeroTests).toBe(false);
+    expect(reporters.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(reporters, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "minitest-skip-color.log",
+      "\u001b[33m1 tests, 0 assertions, 0 failures, 0 errors, 1 skips\u001b[0m\n",
+    );
+    expect(colored.receipts[0]?.ranZeroTests).toBe(false);
+    expect(colored.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const empty = receiptFor(
+      "minitest-empty.log",
+      [
+        "Run options: --seed 1234",
+        "",
+        "# Running:",
+        "",
+        "",
+        "Finished in 0.000000s, NaN runs/s, NaN assertions/s.",
+        "",
+        "0 runs, 0 assertions, 0 failures, 0 errors, 0 skips",
+        "",
+      ].join("\n"),
+    );
+    expect(empty.receipts[0]?.failed).toBe(false);
+    expect(empty.receipts[0]?.skipped).toBe(false);
+    expect(empty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(empty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const failed = receiptFor(
+      "minitest-fail.log",
+      [
+        "F",
+        "",
+        "Finished in 0.000300s, 3333.3333 runs/s, 3333.3333 assertions/s.",
+        "",
+        "1) Failure:",
+        "WidgetTest#test_adds [test/widget_test.rb:4]:",
+        "Expected: 2",
+        "  Actual: 1",
+        "",
+        "1 runs, 1 assertions, 1 failures, 0 errors, 0 skips",
+        "",
+      ].join("\n"),
+    );
+    expect(failed.receipts[0]?.skipped).toBe(false);
+    expect(failed.receipts[0]?.ranZeroTests).toBe(false);
+    expect(failed.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(failed, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const errored = receiptFor(
+      "minitest-error.log",
+      [
+        "E",
+        "",
+        "Finished in 0.000100s, 10000.0000 runs/s, 0.0000 assertions/s.",
+        "",
+        "1 runs, 0 assertions, 0 failures, 1 errors, 0 skips",
+        "",
+      ].join("\n"),
+    );
+    expect(errored.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(errored, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+  });
 });
