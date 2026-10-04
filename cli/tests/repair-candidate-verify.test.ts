@@ -553,6 +553,82 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("does not treat an empty mocha run as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-mocha-empty-"));
+    homes.push(root);
+    const sha = "2".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "npx mocha",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "npx mocha",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const passing = receiptFor(
+      "mocha-one-passing.log",
+      ["", "  suite", "    ✔ keeps one", "", "  1 passing (2ms)", ""].join("\n"),
+    );
+    expect(passing.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(passing, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const prose = receiptFor(
+      "mocha-zero-passing-prose.log",
+      ["  1 passing (2ms)", "0 passing grades remain", "0 passing (draft)", ""].join("\n"),
+    );
+    expect(prose.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const empty = receiptFor("mocha-zero-passing.log", "\n\n  0 passing (1ms)\n\n");
+    expect(empty.receipts[0]?.failed).toBe(false);
+    expect(empty.receipts[0]?.skipped).toBe(false);
+    expect(empty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(empty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const seconds = receiptFor("mocha-zero-passing-seconds.log", "  0 passing (1s)\n");
+    expect(seconds.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(seconds, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "mocha-zero-passing-color.log",
+      "\n\n\u001b[92m \u001b[0m\u001b[32m 0 passing\u001b[0m\u001b[90m (0ms)\u001b[0m\n\n",
+    );
+    expect(colored.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("does not treat a playwright flaky test as proof", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-pw-flaky-"));
     homes.push(root);
