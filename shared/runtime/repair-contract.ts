@@ -292,6 +292,7 @@ export function interpretTestLog(
     if (Number(summary[2]) > 0 || Number(summary[4] ?? 0) > 0) rspecFailed = true;
     if (Number(summary[3] ?? 0) > 0) rspecPending = true;
   }
+  const proveRanNothing = /^[ \t]*Result:[ \t]+NOTESTS[ \t]*$/m.test(todoText);
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -322,6 +323,7 @@ export function interpretTestLog(
     mochaZeroPassing ||
     denoRanNothing ||
     rspecRanNothing ||
+    proveRanNothing ||
     (scanned !== text &&
       !failed &&
       !/^ok\s+\S/m.test(scanned) &&
