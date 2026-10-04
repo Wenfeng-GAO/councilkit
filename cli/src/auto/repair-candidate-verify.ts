@@ -258,9 +258,13 @@ export function writeCommandLog(
   },
 ): void {
   mkdirSync(join(logPath, ".."), { recursive: true });
+  const body =
+    receipt.stdout.length > 0 && receipt.stderr.length > 0 && !receipt.stdout.endsWith("\n")
+      ? `${receipt.stdout}\n${receipt.stderr}`
+      : `${receipt.stdout}${receipt.stderr}`;
   atomicWriteFile(
     logPath,
-    `exit=${receipt.exitCode}\ncwd=${receipt.cwd}\nsha=${receipt.snapshotSha.toLowerCase()}\ndirty=${receipt.dirtyTree ? "1" : "0"}\ncache=${receipt.cacheKey}\ncommand=${receipt.command}\n---\n${receipt.stdout}${receipt.stderr}`,
+    `exit=${receipt.exitCode}\ncwd=${receipt.cwd}\nsha=${receipt.snapshotSha.toLowerCase()}\ndirty=${receipt.dirtyTree ? "1" : "0"}\ncache=${receipt.cacheKey}\ncommand=${receipt.command}\n---\n${body}`,
   );
 }
 
