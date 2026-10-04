@@ -253,9 +253,7 @@ export function interpretTestLog(
     exitCode === 0;
   const failed = logShowsFailures(text);
   const lines = scanned.split("\n");
-  const ranSomeHarness = lines.some((line) =>
-    /^running[ \t]+[1-9]\d*[ \t]+tests?\b/i.test(line),
-  );
+  const ranSomeHarness = lines.some((line) => /^running[ \t]+[1-9]\d*[ \t]+tests?\b/i.test(line));
   const zeroCountText = ranSomeHarness
     ? lines.filter((line) => !/^running[ \t]+0[ \t]+tests?\b/i.test(line)).join("\n")
     : scanned;
