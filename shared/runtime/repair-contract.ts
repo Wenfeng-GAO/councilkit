@@ -242,6 +242,7 @@ export function interpretTestLog(
   const cargoIgnored =
     /^test[ \t]+\S+[ \t]+\.\.\.[ \t]+ignored\b/m.test(scanned) ||
     /^test result:.*\b[1-9]\d* ignored\b/m.test(scanned);
+  const mochaPending = /^[ \t]*[1-9]\d*[ \t]+pending[ \t]*$/im.test(todoText);
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -249,7 +250,8 @@ export function interpretTestLog(
       /#[ \t]+SKIP\b/.test(scanned) ||
       /(?<!\\)"Action"\s*:\s*"skip"/.test(scanned) ||
       cargoIgnored ||
-      todo) &&
+      todo ||
+      mochaPending) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
   const lines = scanned.split("\n");
