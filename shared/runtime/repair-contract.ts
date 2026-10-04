@@ -242,6 +242,13 @@ export function interpretTestLog(
   const cargoIgnored =
     /^test[ \t]+\S+[ \t]+\.\.\.[ \t]+ignored\b/m.test(scanned) ||
     /^test result:.*\b[1-9]\d* ignored\b/m.test(scanned);
+  const denoIgnored = /^[ \t]*(?:ok|FAILED)[ \t]*\|[^\n]*\|[ \t]*[1-9]\d*[ \t]+ignored\b/im.test(
+    todoText,
+  );
+  const denoRanNothing =
+    /^[ \t]*ok[ \t]*\|[ \t]*0[ \t]+passed\b(?![^\n]*\|[ \t]*[1-9]\d*[ \t]+ignored\b)[^\n]*\|[ \t]*0[ \t]+failed\b/im.test(
+      todoText,
+    );
   const mochaPending = /^[ \t]*[1-9]\d*[ \t]+pending[ \t]*$/im.test(todoText);
   const mochaZeroPassing = /^[ \t]*0[ \t]+passing[ \t]+\(\d+(?:ms|s|m|h|d)\)[ \t]*$/im.test(
     todoText,
@@ -274,6 +281,7 @@ export function interpretTestLog(
       /#[ \t]+SKIP\b/.test(scanned) ||
       /(?<!\\)"Action"\s*:\s*"skip"/.test(scanned) ||
       cargoIgnored ||
+      denoIgnored ||
       todo ||
       mochaPending ||
       pytestXfailOnly ||
@@ -292,6 +300,7 @@ export function interpretTestLog(
     /\bTest Files\s+0\b/i.test(scanned) ||
     /\btests\s+0\b/i.test(scanned) ||
     mochaZeroPassing ||
+    denoRanNothing ||
     (scanned !== text &&
       !failed &&
       !/^ok\s+\S/m.test(scanned) &&
