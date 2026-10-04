@@ -482,6 +482,77 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("does not treat a mocha pending test as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-mocha-pending-"));
+    homes.push(root);
+    const sha = "8".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "npx mocha",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "npx mocha",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const title = receiptFor(
+      "mocha-pending-title.log",
+      ["", "    ✔ pending work", "", "  1 passing (2ms)", ""].join("\n"),
+    );
+    expect(title.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(title, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const prose = receiptFor(
+      "mocha-pending-prose.log",
+      ["  1 passing (2ms)", "1 pending review remains", ""].join("\n"),
+    );
+    expect(prose.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const mixed = receiptFor(
+      "mocha-pending.log",
+      ["", "  ✔ keeps one", "  - skips one", "", "  1 passing (1ms)", "  1 pending", ""].join("\n"),
+    );
+    expect(mixed.receipts[0]?.failed).toBe(false);
+    expect(mixed.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "mocha-pending-color.log",
+      "\u001b[36m \u001b[0m\u001b[36m 1 pending\u001b[0m\n",
+    );
+    expect(colored.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+  });
+
   it("accepts a passing cargo test that also ran an empty harness", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-cargo-harness-"));
     homes.push(root);
