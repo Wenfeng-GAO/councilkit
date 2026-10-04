@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import { type LedgerFinding, parseFindingsFile } from "@shared/runtime/cli-ledger";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
-import { resolveFindingAnchor } from "@shared/runtime/review-explainer/anchors";
+import { citedRangeEnd, resolveFindingAnchor } from "@shared/runtime/review-explainer/anchors";
 import type {
   DiffFile,
   FindingAnchor,
@@ -209,6 +209,7 @@ function findingAnchors(frozen: FrozenReview, finding: LedgerFinding): FindingAn
   for (const ref of refs) {
     const path = ref[1] ?? "";
     const line = Number(ref[2]);
+    const endLine = ref[3] === undefined ? undefined : Number(ref[3]);
     const file = frozen.files.find((row) => [row.path, row.oldPath, row.newPath].includes(path));
     const side =
       file?.status === "deleted" ||
@@ -224,6 +225,7 @@ function findingAnchors(frozen: FrozenReview, finding: LedgerFinding): FindingAn
       path,
       side,
       line,
+      endLine,
     });
     if (anchor.status === "unresolved" && file && !file.binary) {
       try {
@@ -235,7 +237,7 @@ function findingAnchors(frozen: FrozenReview, finding: LedgerFinding): FindingAn
             path: content.path,
             side,
             line,
-            endLine: Number(ref[3] ?? line),
+            endLine: citedRangeEnd(line, endLine),
             snippet: found.text,
           };
       } catch {
