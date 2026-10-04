@@ -5,9 +5,14 @@ export interface AnchorInput {
   side: "old" | "new";
   path: string;
   line: number;
+  endLine?: number;
   snippet?: string;
   headSha?: string;
   sourceSha?: string;
+}
+export function citedRangeEnd(line: number, endLine: number | undefined): number {
+  if (endLine === undefined || !Number.isSafeInteger(endLine) || endLine < line) return line;
+  return endLine;
 }
 export function resolveFindingAnchor(input: AnchorInput): FindingAnchor {
   const unresolved = (reason: string): FindingAnchor => ({ status: "unresolved", reason });
@@ -28,7 +33,7 @@ export function resolveFindingAnchor(input: AnchorInput): FindingAnchor {
     path: input.path,
     side: input.side,
     line: input.line,
-    endLine: input.line,
+    endLine: citedRangeEnd(input.line, input.endLine),
     snippet: found[0]?.text ?? "",
   };
 }
