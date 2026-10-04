@@ -243,8 +243,26 @@ export function interpretTestLog(
     /^test[ \t]+\S+[ \t]+\.\.\.[ \t]+ignored\b/m.test(scanned) ||
     /^test result:.*\b[1-9]\d* ignored\b/m.test(scanned);
   const mochaPending = /^[ \t]*[1-9]\d*[ \t]+pending[ \t]*$/im.test(todoText);
-  const mochaZeroPassing =
-    /^[ \t]*0[ \t]+passing[ \t]+\(\d+(?:ms|s|m|h|d)\)[ \t]*$/im.test(todoText);
+  const mochaZeroPassing = /^[ \t]*0[ \t]+passing[ \t]+\(\d+(?:ms|s|m|h|d)\)[ \t]*$/im.test(
+    todoText,
+  );
+  const pytestXfailOnly = todoText.split("\n").some((line) => {
+    const summary = line
+      .replace(/^=+[ \t]*/, "")
+      .replace(/[ \t]*=+[ \t]*$/, "")
+      .trim();
+    if (
+      !/^(?:[1-9]\d*[ \t]+[A-Za-z]+)(?:,[ \t]*[1-9]\d*[ \t]+[A-Za-z]+)*[ \t]+in[ \t]+\d+(?:\.\d+)?s$/.test(
+        summary,
+      )
+    ) {
+      return false;
+    }
+    return (
+      /\b[1-9]\d*[ \t]+xfailed\b/.test(summary) &&
+      !/\b[1-9]\d*[ \t]+(?:xpassed|passed)\b/.test(summary)
+    );
+  });
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -253,7 +271,8 @@ export function interpretTestLog(
       /(?<!\\)"Action"\s*:\s*"skip"/.test(scanned) ||
       cargoIgnored ||
       todo ||
-      mochaPending) &&
+      mochaPending ||
+      pytestXfailOnly) &&
     exitCode === 0;
   const failed = logShowsFailures(text);
   const lines = scanned.split("\n");
