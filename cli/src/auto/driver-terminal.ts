@@ -20,18 +20,22 @@ const TRANSPORT_PHRASE =
 const STATUS_LABEL = /\b(?:status(?:[_\s-]?code)?|error)["']?\s*[:=]\s*["']?\s*$/i;
 const GLUED_NUMBER = /[A-Za-z0-9.:]$/;
 const ATTACHED_PAREN = /[A-Za-z0-9./\\_]\($/;
+const SPACED_PATH_PAREN = /[./\\][A-Za-z0-9_]*\s*\(\s*$/;
+const COLUMN_AFTER = /^\s*,\s*\d+/;
 const LOCATION_WORD = /(?:^|[^A-Za-z])(?:lines?|ports?|versions?)\b[\s"'=:]*$/i;
 
 function mentionsStatusCode(text: string, code: "401" | "429" | "502" | "503"): boolean {
   const re = new RegExp(String.raw`(?<![A-Za-z0-9])${code}(?![A-Za-z0-9])`, "g");
   for (const match of text.matchAll(re)) {
-    if (numberIsHttpStatus(text.slice(0, match.index ?? 0))) return true;
+    const index = match.index ?? 0;
+    if (numberIsHttpStatus(text.slice(0, index), text.slice(index + code.length))) return true;
   }
   return false;
 }
 
-function numberIsHttpStatus(before: string): boolean {
+function numberIsHttpStatus(before: string, after: string): boolean {
   if (STATUS_LABEL.test(before)) return true;
+  if (SPACED_PATH_PAREN.test(before) && COLUMN_AFTER.test(after)) return false;
   if (GLUED_NUMBER.test(before) || ATTACHED_PAREN.test(before)) return false;
   if (LOCATION_WORD.test(before)) return false;
   return true;
