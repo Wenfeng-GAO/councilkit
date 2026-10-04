@@ -720,6 +720,99 @@ describe("candidate snapshot and verification cache", () => {
     });
   });
 
+  it("does not treat a pytest xfail-only summary as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-pytest-xfail-"));
+    homes.push(root);
+    const sha = "e".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "pytest -q",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "pytest -q",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const quiet = receiptFor(
+      "pytest-xfail-quiet.log",
+      ["xx [100%]", "2 xfailed in 0.01s", ""].join("\n"),
+    );
+    expect(quiet.receipts[0]?.skipped).toBe(true);
+    expect(quiet.receipts[0]?.failed).toBe(false);
+    expect(evaluateVerificationAsset(quiet, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const banner = receiptFor(
+      "pytest-xfail-banner.log",
+      "============================== 1 xfailed in 0.01s ==============================\n",
+    );
+    expect(banner.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(banner, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "pytest-xfail-color.log",
+      "\u001b[33m\u001b[33m\u001b[1m2 xfailed\u001b[0m\u001b[33m in 0.01s\u001b[0m\u001b[0m\n",
+    );
+    expect(colored.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const mixed = receiptFor(
+      "pytest-xfail-mixed.log",
+      ["x. [100%]", "1 passed, 1 xfailed in 0.01s", ""].join("\n"),
+    );
+    expect(mixed.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const xpass = receiptFor("pytest-xpass.log", "1 xpassed in 0.00s\n");
+    expect(xpass.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(xpass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const both = receiptFor("pytest-xfail-xpass.log", "1 xfailed, 1 xpassed in 0.01s\n");
+    expect(both.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(both, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const prose = receiptFor(
+      "pytest-xfail-prose.log",
+      [
+        "============================== 1 passed in 0.01s ==============================",
+        "remembered 2 xfailed in 0.01s from a draft",
+        "",
+      ].join("\n"),
+    );
+    expect(prose.receipts[0]?.skipped).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+  });
+
   it("accepts a passing cargo test that also ran an empty harness", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-cand-cargo-harness-"));
     homes.push(root);
