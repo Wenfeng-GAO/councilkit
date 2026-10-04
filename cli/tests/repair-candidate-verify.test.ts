@@ -2616,4 +2616,156 @@ describe("candidate snapshot and verification cache", () => {
       reason: "failing tests cannot prove pass",
     });
   });
+
+  it("reads an rspec log by its pending, empty, and failed summaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-rspec-"));
+    homes.push(root);
+    const sha = "3".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "bundle exec rspec",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "bundle exec rspec",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "rspec-pass.log",
+      [
+        ".",
+        "",
+        "Finished in 0.00123 seconds (files took 0.04567 seconds to load)",
+        "2 examples, 0 failures",
+        "the draft quoted 1 example, 0 failures, 1 pending before the run",
+        "the draft quoted 0 examples, 0 failures before the run",
+        "the draft quoted 1 example, 1 failure before the run",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const pending = receiptFor(
+      "rspec-pending.log",
+      [
+        "*",
+        "",
+        "Pending: (Failures listed here are expected and do not affect your suite's status)",
+        "",
+        "  1) Widget is not ready",
+        "     # Not yet implemented",
+        "     # ./spec/widget_spec.rb:3",
+        "",
+        "Finished in 0.00047 seconds (files took 0.09322 seconds to load)",
+        "1 example, 0 failures, 1 pending",
+        "",
+      ].join("\n"),
+    );
+    expect(pending.receipts[0]?.failed).toBe(false);
+    expect(pending.receipts[0]?.ranZeroTests).toBe(false);
+    expect(pending.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(pending, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const pendingPlural = receiptFor(
+      "rspec-pending-plural.log",
+      "Finished in 0.01 seconds (files took 0.02 seconds to load)\n2 examples, 0 failures, 2 pending\n",
+    );
+    expect(pendingPlural.receipts[0]?.ranZeroTests).toBe(false);
+    expect(pendingPlural.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(pendingPlural, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "rspec-pending-color.log",
+      "\u001b[33m1 example, 0 failures, 1 pending\u001b[0m\n",
+    );
+    expect(colored.receipts[0]?.ranZeroTests).toBe(false);
+    expect(colored.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const empty = receiptFor(
+      "rspec-empty.log",
+      "Finished in 0.00005 seconds (files took 0.081 seconds to load)\n0 examples, 0 failures\n",
+    );
+    expect(empty.receipts[0]?.failed).toBe(false);
+    expect(empty.receipts[0]?.skipped).toBe(false);
+    expect(empty.receipts[0]?.ranZeroTests).toBe(true);
+    expect(evaluateVerificationAsset(empty, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const failed = receiptFor(
+      "rspec-fail.log",
+      "Finished in 0.02 seconds (files took 0.04 seconds to load)\n2 examples, 1 failure\n",
+    );
+    expect(failed.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(failed, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const failedPlural = receiptFor(
+      "rspec-fail-plural.log",
+      "\u001b[31m3 examples, 2 failures\u001b[0m\n",
+    );
+    expect(failedPlural.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(failedPlural, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const outside = receiptFor(
+      "rspec-outside.log",
+      "1 example, 0 failures, 1 error occurred outside of examples\n",
+    );
+    expect(outside.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(outside, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const mixed = receiptFor(
+      "rspec-mixed.log",
+      "3 examples, 1 failure, 1 pending, 2 errors occurred outside of examples\n",
+    );
+    expect(mixed.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(mixed, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+  });
 });

@@ -280,6 +280,18 @@ export function interpretTestLog(
       todoText,
     ) ||
     /^[ \t]*YOU HAVE[ \t]+[1-9]\d*[ \t]+DISABLED[ \t]+TESTS?[ \t]*$/im.test(todoText);
+  let rspecPending = false;
+  let rspecRanNothing = false;
+  let rspecFailed = false;
+  const rspecTotals =
+    /^[ \t]*(\d+)[ \t]+examples?,[ \t]+(\d+)[ \t]+failures?(?:,[ \t]+(\d+)[ \t]+pending)?(?:,[ \t]+(\d+)[ \t]+errors?[ \t]+occurred[ \t]+outside[ \t]+of[ \t]+examples)?[ \t]*$/;
+  for (const line of todoText.split("\n")) {
+    const summary = rspecTotals.exec(line);
+    if (!summary) continue;
+    if (Number(summary[1]) === 0) rspecRanNothing = true;
+    if (Number(summary[2]) > 0 || Number(summary[4] ?? 0) > 0) rspecFailed = true;
+    if (Number(summary[3] ?? 0) > 0) rspecPending = true;
+  }
   const skipped =
     (/\b[1-9]\d*[^\S\n]+skipped\b/i.test(scanned) ||
       /\bskipped\b[^\S\n]*[:=]?[^\S\n]*[1-9]\d*\b/i.test(scanned) ||
@@ -293,9 +305,10 @@ export function interpretTestLog(
       pytestXfailOnly ||
       summarySkipOrTodo ||
       ctestNotRun ||
-      gtestNotRun) &&
+      gtestNotRun ||
+      rspecPending) &&
     exitCode === 0;
-  const failed = logShowsFailures(text);
+  const failed = logShowsFailures(text) || rspecFailed;
   const lines = scanned.split("\n");
   const ranSomeHarness = lines.some((line) => /^running[ \t]+[1-9]\d*[ \t]+tests?\b/i.test(line));
   const zeroCountText = ranSomeHarness
@@ -308,6 +321,7 @@ export function interpretTestLog(
     /\btests\s+0\b/i.test(scanned) ||
     mochaZeroPassing ||
     denoRanNothing ||
+    rspecRanNothing ||
     (scanned !== text &&
       !failed &&
       !/^ok\s+\S/m.test(scanned) &&
