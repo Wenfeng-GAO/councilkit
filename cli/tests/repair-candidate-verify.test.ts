@@ -2362,8 +2362,9 @@ describe("candidate snapshot and verification cache", () => {
         "running 1 test from ./add_test.ts",
         "addition ... ok (1ms)",
         "",
-        "ok | 1 passed | 0 failed (2ms)",
+        "ok | 1 passed (2 steps) | 0 failed (5ms)",
         "the runner ignored 1 stale cache line",
+        "0 ignored (1 step) in the notes",
         "",
       ].join("\n"),
     );
@@ -2413,9 +2414,30 @@ describe("candidate snapshot and verification cache", () => {
       "deno-ignored-steps.log",
       "ok | 1 passed (1 step) | 0 failed | 1 ignored (1 step) (8ms)\n",
     );
+    const ignoredStep = receiptFor(
+      "deno-ignored-step-only.log",
+      "ok | 1 passed (1 step) | 0 failed | 0 ignored (1 step) (8ms)\n",
+    );
+    const ignoredSteps = receiptFor(
+      "deno-ignored-steps-only.log",
+      "ok | 1 passed | 0 failed | 0 ignored (2 steps) (8ms)\n",
+    );
     expect(steps.receipts[0]?.ranZeroTests).toBe(false);
     expect(steps.receipts[0]?.skipped).toBe(true);
     expect(evaluateVerificationAsset(steps, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+    expect(ignoredStep.receipts[0]?.failed).toBe(false);
+    expect(ignoredStep.receipts[0]?.ranZeroTests).toBe(false);
+    expect(ignoredStep.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(ignoredStep, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+    expect(ignoredSteps.receipts[0]?.ranZeroTests).toBe(false);
+    expect(ignoredSteps.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(ignoredSteps, "A1")).toEqual({
       ok: false,
       reason: "zero tests or skipped tests cannot prove pass",
     });
