@@ -1202,6 +1202,27 @@ describe("candidate snapshot and verification cache", () => {
         ].join("\n"),
       ],
       [
+        "mocha-fail.log",
+        [
+          "",
+          "  math",
+          "    1) adds",
+          "    ✔ keeps one",
+          "",
+          "  1 passing (4ms)",
+          "  1 failing",
+          "",
+          "  1) math",
+          "       adds:",
+          "",
+          "     AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:",
+          "",
+          "2 !== 3",
+          "",
+        ].join("\n"),
+      ],
+      ["mocha-color-fail.log", "\u001b[31m  1 failing\u001b[0m\n"],
+      [
         "cargo-fail.log",
         [
           "running 1 test",
@@ -1334,6 +1355,18 @@ describe("candidate snapshot and verification cache", () => {
       ok: true,
       reason: "verified",
     });
+
+    const mochaPass = receiptFor(
+      "mocha-pass.log",
+      ["", "  math", "    ✔ keeps one", "", "  1 passing (2ms)", ""].join("\n"),
+    );
+    expect(evaluateVerificationAsset(mochaPass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const mochaProse = receiptFor(
+      "mocha-prose.log",
+      ["  1 passing (2ms)", "1 failing to bind the port, then recovered", ""].join("\n"),
+    );
+    expect(evaluateVerificationAsset(mochaProse, "A1")).toEqual({ ok: true, reason: "verified" });
 
     const recoveredSentence = receiptFor(
       "recovered-fail-sentence.log",
