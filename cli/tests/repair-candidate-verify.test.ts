@@ -1924,4 +1924,230 @@ describe("candidate snapshot and verification cache", () => {
     expect(stdoutOnly.receipts[0]?.failed).toBe(false);
     expect(evaluateVerificationAsset(stdoutOnly, "A1")).toEqual({ ok: true, reason: "verified" });
   });
+
+  it("does not treat a bun skip, todo, or fail summary as proof", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-bun-"));
+    homes.push(root);
+    const sha = "4".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "bun test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "bun test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "bun-pass.log",
+      [
+        "(pass) adds [0.04ms]",
+        "",
+        " 1 pass",
+        " 0 fail",
+        " 1 expect() calls",
+        "Ran 1 test across 1 file. [3.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const filtered = receiptFor(
+      "bun-filtered.log",
+      [
+        "(pass) adds [0.02ms]",
+        "",
+        " 1 pass",
+        " 1 filtered out",
+        " 0 fail",
+        " 1 expect() calls",
+        "Ran 1 test across 1 file. [2.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(filtered.receipts[0]?.skipped).toBe(false);
+    expect(filtered.receipts[0]?.failed).toBe(false);
+    expect(evaluateVerificationAsset(filtered, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const prose = receiptFor(
+      "bun-prose.log",
+      [
+        " 1 pass",
+        " 0 fail",
+        "1 skip remains in the draft",
+        "1 todo item stays a note",
+        "1 fail to bind the port, then recovered",
+        "1 error while reading the cache, then recovered",
+        "Ran 1 test across 1 file. [2.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(prose.receipts[0]?.skipped).toBe(false);
+    expect(prose.receipts[0]?.failed).toBe(false);
+    expect(evaluateVerificationAsset(prose, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const skip = receiptFor(
+      "bun-skip.log",
+      [
+        "(pass) adds [0.03ms]",
+        "(skip) later",
+        "",
+        " 1 pass",
+        " 1 skip",
+        " 0 fail",
+        " 1 expect() calls",
+        "Ran 2 tests across 1 file. [2.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(skip.receipts[0]?.failed).toBe(false);
+    expect(skip.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skip, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const skipOnly = receiptFor(
+      "bun-skip-only.log",
+      [
+        "(skip) later",
+        "",
+        " 0 pass",
+        " 1 skip",
+        " 0 fail",
+        "Ran 1 test across 1 file. [2.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(skipOnly.receipts[0]?.ranZeroTests).toBe(false);
+    expect(skipOnly.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skipOnly, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const todo = receiptFor(
+      "bun-todo.log",
+      [
+        "(todo) later",
+        "",
+        " 0 pass",
+        " 1 todo",
+        " 0 fail",
+        "Ran 1 test across 1 file. [2.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(todo.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(todo, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const todoMixed = receiptFor(
+      "bun-todo-mixed.log",
+      [
+        "(pass) adds [0.02ms]",
+        "(todo) later",
+        "",
+        " 1 pass",
+        " 1 todo",
+        " 0 fail",
+        " 1 expect() calls",
+        "Ran 2 tests across 1 file. [2.00ms]",
+        "",
+      ].join("\n"),
+    );
+    expect(todoMixed.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(todoMixed, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const coloredSkip = receiptFor(
+      "bun-skip-color.log",
+      [
+        "\u001b[0m\u001b[32m 1 pass\u001b[0m",
+        " \u001b[0m\u001b[33m1 skip\u001b[0m",
+        "\u001b[0m\u001b[2m 0 fail\u001b[0m",
+        "",
+      ].join("\n"),
+    );
+    expect(coloredSkip.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(coloredSkip, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const fail = receiptFor(
+      "bun-fail.log",
+      [" 0 pass", " 1 fail", " 1 expect() calls", "Ran 1 test across 1 file. [2.00ms]", ""].join(
+        "\n",
+      ),
+    );
+    expect(fail.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(fail, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const coloredFail = receiptFor("bun-fail-color.log", "\u001b[0m\u001b[31m 1 fail\u001b[0m\n");
+    expect(coloredFail.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(coloredFail, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const error = receiptFor(
+      "bun-error.log",
+      [" 0 pass", " 0 fail", " 1 error", "Ran 1 test across 1 file. [2.00ms]", ""].join("\n"),
+    );
+    expect(error.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(error, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const errors = receiptFor("bun-errors.log", " 2 errors\n");
+    expect(errors.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(errors, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const coloredError = receiptFor(
+      "bun-error-color.log",
+      " \u001b[0m\u001b[31m1 error\u001b[0m\n",
+    );
+    expect(coloredError.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(coloredError, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+  });
 });
