@@ -2468,4 +2468,152 @@ describe("candidate snapshot and verification cache", () => {
       reason: "failing tests cannot prove pass",
     });
   });
+
+  it("reads a gtest log by its skipped, disabled, and failed summaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-cand-gtest-"));
+    homes.push(root);
+    const sha = "6".repeat(40);
+    const cacheKey = verificationCacheKey({
+      snapshotSha: sha,
+      assertionVersion: "A1",
+      testAssetVersion: "tests-v1",
+    });
+    const receiptFor = (name: string, stdout: string) => {
+      const logPath = join(root, name);
+      writeCommandLog(logPath, {
+        exitCode: 0,
+        stdout,
+        stderr: "",
+        snapshotSha: sha,
+        cwd: root,
+        dirtyTree: false,
+        cacheKey,
+        command: "./build/foo_test",
+      });
+      const receipt = receiptFromIsolatedLog({
+        assertionId: "A1",
+        command: "./build/foo_test",
+        cwd: root,
+        snapshotSha: sha,
+        dirtyTree: false,
+        testAssetVersion: "tests-v1",
+        logPath,
+        cacheKey,
+      });
+      if (receipt === null) throw new Error(`expected a receipt for ${name}`);
+      return receipt;
+    };
+
+    const pass = receiptFor(
+      "gtest-pass.log",
+      [
+        "[==========] 1 test from 1 test suite ran. (0 ms total)",
+        "[  PASSED  ] 1 test.",
+        "the draft quoted [  SKIPPED ] 1 test, listed below: before the run",
+        "YOU HAVE 1 DISABLED TEST in the notes",
+        "the draft quoted [  FAILED  ] 1 test, listed below: before the run",
+        "",
+      ].join("\n"),
+    );
+    expect(pass.receipts[0]?.failed).toBe(false);
+    expect(pass.receipts[0]?.skipped).toBe(false);
+    expect(pass.receipts[0]?.ranZeroTests).toBe(false);
+    expect(evaluateVerificationAsset(pass, "A1")).toEqual({ ok: true, reason: "verified" });
+
+    const skipped = receiptFor(
+      "gtest-skip.log",
+      [
+        "[==========] 2 tests from 1 test suite ran. (1 ms total)",
+        "[  PASSED  ] 1 test.",
+        "[  SKIPPED ] 1 test, listed below:",
+        "[  SKIPPED ] Widget.Later",
+        "",
+      ].join("\n"),
+    );
+    expect(skipped.receipts[0]?.failed).toBe(false);
+    expect(skipped.receipts[0]?.ranZeroTests).toBe(false);
+    expect(skipped.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(skipped, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const brief = receiptFor(
+      "gtest-skip-brief.log",
+      ["[  PASSED  ] 2 tests.", "[  SKIPPED ] 1 test.", ""].join("\n"),
+    );
+    expect(brief.receipts[0]?.ranZeroTests).toBe(false);
+    expect(brief.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(brief, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const colored = receiptFor(
+      "gtest-skip-color.log",
+      "\u001b[0;32m[  PASSED  ] \u001b[m1 test.\n\u001b[0;32m[  SKIPPED ] \u001b[m2 tests, listed below:\n",
+    );
+    expect(colored.receipts[0]?.ranZeroTests).toBe(false);
+    expect(colored.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(colored, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const disabled = receiptFor(
+      "gtest-disabled.log",
+      [
+        "[==========] 1 test from 1 test suite ran. (0 ms total)",
+        "[  PASSED  ] 1 test.",
+        "",
+        "  YOU HAVE 1 DISABLED TEST",
+        "",
+      ].join("\n"),
+    );
+    expect(disabled.receipts[0]?.failed).toBe(false);
+    expect(disabled.receipts[0]?.ranZeroTests).toBe(false);
+    expect(disabled.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(disabled, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const disabledPlural = receiptFor(
+      "gtest-disabled-color.log",
+      "[  PASSED  ] 3 tests.\n\u001b[0;33m  YOU HAVE 2 DISABLED TESTS\n\n\u001b[m",
+    );
+    expect(disabledPlural.receipts[0]?.ranZeroTests).toBe(false);
+    expect(disabledPlural.receipts[0]?.skipped).toBe(true);
+    expect(evaluateVerificationAsset(disabledPlural, "A1")).toEqual({
+      ok: false,
+      reason: "zero tests or skipped tests cannot prove pass",
+    });
+
+    const failed = receiptFor(
+      "gtest-fail.log",
+      [
+        "[==========] 2 tests from 1 test suite ran. (1 ms total)",
+        "[  PASSED  ] 1 test.",
+        "[  FAILED  ] 1 test, listed below:",
+        "[  FAILED  ] Widget.Breaks",
+        " 1 FAILED TEST",
+        "",
+      ].join("\n"),
+    );
+    expect(failed.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(failed, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+
+    const failedBrief = receiptFor(
+      "gtest-fail-brief.log",
+      "\u001b[0;31m[  FAILED  ] \u001b[mWidget.Breaks (1 ms)\n[  PASSED  ] 1 test.\n",
+    );
+    expect(failedBrief.receipts[0]?.failed).toBe(true);
+    expect(evaluateVerificationAsset(failedBrief, "A1")).toEqual({
+      ok: false,
+      reason: "failing tests cannot prove pass",
+    });
+  });
 });
