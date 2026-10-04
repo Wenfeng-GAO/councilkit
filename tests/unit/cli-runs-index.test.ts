@@ -594,7 +594,10 @@ describe("readCliRun seat progress from a long transcript", () => {
         incomplete: false,
       },
     ];
-    writeFileSync(join(dir, "transcript.jsonl"), `${lines.map((row) => JSON.stringify(row)).join("\n")}\n`);
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${lines.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    );
     writeFileSync(
       join(dir, "status.json"),
       `${JSON.stringify({
@@ -616,8 +619,14 @@ describe("readCliRun seat progress from a long transcript", () => {
 
     const run = readCliRun(REVIEW_ID, process.env);
     const attempts = run?.progress?.attempts ?? [];
-    expect(attempts.find((row) => row.attemptId === "attempt-0")?.status).toBe("success");
-    expect(attempts.find((row) => row.attemptId === "aggregator")?.status).toBe("success");
+    expect(attempts.find((row) => row.attemptId === "attempt-0")).toMatchObject({
+      status: "success",
+      durationMs: 1200,
+    });
+    expect(attempts.find((row) => row.attemptId === "aggregator")).toMatchObject({
+      status: "success",
+      durationMs: 800,
+    });
     expect(run?.status).toBe("completed");
   });
 });
