@@ -33,4 +33,11 @@ describe("displayFindingTitle", () => {
   it("keeps a title that is only a source path", () => {
     expect(displayFindingTitle({ title: "src/app.ts:12" })).toBe("src/app.ts:12");
   });
+
+  it.each([
+    ["src/app.code-workspace — workspace settings leak", "workspace settings leak"],
+    ["src/app.code-workspace", "src/app.code-workspace"],
+  ])("keeps a hyphenated extension intact: %s", (title, expected) => {
+    expect(displayFindingTitle({ title })).toBe(expected);
+  });
 });
