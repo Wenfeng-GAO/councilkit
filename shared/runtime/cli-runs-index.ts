@@ -473,6 +473,19 @@ const TRANSCRIPT_HEAD_BYTES = 256 * 1024;
 const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
 const TRANSCRIPT_LINE_PREFIX_BYTES = 8 * 1024;
 const TRANSCRIPT_LINE_SUFFIX_BYTES = 8 * 1024;
+const TRANSCRIPT_ROSTER_LINE_BYTES = 256 * 1024;
+
+function transcriptLineKind(buf: Buffer): string | null {
+  return /^\{"kind":"([^"\\]+)"/.exec(buf.subarray(0, 96).toString("utf8"))?.[1] ?? null;
+}
+
+function transcriptLineCap(buf: Buffer): number {
+  const kind = transcriptLineKind(buf);
+  if (kind === "attempt.finished" || kind === "aggregation.finished") {
+    return TRANSCRIPT_LINE_PREFIX_BYTES;
+  }
+  return kind === null ? TRANSCRIPT_LINE_PREFIX_BYTES : TRANSCRIPT_ROSTER_LINE_BYTES;
+}
 
 function scanTranscriptLinePrefixes(path: string): unknown[] {
   let fd: number | undefined;
@@ -509,7 +522,8 @@ function scanTranscriptLinePrefixes(path: string): unknown[] {
         const piece = data.subarray(index, end);
         noteSuffix(piece);
         if (!overflow) {
-          const room = TRANSCRIPT_LINE_PREFIX_BYTES - held.length;
+          const sample = held.length >= 96 ? held : Buffer.concat([held, piece.subarray(0, 96)]);
+          const room = transcriptLineCap(sample) - held.length;
           if (room <= 0) overflow = true;
           else if (piece.length <= room) held = Buffer.concat([held, piece]);
           else {
