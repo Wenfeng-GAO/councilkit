@@ -1,3 +1,4 @@
+import { cliRunAttemptResultSchema } from "@shared/runtime/schemas";
 import { summarizeSeatOutput } from "@shared/runtime/seat-result";
 import { describe, expect, it } from "vitest";
 
@@ -78,5 +79,18 @@ comment
       findingCount: 1,
       blockingCount: 0,
     });
+  });
+
+  it("clips an emoji overview to the UTF-16 budget the list schema accepts", () => {
+    const emoji = "😀";
+    const output = `## 概览\n\n${emoji.repeat(240)}\n`;
+    const result = summarizeSeatOutput(output);
+    expect(result.summary).toBe(emoji.repeat(120));
+    expect(cliRunAttemptResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it("drops an emoji that would split a surrogate at the summary limit", () => {
+    const output = `## 概览\n\n${"a".repeat(239)}😀\n`;
+    expect(summarizeSeatOutput(output).summary).toBe("a".repeat(239));
   });
 });
