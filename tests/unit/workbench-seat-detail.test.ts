@@ -1,4 +1,5 @@
 import {
+  applyLivePoll,
   isCursorReset,
   newActivityCount,
   nextPollDelayMs,
@@ -30,6 +31,55 @@ describe("isCursorReset 游标重置检测", () => {
     expect(isCursorReset(5, 5)).toBe(false);
     expect(isCursorReset(5, 8)).toBe(false);
     expect(isCursorReset(0, 0)).toBe(false);
+  });
+});
+
+function liveEvent(seq: number, text: string): AttemptLiveEvent {
+  return { seq, at: `t${seq}`, type: "text.delta", text };
+}
+
+/** Host live handler: rows with seq > afterSeq, nextSeq is the file max (or afterSeq when empty). */
+function hostLivePage(all: readonly AttemptLiveEvent[], afterSeq: number) {
+  const events = all.filter((event) => event.seq > afterSeq);
+  const nextSeq = all.length === 0 ? afterSeq : Math.max(...all.map((event) => event.seq));
+  return { events, nextSeq };
+}
+
+describe("applyLivePoll", () => {
+  it("re-reads a restarted sidecar instead of adopting its shorter cursor", () => {
+    const restarted = [liveEvent(1, "hello"), liveEvent(2, "world")];
+    const stale = applyLivePoll({ afterSeq: 10, lastSeq: 10 }, hostLivePage(restarted, 10));
+    expect(stale).toEqual({ action: "reread", afterSeq: 0, lastSeq: -1 });
+
+    const recovered = applyLivePoll(
+      { afterSeq: stale.action === "reread" ? stale.afterSeq : 10, lastSeq: -1 },
+      hostLivePage(restarted, 0),
+    );
+    expect(recovered).toEqual({
+      action: "apply",
+      events: restarted,
+      afterSeq: 2,
+      lastSeq: 2,
+    });
+  });
+
+  it("keeps the cursor when the sidecar is missing", () => {
+    expect(applyLivePoll({ afterSeq: 4, lastSeq: 4 }, hostLivePage([], 4))).toEqual({
+      action: "apply",
+      events: [],
+      afterSeq: 4,
+      lastSeq: 4,
+    });
+  });
+
+  it("appends only rows past the last applied seq", () => {
+    const sidecar = [liveEvent(1, "a"), liveEvent(2, "b"), liveEvent(3, "c")];
+    expect(applyLivePoll({ afterSeq: 1, lastSeq: 1 }, hostLivePage(sidecar, 1))).toEqual({
+      action: "apply",
+      events: [liveEvent(2, "b"), liveEvent(3, "c")],
+      afterSeq: 3,
+      lastSeq: 3,
+    });
   });
 });
 
