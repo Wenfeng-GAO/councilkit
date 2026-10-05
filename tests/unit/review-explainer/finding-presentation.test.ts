@@ -19,6 +19,13 @@ describe("displayFindingTitle", () => {
     ).toBe("状态回滚失败");
   });
 
+  it.each([
+    ["src/site.webmanifest — manifest handling fails", "manifest handling fails"],
+    ["src/foo.properties:12 — config is ignored", "config is ignored"],
+  ])("drops a long extension and keeps the headline: %s", (title, expected) => {
+    expect(displayFindingTitle({ title })).toBe(expected);
+  });
+
   it("drops a backticked source file and keeps the headline", () => {
     expect(displayFindingTitle({ title: "`src/app.ts:12` — null deref" })).toBe("null deref");
   });
