@@ -218,13 +218,14 @@ function splitReviewerBlocks(body: string): Array<{ title: string; body: string 
       continue;
     }
     if (current) current.lines.push(line);
-    else if (line.trim().length > 0) preface.push(line);
+    else preface.push(line);
   }
   if (current) blocks.push({ title: current.title, body: current.lines.join("\n").trim() });
-  if (preface.length > 0) {
-    blocks.unshift({ title: "", body: preface.join("\n").trim() });
+  const prefaceBody = preface.join("\n").trim();
+  if (blocks.length > 0 && prefaceBody.length > 0) {
+    blocks.unshift({ title: "", body: prefaceBody });
   }
-  return blocks.filter((block) => block.title.length > 0);
+  return blocks.filter((block) => block.title.length > 0 || block.body.length > 0);
 }
 
 function parseFinding(item: string): ReviewFinding {
