@@ -19,10 +19,12 @@ import {
   REPAIR_GATE_POLICY_CATALOG,
   hashRepairGatePolicy,
 } from "@shared/runtime/repair-policy";
+import { writerLeaseKey, writerLeasePath } from "@shared/runtime/repair-lease";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { acquireWriterLease } from "../src/auto/repair-lease";
 import {
   createRepairGrant,
   loadRepairProfile,
@@ -221,6 +223,7 @@ describe("repair export CLI", () => {
 
 const SOURCE_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
 const REPAIR_ID = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+const OTHER_REPAIR_ID = "ck-repair-cccccccc-cccc-4ccc-8ddd-eeeeeeeeeee5";
 const PR = "https://github.com/acme/repo/pull/9";
 
 function makeSink(): OutputSink & { finished: unknown } {
@@ -675,6 +678,30 @@ describe("repair outer loop", () => {
     });
   });
 
+  it("releases the writer lease when the repair finishes needs_attention", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    const out = makeSink();
+    await expect(
+      runRepair(
+        ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+        out,
+        loopOpts({
+          reviewImpl: async () => ({
+            runId: "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+            incomplete: true,
+          }),
+        }),
+      ),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({ businessResult: "needs_attention" });
+    const leasePath = writerLeasePath(
+      home,
+      writerLeaseKey({ repo: "github.com/acme/repo", sourceBranch: "feat-x" }),
+    );
+    expect(existsSync(leasePath)).toBe(false);
+  });
+
   it("resumes a CAS+1 reserved slot without minting a new outer cycle", async () => {
     seedCompleteReview(SOURCE_ID, { open: true });
     saveDefaultProfile();
@@ -809,6 +836,61 @@ describe("repair outer loop", () => {
       }),
     ).rejects.toBeInstanceOf(RepairExit);
     expect(out.finished).toMatchObject({ leaseReleased: false, businessResult: "stopped" });
+  });
+
+  it("stop releases the writer lease left on disk when no writer remains", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    const leasePath = writerLeasePath(
+      home,
+      writerLeaseKey({ repo: "github.com/acme/repo", sourceBranch: "feat-x" }),
+    );
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "repair",
+      holderRunId: REPAIR_ID,
+      pid: 999_999_999,
+    });
+    expect(existsSync(leasePath)).toBe(true);
+    const out = makeSink();
+    await expect(runRepair(["stop", "--run", REPAIR_ID], out, { kill: () => {} })).rejects.toBeInstanceOf(
+      RepairExit,
+    );
+    expect(out.finished).toMatchObject({ leaseReleased: true, businessResult: "stopped" });
+    expect(existsSync(leasePath)).toBe(false);
+  });
+
+  it("stop reports the lease as still held when another run owns it", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    saveDefaultProfile();
+    await runRepair(
+      ["run", "--from", SOURCE_ID, "--profile", "default", "--run-id", REPAIR_ID],
+      makeSink(),
+      { wait: async () => {}, loop: false },
+    );
+    acquireWriterLease({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderKind: "repair",
+      holderRunId: OTHER_REPAIR_ID,
+      pid: 999_999_999,
+    });
+    const leasePath = writerLeasePath(
+      home,
+      writerLeaseKey({ repo: "github.com/acme/repo", sourceBranch: "feat-x" }),
+    );
+    const out = makeSink();
+    await expect(
+      runRepair(["stop", "--run", REPAIR_ID], out, { kill: () => {} }),
+    ).rejects.toBeInstanceOf(RepairExit);
+    expect(out.finished).toMatchObject({ leaseReleased: false, businessResult: "stopped" });
+    expect(existsSync(leasePath)).toBe(true);
   });
 
   it("does not promote an incomplete follow-up to priorComplete", async () => {
