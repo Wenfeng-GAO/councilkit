@@ -54,7 +54,11 @@ import {
   wireKindOf,
 } from "@/orchestrator/discussion-instructions";
 import { type RuntimeClient, RuntimeClientError } from "@/runtime/client";
-import { followExecutionEvents } from "@/runtime/event-stream";
+import {
+  EventStreamError,
+  type FollowOutcome,
+  followExecutionEvents,
+} from "@/runtime/event-stream";
 import type { RuntimeEvent } from "@shared/runtime/events";
 import { type ExecutionProfileDto, executionProfileSchema } from "@shared/runtime/schemas";
 import type { SnapshotItem } from "@shared/runtime/schemas";
@@ -798,17 +802,26 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     const binding = await latestBinding(room.id);
     const scopeId = binding?.executionScopeId as string;
     let resumeAt = afterSeq;
+    let streamFailures = 0;
     for (;;) {
-      const outcome = await followExecutionEvents({
-        fetchInput: client.eventStreamFetch({
-          scopeId,
-          executionId: execution.executionId,
-          afterSeq: resumeAt,
-        }),
-        onEvent: (event) => {
-          display.onPreview?.(room.id, event);
-        },
-      });
+      let outcome: FollowOutcome;
+      try {
+        outcome = await followExecutionEvents({
+          fetchInput: client.eventStreamFetch({
+            scopeId,
+            executionId: execution.executionId,
+            afterSeq: resumeAt,
+          }),
+          onEvent: (event) => {
+            display.onPreview?.(room.id, event);
+          },
+        });
+        streamFailures = 0;
+      } catch (error) {
+        if (!(error instanceof EventStreamError)) throw error;
+        streamFailures += 1;
+        outcome = { kind: "closed", lastSeq: resumeAt };
+      }
       if (outcome.kind === "terminal") {
         return handleTerminal(room, round, execution.executionId, outcome.event, token);
       }
@@ -816,6 +829,16 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       // Connection ended without a terminal: check the Host's record.
       try {
         const status = await client.getExecution(scopeId, execution.executionId);
+        if (streamFailures >= 2) {
+          await failExecution(db, {
+            executionId: execution.executionId,
+            token,
+            error: errorOf("INTERRUPTED_UNKNOWN", "event stream failed before a terminal"),
+            kind: "interrupted",
+          });
+          notify(room.id);
+          return false;
+        }
         if (status.state === "running") continue; // keep following from afterSeq
       } catch (error) {
         if (error instanceof RuntimeClientError && error.status === 404) {

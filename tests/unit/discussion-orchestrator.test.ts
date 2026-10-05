@@ -206,7 +206,6 @@ class FakeHost {
   createScopeCalls: { scopeId: string; controllerId: string }[] = [];
   activateCalls: string[] = [];
   ackTombstones = 0;
-  /** Next N event-stream GETs return 429, matching the host connection quota. */
   private eventStreamFailuresRemaining = 0;
 
   private readonly prewarmFailures = new Set<string>();
@@ -247,7 +246,6 @@ class FakeHost {
     this.onCreateScope = null;
   }
 
-  /** The next `count` event-stream requests fail with HTTP 429. */
   failNextEventStreams(count: number): void {
     this.eventStreamFailuresRemaining = count;
   }
