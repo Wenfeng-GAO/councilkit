@@ -206,6 +206,7 @@ class FakeHost {
   createScopeCalls: { scopeId: string; controllerId: string }[] = [];
   activateCalls: string[] = [];
   ackTombstones = 0;
+  private eventStreamFailuresRemaining = 0;
 
   private readonly prewarmFailures = new Set<string>();
   private readonly scopes = new Map<string, FakeScope>();
@@ -240,8 +241,13 @@ class FakeHost {
     this.createScopeCalls = [];
     this.activateCalls = [];
     this.ackTombstones = 0;
+    this.eventStreamFailuresRemaining = 0;
     this.ackBehavior = "ok";
     this.onCreateScope = null;
+  }
+
+  failNextEventStreams(count: number): void {
+    this.eventStreamFailuresRemaining = count;
   }
 
   seedScope(input: {
@@ -607,6 +613,10 @@ class FakeHost {
   }
 
   private handleEvents(scopeId: string, executionId: string, afterSeqRaw: string | null): Response {
+    if (this.eventStreamFailuresRemaining > 0) {
+      this.eventStreamFailuresRemaining -= 1;
+      return errorResponse(429, "RESOURCE_LIMIT", "Event connection quota reached.");
+    }
     const scope = this.requireScope(scopeId);
     if (scope instanceof Response) return scope;
     const execution = this.executions.get(executionId);
@@ -1562,6 +1572,56 @@ describe("discussion orchestrator (U5)", () => {
     ).toHaveLength(1);
     const bodies = await db.messages.where("roomId").equals(room.id).toArray();
     expect(bodies.some((message) => message.content === "resumed output")).toBe(true);
+  });
+
+  it("8c. one event-stream 429 reconnects the same turn instead of leaving it generating", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.failNextEventStreams(1);
+    const roundPromise = orchestrator.startRound(room.id);
+
+    const early = await Promise.race([
+      roundPromise.then(
+        (round) => ({ kind: "resolved" as const, phase: round?.phase ?? null }),
+        (error: unknown) => ({
+          kind: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+      vi
+        .waitFor(() => {
+          expect(host.getExecutionCalls.length).toBeGreaterThan(0);
+        })
+        .then(() => ({ kind: "following" as const })),
+    ]);
+    expect(early).toEqual({ kind: "following" });
+
+    const executionId = host.executeCalls[0]?.executionId as string;
+    host.complete(executionId, "quota recovered");
+    const round = await roundPromise;
+    expect(round?.phase).toBe("completed");
+    expect(round?.activeExecutionId).toBeNull();
+    const bodies = await db.messages.where("roomId").equals(room.id).toArray();
+    expect(bodies.some((message) => message.content === "quota recovered")).toBe(true);
+    expect(host.executeCalls.filter((call) => call.executionId === executionId)).toHaveLength(1);
+  });
+
+  it("8d. repeated event-stream failures pause the turn instead of leaving it generating", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.failNextEventStreams(5);
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(round?.activeExecutionId).toBeNull();
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    const executionId = host.executeCalls[0]?.executionId as string;
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("INTERRUPTED_UNKNOWN");
+    expect(host.executeCalls).toHaveLength(1);
   });
 
   it("9. startup audit classifies prepared / running-404 / running-known / committed", async () => {

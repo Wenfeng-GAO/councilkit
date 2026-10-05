@@ -25,7 +25,7 @@ export type FollowOutcome =
   | { kind: "closed"; lastSeq: number }
   | { kind: "aborted"; lastSeq: number };
 
-class EventStreamError extends Error {
+export class EventStreamError extends Error {
   constructor(
     readonly status: number,
     message: string,
