@@ -12,7 +12,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLI_RUN_PIPELINE_PID_FILE, CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
-import { readCliRun } from "@shared/runtime/cli-runs-index";
+import { listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
+import { cliRunsListResponseSchema } from "@shared/runtime/schemas";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
 import {
   DEFAULT_GATE_POLICY_ID,
@@ -23,6 +24,7 @@ import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-cont
 import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readRepairState } from "../src/auto/repair-persist";
 import {
   createRepairGrant,
   loadRepairProfile,
@@ -1611,6 +1613,58 @@ function saveV2Profile(): void {
 }
 
 describe("repair v2 protocol", () => {
+  it("keeps a long review title on the runs list and in repair state", async () => {
+    seedCompleteReview(SOURCE_ID, { open: true });
+    const title = `${"修".repeat(399)}🎯`;
+    writeFileSync(
+      join(home, "runs", SOURCE_ID, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        runId: SOURCE_ID,
+        startedAt: "2026-09-20T00:00:00.000Z",
+        task: { task: title },
+      })}\n${JSON.stringify({
+        kind: "review.finished",
+        status: "completed",
+        incomplete: false,
+        endedAt: "2026-09-20T00:01:00.000Z",
+      })}\n`,
+    );
+    saveV2Profile();
+    const childId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    await runRepair(
+      [
+        "run",
+        "--from",
+        SOURCE_ID,
+        "--profile",
+        "v2",
+        "--protocol",
+        "v2",
+        "--isolation",
+        "collaborative",
+        "--run-id",
+        REPAIR_ID,
+      ],
+      makeSink(),
+      loopOpts({
+        reviewImpl: async () => {
+          seedCompleteReview(childId, { open: false, against: SOURCE_ID });
+          return { runId: childId };
+        },
+      }),
+    );
+    const runs = listCliRuns();
+    const parsed = cliRunsListResponseSchema.safeParse({ runs });
+    const repair = runs.find((run) => run.runId === REPAIR_ID);
+    expect(
+      parsed.success,
+      parsed.success ? "" : JSON.stringify(parsed.error.issues),
+    ).toBe(true);
+    expect(repair?.goalSummary).toBe("修".repeat(399));
+    expect(readRepairState(join(home, "runs", REPAIR_ID))?.goalSummary).toBe("修".repeat(399));
+  });
+
   it("refuses v2 without an explicit isolation mode", async () => {
     seedCompleteReview(SOURCE_ID, { open: true });
     saveDefaultProfile();
