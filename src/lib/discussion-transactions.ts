@@ -1307,27 +1307,75 @@ export async function failExecution(
       if (execution.state === "failed" || execution.state === "interrupted") {
         return; // idempotent: the terminal is already persisted
       }
-      execution.state = input.kind;
-      execution.error = input.error;
-      execution.ackState = null;
-      execution.updatedAt = ts();
+      const roundChanged = recordExecutionFailure(execution, round, input);
       await db.modelExecutions.put(execution);
-      if (round.activeExecutionId === execution.executionId) {
-        round.activeExecutionId = null;
-        if (input.pause !== false && (round.phase === "running" || round.phase === "summarizing")) {
-          round.pausedFrom = round.phase;
-          round.phase = "paused";
-          round.pauseReason = {
-            code: input.error.code === "USER_CANCELLED" ? "user_cancelled" : "execution_failed",
-            participantId: execution.participantId,
-            executionId: execution.executionId,
-            detail: input.error.message.slice(0, 256),
-          };
-        }
-        await db.rounds.put(round);
-      }
+      if (roundChanged) await db.rounds.put(round);
     },
   );
+}
+
+export type UnboundFailureResult = "settled" | "owned-by-controller";
+
+export async function failUnboundExecution(
+  db: CouncilKitRuntimeDB,
+  input: {
+    executionId: string;
+    error: ModelExecutionError;
+    kind: "failed" | "interrupted";
+    pause?: boolean;
+  },
+): Promise<UnboundFailureResult> {
+  return db.transaction("rw", [db.modelExecutions, db.rounds, db.runtimeBindings], async () => {
+    const execution = await db.modelExecutions.get(input.executionId);
+    if (!execution) throw new TransactionError("EXECUTION_NOT_FOUND", "unknown execution");
+    const active = await db.runtimeBindings
+      .where("roomId")
+      .equals(execution.roomId)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    if (active) return "owned-by-controller";
+    if (execution.state === "committed" || execution.state === "discarded") {
+      throw new TransactionError(
+        "IDEMPOTENCY_CONFLICT",
+        `a ${execution.state} execution cannot become ${input.kind}`,
+      );
+    }
+    if (execution.state === "failed" || execution.state === "interrupted") return "settled";
+    const round = await db.rounds.get(execution.roundId);
+    if (!round) throw new TransactionError("ROUND_NOT_FOUND", "unknown round");
+    const roundChanged = recordExecutionFailure(execution, round, input);
+    await db.modelExecutions.put(execution);
+    if (roundChanged) await db.rounds.put(round);
+    return "settled";
+  });
+}
+
+function recordExecutionFailure(
+  execution: ModelExecution,
+  round: DiscussionRound,
+  input: {
+    error: ModelExecutionError;
+    kind: "failed" | "interrupted";
+    pause?: boolean;
+  },
+): boolean {
+  execution.state = input.kind;
+  execution.error = input.error;
+  execution.ackState = null;
+  execution.updatedAt = ts();
+  if (round.activeExecutionId !== execution.executionId) return false;
+  round.activeExecutionId = null;
+  if (input.pause !== false && (round.phase === "running" || round.phase === "summarizing")) {
+    round.pausedFrom = round.phase;
+    round.phase = "paused";
+    round.pauseReason = {
+      code: input.error.code === "USER_CANCELLED" ? "user_cancelled" : "execution_failed",
+      participantId: execution.participantId,
+      executionId: execution.executionId,
+      detail: input.error.message.slice(0, 256),
+    };
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------

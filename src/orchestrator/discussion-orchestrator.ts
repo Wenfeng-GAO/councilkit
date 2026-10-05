@@ -1,4 +1,4 @@
-import type { ControllerToken } from "@/lib/discussion-transactions";
+import type { ControllerToken, UnboundFailureResult } from "@/lib/discussion-transactions";
 import {
   abortRound,
   activateRuntimeBinding,
@@ -10,6 +10,7 @@ import {
   createRuntimeBindingTx,
   discardExecution,
   failExecution,
+  failUnboundExecution,
   markAckExpired,
   markAcknowledged,
   markBindingClosed,
@@ -129,6 +130,46 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   // Controller (Web Lock + Host fencing)
   // -------------------------------------------------------------------------
 
+  async function failLostExecution(
+    execution: ModelExecution,
+    token: ControllerToken | null,
+    error: ModelExecutionError,
+  ): Promise<UnboundFailureResult> {
+    const kind = execution.state === "prepared" ? "failed" : "interrupted";
+    if (!token) {
+      return failUnboundExecution(db, { executionId: execution.executionId, error, kind });
+    }
+    try {
+      await failExecution(db, { executionId: execution.executionId, token, error, kind });
+      return "settled";
+    } catch (caught) {
+      if (!(caught instanceof TransactionError && caught.code === "STALE_CONTROLLER")) throw caught;
+      return failUnboundExecution(db, { executionId: execution.executionId, error, kind });
+    }
+  }
+
+  const lostHostError = () =>
+    errorOf("SAFE_INTERRUPTION", "host restarted or terminal lost before commit");
+
+  async function interruptRoomLostWithHost(roomId: string, token: ControllerToken): Promise<void> {
+    const unfinished = await db.modelExecutions
+      .where("roomId")
+      .equals(roomId)
+      .filter(
+        (execution) =>
+          execution.state === "prepared" ||
+          execution.state === "running" ||
+          execution.state === "succeeded_uncommitted",
+      )
+      .toArray();
+    let settled = false;
+    for (const execution of unfinished) {
+      const outcome = await failLostExecution(execution, token, lostHostError());
+      if (outcome === "settled") settled = true;
+    }
+    if (settled) notify(roomId);
+  }
+
   /** Hold the per-Room Web Lock, then take over the Host controller with a
    * fresh, higher leaseEpoch. While waiting the page is an observer; the
    * lock dropping later flips it to controller automatically. */
@@ -178,6 +219,12 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         // The old scope may be gone (Host restarted): converge locally and
         // let ensureScope rebuild on the next round.
         if (error instanceof RuntimeClientError && error.status === 404) {
+          if (binding.controllerId && binding.leaseEpoch !== null) {
+            await interruptRoomLostWithHost(roomId, {
+              controllerId: binding.controllerId,
+              leaseEpoch: binding.leaseEpoch,
+            });
+          }
           await markBindingClosed(db, binding.id);
         } else {
           // A live Host refused/errored the takeover: the page must surface
@@ -365,8 +412,11 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       for (const execution of unfinished) {
         if (!(await auditLock(execution.roomId))) continue;
         const token = await tokenForRoom(execution.roomId);
-        if (!token) continue; // no controller here; leave for the controlling page
-        const kind = execution.state === "prepared" ? "failed" : "interrupted";
+        if (!token) {
+          const outcome = await failLostExecution(execution, null, lostHostError());
+          if (outcome === "settled") notify(execution.roomId);
+          continue;
+        }
         let code = "SAFE_INTERRUPTION";
         if (execution.hostInstanceId === hostId && execution.executionScopeId) {
           try {
@@ -376,18 +426,17 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
             if (!(error instanceof RuntimeClientError && error.status === 404)) throw error;
           }
         }
-        await failExecution(db, {
-          executionId: execution.executionId,
+        const outcome = await failLostExecution(
+          execution,
           token,
-          error: errorOf(
+          errorOf(
             code,
             code === "SAFE_INTERRUPTION"
               ? "host restarted or terminal lost before commit"
               : "execution still exists but its outcome is unknown after reload",
           ),
-          kind,
-        });
-        notify(execution.roomId);
+        );
+        if (outcome === "settled") notify(execution.roomId);
       }
 
       // Pending ACKs: resend against the same Host instance; converge to
