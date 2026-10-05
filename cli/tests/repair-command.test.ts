@@ -24,7 +24,7 @@ import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-cont
 import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readRepairState } from "../src/auto/repair-persist";
+import { readRepairState, writeRepairState } from "../src/auto/repair-persist";
 import {
   createRepairGrant,
   loadRepairProfile,
@@ -1685,6 +1685,49 @@ describe("repair v2 protocol", () => {
       })}\n`,
     );
     expect(readRepairState(dir)?.goalSummary).toBe("修".repeat(399));
+  });
+
+  it("reads a stored lastError that ends on an emoji", () => {
+    const dir = join(home, "runs", REPAIR_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: SOURCE_ID,
+        profileName: "v2",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: "needs_attention",
+        reasonCode: "findings_open",
+        lastError: `${"修".repeat(1999)}🎯`,
+      })}\n`,
+    );
+    expect(readRepairState(dir)?.lastError).toBe("修".repeat(1999));
+  });
+
+  it("writes a lastError that ends on an emoji inside the list cap", () => {
+    const dir = join(home, "runs", REPAIR_ID);
+    mkdirSync(dir, { recursive: true });
+    writeRepairState(dir, {
+      version: 1,
+      casVersion: 0,
+      sourceRunId: SOURCE_ID,
+      profileName: "v2",
+      outerUsed: 0,
+      outerMax: 10,
+      timeoutMs: null,
+      businessResult: "needs_attention",
+      reasonCode: "findings_open",
+      lastError: `${"修".repeat(1999)}🎯`,
+    });
+    const stored = JSON.parse(readFileSync(join(dir, "repair.json"), "utf8")) as {
+      lastError?: string;
+    };
+    expect(stored.lastError).toBe("修".repeat(1999));
+    expect(readRepairState(dir)?.lastError).toBe("修".repeat(1999));
   });
 
   it("refuses v2 without an explicit isolation mode", async () => {
