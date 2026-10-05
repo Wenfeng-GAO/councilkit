@@ -82,10 +82,6 @@ export function computeContextDigest(projection: SharedProjection): string {
   });
 }
 
-/** Build the stable first context item that carries background + target output
- * + the participating agent roster. The shared schema has no top-level
- * background/targetOutput fields, so this stable user-role item is their only
- * injection point (plan-a §5). Its id/content NEVER change across the run. */
 export function contextItem(
   runId: string,
   council: {

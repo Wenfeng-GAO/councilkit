@@ -17,6 +17,7 @@ import {
   projectSharedContext,
 } from "@/orchestrator/context-snapshot";
 import { contextSnapshotSchema } from "@shared/runtime/schemas";
+import { renderTurn } from "../../runtime-host/scopes/snapshot-render.ts";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -226,6 +227,42 @@ describe("buildContextSnapshot", () => {
     expect(reparsed.instruction.kind).toBe("message");
     expect(reparsed.instruction.instructionDigest).toBe(computeInstructionDigest(instruction));
     expect(reparsed.instruction.text).toBe(instruction.text);
+  });
+
+  it("puts a room background into the full-turn prompt without rewriting items", () => {
+    const agent = createDiscussionAgent({
+      name: "Agent",
+      personaPrompt: "persona prompt",
+      executionProfileId: "prof-1",
+      modelId: "model-a",
+      color: "#a1b2c3",
+    });
+    const room = initializeRoomDigest(
+      createDiscussionRoom({
+        topic: "Route local models",
+        background: "The budget is frozen.\nShip the cheaper route.",
+        facilitatorParticipantId: "pending",
+      }),
+    );
+    const participant = createParticipant({ roomId: room.id, agent, profileDigest: "pd" });
+    const instruction = { kind: "message" as const, text: "请就 topic 发言" };
+
+    const snapshot = buildContextSnapshot({ room, participant, instruction, items: [] });
+    const { prompt } = renderTurn(snapshot, 0);
+
+    expect(snapshot.roomContext.items).toEqual([]);
+    expect(prompt).toBe(
+      [
+        "# Discussion context (revision 0)",
+        "Topic: Route local models",
+        "Background:",
+        "The budget is frozen.",
+        "Ship the cheaper route.",
+        "",
+        "# Instruction (message)",
+        "请就 topic 发言",
+      ].join("\n"),
+    );
   });
 });
 

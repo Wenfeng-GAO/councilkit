@@ -38,6 +38,7 @@ export function renderTurn(
     const header = [
       `# Discussion context (revision ${snapshot.roomContext.contextRevision})`,
       snapshot.roomContext.topic ? `Topic: ${snapshot.roomContext.topic}` : null,
+      snapshot.roomContext.background ? `Background:\n${snapshot.roomContext.background}` : null,
     ]
       .filter(Boolean)
       .join("\n");

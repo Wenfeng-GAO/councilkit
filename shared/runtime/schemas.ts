@@ -271,6 +271,7 @@ export const contextSnapshotSchema = z
         contextRevision: z.number().int().nonnegative(),
         contextDigest: z.string().min(1),
         topic: z.string().optional(),
+        background: z.string().optional(),
         items: z.array(snapshotItemSchema),
       })
       .strict(),
