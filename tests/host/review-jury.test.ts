@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reviewJuryRoutes, runJuryCli } from "@host/routes/review-jury";
@@ -40,6 +40,56 @@ it("the Host CLI bridge reads, saves and detects conflicting revisions without r
   expect((await runJuryCli(config)).seats[0]?.modelId).toBe("gpt-6-astra");
   await expect(runJuryCli(config)).rejects.toMatchObject({ status: 409 });
 }, 20_000);
+it("surfaces a corrupt councils.json instead of telling the operator to init", async () => {
+  writeFileSync(join(home, "councils.json"), "{not json\n");
+  await expect(runJuryCli()).rejects.toMatchObject({
+    status: 400,
+    message: expect.stringContaining("councils.json is not valid JSON"),
+  });
+}, 20_000);
+
+it("still tells the operator to init when pr-jury is absent", async () => {
+  await expect(runJuryCli()).rejects.toMatchObject({
+    status: 400,
+    message: "无法读取或保存默认席位。请检查 CLI 配置；尚未初始化时先运行 councilkit init。",
+  });
+}, 20_000);
+
+it("keeps a disabled-seat save error instead of telling the operator to init", async () => {
+  const store = new Store();
+  const agent = store.createAgent({
+    name: "review-security",
+    personaPrompt: "Review",
+    modelId: "old",
+    color: "#123456",
+    driverSelection: { driverId: "codex-app-server", options: {} },
+  });
+  store.createCouncil({
+    name: "pr-jury",
+    topic: "Review",
+    rounds: 1,
+    agentIds: [agent.id],
+    reporterAgentId: agent.id,
+  });
+  const agentsPath = join(home, "agents.json");
+  const agents = JSON.parse(readFileSync(agentsPath, "utf8")) as {
+    agents: Array<{ enabled: boolean }>;
+  };
+  agents.agents[0]!.enabled = false;
+  writeFileSync(agentsPath, `${JSON.stringify(agents)}\n`);
+  const data = await runJuryCli();
+  await expect(
+    runJuryCli({
+      revision: data.revision,
+      seats: data.seats,
+      reporterAgentId: data.reporterAgentId,
+    }),
+  ).rejects.toMatchObject({
+    status: 400,
+    message: "不能添加已停用的 Agent",
+  });
+}, 20_000);
+
 it("registers authenticated reads and CSRF-protected writes with a strict request schema", () => {
   const routes = reviewJuryRoutes();
   expect(routes.map((route) => [route.method, route.auth])).toEqual([

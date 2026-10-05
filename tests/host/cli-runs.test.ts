@@ -1459,6 +1459,21 @@ describe("POST /api/v1/cli-runs start review", () => {
     expect(launches).toEqual([]);
   });
 
+  it("POST /api/v1/cli-runs corrupt councils.json names the file instead of a missing pr-jury", async () => {
+    writeFileSync(join(home, "councils.json"), "{not json\n");
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ pr: GH_PR }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { message: string } };
+    expect(body.error.message).toContain("councils.json is not valid JSON");
+    expect(body.error.message).not.toContain("councilkit init");
+    expect(launches).toEqual([]);
+  });
+
   it("POST /api/v1/cli-runs maps no local clone to 400 with project key and CLI hint", async () => {
     seedPrJury();
     const { launches } = await bootStartReview(() => {
@@ -1534,6 +1549,21 @@ describe("POST /api/v1/cli-runs/ideate", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { ok: false; error: { message: string } };
     expect(body.error.message).toContain("product-jury");
+    expect(launches).toEqual([]);
+  });
+
+  it("does not claim product-jury is missing when councils.json is corrupt", async () => {
+    writeFileSync(join(home, "councils.json"), "{not json\n");
+    const { launches } = await bootStartReview();
+    const res = await fetch(`${host?.baseUrl}/api/v1/cli-runs/ideate`, {
+      method: "POST",
+      headers: authedHeaders(host as TestHost),
+      body: JSON.stringify({ idea: "weekly feedback" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { message: string } };
+    expect(body.error.message).toContain("councils.json is not valid JSON");
+    expect(body.error.message).not.toContain("councilkit init");
     expect(launches).toEqual([]);
   });
 
