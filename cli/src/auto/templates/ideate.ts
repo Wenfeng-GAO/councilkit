@@ -48,14 +48,10 @@ export function clipUtf8(text: string, maxBytes: number, label = "truncated"): B
   const marker = `\n\n[… ${label}: UTF-8 clipped to ${maxBytes} bytes …]\n`;
   const markerBytes = Buffer.byteLength(marker, "utf8");
   const budget = Math.max(0, maxBytes - markerBytes);
-  let lo = 0;
-  let hi = text.length;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (Buffer.byteLength(text.slice(0, mid), "utf8") <= budget) lo = mid;
-    else hi = mid - 1;
-  }
-  const clipped = `${text.slice(0, lo)}${marker}`;
+  const buf = Buffer.from(text, "utf8");
+  let end = Math.min(budget, buf.length);
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+  const clipped = `${buf.subarray(0, end).toString("utf8")}${marker}`;
   return { text: clipped, truncated: true, bytes: Buffer.byteLength(clipped, "utf8") };
 }
 
