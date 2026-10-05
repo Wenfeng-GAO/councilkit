@@ -212,8 +212,6 @@ export type ControlTransition =
   | { kind: "acquired"; notice: "已取得控制权" }
   | { kind: "lost"; notice: "已转为只读观察" };
 
-/** 切房只丢掉上一间留下的提示。预览只在同一间从 controlling 落到
- * observing 或 lost-control 时清掉。 */
 export function controlTransition(input: {
   previousRoomId: string | undefined;
   previousState: ControlState | undefined;
@@ -404,8 +402,6 @@ export function RoomPage() {
     });
   }, [roomId]);
 
-  // Control transitions: announce takeovers; on losing control drop the local
-  // preview immediately and stay read-only.
   const [notice, setNotice] = useState<string | null>(null);
   const prevControlRef = useRef<{
     roomId: string | undefined;
