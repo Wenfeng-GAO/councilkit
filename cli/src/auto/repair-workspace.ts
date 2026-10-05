@@ -112,7 +112,11 @@ export function originMatchesRepo(originUrl: string, repo: string): boolean {
   const origin = parseRemoteRepoIdentity(originUrl);
   const identity = parseRemoteRepoIdentity(repo);
   if (!origin || !identity || !origin.host || !identity.host) return false;
-  return origin.host === identity.host && origin.path === identity.path;
+  if (origin.host !== identity.host) return false;
+  if (origin.host === "github.com") {
+    return origin.path.toLowerCase() === identity.path.toLowerCase();
+  }
+  return origin.path === identity.path;
 }
 
 export async function materializeRepairWorkspace(input: {
