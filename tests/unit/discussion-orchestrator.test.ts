@@ -207,6 +207,7 @@ class FakeHost {
   activateCalls: string[] = [];
   ackTombstones = 0;
   private eventStreamFailuresRemaining = 0;
+  private eventStreamFetchRejectionsRemaining = 0;
 
   private readonly prewarmFailures = new Set<string>();
   private readonly scopes = new Map<string, FakeScope>();
@@ -242,12 +243,17 @@ class FakeHost {
     this.activateCalls = [];
     this.ackTombstones = 0;
     this.eventStreamFailuresRemaining = 0;
+    this.eventStreamFetchRejectionsRemaining = 0;
     this.ackBehavior = "ok";
     this.onCreateScope = null;
   }
 
   failNextEventStreams(count: number): void {
     this.eventStreamFailuresRemaining = count;
+  }
+
+  rejectNextEventStreamFetches(count: number): void {
+    this.eventStreamFetchRejectionsRemaining = count;
   }
 
   seedScope(input: {
@@ -613,6 +619,10 @@ class FakeHost {
   }
 
   private handleEvents(scopeId: string, executionId: string, afterSeqRaw: string | null): Response {
+    if (this.eventStreamFetchRejectionsRemaining > 0) {
+      this.eventStreamFetchRejectionsRemaining -= 1;
+      throw new TypeError("network error");
+    }
     if (this.eventStreamFailuresRemaining > 0) {
       this.eventStreamFailuresRemaining -= 1;
       return errorResponse(429, "RESOURCE_LIMIT", "Event connection quota reached.");
@@ -1605,6 +1615,40 @@ describe("discussion orchestrator (U5)", () => {
     expect(round?.activeExecutionId).toBeNull();
     const bodies = await db.messages.where("roomId").equals(room.id).toArray();
     expect(bodies.some((message) => message.content === "quota recovered")).toBe(true);
+    expect(host.executeCalls.filter((call) => call.executionId === executionId)).toHaveLength(1);
+  });
+
+  it("8e. a fetch that fails before any HTTP status reconnects the same turn instead of leaving it generating", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.rejectNextEventStreamFetches(1);
+    const roundPromise = orchestrator.startRound(room.id);
+
+    const early = await Promise.race([
+      roundPromise.then(
+        (round) => ({ kind: "resolved" as const, phase: round?.phase ?? null }),
+        (error: unknown) => ({
+          kind: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      ),
+      vi
+        .waitFor(() => {
+          expect(host.getExecutionCalls.length).toBeGreaterThan(0);
+        })
+        .then(() => ({ kind: "following" as const })),
+    ]);
+    expect(early).toEqual({ kind: "following" });
+
+    const executionId = host.executeCalls[0]?.executionId as string;
+    host.complete(executionId, "link recovered");
+    const round = await roundPromise;
+    expect(round?.phase).toBe("completed");
+    expect(round?.activeExecutionId).toBeNull();
+    const bodies = await db.messages.where("roomId").equals(room.id).toArray();
+    expect(bodies.some((message) => message.content === "link recovered")).toBe(true);
     expect(host.executeCalls.filter((call) => call.executionId === executionId)).toHaveLength(1);
   });
 

@@ -25,6 +25,8 @@ export type FollowOutcome =
   | { kind: "closed"; lastSeq: number }
   | { kind: "aborted"; lastSeq: number };
 
+const NO_HTTP_STATUS = 0;
+
 export class EventStreamError extends Error {
   constructor(
     readonly status: number,
@@ -42,10 +44,20 @@ export class EventStreamError extends Error {
  */
 export async function followExecutionEvents(options: FollowEventsOptions): Promise<FollowOutcome> {
   const fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
-  const response = await fetchFn(options.fetchInput.url, {
-    headers: options.fetchInput.headers,
-    signal: options.signal ?? null,
-  });
+  let response: Response;
+  try {
+    response = await fetchFn(options.fetchInput.url, {
+      headers: options.fetchInput.headers,
+      signal: options.signal ?? null,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    const message = error instanceof Error ? error.message : "";
+    throw new EventStreamError(
+      NO_HTTP_STATUS,
+      message.length > 0 ? message : "event stream fetch failed",
+    );
+  }
   if (!response.ok || !response.body) {
     throw new EventStreamError(response.status, `event stream HTTP ${response.status}`);
   }
