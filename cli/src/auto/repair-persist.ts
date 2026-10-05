@@ -10,7 +10,7 @@ import {
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
-import { CLI_RUN_GOAL_SUMMARY_MAX } from "@shared/runtime/schemas";
+import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
 import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { z } from "zod";
 import { errors } from "../errors";
@@ -64,7 +64,7 @@ const repairStateSchema = z
     historyCount: z.number().int().nonnegative().nullable().optional(),
     writerPids: z.array(z.number().int().positive()).max(16).optional(),
     cycles: z.array(repairCycleSchema).optional(),
-    lastError: z.string().min(1).max(2000).nullable().optional(),
+    lastError: z.string().min(1).max(CLI_RUN_LAST_ERROR_MAX).nullable().optional(),
     workspaceCwd: z.string().min(1).max(4096).nullable().optional(),
     frozenOriginUrl: z.string().min(1).max(4096).nullable().optional(),
     frozenPushUrl: z.string().min(1).max(4096).nullable().optional(),
@@ -171,28 +171,28 @@ export function bootstrapRepairRun(input: {
 export function readRepairState(runDir: string): RepairState | null {
   const text = readFileText(join(runDir, REPAIR_STATE_FILE));
   if (text === null) return null;
-  const parsed = repairStateSchema.safeParse(clipStoredGoalSummary(jsonParse(text)));
+  const parsed = repairStateSchema.safeParse(clipStoredRepairFields(jsonParse(text)));
   return parsed.success ? parsed.data : null;
 }
 
 export function writeRepairState(runDir: string, state: RepairState): void {
-  const goalSummary = clipStoredGoalSummaryValue(state.goalSummary);
-  atomicWriteJson(
-    join(runDir, REPAIR_STATE_FILE),
-    goalSummary === state.goalSummary ? state : { ...state, goalSummary },
-  );
+  const clipped = clipStoredRepairFields(state);
+  atomicWriteJson(join(runDir, REPAIR_STATE_FILE), clipped === state ? state : clipped);
 }
 
-function clipStoredGoalSummary(value: unknown): unknown {
+function clipStoredRepairFields(value: unknown): unknown {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
   const row = value as Record<string, unknown>;
-  if (typeof row.goalSummary !== "string") return value;
-  return { ...row, goalSummary: clipUtf16CodeUnits(row.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX) };
-}
-
-function clipStoredGoalSummaryValue(value: string | null | undefined): string | null | undefined {
-  if (typeof value !== "string") return value;
-  return clipUtf16CodeUnits(value, CLI_RUN_GOAL_SUMMARY_MAX);
+  let next = row;
+  if (typeof row.goalSummary === "string") {
+    const goalSummary = clipUtf16CodeUnits(row.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX);
+    if (goalSummary !== row.goalSummary) next = { ...next, goalSummary };
+  }
+  if (typeof row.lastError === "string") {
+    const lastError = clipUtf16CodeUnits(row.lastError, CLI_RUN_LAST_ERROR_MAX);
+    if (lastError !== row.lastError) next = { ...next, lastError };
+  }
+  return next;
 }
 
 export function writeRepairPid(runDir: string, pid: number): void {

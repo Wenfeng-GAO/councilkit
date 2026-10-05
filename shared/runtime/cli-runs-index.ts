@@ -58,6 +58,7 @@ import {
 } from "./reviewer-assessment";
 import {
   CLI_RUN_GOAL_SUMMARY_MAX,
+  CLI_RUN_LAST_ERROR_MAX,
   type CliRunDocumentDto,
   type CliRunHandoffDto,
   type IdeateIntegrityDto,
@@ -341,7 +342,10 @@ function readRepairProjection(
       businessResult: business,
       reasonCode: typeof rec.reasonCode === "string" ? rec.reasonCode : null,
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : null,
-      lastError: typeof rec.lastError === "string" ? rec.lastError : null,
+      lastError:
+        typeof rec.lastError === "string"
+          ? clipUtf16CodeUnits(rec.lastError, CLI_RUN_LAST_ERROR_MAX)
+          : null,
       outerUsed,
       outerMax,
       resumeEligible:

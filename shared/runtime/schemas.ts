@@ -654,6 +654,7 @@ export const ideateIntegritySchema = z
 export type IdeateIntegrityDto = z.infer<typeof ideateIntegritySchema>;
 
 export const CLI_RUN_GOAL_SUMMARY_MAX = 400;
+export const CLI_RUN_LAST_ERROR_MAX = 2000;
 
 export const cliRunSummarySchema = z
   .object({
@@ -676,7 +677,7 @@ export const cliRunSummarySchema = z
     businessResult: z.enum(["approved", "needs_attention", "stopped"]).nullable().optional(),
     reasonCode: z.string().min(1).max(80).nullable().optional(),
     sourceRunId: z.string().min(1).max(80).nullable().optional(),
-    lastError: z.string().min(1).max(2000).nullable().optional(),
+    lastError: z.string().min(1).max(CLI_RUN_LAST_ERROR_MAX).nullable().optional(),
     outerUsed: z.number().int().nonnegative().optional(),
     outerMax: z.number().int().positive().optional(),
     resumeEligible: z.boolean().optional(),
