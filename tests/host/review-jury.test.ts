@@ -75,7 +75,9 @@ it("keeps a disabled-seat save error instead of telling the operator to init", a
   const agents = JSON.parse(readFileSync(agentsPath, "utf8")) as {
     agents: Array<{ enabled: boolean }>;
   };
-  agents.agents[0]!.enabled = false;
+  const seat = agents.agents[0];
+  if (!seat) throw new Error("expected a seeded agent");
+  seat.enabled = false;
   writeFileSync(agentsPath, `${JSON.stringify(agents)}\n`);
   const data = await runJuryCli();
   await expect(

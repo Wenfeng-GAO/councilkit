@@ -135,16 +135,8 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             ),
           );
         }
-        if (!body.reviewModels && !hasPrJuryCouncil()) {
-          throw httpError(
-            400,
-            makeError(
-              "BAD_REQUEST",
-              "discovery",
-              "default pr-jury is missing; run `councilkit init`",
-              { retryable: false },
-            ),
-          );
+        if (!body.reviewModels) {
+          assertNamedCouncil("pr-jury", "default pr-jury is missing; run `councilkit init`");
         }
         const runId = `ck-review-${randomUUID()}`;
         const logPath = join(tmpdir(), `councilkit-host-review-${runId}.log`);
@@ -189,15 +181,10 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             makeError("BAD_REQUEST", "discovery", "idea is required.", { retryable: false }),
           );
         }
-        if (!body.models && !hasNamedCouncil("product-jury")) {
-          throw httpError(
-            400,
-            makeError(
-              "BAD_REQUEST",
-              "discovery",
-              "default product-jury is missing; run `councilkit init`",
-              { retryable: false },
-            ),
+        if (!body.models) {
+          assertNamedCouncil(
+            "product-jury",
+            "default product-jury is missing; run `councilkit init`",
           );
         }
         const runId = `ck-ideate-${randomUUID()}`;
@@ -1100,20 +1087,49 @@ function isRealDir(path: string): boolean {
   }
 }
 
-function hasPrJuryCouncil(): boolean {
-  return hasNamedCouncil("pr-jury");
+const CORRUPT_COUNCILS = "councils.json is not valid JSON (file is corrupt)";
+
+type CouncilPresence = "present" | "absent" | "corrupt" | "unreadable";
+
+function councilPresence(name: string): CouncilPresence {
+  const path = join(resolveCouncilkitHome(process.env), "councils.json");
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (error) {
+    const code =
+      error !== null && typeof error === "object" && "code" in error
+        ? String((error as { code: unknown }).code)
+        : "";
+    return code === "ENOENT" ? "absent" : "unreadable";
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return "corrupt";
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "absent";
+  const councils = (parsed as { councils?: unknown }).councils;
+  if (!Array.isArray(councils)) return "absent";
+  const present = councils.some((council) => {
+    if (council === null || typeof council !== "object") return false;
+    const row = council as { id?: unknown; name?: unknown };
+    return row.name === name || row.id === name;
+  });
+  return present ? "present" : "absent";
 }
 
-function hasNamedCouncil(name: string): boolean {
-  try {
-    const home = resolveCouncilkitHome(process.env);
-    const raw = readFileSync(join(home, "councils.json"), "utf8");
-    const parsed = JSON.parse(raw) as { councils?: Array<{ id?: unknown; name?: unknown }> };
-    if (!Array.isArray(parsed.councils)) return false;
-    return parsed.councils.some((council) => council.name === name || council.id === name);
-  } catch {
-    return false;
-  }
+function assertNamedCouncil(name: string, missingMessage: string): void {
+  const presence = councilPresence(name);
+  if (presence === "present") return;
+  const message =
+    presence === "corrupt"
+      ? CORRUPT_COUNCILS
+      : presence === "unreadable"
+        ? "councils.json could not be read"
+        : missingMessage;
+  throw httpError(400, makeError("BAD_REQUEST", "discovery", message, { retryable: false }));
 }
 
 function mapIdeateSpawnError(error: unknown): never {
