@@ -258,7 +258,6 @@ class FakeHost {
     this.eventStreamFetchRejectionsRemaining = count;
   }
 
-  /** HTTP 200, then the body reader fails. Headers have already arrived. */
   resetNextEventStreamBodies(count: number): void {
     this.eventStreamBodyResetsRemaining = count;
   }
