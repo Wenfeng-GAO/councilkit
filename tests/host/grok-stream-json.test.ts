@@ -19,6 +19,7 @@ import type {
 } from "@host/drivers/types";
 import type { InstallationRecord } from "@host/installations/registry";
 import { createLogger } from "@host/logging";
+import { buildBinding } from "@host/profiles/resolver";
 import { type ProcessSupervisor, createProcessSupervisor } from "@host/process/process-supervisor";
 import type { ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -195,6 +196,31 @@ describe("grok-stream-json driver", () => {
     expect(prewarm.modelAliases).toEqual(["grok-4.6-build"]);
     expect(prewarm.capability.protocol).toBe("grok-stream-json");
     expect(driver.capabilityState()).toBe("ready");
+  });
+
+  it("prewarm of a non-default catalog model binds that model", async () => {
+    const driver = await createDriver();
+    const installation = makeInstallation();
+    const spec = makeSpec("grok-4.5");
+    const prewarm = await driver.prewarm({
+      participantId: "p-1",
+      spec,
+      installation,
+    });
+    const resolved = buildBinding(spec, installation, prewarm);
+    expect(resolved.readiness).toEqual({ state: "ready", detail: null });
+    expect(resolved.binding?.requestedModel).toBe("grok-4.5");
+    expect(resolved.binding?.canonicalModelId).toBe("grok-4.5");
+
+    const aliasSpec = makeSpec("grok-4.6-build");
+    const aliasPrewarm = await driver.prewarm({
+      participantId: "p-1",
+      spec: aliasSpec,
+      installation,
+    });
+    const aliasResolved = buildBinding(aliasSpec, installation, aliasPrewarm);
+    expect(aliasResolved.readiness.state).toBe("ready");
+    expect(aliasResolved.binding?.canonicalModelId).toBe("grok-4.6");
   });
 
   it("two turns resume the same session and complete with usage", async () => {
