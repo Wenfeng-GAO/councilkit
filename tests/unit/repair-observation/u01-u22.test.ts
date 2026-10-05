@@ -21,6 +21,8 @@ import {
   isStaleRequest,
   markUnfinishedTools,
   mergeOperationRevision,
+  REPAIR_OBS_SUMMARY_MAX,
+  repairOperationSchema,
   nextPollDelayMs,
   normalizeToolRecords,
   observationDone,
@@ -766,5 +768,28 @@ describe("U22 authoritative files have no side effects in pure helpers", () => {
     );
     expect(ops[0]!.status).toBe("unfinished");
     expect(ops[0]!.summary).toContain(REPAIR_OBS_COPY.unfinishedTool);
+  });
+
+  it("keeps a full tool summary parsable after marking it unfinished", () => {
+    const summary = "👍".repeat(REPAIR_OBS_SUMMARY_MAX / 2);
+    const ops = markUnfinishedTools(
+      [
+        baseOp({
+          operationId: "op-long",
+          eventId: "e-long",
+          status: "started",
+          kind: "command",
+          summary,
+          occurredAt: new Date(T0).toISOString(),
+        }),
+      ],
+      T0 + 181_000,
+    );
+    const parsed = repairOperationSchema.parse(ops[0]);
+    expect(parsed.status).toBe("unfinished");
+    expect(parsed.summary.endsWith("未收到结束记录")).toBe(true);
+    expect(parsed.summary).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
   });
 });
