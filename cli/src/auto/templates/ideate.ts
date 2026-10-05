@@ -55,6 +55,10 @@ export function clipUtf8(text: string, maxBytes: number, label = "truncated"): B
     if (Buffer.byteLength(text.slice(0, mid), "utf8") <= budget) lo = mid;
     else hi = mid - 1;
   }
+  // A lone surrogate encodes as U+FFFD (3 bytes), so the search can accept a
+  // cut inside an emoji whose real UTF-8 form is 4 bytes.
+  const cut = lo > 0 ? text.charCodeAt(lo - 1) : 0;
+  if (cut >= 0xd800 && cut <= 0xdbff) lo -= 1;
   const clipped = `${text.slice(0, lo)}${marker}`;
   return { text: clipped, truncated: true, bytes: Buffer.byteLength(clipped, "utf8") };
 }
