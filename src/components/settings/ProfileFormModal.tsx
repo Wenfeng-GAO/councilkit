@@ -6,7 +6,7 @@ import type { ExecutionProfileRecord } from "@/models/execution-profile";
 import { DRIVER_IDS, type DriverId } from "@shared/runtime/contracts";
 import type { ClaudeRoute, InstallationDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
-import { CLAUDE_ROUTE_LABELS, driverDisplayName } from "./view-model";
+import { CLAUDE_ROUTE_LABELS, driverDisplayName, profileEmptyOptionsNote } from "./view-model";
 
 /**
  * Execution Profile create/edit form (U6). Only Driver-typed fields are
@@ -78,6 +78,7 @@ export function ProfileFormModal({
   const trustedInstallations = installations.filter(
     (item) => item.driverId === driverId && item.state === "trusted",
   );
+  const emptyOptionsNote = profileEmptyOptionsNote(driverId);
 
   const handleDriverChange = (next: DriverId) => {
     setDriverId(next);
@@ -160,13 +161,9 @@ export function ProfileFormModal({
             placeholder="例如：medium"
             help="仅保存 Driver 声明的类型化选项；Profile 不保存模型与凭据。"
           />
-        ) : (
-          <p className="text-xs text-muted">
-            {driverId === "grok-stream-json"
-              ? "Grok 的模型在 Agent 中从闭集目录（grok-4.6 / grok-4.5）选择；Profile 不保存模型、argv 或凭据，无可编辑选项。"
-              : "Kimi 的模型在 Agent 中从闭集目录（kimi-code/k3）选择；Profile 不保存模型、argv 或凭据，无可编辑选项。"}
-          </p>
-        )}
+        ) : emptyOptionsNote !== null ? (
+          <p className="text-xs text-muted">{emptyOptionsNote}</p>
+        ) : null}
         {error ? (
           <p role="alert" className="text-xs text-error">
             {error}

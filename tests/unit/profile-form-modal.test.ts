@@ -70,6 +70,8 @@ describe("ProfileFormModal empty-options note", () => {
 
   it("keeps editable Claude and Codex fields", () => {
     expect(renderOpen("claude-stream-json")).toContain("Route（claude-stream-json 选项）");
-    expect(renderOpen("codex-app-server")).toContain("Reasoning effort（codex-app-server 选项，可留空）");
+    expect(renderOpen("codex-app-server")).toContain(
+      "Reasoning effort（codex-app-server 选项，可留空）",
+    );
   });
 });
