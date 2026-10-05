@@ -8,6 +8,7 @@ import {
   parseTranscriptMeta,
   readCliRun,
 } from "@shared/runtime/cli-runs-index";
+import { cliRunsListResponseSchema } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SQUAD_ID = "ck-squad-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
@@ -689,5 +690,47 @@ describe("readCliRun seat progress from a long transcript", () => {
       durationMs: 1200,
     });
     expect(run?.status).toBe("completed");
+  });
+});
+
+describe("listCliRuns repair goal summary", () => {
+  let home: string;
+  let previous: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ck-repair-goal-"));
+    previous = process.env.COUNCILKIT_HOME;
+    process.env.COUNCILKIT_HOME = home;
+  });
+
+  afterEach(() => {
+    if (previous === undefined) Reflect.deleteProperty(process.env, "COUNCILKIT_HOME");
+    else process.env.COUNCILKIT_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("clips a stored goal that ends on an emoji so the runs list still validates", () => {
+    const dir = join(home, "runs", REPAIR_ID);
+    mkdirSync(dir, { recursive: true });
+    const stored = `${"修".repeat(399)}🎯`;
+    writeFileSync(
+      join(dir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: REVIEW_ID,
+        profileName: "default",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: null,
+        reasonCode: null,
+        goalSummary: stored,
+      })}\n`,
+    );
+    const runs = listCliRuns(process.env);
+    const parsed = cliRunsListResponseSchema.safeParse({ runs });
+    expect(parsed.success).toBe(true);
+    expect(runs.find((run) => run.runId === REPAIR_ID)?.goalSummary).toBe("修".repeat(399));
   });
 });
