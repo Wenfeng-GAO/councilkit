@@ -328,12 +328,10 @@ test("过程序号回退时从头重读，不把重启后的正文丢掉", async
     .getByRole("button", { name: /正确性审查/ })
     .first()
     .click();
-  await expect(page.getByText("第二句仍在", { exact: true })).toBeVisible();
+  await expect(page.getByText("第一轮过程正文第二句仍在")).toBeVisible();
   sidecar = [{ seq: 1, at, type: "text.delta", text: "序号重置后的正文" }];
-  await expect(page.getByText("序号重置后的正文", { exact: true })).toBeVisible({
-    timeout: 15_000,
-  });
-  await expect(page.getByText("第二句仍在")).toHaveCount(0);
+  await expect(page.getByText("序号重置后的正文")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("第一轮过程正文第二句仍在")).toHaveCount(0);
 });
 
 test("squad 席位抽屉开关后工作台仍只有一份", async ({ page }) => {
