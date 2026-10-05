@@ -259,6 +259,34 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
       );
     }
 
+    /** Probe `canonical` is the CLI default. A seat asking for another catalog
+     * model (or an alias of one) must handshake as that model, or buildBinding
+     * rejects it as model_unavailable. */
+    function handshakeModel(requested: string): {
+      canonicalModelId: string;
+      modelAliases: string[];
+    } {
+      if (requested !== "__catalog__" && catalog.includes(requested)) {
+        return {
+          canonicalModelId: requested,
+          modelAliases: [...(GROK_ALIASES[requested] ?? [])],
+        };
+      }
+      for (const [canonicalId, aliases] of Object.entries(GROK_ALIASES)) {
+        if (
+          requested !== "__catalog__" &&
+          aliases.includes(requested) &&
+          catalog.includes(canonicalId)
+        ) {
+          return { canonicalModelId: canonicalId, modelAliases: [...aliases] };
+        }
+      }
+      return {
+        canonicalModelId: canonical,
+        modelAliases: [...(GROK_ALIASES[canonical] ?? [])],
+      };
+    }
+
     async function runModelsProbe(executable: string): Promise<void> {
       if (isClosingOrClosed()) {
         throw Object.assign(new Error("grok driver closed during prewarm"), {
@@ -679,9 +707,10 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
           });
         }
         state = "ready";
+        const handshake = handshakeModel(input.spec.modelId);
         return {
-          canonicalModelId: canonical,
-          modelAliases: GROK_ALIASES[canonical] ?? [],
+          canonicalModelId: handshake.canonicalModelId,
+          modelAliases: handshake.modelAliases,
           capability: {
             protocol: "grok-stream-json",
             credentialMode: "installation-managed",

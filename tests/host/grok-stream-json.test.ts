@@ -19,8 +19,8 @@ import type {
 } from "@host/drivers/types";
 import type { InstallationRecord } from "@host/installations/registry";
 import { createLogger } from "@host/logging";
-import { buildBinding } from "@host/profiles/resolver";
 import { type ProcessSupervisor, createProcessSupervisor } from "@host/process/process-supervisor";
+import { buildBinding } from "@host/profiles/resolver";
 import type { ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
