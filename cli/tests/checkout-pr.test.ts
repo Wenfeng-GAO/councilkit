@@ -358,4 +358,23 @@ describe("defaultRunCommand capture", () => {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
+
+  it("keeps a multibyte stderr character when the pipe splits its bytes", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "ck-run-cmd-"));
+    try {
+      const result = await defaultRunCommand({
+        executable: process.execPath,
+        argv: [
+          "-e",
+          "const fs=require('fs'); fs.writeSync(2, Buffer.from([0xe4])); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 80); fs.writeSync(2, Buffer.from([0xb8, 0xad]));",
+        ],
+        cwd,
+        timeoutMs: 15_000,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("中");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 });
