@@ -803,6 +803,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     const scopeId = binding?.executionScopeId as string;
     let resumeAt = afterSeq;
     let streamFailures = 0;
+    let statusFailures = 0;
     for (;;) {
       let outcome: FollowOutcome;
       try {
@@ -829,6 +830,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       // Connection ended without a terminal: check the Host's record.
       try {
         const status = await client.getExecution(scopeId, execution.executionId);
+        statusFailures = 0;
         if (streamFailures >= 2) {
           await failExecution(db, {
             executionId: execution.executionId,
@@ -851,7 +853,16 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
           notify(room.id);
           return false;
         }
-        throw error;
+        statusFailures += 1;
+        if (statusFailures < 2) continue;
+        await failExecution(db, {
+          executionId: execution.executionId,
+          token,
+          error: errorOf("INTERRUPTED_UNKNOWN", "execution status failed before a terminal"),
+          kind: "interrupted",
+        });
+        notify(room.id);
+        return false;
       }
     }
   }
