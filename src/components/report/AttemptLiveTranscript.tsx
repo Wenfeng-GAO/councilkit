@@ -17,6 +17,7 @@ import {
   showsTick,
   silentToolTally,
   splitSeatDeliverable,
+  takeLivePage,
   unwrapShellSummary,
 } from "@/lib/live-transcript";
 import { getAppRuntime } from "@/runtime/bootstrap";
@@ -58,6 +59,7 @@ export function AttemptLiveTranscript({
   const [now, setNow] = useState(() => Date.now());
   const retryRef = useRef<() => void>(() => {});
   const afterSeqRef = useRef(0);
+  const lastSeqRef = useRef(-1);
   const eventsRef = useRef<AttemptLiveEvent[]>([]);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const pinToBottomRef = useRef(active);
@@ -70,6 +72,7 @@ export function AttemptLiveTranscript({
     let timer: number | undefined;
     const client = getAppRuntime().client;
     afterSeqRef.current = 0;
+    lastSeqRef.current = -1;
     eventsRef.current = [];
     setEvents([]);
     setDone(false);
@@ -92,14 +95,35 @@ export function AttemptLiveTranscript({
       try {
         const res = await client.getCliRunAttemptLive(runId, attemptId, afterSeqRef.current);
         if (cancelled) return;
-        if (res.events.length > 0) {
-          eventsRef.current = [...eventsRef.current, ...res.events];
+        const decision = takeLivePage(
+          { afterSeq: afterSeqRef.current, lastSeq: lastSeqRef.current },
+          res,
+        );
+        if (decision.action === "reread") {
+          eventsRef.current = [];
+          setEvents([]);
+          afterSeqRef.current = decision.afterSeq;
+          lastSeqRef.current = decision.lastSeq;
+          setReadError(false);
+          setReady(true);
+          if (activeRef.current) {
+            timer = window.setTimeout(() => {
+              void pull();
+            }, 0);
+          } else {
+            setDone(true);
+          }
+          return;
+        }
+        if (decision.events.length > 0) {
+          eventsRef.current = [...eventsRef.current, ...decision.events];
           setEvents(eventsRef.current);
           if (!pinToBottomRef.current) {
             setNewCount(Math.max(0, eventsRef.current.length - unpinnedAtRef.current));
           }
         }
-        afterSeqRef.current = res.nextSeq;
+        afterSeqRef.current = decision.afterSeq;
+        lastSeqRef.current = decision.lastSeq;
         setReadError(false);
         setReady(true);
         stickToBottom();

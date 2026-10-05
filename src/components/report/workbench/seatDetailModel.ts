@@ -1,4 +1,3 @@
-import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
 import type { CliRunAttemptResultResponse } from "@shared/runtime/schemas";
 import type { WorkbenchAttempt } from "./selection";
 
@@ -28,40 +27,6 @@ export function nextPollDelayMs(failures: number, baseMs = PROCESS_POLL_MS): num
 /** 服务端游标重置检测：返回的 nextSeq 小于本地已应用游标 → 缓存重建、从头重读。 */
 export function isCursorReset(appliedNextSeq: number, serverNextSeq: number): boolean {
   return serverNextSeq < appliedNextSeq;
-}
-
-export interface LivePollCursor {
-  afterSeq: number;
-  lastSeq: number;
-}
-
-export type LivePollDecision =
-  | { action: "reread"; afterSeq: 0; lastSeq: -1 }
-  | {
-      action: "apply";
-      events: AttemptLiveEvent[];
-      afterSeq: number;
-      lastSeq: number;
-    };
-
-/**
- * One live page. A restarted sidecar has a smaller max seq, and the page just
- * fetched was filtered with the old afterSeq, so it cannot contain those rows.
- * Adopting that smaller nextSeq skips every row still on disk.
- */
-export function applyLivePoll(
-  cursor: LivePollCursor,
-  page: { events: readonly AttemptLiveEvent[]; nextSeq: number },
-): LivePollDecision {
-  let lastSeq = cursor.lastSeq;
-  if (isCursorReset(cursor.afterSeq, page.nextSeq)) lastSeq = -1;
-  const events = page.events.filter((event) => event.seq > lastSeq);
-  return {
-    action: "apply",
-    events,
-    afterSeq: page.nextSeq,
-    lastSeq: events.reduce((max, event) => Math.max(max, event.seq), lastSeq),
-  };
 }
 
 /** AC-03：迟到响应检测。轮询回调 capture 当时的 requestSeq；代次变了即迟到，一律丢弃。 */
