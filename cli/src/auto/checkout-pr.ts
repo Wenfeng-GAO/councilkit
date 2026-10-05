@@ -70,9 +70,11 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
     let stdoutBytes = 0;
     let stdoutOverflow = false;
     const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     const finish = (partial: { exitCode: number | null; error?: string }): void => {
       if (settled) return;
       settled = true;
+      stderr += stderrDecoder.end();
       if (stdoutOverflow && partial.error === undefined && partial.exitCode === 0) {
         resolve({
           stdout: "",
@@ -115,7 +117,7 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
       stdout += stdoutDecoder.write(chunk);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      stderr += stderrDecoder.write(chunk);
       if (stderr.length > 1 * 1024 * 1024) stderr = stderr.slice(-512 * 1024);
     });
     const timeout = setTimeout(() => {
