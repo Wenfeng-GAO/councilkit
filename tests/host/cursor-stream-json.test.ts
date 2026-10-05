@@ -20,6 +20,7 @@ import type {
 import type { InstallationRecord } from "@host/installations/registry";
 import { createLogger } from "@host/logging";
 import { type ProcessSupervisor, createProcessSupervisor } from "@host/process/process-supervisor";
+import { buildBinding } from "@host/profiles/resolver";
 import type { ParticipantSpec } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -206,6 +207,23 @@ describe("cursor-stream-json driver", () => {
     expect(prewarm.catalog).toEqual(["auto", "composer-2.5"]);
     expect(prewarm.capability.protocol).toBe("cursor-stream-json");
     expect(driver.capabilityState()).toBe("ready");
+  });
+
+  it("prewarm of a non-default catalog model binds that model", async () => {
+    const driver = await createDriver();
+    const installation = makeInstallation();
+    for (const modelId of ["composer-2.5", "default"]) {
+      const spec = makeSpec(modelId);
+      const prewarm = await driver.prewarm({
+        participantId: "p-1",
+        spec,
+        installation,
+      });
+      const resolved = buildBinding(spec, installation, prewarm);
+      expect(resolved.readiness, modelId).toEqual({ state: "ready", detail: null });
+      expect(resolved.binding?.requestedModel).toBe(modelId);
+      expect(resolved.binding?.canonicalModelId).toBe(modelId);
+    }
   });
 
   it("two turns resume the same session", async () => {

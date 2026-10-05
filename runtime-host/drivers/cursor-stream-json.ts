@@ -249,6 +249,22 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
       return catalog.includes(modelId);
     }
 
+    /** Probe `canonical` is the account default (`auto`). A seat asking for
+     * another catalog id, or for `default` / `configured`, must handshake as
+     * that id. Otherwise buildBinding rejects it as model_unavailable. */
+    function handshakeModel(requested: string): {
+      canonicalModelId: string;
+      modelAliases: string[];
+    } {
+      if (
+        requested !== "__catalog__" &&
+        (isCursorDefaultModel(requested) || catalog.includes(requested))
+      ) {
+        return { canonicalModelId: requested, modelAliases: [] };
+      }
+      return { canonicalModelId: canonical, modelAliases: [] };
+    }
+
     async function runModelsProbe(executable: string): Promise<void> {
       if (isClosingOrClosed()) {
         throw Object.assign(new Error("cursor driver closed during prewarm"), {
@@ -670,9 +686,10 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
           );
         }
         state = "ready";
+        const handshake = handshakeModel(input.spec.modelId);
         return {
-          canonicalModelId: canonical,
-          modelAliases: [],
+          canonicalModelId: handshake.canonicalModelId,
+          modelAliases: handshake.modelAliases,
           capability: {
             protocol: "cursor-stream-json",
             credentialMode: "installation-managed",
