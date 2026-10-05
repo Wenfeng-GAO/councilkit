@@ -10,6 +10,8 @@ import {
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
+import { CLI_RUN_GOAL_SUMMARY_MAX } from "@shared/runtime/schemas";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteFile, atomicWriteJson, readFileText } from "../store/atomic-write";
@@ -99,7 +101,7 @@ const repairStateSchema = z
     acceptanceCoverage: z.string().min(1).max(200).nullable().optional(),
     remainingBudget: z.string().min(1).max(200).nullable().optional(),
     recoveryAction: z.string().min(1).max(400).nullable().optional(),
-    goalSummary: z.string().min(1).max(400).nullable().optional(),
+    goalSummary: z.string().min(1).max(CLI_RUN_GOAL_SUMMARY_MAX).nullable().optional(),
   })
   .strict();
 export type RepairState = z.infer<typeof repairStateSchema>;
@@ -169,12 +171,28 @@ export function bootstrapRepairRun(input: {
 export function readRepairState(runDir: string): RepairState | null {
   const text = readFileText(join(runDir, REPAIR_STATE_FILE));
   if (text === null) return null;
-  const parsed = repairStateSchema.safeParse(jsonParse(text));
+  const parsed = repairStateSchema.safeParse(clipStoredGoalSummary(jsonParse(text)));
   return parsed.success ? parsed.data : null;
 }
 
 export function writeRepairState(runDir: string, state: RepairState): void {
-  atomicWriteJson(join(runDir, REPAIR_STATE_FILE), state);
+  const goalSummary = clipStoredGoalSummaryValue(state.goalSummary);
+  atomicWriteJson(
+    join(runDir, REPAIR_STATE_FILE),
+    goalSummary === state.goalSummary ? state : { ...state, goalSummary },
+  );
+}
+
+function clipStoredGoalSummary(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const row = value as Record<string, unknown>;
+  if (typeof row.goalSummary !== "string") return value;
+  return { ...row, goalSummary: clipUtf16CodeUnits(row.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX) };
+}
+
+function clipStoredGoalSummaryValue(value: string | null | undefined): string | null | undefined {
+  if (typeof value !== "string") return value;
+  return clipUtf16CodeUnits(value, CLI_RUN_GOAL_SUMMARY_MAX);
 }
 
 export function writeRepairPid(runDir: string, pid: number): void {

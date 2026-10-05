@@ -13,13 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLI_RUN_PIPELINE_PID_FILE, CLI_RUN_STATUS_FILE } from "@shared/runtime/cli-run-progress";
 import { listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
-import { cliRunsListResponseSchema } from "@shared/runtime/schemas";
 import { repairPackageSchema } from "@shared/runtime/repair-package";
 import {
   DEFAULT_GATE_POLICY_ID,
   REPAIR_GATE_POLICY_CATALOG,
   hashRepairGatePolicy,
 } from "@shared/runtime/repair-policy";
+import { cliRunsListResponseSchema } from "@shared/runtime/schemas";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { historyEnvelopeHash, parseHistoryEnvelope } from "@shared/runtime/squad-history-bridge";
 import { mapSquadStatus } from "@shared/runtime/squad-journal-map";
@@ -1657,12 +1657,34 @@ describe("repair v2 protocol", () => {
     const runs = listCliRuns();
     const parsed = cliRunsListResponseSchema.safeParse({ runs });
     const repair = runs.find((run) => run.runId === REPAIR_ID);
-    expect(
-      parsed.success,
-      parsed.success ? "" : JSON.stringify(parsed.error.issues),
-    ).toBe(true);
+    expect(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues)).toBe(true);
+    const stored = JSON.parse(
+      readFileSync(join(home, "runs", REPAIR_ID, "repair.json"), "utf8"),
+    ) as { goalSummary?: string };
+    expect(stored.goalSummary).toBe("修".repeat(399));
     expect(repair?.goalSummary).toBe("修".repeat(399));
     expect(readRepairState(join(home, "runs", REPAIR_ID))?.goalSummary).toBe("修".repeat(399));
+  });
+
+  it("reads a stored goal that ends on an emoji", () => {
+    const dir = join(home, "runs", REPAIR_ID);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: SOURCE_ID,
+        profileName: "v2",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: null,
+        reasonCode: null,
+        goalSummary: `${"修".repeat(399)}🎯`,
+      })}\n`,
+    );
+    expect(readRepairState(dir)?.goalSummary).toBe("修".repeat(399));
   });
 
   it("refuses v2 without an explicit isolation mode", async () => {

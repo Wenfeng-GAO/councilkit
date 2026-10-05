@@ -57,11 +57,13 @@ import {
   assessmentDiagnosticsFileSchema,
 } from "./reviewer-assessment";
 import {
+  CLI_RUN_GOAL_SUMMARY_MAX,
   type CliRunDocumentDto,
   type CliRunHandoffDto,
   type IdeateIntegrityDto,
   ideateIntegritySchema,
 } from "./schemas";
+import { clipUtf16CodeUnits } from "./seat-result";
 
 export type { CliRunAttemptProgress, CliRunPipeline, CliRunProgress } from "./cli-run-progress";
 export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
@@ -354,7 +356,10 @@ function readRepairProjection(
           : rec.isolationMode === null
             ? null
             : undefined,
-      goalSummary: typeof rec.goalSummary === "string" ? rec.goalSummary : null,
+      goalSummary:
+        typeof rec.goalSummary === "string"
+          ? clipUtf16CodeUnits(rec.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX)
+          : null,
       acceptanceCoverage:
         typeof rec.acceptanceCoverage === "string" ? rec.acceptanceCoverage : null,
       remainingBudget: typeof rec.remainingBudget === "string" ? rec.remainingBudget : null,

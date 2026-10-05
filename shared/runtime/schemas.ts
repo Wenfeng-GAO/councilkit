@@ -653,6 +653,8 @@ export const ideateIntegritySchema = z
   .strict();
 export type IdeateIntegrityDto = z.infer<typeof ideateIntegritySchema>;
 
+export const CLI_RUN_GOAL_SUMMARY_MAX = 400;
+
 export const cliRunSummarySchema = z
   .object({
     runId: z.string().min(1),
@@ -680,7 +682,7 @@ export const cliRunSummarySchema = z
     resumeEligible: z.boolean().optional(),
     protocolVersion: z.enum(["v1", "v2"]).optional(),
     isolationMode: z.enum(["strong", "collaborative"]).nullable().optional(),
-    goalSummary: z.string().max(400).nullable().optional(),
+    goalSummary: z.string().max(CLI_RUN_GOAL_SUMMARY_MAX).nullable().optional(),
     acceptanceCoverage: z.string().max(200).nullable().optional(),
     remainingBudget: z.string().max(200).nullable().optional(),
     recoveryAction: z.string().max(400).nullable().optional(),
