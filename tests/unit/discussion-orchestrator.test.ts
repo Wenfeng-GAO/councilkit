@@ -865,8 +865,6 @@ function makeOrchestrator(options: { locks?: LockProvider } = {}) {
   return { orchestrator, client, previews, controlStates };
 }
 
-/** A Room mid-turn: active binding, running Round, live execution. This is the
- * durable state the discussion page renders as "正在生成". */
 async function seedInFlightTurn(): Promise<{
   roomId: string;
   roundId: string;
@@ -2179,8 +2177,6 @@ describe("discussion orchestrator (U5)", () => {
 
   it("18b. startup audit pauses a generating turn after the host restart closed its binding", async () => {
     const { roomId, roundId, executionId, bindingId } = await seedInFlightTurn();
-    // The scope died with the old Host. controlRoom's takeover 404 has already
-    // closed the local binding, so this page load has no controller token.
     host.restart("host-2");
     await markBindingClosed(db, bindingId);
 
