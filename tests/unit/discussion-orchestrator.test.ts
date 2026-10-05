@@ -252,7 +252,6 @@ class FakeHost {
     this.eventStreamFailuresRemaining = count;
   }
 
-  /** Next N event-stream fetches reject before any HTTP status (connection reset). */
   rejectNextEventStreamFetches(count: number): void {
     this.eventStreamFetchRejectionsRemaining = count;
   }
