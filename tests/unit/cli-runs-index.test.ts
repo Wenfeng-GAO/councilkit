@@ -629,4 +629,65 @@ describe("readCliRun seat progress from a long transcript", () => {
     });
     expect(run?.status).toBe("completed");
   });
+
+  it("keeps the seat roster when the started line is longer than the salvage prefix", () => {
+    const dir = join(home, "runs", REVIEW_ID);
+    mkdirSync(dir, { recursive: true });
+    const seat = {
+      attemptId: "attempt-0",
+      agentId: "a",
+      agentName: "review-security",
+      driverId: "grok-stream-json",
+      modelId: "grok-4.6",
+    };
+    const lines = [
+      {
+        kind: "review.started",
+        version: 1,
+        runId: REVIEW_ID,
+        startedAt: "2026-10-04T00:00:00.000Z",
+        task: {
+          pr: "https://github.com/acme/repo/pull/9",
+          focus: "f".repeat(12 * 1024),
+        },
+        attempts: [seat],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "b",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      },
+      {
+        kind: "attempt.finished",
+        version: 1,
+        attemptId: "attempt-0",
+        agentName: "review-security",
+        driverId: "grok-stream-json",
+        status: "success",
+        output: "x".repeat(300 * 1024),
+        exitCode: 0,
+        durationMs: 1200,
+      },
+      {
+        kind: "review.finished",
+        version: 1,
+        status: "completed",
+        endedAt: "2026-10-04T00:05:00.000Z",
+        incomplete: false,
+      },
+    ];
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${lines.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    );
+
+    const run = readCliRun(REVIEW_ID, process.env);
+    expect(run?.progress?.attempts.find((row) => row.attemptId === "attempt-0")).toMatchObject({
+      status: "success",
+      durationMs: 1200,
+    });
+    expect(run?.status).toBe("completed");
+  });
 });
