@@ -80,7 +80,17 @@ export async function followExecutionEvents(options: FollowEventsOptions): Promi
 
   try {
     for (;;) {
-      const chunk = await reader.read();
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        const message = error instanceof Error ? error.message : "";
+        throw new EventStreamError(
+          NO_HTTP_STATUS,
+          message.length > 0 ? message : "event stream read failed",
+        );
+      }
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, { stream: true });
       let index = buffer.indexOf("\n\n");
