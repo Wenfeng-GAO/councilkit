@@ -45,7 +45,9 @@ export function ProfileFormModal({
   onSubmit,
 }: ProfileFormModalProps) {
   const [name, setName] = useState("");
-  const [driverId, setDriverId] = useState<DriverId>("claude-stream-json");
+  const [driverId, setDriverId] = useState<DriverId>(
+    () => initial?.driverId ?? "claude-stream-json",
+  );
   const [installationId, setInstallationId] = useState("");
   const [route, setRoute] = useState<ClaudeRoute>(DEFAULT_ROUTE);
   const [reasoningEffort, setReasoningEffort] = useState("");
