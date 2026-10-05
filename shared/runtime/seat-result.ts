@@ -35,14 +35,19 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
   return { parseStatus: "unparsed", summary, findingCount: null, blockingCount: null };
 }
 
+export function clipUtf16CodeUnits(value: string, max: number): string {
+  if (value.length <= max) return value;
+  let end = max;
+  const unit = value.charCodeAt(end - 1);
+  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
+  return value.slice(0, end);
+}
+
 export function clipSeatSummary(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-  const chars = Array.from(trimmed);
-  return chars.length > SEAT_RESULT_SUMMARY_MAX
-    ? chars.slice(0, SEAT_RESULT_SUMMARY_MAX).join("")
-    : trimmed;
+  return clipUtf16CodeUnits(trimmed, SEAT_RESULT_SUMMARY_MAX);
 }
 
 function textOutsideFences(text: string): string {

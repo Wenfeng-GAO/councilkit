@@ -4,7 +4,12 @@
  * without parsing Attempt output payloads.
  */
 import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
-import { type CliRunAttemptResult, clipSeatSummary, summarizeSeatOutput } from "./seat-result";
+import {
+  type CliRunAttemptResult,
+  clipSeatSummary,
+  clipUtf16CodeUnits,
+  summarizeSeatOutput,
+} from "./seat-result";
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
@@ -454,8 +459,7 @@ function clipActivity(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-  const chars = Array.from(trimmed);
-  return chars.length > LAST_ACTIVITY_MAX ? chars.slice(0, LAST_ACTIVITY_MAX).join("") : trimmed;
+  return clipUtf16CodeUnits(trimmed, LAST_ACTIVITY_MAX);
 }
 
 export function parseLiveStateJson(text: string): CliRunLiveState | null {
