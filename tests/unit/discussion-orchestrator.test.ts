@@ -209,6 +209,7 @@ class FakeHost {
   private eventStreamFailuresRemaining = 0;
   private eventStreamFetchRejectionsRemaining = 0;
   private eventStreamBodyResetsRemaining = 0;
+  private executionStatusFailuresRemaining = 0;
 
   private readonly prewarmFailures = new Set<string>();
   private readonly scopes = new Map<string, FakeScope>();
@@ -246,6 +247,7 @@ class FakeHost {
     this.eventStreamFailuresRemaining = 0;
     this.eventStreamFetchRejectionsRemaining = 0;
     this.eventStreamBodyResetsRemaining = 0;
+    this.executionStatusFailuresRemaining = 0;
     this.ackBehavior = "ok";
     this.onCreateScope = null;
   }
@@ -260,6 +262,20 @@ class FakeHost {
 
   resetNextEventStreamBodies(count: number): void {
     this.eventStreamBodyResetsRemaining = count;
+  }
+
+  failNextExecutionStatuses(count: number): void {
+    this.executionStatusFailuresRemaining = count;
+  }
+
+  openStreams(executionId: string): number {
+    const execution = this.executions.get(executionId);
+    if (!execution) return 0;
+    let open = 0;
+    for (const entry of execution.streams) {
+      if (!entry.closed) open += 1;
+    }
+    return open;
   }
 
   seedScope(input: {
@@ -617,6 +633,10 @@ class FakeHost {
 
   private handleExecutionStatus(scopeId: string, executionId: string): Response {
     this.getExecutionCalls.push(executionId);
+    if (this.executionStatusFailuresRemaining > 0) {
+      this.executionStatusFailuresRemaining -= 1;
+      return errorResponse(503, "HOST_UNAVAILABLE", "execution status unavailable");
+    }
     const scope = this.requireScope(scopeId);
     if (scope instanceof Response) return scope;
     const execution = this.executions.get(executionId);
@@ -1702,6 +1722,113 @@ describe("discussion orchestrator (U5)", () => {
     const bodies = await db.messages.where("roomId").equals(room.id).toArray();
     expect(bodies.some((message) => message.content === "stream recovered")).toBe(true);
     expect(host.executeCalls.filter((call) => call.executionId === executionId)).toHaveLength(1);
+  });
+
+  it("8g. a clean disconnect then one status error follows the same turn", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    let executionId = "";
+    const settled = roundPromise.then(
+      (round) => ({ kind: "resolved" as const, phase: round?.phase ?? null }),
+      async (error: unknown) => {
+        const stored = await db.rounds.where("roomId").equals(room.id).first();
+        const execution = executionId ? await db.modelExecutions.get(executionId) : undefined;
+        return {
+          kind: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+          phase: stored?.phase ?? null,
+          activeExecutionId: stored?.activeExecutionId ?? null,
+          executionState: execution?.state ?? null,
+        };
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    executionId = host.executeCalls[0]?.executionId as string;
+    await vi.waitFor(() => {
+      expect(host.openStreams(executionId)).toBe(1);
+    });
+    host.failNextExecutionStatuses(1);
+    host.dropStreams(executionId);
+
+    const afterClose = await Promise.race([
+      settled,
+      vi
+        .waitFor(() => {
+          expect(host.getExecutionCalls.length).toBeGreaterThanOrEqual(1);
+          expect(host.openStreams(executionId)).toBe(1);
+        })
+        .then(() => ({ kind: "reconnected" as const })),
+    ]);
+    expect(afterClose).toEqual({ kind: "reconnected" });
+
+    host.complete(executionId, "status recovered");
+    const round = await roundPromise;
+    expect(round?.phase).toBe("completed");
+    expect(round?.activeExecutionId).toBeNull();
+    const bodies = await db.messages.where("roomId").equals(room.id).toArray();
+    expect(bodies.some((message) => message.content === "status recovered")).toBe(true);
+    expect(host.executeCalls.filter((call) => call.executionId === executionId)).toHaveLength(1);
+  });
+
+  it("8h. a clean disconnect then repeated status errors pauses the turn", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    let executionId = "";
+    const settled = roundPromise.then(
+      (round) => ({ kind: "resolved" as const, phase: round?.phase ?? null }),
+      async (error: unknown) => {
+        const stored = await db.rounds.where("roomId").equals(room.id).first();
+        const execution = executionId ? await db.modelExecutions.get(executionId) : undefined;
+        return {
+          kind: "rejected" as const,
+          message: error instanceof Error ? error.message : String(error),
+          phase: stored?.phase ?? null,
+          activeExecutionId: stored?.activeExecutionId ?? null,
+          executionState: execution?.state ?? null,
+        };
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    executionId = host.executeCalls[0]?.executionId as string;
+    await vi.waitFor(() => {
+      expect(host.openStreams(executionId)).toBe(1);
+    });
+    host.failNextExecutionStatuses(8);
+    host.dropStreams(executionId);
+
+    const afterClose = await Promise.race([
+      settled,
+      vi
+        .waitFor(() => {
+          expect(host.getExecutionCalls.length).toBeGreaterThanOrEqual(1);
+          expect(host.openStreams(executionId)).toBe(1);
+        })
+        .then(() => ({ kind: "reconnected" as const })),
+    ]);
+    expect(afterClose).toEqual({ kind: "reconnected" });
+
+    host.dropStreams(executionId);
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    expect(round?.activeExecutionId).toBeNull();
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(round?.pauseReason?.detail).toBe("execution status failed before a terminal");
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("INTERRUPTED_UNKNOWN");
+    expect(host.executeCalls).toHaveLength(1);
   });
 
   it("8d. repeated event-stream failures pause the turn instead of leaving it generating", async () => {
