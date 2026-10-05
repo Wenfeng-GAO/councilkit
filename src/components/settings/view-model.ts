@@ -33,6 +33,31 @@ export function driverDisplayName(driverId: DriverId): string {
   return DRIVER_DISPLAY_NAMES[driverId] ?? driverId;
 }
 
+const KIMI_EMPTY_OPTIONS_NOTE =
+  "Kimi 的模型在 Agent 中从闭集目录（kimi-code/k3）选择；Profile 不保存模型、argv 或凭据，无可编辑选项。";
+const GROK_EMPTY_OPTIONS_NOTE =
+  "Grok 的模型在 Agent 中从闭集目录（grok-4.6 / grok-4.5）选择；Profile 不保存模型、argv 或凭据，无可编辑选项。";
+const CURSOR_EMPTY_OPTIONS_NOTE =
+  "Cursor 的模型在 Agent 中从 cursor-agent 实时目录选择（auto 使用账号默认）；Profile 不保存模型、argv 或凭据，无可编辑选项。";
+
+export function profileEmptyOptionsNote(driverId: DriverId): string | null {
+  switch (driverId) {
+    case "claude-stream-json":
+    case "codex-app-server":
+      return null;
+    case "kimi-stream-json":
+      return KIMI_EMPTY_OPTIONS_NOTE;
+    case "grok-stream-json":
+      return GROK_EMPTY_OPTIONS_NOTE;
+    case "cursor-stream-json":
+      return CURSOR_EMPTY_OPTIONS_NOTE;
+    default: {
+      const unreachable: never = driverId;
+      throw new Error(unreachable);
+    }
+  }
+}
+
 /** Exact InstallationState vocabulary → (Chinese label, pill tone). */
 export function installationStateView(state: InstallationState): {
   label: string;
