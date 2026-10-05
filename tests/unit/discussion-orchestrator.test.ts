@@ -865,6 +865,61 @@ function makeOrchestrator(options: { locks?: LockProvider } = {}) {
   return { orchestrator, client, previews, controlStates };
 }
 
+/** A Room mid-turn: active binding, running Round, live execution. This is the
+ * durable state the discussion page renders as "正在生成". */
+async function seedInFlightTurn(): Promise<{
+  roomId: string;
+  roundId: string;
+  executionId: string;
+  bindingId: string;
+}> {
+  const { room, p1, p2 } = await seedBase();
+  const { orchestrator } = makeOrchestrator();
+  await orchestrator.ensureScope(room.id, [p1, p2]);
+  const binding = await db.runtimeBindings
+    .where("roomId")
+    .equals(room.id)
+    .filter((candidate) => candidate.state === "active")
+    .first();
+  if (!binding?.controllerId || binding.leaseEpoch === null || !binding.executionScopeId) {
+    throw new Error("test: expected an active scope");
+  }
+  const token = { controllerId: binding.controllerId, leaseEpoch: binding.leaseEpoch };
+  const round = await createRound(db, {
+    roomId: room.id,
+    token,
+    participantOrder: [p1.id, p2.id],
+  });
+  await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "prewarming" });
+  await transitionRound(db, { roomId: room.id, roundId: round.id, token, to: "running" });
+  await db.rounds.update(round.id, { focusMessageId: "seeded-focus" });
+  const execution = createModelExecution({
+    executionId: `exec-inflight-${room.id}`,
+    roomId: room.id,
+    roundId: round.id,
+    participantId: p1.id,
+    resultKind: "message",
+    requestedModel: p1.modelId,
+    contextRevision: room.contextRevision,
+    expectedRoomDigest: room.contextDigest,
+    participantSnapshotDigest: p1.participantSnapshotDigest,
+    instructionDigest: computeInstructionDigest({ kind: "message", text: "answer" }),
+  });
+  await beginExecution(db, { execution, token });
+  await markExecutionDispatched(db, {
+    executionId: execution.executionId,
+    hostInstanceId: host.hostInstanceId,
+    executionScopeId: binding.executionScopeId,
+    dispatchState: "unknown",
+  });
+  return {
+    roomId: room.id,
+    roundId: round.id,
+    executionId: execution.executionId,
+    bindingId: binding.id,
+  };
+}
+
 async function activeToken(roomId: string): Promise<ControllerToken> {
   const binding = await db.runtimeBindings
     .where("roomId")
@@ -2120,6 +2175,48 @@ describe("discussion orchestrator (U5)", () => {
     expect(converged?.state).toBe("interrupted");
     expect(converged?.error?.code).toBe("SAFE_INTERRUPTION");
     expect((await db.rounds.get(round.id))?.phase).toBe("paused");
+  });
+
+  it("18b. startup audit pauses a generating turn after the host restart closed its binding", async () => {
+    const { roomId, roundId, executionId, bindingId } = await seedInFlightTurn();
+    // The scope died with the old Host. controlRoom's takeover 404 has already
+    // closed the local binding, so this page load has no controller token.
+    host.restart("host-2");
+    await markBindingClosed(db, bindingId);
+
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.startupAudit();
+
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("SAFE_INTERRUPTION");
+    const round = await db.rounds.get(roundId);
+    expect(round?.phase).toBe("paused");
+    expect(round?.activeExecutionId).toBeNull();
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect((await db.rooms.get(roomId))?.activeRoundId).toBe(roundId);
+  });
+
+  it("18c. controlRoom after a host restart pauses the generating turn instead of leaving it running", async () => {
+    const { roomId, roundId, executionId } = await seedInFlightTurn();
+    host.restart("host-2");
+
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.controlRoom(roomId);
+
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("SAFE_INTERRUPTION");
+    const round = await db.rounds.get(roundId);
+    expect(round?.phase).toBe("paused");
+    expect(round?.activeExecutionId).toBeNull();
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(roomId)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    expect(binding).toBeUndefined();
   });
 
   it("19. ensureScope resumes an interrupted create with the same scopeRequestId", async () => {
