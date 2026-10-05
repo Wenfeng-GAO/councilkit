@@ -123,6 +123,7 @@ export function buildContextSnapshot(input: {
       contextRevision: input.room.contextRevision,
       contextDigest: input.room.contextDigest,
       ...(input.room.topic ? { topic: input.room.topic } : {}),
+      ...(input.room.background.trim().length > 0 ? { background: input.room.background } : {}),
       items: input.items,
     },
     participant: {
