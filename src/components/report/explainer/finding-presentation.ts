@@ -3,6 +3,9 @@ import type {
   ExplanationPayload,
 } from "@shared/runtime/review-explainer/contracts";
 
+const LEADING_SOURCE_FILE =
+  /^`?(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?:-\d+)?)?`?\s*(?:[—–:：-]\s*)?/;
+
 /** A display-only excerpt; the original title and text remain intact in the detail view. */
 export function displayFindingTitle(
   finding: Pick<ExplainerFinding, "title">,
@@ -10,9 +13,7 @@ export function displayFindingTitle(
 ): string {
   if (summary) return summary;
   const title = finding.title.trim();
-  const withoutPath = title
-    .replace(/^`?(?:[\w.-]+\/)+[\w./-]+(?::\d+(?:-\d+)?)?`?\s*(?:[—–:：-]\s*)?/, "")
-    .trim();
+  const withoutPath = title.replace(LEADING_SOURCE_FILE, "").trim();
   const display = withoutPath || title;
   return display.length > 120 ? `${display.slice(0, 119)}…` : display;
 }
