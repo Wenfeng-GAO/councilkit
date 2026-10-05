@@ -96,4 +96,25 @@ describe("materializeRepairWorkspace", () => {
     expect(originMatchesRepo("git@evil.com:github.com/acme/repo.git", repo)).toBe(false);
     expect(originMatchesRepo("https://github.com/acme/other.git", repo)).toBe(false);
   });
+
+  it("treats GitHub owner and repo names as case-insensitive", () => {
+    expect(
+      originMatchesRepo(
+        "https://github.com/Microsoft/TypeScript.git",
+        "github.com/microsoft/typescript",
+      ),
+    ).toBe(true);
+    expect(
+      originMatchesRepo("git@github.com:Microsoft/TypeScript", "github.com/microsoft/TypeScript"),
+    ).toBe(true);
+    expect(
+      originMatchesRepo(
+        "https://github.com/Microsoft/TypeScript.git",
+        "github.com/microsoft/other",
+      ),
+    ).toBe(false);
+    expect(
+      originMatchesRepo("git@code.alipay.com:Group/Proj.git", "code.alipay.com/group/proj"),
+    ).toBe(false);
+  });
 });
