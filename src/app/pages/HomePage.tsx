@@ -44,6 +44,11 @@ export function sortRooms(
   });
 }
 
+/** `toLowerCase` turns U+0130 (`İ`) into `i` plus a combining dot. Replace the capital first. */
+export function normalizeRoomSearchText(value: string): string {
+  return value.trim().normalize("NFKC").replace(/İ/g, "i").toLowerCase();
+}
+
 /**
  * S7 段 1：搜索过滤纯函数（段 2 才接搜索框 UI）。大小写不敏感的 topic 命中，
  * 或 roomId 落在消息内容命中集合 `matchedRoomIds` 内（消息扫描由调用方做，
@@ -55,10 +60,11 @@ export function filterRooms(
   query: string,
   matchedRoomIds?: ReadonlySet<string>,
 ): DiscussionRoom[] {
-  const q = query.trim().toLowerCase();
+  const q = normalizeRoomSearchText(query);
   if (q.length === 0) return [...rooms];
   return rooms.filter(
-    (room) => room.topic.toLowerCase().includes(q) || (matchedRoomIds?.has(room.id) ?? false),
+    (room) =>
+      normalizeRoomSearchText(room.topic).includes(q) || (matchedRoomIds?.has(room.id) ?? false),
   );
 }
 
@@ -109,7 +115,7 @@ export function HomePage() {
     },
   });
 
-  const normalizedQuery = deferredQuery.trim().toLowerCase();
+  const normalizedQuery = normalizeRoomSearchText(deferredQuery);
   const searchQuery = useQuery({
     queryKey: ["rt", "room-message-search", normalizedQuery],
     enabled: normalizedQuery.length > 0,
@@ -117,7 +123,7 @@ export function HomePage() {
     queryFn: async () => {
       const ids = new Set<string>();
       await runtimeDb.messages
-        .filter((message) => message.content.toLowerCase().includes(normalizedQuery))
+        .filter((message) => normalizeRoomSearchText(message.content).includes(normalizedQuery))
         .each((message) => {
           ids.add(message.roomId);
         });

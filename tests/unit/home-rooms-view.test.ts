@@ -1,4 +1,4 @@
-import { filterRooms, sortRooms } from "@/app/pages/HomePage";
+import { filterRooms, normalizeRoomSearchText, sortRooms } from "@/app/pages/HomePage";
 import type { UsageTotals } from "@/components/room/UsageBadge";
 import type { DiscussionRoom } from "@/models/discussion/entities";
 import { createDiscussionRoom } from "@/models/discussion/factories";
@@ -97,7 +97,17 @@ describe("filterRooms", () => {
 
   it("ASCII 字母能命中全角拉丁话题", () => {
     const fullwidth = makeRoom("ＡＢＣ项目", "2026-07-05T00:00:00.000Z");
-    expect(filterRooms([fullwidth, c], "abc").map((r) => r.topic)).toEqual(["ＡＢＣ项目", "ABC 讨论"]);
+    expect(filterRooms([fullwidth, c], "abc").map((r) => r.topic)).toEqual([
+      "ＡＢＣ项目",
+      "ABC 讨论",
+    ]);
+  });
+
+  it("消息正文使用同一折叠，ASCII 查询能命中", () => {
+    const body = "请看 İstanbul 的 ＡＢＣ 方案";
+    expect(normalizeRoomSearchText(body).includes(normalizeRoomSearchText("istanbul"))).toBe(true);
+    expect(normalizeRoomSearchText(body).includes(normalizeRoomSearchText("abc"))).toBe(true);
+    expect(normalizeRoomSearchText(body).includes(normalizeRoomSearchText("不存在"))).toBe(false);
   });
 
   it("空 query（含纯空白）返回全量", () => {
