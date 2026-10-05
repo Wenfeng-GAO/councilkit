@@ -4,7 +4,7 @@ import type {
 } from "@shared/runtime/review-explainer/contracts";
 
 const LEADING_SOURCE_FILE =
-  /^`?(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][A-Za-z0-9]*(?=$|[:`\s—–：-])(?::\d+(?:-\d+)?)?`?\s*(?:[—–:：-]\s*)?/;
+  /^`?(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][A-Za-z0-9-]*(?=$|[:`\s—–：-])(?::\d+(?:-\d+)?)?`?\s*(?:[—–:：-]\s*)?/;
 
 /** A display-only excerpt; the original title and text remain intact in the detail view. */
 export function displayFindingTitle(
