@@ -7,6 +7,7 @@ import {
   parseLiveStateJson,
   reconcileRunningStatus,
 } from "@shared/runtime/cli-run-progress";
+import { cliRunProgressSchema } from "@shared/runtime/schemas";
 import { describe, expect, it } from "vitest";
 
 const started = {
@@ -64,6 +65,35 @@ describe("liveStateFromRecords", () => {
     expect(other?.status).toBe("queued");
     expect(other?.durationMs).toBeNull();
     expect(other?.lastActivity).toBeNull();
+  });
+
+  it("clips an emoji lastActivity to the UTF-16 budget the list schema accepts", () => {
+    const emoji = "😀";
+    const live = parseLiveStateJson(
+      JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: {
+          phase: "attempts",
+          updatedAt: "t",
+          attempts: [
+            {
+              attemptId: "attempt-0",
+              agentName: "review-security",
+              driverId: "claude-stream-json",
+              modelId: "m",
+              role: "attempt",
+              status: "running",
+              durationMs: 1,
+              lastActivity: emoji.repeat(240),
+            },
+          ],
+        },
+        pipeline: null,
+      }),
+    );
+    expect(live?.progress.attempts[0]?.lastActivity).toBe(emoji.repeat(120));
+    expect(cliRunProgressSchema.safeParse(live?.progress).success).toBe(true);
   });
 
   it("moves to aggregating after every attempt finishes successfully", () => {

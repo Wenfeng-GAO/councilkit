@@ -116,6 +116,94 @@ describe("cli-runs route", () => {
     expect(body.data.markdown).toBe(MARKDOWN);
   });
 
+  it("lists a run when the seat summary and last activity are emoji-heavy", async () => {
+    seed();
+    const emoji = "😀";
+    const overview = emoji.repeat(240);
+    writeFileSync(
+      join(home, "runs", RUN_ID, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: RUN_ID,
+        startedAt: "2026-08-01T00:00:00.000Z",
+        task: { task: "host-fixture" },
+        attempts: [
+          {
+            attemptId: "attempt-0",
+            agentId: "a",
+            agentName: "review-security",
+            driverId: "claude-stream-json",
+            modelId: "m",
+          },
+        ],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "a",
+          agentName: "review-security",
+          driverId: "claude-stream-json",
+          modelId: "m",
+        },
+      })}\n${JSON.stringify({
+        kind: "attempt.finished",
+        attemptId: "attempt-0",
+        status: "success",
+        durationMs: 12,
+        output: `## 概览\n\n${overview}\n`,
+      })}\n`,
+    );
+    writeFileSync(
+      join(home, "runs", RUN_ID, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: {
+          phase: "attempts",
+          updatedAt: "t",
+          attempts: [
+            {
+              attemptId: "attempt-0",
+              agentName: "review-security",
+              driverId: "claude-stream-json",
+              modelId: "m",
+              role: "attempt",
+              status: "running",
+              durationMs: 12,
+              lastActivity: overview,
+              result: {
+                parseStatus: "parsed",
+                summary: overview,
+                findingCount: 0,
+                blockingCount: 0,
+              },
+            },
+          ],
+        },
+        pipeline: null,
+      })}\n`,
+    );
+    host = await boot();
+    const list = await fetch(`${host.baseUrl}/api/v1/cli-runs`, { headers: authedHeaders(host) });
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      ok: true;
+      data: {
+        runs: Array<{
+          progress: {
+            attempts: Array<{
+              lastActivity: string | null;
+              result?: { summary: string | null };
+            }>;
+          } | null;
+        }>;
+      };
+    };
+    expect(body.data.runs).toHaveLength(1);
+    const attempt = body.data.runs[0]?.progress?.attempts[0];
+    expect(attempt?.lastActivity).toBe(emoji.repeat(120));
+    expect(attempt?.result?.summary).toBe(emoji.repeat(120));
+  });
+
   it("refills empty status.json attempts from the transcript so process stays inspectable", async () => {
     seed();
     writeFileSync(
