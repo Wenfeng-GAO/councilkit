@@ -90,6 +90,16 @@ describe("filterRooms", () => {
     expect(filterRooms([a, b, c], "abc").map((r) => r.topic)).toEqual(["ABC 讨论"]);
   });
 
+  it("ASCII i 能命中话题里的土耳其文大写 I", () => {
+    const istanbul = makeRoom("İstanbul 讨论", "2026-07-04T00:00:00.000Z");
+    expect(filterRooms([istanbul, a], "istanbul").map((r) => r.topic)).toEqual(["İstanbul 讨论"]);
+  });
+
+  it("ASCII 字母能命中全角拉丁话题", () => {
+    const fullwidth = makeRoom("ＡＢＣ项目", "2026-07-05T00:00:00.000Z");
+    expect(filterRooms([fullwidth, c], "abc").map((r) => r.topic)).toEqual(["ＡＢＣ项目", "ABC 讨论"]);
+  });
+
   it("空 query（含纯空白）返回全量", () => {
     expect(filterRooms([a, b, c], "")).toHaveLength(3);
     expect(filterRooms([a, b, c], "   ")).toHaveLength(3);
