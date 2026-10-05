@@ -179,6 +179,32 @@ describe("parseFindings", () => {
     });
   });
 
+  it("keeps findings that precede the first reviewer heading", () => {
+    const parsed = parseReviewReport(
+      [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 独有发现",
+        "",
+        "- [critical] 共享缓存会把上一次失败写成成功",
+        "",
+        "**review-security**",
+        "",
+        "- [nit] 日志多打了一行",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+    );
+    const unique = parsed?.sections.find((section) => section.title === "独有发现");
+    expect(unique?.groups?.map((group) => group.title)).toEqual(["", "review-security"]);
+    expect(unique?.findings?.map((finding) => finding.severity)).toEqual(["critical", "nit"]);
+    expect(unique?.findings?.[0]?.text).toContain("共享缓存");
+  });
+
   it("groups unique findings by reviewer heading", () => {
     const groups = parseFindingGroups(
       [
