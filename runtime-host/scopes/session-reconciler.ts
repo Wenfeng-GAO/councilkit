@@ -8,9 +8,12 @@ import { renderTurn } from "./snapshot-render";
  *
  * A Participant's Execution Session is reused only for a STRICT append-only
  * Context Snapshot: same digestVersion, non-decreasing revision, unchanged
- * participant snapshot digest, and an exact id+content prefix of previously
- * applied items. Anything else is `needs_rebase` — V1 never auto-rebases an
- * active Scope; the Orchestrator persists a pause and closes the Scope.
+ * participant snapshot digest, unchanged topic and background, and an exact
+ * id+content prefix of previously applied items. Topic and background are
+ * rendered only on a full prompt, so a later edit must rebuild the session
+ * instead of appending under the header the seat already holds. Anything else
+ * is `needs_rebase` — V1 never auto-rebases an active Scope; the Orchestrator
+ * persists a pause and closes the Scope.
  *
  * Independent of CouncilKit digests, a Session also becomes unusable when the
  * runtime signals compaction/truncation (driver invalidates the epoch) or it
@@ -30,6 +33,8 @@ export interface SessionRecord {
   participantSnapshotDigest: string;
   appliedItemCount: number;
   itemDigests: string[];
+  topic: string;
+  background: string;
   executionCount: number;
   cumulativeInputTokens: number;
   executionIds: string[];
@@ -47,6 +52,7 @@ export type ReconcileOutcome =
       reason:
         | "digest_version_changed"
         | "history_replaced"
+        | "shared_context_changed"
         | "participant_changed"
         | "revision_regressed"
         | "session_execution_limit"
@@ -126,6 +132,12 @@ export function createSessionReconciler(): SessionReconciler {
           return { kind: "needs_rebase", reason: "history_replaced" };
         }
       }
+      if (
+        (snapshot.roomContext.topic ?? "") !== record.topic ||
+        (snapshot.roomContext.background ?? "") !== record.background
+      ) {
+        return { kind: "needs_rebase", reason: "shared_context_changed" };
+      }
       const { prompt, itemCount } = renderTurn(snapshot, record.appliedItemCount);
       return { kind: "ok", basis: "incremental", prompt, appliedItemCount: itemCount };
     },
@@ -143,6 +155,8 @@ export function createSessionReconciler(): SessionReconciler {
               participantSnapshotDigest: snapshot.participant.participantSnapshotDigest,
               appliedItemCount: 0,
               itemDigests: [],
+              topic: "",
+              background: "",
               executionCount: 0,
               cumulativeInputTokens: 0,
               executionIds: [],
@@ -153,6 +167,8 @@ export function createSessionReconciler(): SessionReconciler {
       base.participantSnapshotDigest = snapshot.participant.participantSnapshotDigest;
       base.appliedItemCount = snapshot.roomContext.items.length;
       base.itemDigests = snapshot.roomContext.items.map(hashItem);
+      base.topic = snapshot.roomContext.topic ?? "";
+      base.background = snapshot.roomContext.background ?? "";
       base.executionCount += 1;
       base.cumulativeInputTokens += usage?.inputTokens ?? 0;
       base.executionIds.push(executionId);

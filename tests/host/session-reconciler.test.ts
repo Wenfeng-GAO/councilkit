@@ -35,6 +35,7 @@ function makeSnapshot(options: {
   digestVersion?: number;
   instructionText?: string;
   topic?: string;
+  background?: string;
 }): ContextSnapshot {
   return {
     // digestVersion is `literal(1)` in the schema; the cast lets a test feed
@@ -44,6 +45,7 @@ function makeSnapshot(options: {
       contextRevision: options.revision,
       contextDigest: `digest-r${options.revision}`,
       ...(options.topic === undefined ? {} : { topic: options.topic }),
+      ...(options.background === undefined ? {} : { background: options.background }),
       items: options.items,
     },
     participant: {
@@ -91,6 +93,60 @@ describe("session reconciler", () => {
     expect(appended.prompt).not.toContain("First user message.");
     expect(appended.prompt).not.toContain("# Discussion context");
     expect(appended.prompt).toContain("# Instruction (message)");
+  });
+
+  it("needs_rebase when a later turn changes the room topic or background", () => {
+    const reconciler = createSessionReconciler();
+    const applied = makeSnapshot({
+      revision: 1,
+      topic: "登录设计",
+      background: "只要邮箱登录",
+      items: [userItem("i-1", "先看登录。")],
+    });
+    reconciler.reconcile(PARTICIPANT, applied, 0, null);
+    reconciler.recordApplied(PARTICIPANT, applied, "exec-1", 0, null);
+
+    const sameHeader = makeSnapshot({
+      revision: 2,
+      topic: "登录设计",
+      background: "只要邮箱登录",
+      items: [userItem("i-1", "先看登录。"), userItem("i-2", "补充验证码。")],
+    });
+    const kept = reconciler.reconcile(PARTICIPANT, sameHeader, 0, null);
+    expect(kept).toEqual({
+      kind: "ok",
+      basis: "incremental",
+      prompt: expect.stringContaining("补充验证码。"),
+      appliedItemCount: 2,
+    });
+    if (kept.kind !== "ok") throw new Error("unreachable");
+    expect(kept.prompt).not.toContain("登录设计");
+
+    const renamed = makeSnapshot({
+      revision: 3,
+      topic: "支付设计",
+      background: "只要邮箱登录",
+      items: [
+        userItem("i-1", "先看登录。"),
+        userItem("i-2", "补充验证码。"),
+        userItem("i-3", "再看支付。"),
+      ],
+    });
+    expect(reconciler.reconcile(PARTICIPANT, renamed, 0, null)).toEqual({
+      kind: "needs_rebase",
+      reason: "shared_context_changed",
+    });
+
+    const rebackground = makeSnapshot({
+      revision: 3,
+      topic: "登录设计",
+      background: "改成手机号登录",
+      items: [userItem("i-1", "先看登录。"), userItem("i-2", "补充验证码。")],
+    });
+    expect(reconciler.reconcile(PARTICIPANT, rebackground, 0, null)).toEqual({
+      kind: "needs_rebase",
+      reason: "shared_context_changed",
+    });
   });
 
   it("needs_rebase when applied history diverges or is truncated", () => {
