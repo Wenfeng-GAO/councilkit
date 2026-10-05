@@ -16,8 +16,8 @@ import {
   initializeRoomDigest,
   projectSharedContext,
 } from "@/orchestrator/context-snapshot";
-import { renderTurn } from "@host/scopes/snapshot-render";
 import { contextSnapshotSchema } from "@shared/runtime/schemas";
+import { renderTurn } from "../../runtime-host/scopes/snapshot-render.ts";
 import { describe, expect, it } from "vitest";
 
 /**
