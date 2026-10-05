@@ -212,17 +212,15 @@ export type ControlTransition =
   | { kind: "acquired"; notice: "已取得控制权" }
   | { kind: "lost"; notice: "已转为只读观察" };
 
-/** Control-banner transition for one room. A room id change only clears a
- * notice left by the previous room. Preview text is cleared only when this
- * same room actually loses control. */
+/** 切房只丢掉上一间留下的提示。预览只在同一间从 controlling 落到
+ * observing 或 lost-control 时清掉。 */
 export function controlTransition(input: {
   previousRoomId: string | undefined;
   previousState: ControlState | undefined;
   roomId: string | undefined;
   state: ControlState | undefined;
 }): ControlTransition {
-  void input.previousRoomId;
-  void input.roomId;
+  if (input.previousRoomId !== input.roomId) return { kind: "reset" };
   if (input.previousState === input.state) return { kind: "none" };
   if (input.previousState === "observing" && input.state === "controlling") {
     return { kind: "acquired", notice: "已取得控制权" };
