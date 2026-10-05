@@ -206,6 +206,36 @@ export function notifyTone(event: RoomNotifyEvent): "warn" | "success" {
   return event.kind === "round-paused" ? "warn" : "success";
 }
 
+export type ControlTransition =
+  | { kind: "none" }
+  | { kind: "reset" }
+  | { kind: "acquired"; notice: "已取得控制权" }
+  | { kind: "lost"; notice: "已转为只读观察" };
+
+/** Control-banner transition for one room. A room id change only clears a
+ * notice left by the previous room. Preview text is cleared only when this
+ * same room actually loses control. */
+export function controlTransition(input: {
+  previousRoomId: string | undefined;
+  previousState: ControlState | undefined;
+  roomId: string | undefined;
+  state: ControlState | undefined;
+}): ControlTransition {
+  void input.previousRoomId;
+  void input.roomId;
+  if (input.previousState === input.state) return { kind: "none" };
+  if (input.previousState === "observing" && input.state === "controlling") {
+    return { kind: "acquired", notice: "已取得控制权" };
+  }
+  if (
+    input.previousState === "controlling" &&
+    (input.state === "observing" || input.state === "lost-control")
+  ) {
+    return { kind: "lost", notice: "已转为只读观察" };
+  }
+  return { kind: "none" };
+}
+
 // ---------------------------------------------------------------------------
 // S8 favicon 状态点（canvas dataURL，不预置图标文件——现状 index.html 无 icon
 // link，预置文件需动 index.html/public 且无法表达双态）。模块级辅助仅在
@@ -379,23 +409,28 @@ export function RoomPage() {
   // Control transitions: announce takeovers; on losing control drop the local
   // preview immediately and stay read-only.
   const [notice, setNotice] = useState<string | null>(null);
-  const prevControlRef = useRef<ControlState | undefined>(undefined);
+  const prevControlRef = useRef<{
+    roomId: string | undefined;
+    state: ControlState | undefined;
+  }>({ roomId: undefined, state: undefined });
   useEffect(() => {
-    const prev = prevControlRef.current;
-    prevControlRef.current = controlState;
-    if (prev === controlState) return;
-    if (prev === "observing" && controlState === "controlling") {
-      setNotice("已取得控制权");
-    } else if (
-      prev === "controlling" &&
-      (controlState === "observing" || controlState === "lost-control")
-    ) {
+    const previous = prevControlRef.current;
+    prevControlRef.current = { roomId, state: controlState };
+    const transition = controlTransition({
+      previousRoomId: previous.roomId,
+      previousState: previous.state,
+      roomId,
+      state: controlState,
+    });
+    if (transition.kind === "reset") setNotice(null);
+    if (transition.kind === "acquired") setNotice(transition.notice);
+    if (transition.kind === "lost") {
       if (activeExecutionId) {
         useRuntimeDiscussionStore.getState().clearPreview(activeExecutionId);
       }
-      setNotice("已转为只读观察");
+      setNotice(transition.notice);
     }
-  }, [controlState, activeExecutionId]);
+  }, [controlState, activeExecutionId, roomId]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 5000);
