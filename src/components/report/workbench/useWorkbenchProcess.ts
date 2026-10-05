@@ -1,4 +1,9 @@
-import { type TimelineBlock, foldLiveEvents, foldLiveEventsAppend } from "@/lib/live-transcript";
+import {
+  type TimelineBlock,
+  foldLiveEvents,
+  foldLiveEventsAppend,
+  takeLivePage,
+} from "@/lib/live-transcript";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
 import { useEffect, useRef, useState } from "react";
@@ -9,7 +14,6 @@ import {
   PROCESS_WINDOW_STEP,
   chunkedWindow,
   newActivityCount as countNewActivities,
-  isCursorReset,
   isStaleResponse,
   nextPollDelayMs,
 } from "./seatDetailModel";
@@ -185,16 +189,25 @@ export function useWorkbenchProcess(input: {
       try {
         const res = await client.getCliRunAttemptLive(runId, attemptId, afterSeqRef.current);
         if (!isCurrent()) return; // AC-03：迟到响应，不得写入新席位
-        if (isCursorReset(afterSeqRef.current, res.nextSeq)) {
-          // 服务端事件序号重置：沿用旧游标会永久漏数据，重建该席缓存从头重读。
+        const decision = takeLivePage(
+          { afterSeq: afterSeqRef.current, lastSeq: lastSeqRef.current },
+          res,
+        );
+        if (decision.action === "reread") {
           eventsRef.current = [];
           blocksRef.current = [];
           bytesRef.current = 0;
-          lastSeqRef.current = -1;
+          lastSeqRef.current = decision.lastSeq;
+          afterSeqRef.current = decision.afterSeq;
+          failuresRef.current = 0;
+          setReadError(false);
+          setReady(true);
+          schedule(0);
+          return;
         }
-        const fresh = res.events.filter((event) => event.seq > lastSeqRef.current);
-        if (fresh.length > 0) appendEvents(fresh);
-        afterSeqRef.current = res.nextSeq;
+        if (decision.events.length > 0) appendEvents(decision.events);
+        lastSeqRef.current = decision.lastSeq;
+        afterSeqRef.current = decision.afterSeq;
         failuresRef.current = 0;
         setReadError(false);
         setReady(true);

@@ -1,5 +1,35 @@
 import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
 
+export interface LivePollCursor {
+  afterSeq: number;
+  lastSeq: number;
+}
+
+export type LivePollDecision =
+  | { action: "reread"; afterSeq: 0; lastSeq: -1 }
+  | {
+      action: "apply";
+      events: AttemptLiveEvent[];
+      afterSeq: number;
+      lastSeq: number;
+    };
+
+export function takeLivePage(
+  cursor: LivePollCursor,
+  page: { events: readonly AttemptLiveEvent[]; nextSeq: number },
+): LivePollDecision {
+  if (page.nextSeq < cursor.afterSeq) {
+    return { action: "reread", afterSeq: 0, lastSeq: -1 };
+  }
+  const events = page.events.filter((event) => event.seq > cursor.lastSeq);
+  return {
+    action: "apply",
+    events,
+    afterSeq: page.nextSeq,
+    lastSeq: events.reduce((max, event) => Math.max(max, event.seq), cursor.lastSeq),
+  };
+}
+
 export type TimelineBlock =
   | { kind: "text"; text: string; at: string }
   | { kind: "thinking"; text: string; at: string }

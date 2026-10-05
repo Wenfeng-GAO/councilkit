@@ -286,6 +286,54 @@ const makeSquadRun = () => ({
   },
 });
 
+test("过程序号回退时从头重读，不把重启后的正文丢掉", async ({ page }) => {
+  const restartRunId = "ck-review-00000000-0000-4000-8000-0000000000e4";
+  const data = makeRun();
+  data.runId = restartRunId;
+  data.reportUrl = `/reports/${restartRunId}`;
+  const at = new Date().toISOString();
+  let sidecar: Array<{ seq: number; at: string; type: "text.delta"; text: string }> = [
+    { seq: 1, at, type: "text.delta", text: "第一轮过程正文" },
+    { seq: 2, at, type: "text.delta", text: "第二句仍在" },
+  ];
+  await page.route(`**/api/v1/cli-runs/${restartRunId}`, (route) =>
+    route.fulfill({ json: { ok: true, data } }),
+  );
+  await page.route("**/api/v1/cli-runs", (route) =>
+    route.fulfill({ json: { ok: true, data: { runs: [] } } }),
+  );
+  await page.route(`**/api/v1/cli-runs/${restartRunId}/attempts/*/result*`, (route) => {
+    const attemptId = /attempts\/([^/]+)\/result/.exec(route.request().url())?.[1] ?? "";
+    return route.fulfill({
+      json: resultEnvelope(attemptId, {
+        runId: restartRunId,
+        executionStatus: attemptId === "attempt-1" ? "running" : "pending",
+        availability: "pending",
+        markdown: null,
+      }),
+    });
+  });
+  await page.route(`**/api/v1/cli-runs/${restartRunId}/attempts/*/live*`, (route) => {
+    const afterRaw = new URL(route.request().url()).searchParams.get("afterSeq");
+    const afterSeq = afterRaw === null || afterRaw === "" ? 0 : Number(afterRaw);
+    const events = sidecar.filter((event) => event.seq > afterSeq);
+    const nextSeq =
+      sidecar.length === 0 ? afterSeq : Math.max(...sidecar.map((event) => event.seq));
+    return route.fulfill({
+      json: { ok: true, data: { events, nextSeq, done: false } },
+    });
+  });
+  await page.goto(`/reports/${restartRunId}`);
+  await page
+    .getByRole("button", { name: /正确性审查/ })
+    .first()
+    .click();
+  await expect(page.getByText("第一轮过程正文第二句仍在")).toBeVisible();
+  sidecar = [{ seq: 1, at, type: "text.delta", text: "序号重置后的正文" }];
+  await expect(page.getByText("序号重置后的正文")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("第一轮过程正文第二句仍在")).toHaveCount(0);
+});
+
 test("squad 席位抽屉开关后工作台仍只有一份", async ({ page }) => {
   const data = makeSquadRun();
   await page.route(`**/api/v1/cli-runs/${squadRunId}`, (route) =>
