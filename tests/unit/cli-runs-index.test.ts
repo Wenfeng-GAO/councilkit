@@ -733,4 +733,29 @@ describe("listCliRuns repair goal summary", () => {
     expect(parsed.success).toBe(true);
     expect(runs.find((run) => run.runId === REPAIR_ID)?.goalSummary).toBe("修".repeat(399));
   });
+
+  it("clips a stored lastError that ends on an emoji so the runs list still validates", () => {
+    const dir = join(home, "runs", REPAIR_ID);
+    mkdirSync(dir, { recursive: true });
+    const stored = `${"修".repeat(1999)}🎯`;
+    writeFileSync(
+      join(dir, "repair.json"),
+      `${JSON.stringify({
+        version: 1,
+        casVersion: 0,
+        sourceRunId: REVIEW_ID,
+        profileName: "default",
+        outerUsed: 0,
+        outerMax: 10,
+        timeoutMs: null,
+        businessResult: "needs_attention",
+        reasonCode: "findings_open",
+        lastError: stored,
+      })}\n`,
+    );
+    const runs = listCliRuns(process.env);
+    const parsed = cliRunsListResponseSchema.safeParse({ runs });
+    expect(parsed.success).toBe(true);
+    expect(runs.find((run) => run.runId === REPAIR_ID)?.lastError).toBe("修".repeat(1999));
+  });
 });
