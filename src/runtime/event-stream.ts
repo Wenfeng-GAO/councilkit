@@ -80,7 +80,7 @@ export async function followExecutionEvents(options: FollowEventsOptions): Promi
 
   try {
     for (;;) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
+      let chunk;
       try {
         chunk = await reader.read();
       } catch (error) {
