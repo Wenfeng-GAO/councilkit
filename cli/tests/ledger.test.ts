@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markdownLines } from "@shared/runtime/aggregator-verdict";
@@ -7,15 +16,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { buildFindingGroups, hashFindingsBytes } from "../src/auto/finding-groups";
 import {
   againstDiffRange,
+  appendLanding,
   applyReviewerVerifications,
   buildClusterPlanMarkdown,
   classifyAgainstPrior,
   classifyAgainstPriorWithAliases,
+  ensureFindings,
   extractFindingsFromReport,
   formatLedgerForPrompt,
   markFindingsRepairClaimed,
   parsePlanDocument,
   persistFindingsFromReport,
+  readLandings,
   resolveClusterCloses,
 } from "../src/auto/ledger";
 import type { LedgerFinding, PlanCluster } from "../src/auto/ledger";
@@ -1201,5 +1213,81 @@ describe("ledger persist", () => {
     expect(hashed.source.findingsSha256).toBe(
       hashFindingsBytes(readFileSync(join(hashedDir, "findings.json"), "utf8")),
     );
+  });
+});
+
+describe("present ledger files", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+  });
+
+  const landing = {
+    at: "2026-10-06T00:00:00.000Z",
+    clusterId: "eventlog-short-write",
+    parentSha: "a".repeat(40),
+    candidateSha: "b".repeat(40),
+    closed: [],
+    claimed: ["pkg.eventlog.log.go--hole"],
+    runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+    pushed: true,
+  };
+
+  it("keeps a present findings.json that is not valid JSON", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-bad-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "findings.json"), "{not json");
+    expect(() =>
+      ensureFindings({
+        runDir: dir,
+        runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+        markdown: SAMPLE,
+      }),
+    ).toThrow("findings.json is present but not a valid ledger");
+    expect(readFileSync(join(dir, "findings.json"), "utf8")).toBe("{not json");
+  });
+
+  it("keeps an unreadable findings.json", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-unreadable-"));
+    dirs.push(dir);
+    const ledger = join(dir, "findings.json");
+    writeFileSync(ledger, "accepted: keep this claim");
+    chmodSync(ledger, 0);
+    expect(() =>
+      ensureFindings({
+        runDir: dir,
+        runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+        markdown: SAMPLE,
+      }),
+    ).toThrow("cannot read findings.json");
+    chmodSync(ledger, 0o600);
+    expect(readFileSync(ledger, "utf8")).toBe("accepted: keep this claim");
+  });
+
+  it("does not read or append landings through a symlink", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-link-"));
+    dirs.push(dir);
+    const outside = join(dir, "outside.jsonl");
+    const runDir = join(dir, "run");
+    mkdirSync(runDir);
+    writeFileSync(outside, "keep\n");
+    symlinkSync(outside, join(runDir, "landings.jsonl"));
+    expect(() => readLandings(runDir)).toThrow("landings.jsonl is not a regular file");
+    expect(() => appendLanding(runDir, landing)).toThrow("landings.jsonl is not a regular file");
+    expect(readFileSync(outside, "utf8")).toBe("keep\n");
+    expect(lstatSync(join(runDir, "landings.jsonl")).isSymbolicLink()).toBe(true);
+  });
+
+  it("does not treat an unreadable landings file as no landings", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-landings-"));
+    dirs.push(dir);
+    const path = join(dir, "landings.jsonl");
+    const body = `${JSON.stringify(landing)}\n`;
+    writeFileSync(path, body);
+    chmodSync(path, 0);
+    expect(() => readLandings(dir)).toThrow("cannot read landings.jsonl");
+    chmodSync(path, 0o600);
+    expect(readFileSync(path, "utf8")).toBe(body);
   });
 });
