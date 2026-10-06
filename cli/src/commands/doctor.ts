@@ -18,7 +18,7 @@ import type { OutputSink } from "../output";
 import { parseFlags } from "./parse";
 
 export async function runDoctor(argv: string[], out: OutputSink): Promise<void> {
-  parseFlags({ flags: { json: { type: "boolean" } }, allowPositionals: 0 }, argv);
+  parseFlags({ flags: {}, allowPositionals: 0 }, argv);
 
   const host = new HostClient();
   let health: HealthResponse;
