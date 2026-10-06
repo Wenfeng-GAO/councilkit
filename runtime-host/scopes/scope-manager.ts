@@ -581,15 +581,15 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     if (!record || record.scopeId !== scopeId) {
       throw err(404, makeError("EXECUTION_NOT_FOUND", "cancel", "Unknown execution."));
     }
-    if (record.state !== "running") {
-      return { executionId, state: record.state };
-    }
     const entry = scope.participants.get(record.participantId);
     if (!entry) {
       throw err(404, makeError("PARTICIPANT_NOT_FOUND", "cancel", "Unknown participant."));
     }
+    const finished = record.state !== "running";
     await entry.driver.cancel(executionId);
-    return { executionId, state: "cancelling" };
+    if (!finished) return { executionId, state: "cancelling" };
+    const settled = executions.get(executionId);
+    return { executionId, state: settled?.state ?? record.state };
   }
 
   function ack(
