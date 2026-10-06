@@ -263,7 +263,7 @@ function startLockHolder(lockPath: string): {
       "tsx",
       "--input-type=module",
       "-e",
-      `import { acquireExclusiveLock } from ${JSON.stringify(join(process.cwd(), "shared/runtime/exclusive-lock.ts"))};\nacquireExclusiveLock(${JSON.stringify(lockPath)});\nconsole.log("held");\nsetInterval(() => {}, 1000);\n`,
+      `import { acquireExclusiveLock } from ${JSON.stringify(join(process.cwd(), "shared/runtime/exclusive-lock.ts"))};\nconst held = acquireExclusiveLock(${JSON.stringify(lockPath)});\nconsole.log("held");\nsetInterval(() => {}, 1000);\nvoid held;\n`,
     ],
     { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
   );
