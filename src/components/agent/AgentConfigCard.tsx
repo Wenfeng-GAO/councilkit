@@ -1,3 +1,4 @@
+import { avatarInitial } from "@/components/shared/avatar-initial";
 import type { DiscussionAgent } from "@/models/discussion/entities";
 
 /**
@@ -22,7 +23,7 @@ export function AgentConfigCard({ agent, profileName, onEdit }: AgentConfigCardP
           style={{ backgroundColor: agent.color }}
           aria-hidden="true"
         >
-          {agent.name.slice(0, 1)}
+          {avatarInitial(agent.name)}
         </span>
         <div className="min-w-0">
           <p className="break-words text-sm font-medium text-fg">{agent.name}</p>

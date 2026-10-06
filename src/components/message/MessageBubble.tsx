@@ -1,4 +1,5 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import { avatarInitial } from "@/components/shared/avatar-initial";
 
 interface MessageBubbleProps {
   /** Resolved speaker display name (参与者名 / 你). */
@@ -27,7 +28,7 @@ export function MessageBubble({ name, color, content, timestamp, badge }: Messag
           style={{ backgroundColor: color }}
           aria-hidden="true"
         >
-          {name.slice(0, 1)}
+          {avatarInitial(name)}
         </span>
         <span className="text-sm font-medium text-fg">{name}</span>
         {badge ? (
