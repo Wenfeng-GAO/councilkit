@@ -103,3 +103,22 @@ it("registers authenticated reads and CSRF-protected writes with a strict reques
       .success,
   ).toBe(false);
 });
+
+it("clips a long schema error on a whole emoji", async () => {
+  const key = `${"k".repeat(400)}😀z`;
+  writeFileSync(
+    join(home, "councils.json"),
+    `${JSON.stringify({
+      format: "councilkit-councils",
+      version: 1,
+      councils: [],
+      [key]: true,
+    })}\n`,
+  );
+  const prefix =
+    'councils.json failed schema validation: [{"path":[],"code":"unrecognized_keys","message":"Unrecognized key: \\"';
+  await expect(runJuryCli()).rejects.toMatchObject({
+    status: 400,
+    message: `${prefix}${"k".repeat(400)}…`,
+  });
+}, 20_000);

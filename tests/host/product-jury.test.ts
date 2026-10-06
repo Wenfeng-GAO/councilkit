@@ -40,4 +40,23 @@ describe("product-jury CLI bridge", () => {
       message: "default product-jury is missing; run `councilkit init`",
     });
   }, 20_000);
+
+  it("clips a long schema error on a whole emoji", async () => {
+    const key = `${"k".repeat(400)}😀z`;
+    writeFileSync(
+      join(home, "councils.json"),
+      `${JSON.stringify({
+        format: "councilkit-councils",
+        version: 1,
+        councils: [],
+        [key]: true,
+      })}\n`,
+    );
+    const prefix =
+      'councils.json failed schema validation: [{"path":[],"code":"unrecognized_keys","message":"Unrecognized key: \\"';
+    await expect(runProductJuryCli()).rejects.toMatchObject({
+      status: 400,
+      message: `${prefix}${"k".repeat(400)}…`,
+    });
+  }, 20_000);
 });

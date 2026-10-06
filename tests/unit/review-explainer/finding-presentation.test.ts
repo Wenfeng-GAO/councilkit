@@ -40,4 +40,9 @@ describe("displayFindingTitle", () => {
   ])("keeps a hyphenated extension intact: %s", (title, expected) => {
     expect(displayFindingTitle({ title })).toBe(expected);
   });
+
+  it("clips a long title on a whole emoji", () => {
+    expect(displayFindingTitle({ title: `${"a".repeat(118)}😀z` })).toBe(`${"a".repeat(118)}…`);
+    expect(displayFindingTitle({ title: `${"a".repeat(117)}😀z` })).toBe(`${"a".repeat(117)}😀z`);
+  });
 });
