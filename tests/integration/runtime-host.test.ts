@@ -873,6 +873,71 @@ describe("runtime host integration", () => {
     expect(stopped.data.state).toBe("interrupted");
   });
 
+  it("ack, status, and the event stream stay inside the owning scope", async () => {
+    const rig = await createRig();
+    rigs.push(rig);
+    const owner = await createActiveScope(rig.host, "req-scope-own-read", ["p-own"]);
+    const started = await api(rig.host, "POST", `/api/v1/scopes/${owner.scopeId}/executions`, {
+      ...ctrl(owner),
+      executionId: "exec-cross-scope-read",
+      participantId: "p-own",
+      snapshot: snapshot("p-own", [{ id: "m1", content: "secret" }], "go", 1),
+    });
+    expect(started.status).toBe(200);
+    const ownedEvents = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-read/events`,
+      (event) => event.type === "completed",
+    );
+    const terminal = ownedEvents.at(-1);
+    if (terminal?.type !== "completed") throw new Error("expected completed terminal");
+    expect(terminal.output).toBe("answer-from-p-own");
+
+    const other = await createActiveScope(rig.host, "req-scope-other-read", ["p-other"]);
+
+    const status = await api<{ code?: string; state?: string }>(
+      rig.host,
+      "GET",
+      `/api/v1/scopes/${other.scopeId}/executions/exec-cross-scope-read`,
+    );
+    expect.soft(status.status).toBe(404);
+    expect.soft(status.data.code).toBe("EXECUTION_NOT_FOUND");
+
+    const leaked = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${other.scopeId}/executions/exec-cross-scope-read/events`,
+      (event) => event.type === "completed",
+    );
+    expect.soft(leaked.map((event) => event.type)).toEqual([]);
+
+    const foreignAck = await api<{ code?: string; ackState?: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${other.scopeId}/executions/exec-cross-scope-read/ack`,
+      { ...ctrl(other), finalSeq: terminal.finalSeq, disposition: "discarded" },
+    );
+    expect.soft(foreignAck.status).toBe(404);
+    expect.soft(foreignAck.data.code).toBe("EXECUTION_NOT_FOUND");
+
+    const replay = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-read/events`,
+      (event) => event.type === "completed",
+    );
+    const replayTerminal = replay.at(-1);
+    if (replayTerminal?.type !== "completed") throw new Error("owning scope lost the terminal");
+    expect(replayTerminal.output).toBe("answer-from-p-own");
+
+    const ownedAck = await api<{ ackState: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-read/ack`,
+      { ...ctrl(owner), finalSeq: terminal.finalSeq, disposition: "committed" },
+    );
+    expect(ownedAck.status).toBe(200);
+    expect(ownedAck.data.ackState).toBe("acknowledged");
+  });
+
   it("ack against a scope that does not own the execution is rejected and leaves it pending", async () => {
     const rig = await createRig();
     rigs.push(rig);

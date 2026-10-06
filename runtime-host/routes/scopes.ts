@@ -90,7 +90,7 @@ export function scopeRoutes(services: HostServices): Route[] {
       responseSchema: executionStatusSchema,
       handler: ({ params }) => {
         const record = executions.get(params.executionId as string);
-        if (!record) {
+        if (!record || record.scopeId !== params.scopeId) {
           throw httpError(404, makeError("EXECUTION_NOT_FOUND", "dispatch", "Unknown execution."));
         }
         return {
@@ -117,6 +117,7 @@ export function scopeRoutes(services: HostServices): Route[] {
           );
         }
         const executionId = params.executionId as string;
+        const owned = executions.get(executionId);
         const afterSeqRaw = query.get("afterSeq");
         const afterSeq = afterSeqRaw ? Number.parseInt(afterSeqRaw, 10) : 0;
         if (!Number.isFinite(afterSeq) || afterSeq < 0) {
@@ -137,10 +138,13 @@ export function scopeRoutes(services: HostServices): Route[] {
         }, 15_000);
         heartbeat.unref?.();
 
-        const unsubscribe = executions.follow(executionId, afterSeq, (event) => {
-          if (closed) return;
-          res.write(`event: runtime\ndata: ${JSON.stringify(event)}\n\n`);
-        });
+        const unsubscribe =
+          owned && owned.scopeId === params.scopeId
+            ? executions.follow(executionId, afterSeq, (event) => {
+                if (closed) return;
+                res.write(`event: runtime\ndata: ${JSON.stringify(event)}\n\n`);
+              })
+            : null;
         if (!unsubscribe) {
           clearInterval(heartbeat);
           res.write(`event: error\ndata: ${JSON.stringify({ code: "EXECUTION_NOT_FOUND" })}\n\n`);
