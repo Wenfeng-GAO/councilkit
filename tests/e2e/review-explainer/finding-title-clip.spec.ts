@@ -32,7 +32,7 @@ test("a long finding title stays on a whole emoji", async ({ page }) => {
   await expect(heading).toHaveText(CLIPPED);
   await expect(heading).toHaveAttribute("title", TITLE);
   await page.screenshot({
-    path: "/opt/cursor/artifacts/finding-title-emoji.png",
+    path: test.info().outputPath("finding-title-emoji.png"),
     fullPage: false,
   });
 });
