@@ -7,7 +7,7 @@
  * that ledger instead of rediscovering the whole PR vs master.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ReviewFinding, parseReviewReport } from "@/lib/review-report";
 import { markdownLines } from "@shared/runtime/aggregator-verdict";
@@ -41,6 +41,7 @@ import {
   type DiagnosedAssessment,
   buildAssessmentDiagnostics,
 } from "@shared/runtime/reviewer-assessment";
+import { errors } from "../errors";
 import { atomicWriteJson } from "../store/atomic-write";
 import {
   FINDING_GROUPS_FILE,
@@ -420,7 +421,9 @@ export function writePlanLock(runDir: string, file: PlanLockFile): void {
 }
 
 export function appendLanding(runDir: string, record: LandingRecord): void {
-  appendFileSync(join(runDir, CLI_RUN_LANDINGS_FILE), `${JSON.stringify(record)}\n`, {
+  const path = join(runDir, CLI_RUN_LANDINGS_FILE);
+  assertRegularOrMissing(path);
+  appendFileSync(path, `${JSON.stringify(record)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });
@@ -580,8 +583,12 @@ export function ensureFindings(input: {
   markdown: string;
   sha?: string | null;
 }): FindingsFile {
-  const existing = readFindings(input.runDir);
-  if (existing) return existing;
+  const text = readOptional(join(input.runDir, CLI_RUN_FINDINGS_FILE));
+  if (text !== null) {
+    const existing = parseFindingsFile(text);
+    if (!existing) throw errors.io("findings.json is present but not a valid ledger");
+    return existing;
+  }
   return persistFindingsFromReport({
     runDir: input.runDir,
     runId: input.runId,
@@ -1095,9 +1102,33 @@ function unique(values: string[]): string[] {
 }
 
 function readOptional(path: string): string | null {
+  assertRegularOrMissing(path);
   try {
     return readFileSync(path, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    if (ioCode(error) === "ENOENT") return null;
+    throw errors.io(`cannot read ${ledgerName(path)}`);
   }
+}
+
+function assertRegularOrMissing(path: string): void {
+  const name = ledgerName(path);
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if (ioCode(error) === "ENOENT") return;
+    throw errors.io(`cannot stat ${name}`);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw errors.io(`${name} is not a regular file`);
+  }
+}
+
+function ledgerName(path: string): string {
+  return path.split("/").pop() || "ledger file";
+}
+
+function ioCode(error: unknown): string | undefined {
+  return (error as { code?: string }).code;
 }
