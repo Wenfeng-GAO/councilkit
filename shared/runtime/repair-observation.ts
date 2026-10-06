@@ -634,7 +634,10 @@ function summaryWithUnfinishedNote(summary: string): string {
 
 export function clipSummary(value: string): string {
   if (value.length <= REPAIR_OBS_SUMMARY_MAX) return value;
-  return value.slice(0, REPAIR_OBS_SUMMARY_MAX);
+  let end = REPAIR_OBS_SUMMARY_MAX;
+  const unit = value.charCodeAt(end - 1);
+  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
+  return value.slice(0, end);
 }
 
 const SECRET_VALUE_KEYS =
