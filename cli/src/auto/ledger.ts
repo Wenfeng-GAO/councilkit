@@ -431,6 +431,12 @@ export function appendLanding(runDir: string, record: LandingRecord): void {
   });
 }
 
+function mergeFindingEvidence(stronger: boolean, evidence: string, summary: string): string {
+  const kept = stronger ? evidence : summary;
+  const rest = stronger ? `聚合摘要: ${summary}` : evidence;
+  return clipUtf16CodeUnits(`${kept}\n\n${rest}`, 8000);
+}
+
 export function persistFindingsFromReport(input: {
   runDir: string;
   runId: string;
@@ -481,13 +487,10 @@ export function persistFindingsFromReport(input: {
           matched.reviewer = attempt.agentName;
         }
         if (row.text !== matched.text) {
-          // Put the stronger evidence first so the bounded field cannot truncate it away.
-          const evidence = `${attempt.agentName}: ${row.text}`;
-          matched.text = clipUtf16CodeUnits(
-            stronger
-              ? `${evidence}\n\n聚合摘要: ${matched.text}`
-              : `${matched.text}\n\n${evidence}`,
-            8000,
+          matched.text = mergeFindingEvidence(
+            stronger,
+            `${attempt.agentName}: ${row.text}`,
+            matched.text,
           );
         }
         matched.files = [...new Set([...matched.files, ...row.files])].slice(0, 32);
