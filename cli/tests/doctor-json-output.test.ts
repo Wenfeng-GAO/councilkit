@@ -1,9 +1,3 @@
-/**
- * `councilkit doctor --json` when the Host is down.
- *
- * main strips the global `--json` flag before dispatch, so the command sees an
- * empty argv and a json OutputSink. The startup paragraph is human-only.
- */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDoctor } from "../src/commands/doctor";
 import { CliError } from "../src/errors";
