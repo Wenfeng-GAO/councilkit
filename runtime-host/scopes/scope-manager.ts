@@ -578,11 +578,14 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     const scope = getScope(scopeId);
     fenced(scope, controller.controllerId, controller.leaseEpoch);
     const record = executions.get(executionId);
-    if (!record) {
+    if (!record || record.scopeId !== scopeId) {
       throw err(404, makeError("EXECUTION_NOT_FOUND", "cancel", "Unknown execution."));
     }
     const entry = scope.participants.get(record.participantId);
-    await entry?.driver.cancel(executionId);
+    if (!entry) {
+      throw err(404, makeError("PARTICIPANT_NOT_FOUND", "cancel", "Unknown participant."));
+    }
+    await entry.driver.cancel(executionId);
   }
 
   function ack(
