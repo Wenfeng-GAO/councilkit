@@ -28,7 +28,7 @@ test("a long finding title stays on a whole emoji", async ({ page }) => {
     .locator(".ck-ex-issue-title");
   await expect(rowTitle).toHaveText(CLIPPED);
   await selectFinding(page, FINDING.busy);
-  const heading = page.getByTestId(UI.drawer).locator("h2");
+  const heading = page.getByTestId(UI.drawer).locator("h2[title]");
   await expect(heading).toHaveText(CLIPPED);
   await expect(heading).toHaveAttribute("title", TITLE);
   await page.screenshot({
