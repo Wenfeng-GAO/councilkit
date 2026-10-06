@@ -342,6 +342,57 @@ describe("councilkit init", () => {
     expect(new Store().getCouncil("product-jury").name).toBe("product-jury");
   });
 
+  it("keeps a default agent a custom council still uses and rebuilds pr-jury", async () => {
+    stub(["cld", "kimi", "grok"]);
+    await runInit([], makeSink());
+    const before = new Store();
+    const securityId = before.getAgent("review-security").id;
+    const maintainabilityId = before.getAgent("review-maintainability").id;
+    const prJuryId = before.getCouncil("pr-jury").id;
+    before.createCouncil({
+      name: "release-jury",
+      topic: "release review",
+      agentIds: [securityId],
+      rounds: 1,
+      reporterAgentId: securityId,
+    });
+
+    await runInit(["--force"], makeSink());
+
+    const after = new Store();
+    expect(after.getAgent("review-security").id).toBe(securityId);
+    expect(after.getAgent("review-maintainability").id).not.toBe(maintainabilityId);
+    expect(after.getCouncil("pr-jury").id).not.toBe(prJuryId);
+    expect(after.getCouncil("pr-jury").agentIds).toContain(securityId);
+    expect(after.getCouncil("release-jury").agentIds).toEqual([securityId]);
+  });
+
+  it("still resets defaults when a custom council uses only its own agent", async () => {
+    stub(["cld", "kimi", "grok"]);
+    await runInit([], makeSink());
+    const store = new Store();
+    const own = store.createAgent({
+      name: "release-reader",
+      personaPrompt: "read the release",
+      modelId: "grok-4.6",
+      color: "#112233",
+      driverSelection: { driverId: "grok-stream-json", options: {} },
+    });
+    store.createCouncil({
+      name: "release-jury",
+      topic: "release review",
+      agentIds: [own.id],
+      rounds: 1,
+      reporterAgentId: own.id,
+    });
+    const firstSecurity = store.getAgent("review-security").id;
+    await runInit(["--force"], makeSink());
+    const after = new Store();
+    expect(after.getAgent("review-security").id).not.toBe(firstSecurity);
+    expect(after.getCouncil("release-jury").agentIds).toEqual([own.id]);
+    expect(after.getAgent("release-reader").id).toBe(own.id);
+  });
+
   it("does not overwrite a user-edited default agent without --force", async () => {
     stub(["kimi"]);
     await runInit([], makeSink());
