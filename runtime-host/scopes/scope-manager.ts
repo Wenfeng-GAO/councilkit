@@ -574,18 +574,22 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     scopeId: string,
     executionId: string,
     controller: { controllerId: string; leaseEpoch: number },
-  ): Promise<void> {
+  ): Promise<{ executionId: string; state: ExecuteOutcome["state"] | "cancelling" }> {
     const scope = getScope(scopeId);
     fenced(scope, controller.controllerId, controller.leaseEpoch);
     const record = executions.get(executionId);
     if (!record || record.scopeId !== scopeId) {
       throw err(404, makeError("EXECUTION_NOT_FOUND", "cancel", "Unknown execution."));
     }
+    if (record.state !== "running") {
+      return { executionId, state: record.state };
+    }
     const entry = scope.participants.get(record.participantId);
     if (!entry) {
       throw err(404, makeError("PARTICIPANT_NOT_FOUND", "cancel", "Unknown participant."));
     }
     await entry.driver.cancel(executionId);
+    return { executionId, state: "cancelling" };
   }
 
   function ack(
