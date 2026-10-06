@@ -37,6 +37,14 @@ export class EventStreamError extends Error {
   }
 }
 
+function requestedAfterSeq(url: string): number {
+  const query = url.split("?")[1]?.split("#")[0] ?? "";
+  const raw = new URLSearchParams(query).get("afterSeq");
+  if (raw === null || !/^(0|[1-9][0-9]*)$/.test(raw)) return 0;
+  const seq = Number(raw);
+  return Number.isSafeInteger(seq) ? seq : 0;
+}
+
 /**
  * Reads one SSE connection: parses `event: runtime` blocks, validates each
  * event against the shared schema, invokes onEvent in order. Resolves with
@@ -65,7 +73,7 @@ export async function followExecutionEvents(options: FollowEventsOptions): Promi
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  let lastSeq = 0;
+  let lastSeq = requestedAfterSeq(options.fetchInput.url);
   let terminal: RuntimeEvent | null = null;
 
   const dispatchBlock = async (block: string): Promise<void> => {
