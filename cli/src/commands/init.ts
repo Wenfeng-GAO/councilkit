@@ -196,7 +196,10 @@ function recreateDefaults(store: Store): void {
   }
   for (const spec of [...DEFAULT_AGENT_SPECS, ...IDEATE_AGENT_SPECS]) {
     const agent = findByName(store, spec.name);
-    if (agent !== null) store.deleteAgent(agent.id);
+    if (agent === null) continue;
+    const stillUsed = store.listCouncils().some((council) => council.agentIds.includes(agent.id));
+    if (stillUsed) continue;
+    store.deleteAgent(agent.id);
   }
 }
 
