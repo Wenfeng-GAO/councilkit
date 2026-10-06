@@ -26,7 +26,7 @@ export function StartReviewForm() {
 
   useEffect(() => {
     const next = parseStartReviewQuery(location.search);
-    if (next.pr) setPr(next.pr);
+    setPr(next.pr ?? "");
   }, [location.search]);
 
   useEffect(() => {
