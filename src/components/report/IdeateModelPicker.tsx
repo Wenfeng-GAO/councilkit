@@ -15,7 +15,7 @@ import type { DriverId } from "@shared/runtime/contracts";
 import type { ReviewJuryResponse, ReviewJurySeat } from "@shared/runtime/review-jury";
 import type { ClaudeRoute, IdeateModels, InstallationDto } from "@shared/runtime/schemas";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const KEY = ["cli-product-jury"];
 
@@ -48,10 +48,16 @@ export function IdeateModelPicker({
   const reporterName = data?.agents.find((agent) => agent.agentId === reporter)?.name;
   const enoughSeats = seats.length >= 2 && seats.length <= 8;
   const allBound = seats.every((seat) => seat.modelId.length > 0);
-  const override =
-    data && draft && !savedRosterUnchanged(data.seats, data.reporterAgentId, draft.seats, draft.reporterAgentId)
-      ? rosterToIdeateModels(draft.seats, draft.reporterAgentId)
-      : undefined;
+  const override = useMemo(() => {
+    if (
+      !data ||
+      !draft ||
+      savedRosterUnchanged(data.seats, data.reporterAgentId, draft.seats, draft.reporterAgentId)
+    ) {
+      return undefined;
+    }
+    return rosterToIdeateModels(draft.seats, draft.reporterAgentId);
+  }, [data, draft]);
   const summary =
     query.isFetching && !data
       ? "正在读取 product-jury"
@@ -70,7 +76,7 @@ export function IdeateModelPicker({
       summary,
       models: override,
     });
-  }, [allBound, data, draft, enoughSeats, onStatusChange, override, query.isError, summary]);
+  }, [allBound, data, enoughSeats, onStatusChange, override, query.isError, summary]);
 
   return (
     <section className="ck-default-jury" aria-label="product-jury 席位">
