@@ -574,7 +574,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     scopeId: string,
     executionId: string,
     controller: { controllerId: string; leaseEpoch: number },
-  ): Promise<void> {
+  ): Promise<{ executionId: string; state: ExecuteOutcome["state"] | "cancelling" }> {
     const scope = getScope(scopeId);
     fenced(scope, controller.controllerId, controller.leaseEpoch);
     const record = executions.get(executionId);
@@ -585,7 +585,11 @@ export function createScopeManager(deps: ScopeManagerDeps) {
     if (!entry) {
       throw err(404, makeError("PARTICIPANT_NOT_FOUND", "cancel", "Unknown participant."));
     }
+    const finished = record.state !== "running";
     await entry.driver.cancel(executionId);
+    if (!finished) return { executionId, state: "cancelling" };
+    const settled = executions.get(executionId);
+    return { executionId, state: settled?.state ?? record.state };
   }
 
   function ack(

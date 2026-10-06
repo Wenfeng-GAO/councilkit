@@ -194,8 +194,7 @@ export function scopeRoutes(services: HostServices): Route[] {
       bodySchema: controllerRequestSchema,
       handler: async ({ params, body }) => {
         const controller = body as { controllerId: string; leaseEpoch: number };
-        await scopes.cancel(params.scopeId as string, params.executionId as string, controller);
-        return { executionId: params.executionId, state: "cancelling" };
+        return scopes.cancel(params.scopeId as string, params.executionId as string, controller);
       },
     },
     {

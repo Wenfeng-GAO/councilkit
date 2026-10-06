@@ -873,6 +873,56 @@ describe("runtime host integration", () => {
     expect(stopped.data.state).toBe("interrupted");
   });
 
+  it("cancel of an already completed execution reports that terminal state", async () => {
+    const rig = await createRig();
+    rigs.push(rig);
+    const scope = await createActiveScope(rig.host, "req-scope-cancel-done", ["p-1"]);
+    const started = await api(rig.host, "POST", `/api/v1/scopes/${scope.scopeId}/executions`, {
+      ...ctrl(scope),
+      executionId: "exec-cancel-completed",
+      participantId: "p-1",
+      snapshot: snapshot("p-1", [{ id: "m1", content: "x" }], "go", 1),
+    });
+    expect(started.status).toBe(200);
+    const events = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${scope.scopeId}/executions/exec-cancel-completed/events`,
+      (event) => event.type === "completed",
+    );
+    const terminal = events.at(-1);
+    if (terminal?.type !== "completed") throw new Error("expected completed terminal");
+    expect(terminal.output).toBe("answer-from-p-1");
+
+    const cancelled = await api<{ executionId: string; state: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${scope.scopeId}/executions/exec-cancel-completed/cancel`,
+      { controllerId: scope.controllerId, leaseEpoch: scope.leaseEpoch },
+    );
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.data).toEqual({
+      executionId: "exec-cancel-completed",
+      state: "completed",
+    });
+
+    const status = await api<{ state: string }>(
+      rig.host,
+      "GET",
+      `/api/v1/scopes/${scope.scopeId}/executions/exec-cancel-completed`,
+    );
+    expect(status.status).toBe(200);
+    expect(status.data.state).toBe("completed");
+
+    const replay = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${scope.scopeId}/executions/exec-cancel-completed/events`,
+      (event) => event.type === "completed" || event.type === "interrupted",
+    );
+    const replayTerminal = replay.at(-1);
+    if (replayTerminal?.type !== "completed") throw new Error("cancel rewrote the terminal");
+    expect(replayTerminal.output).toBe("answer-from-p-1");
+  });
+
   it("ack, status, and the event stream stay inside the owning scope", async () => {
     const rig = await createRig();
     rigs.push(rig);
