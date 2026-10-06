@@ -3,6 +3,7 @@
  * Observation is a read-only projection — never mutates repair budget/gate/journal.
  */
 import { z } from "zod";
+import { clipUtf16CodeUnits } from "./seat-result";
 
 const SHA256_K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -633,8 +634,7 @@ function summaryWithUnfinishedNote(summary: string): string {
 }
 
 export function clipSummary(value: string): string {
-  if (value.length <= REPAIR_OBS_SUMMARY_MAX) return value;
-  return value.slice(0, REPAIR_OBS_SUMMARY_MAX);
+  return clipUtf16CodeUnits(value, REPAIR_OBS_SUMMARY_MAX);
 }
 
 const SECRET_VALUE_KEYS =
