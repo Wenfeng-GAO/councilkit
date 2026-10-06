@@ -256,6 +256,17 @@ describe("U05 text folding", () => {
     expect(JSON.stringify(ops)).not.toContain("secret-reason");
     expect(JSON.stringify(ops)).not.toContain("hidden");
   });
+
+  it("clips a progress summary on a whole emoji", () => {
+    const text = `x${"👍".repeat(2048)}`;
+    const ops = foldPublicText([raw({ type: "text", text, byteOffset: 1 })]);
+    const summary = `x${"👍".repeat(2047)}`;
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.truncated).toBe(true);
+    expect(ops[0]!.summary).toBe(summary);
+    expect(Buffer.from(ops[0]!.summary, "utf8").toString("utf8")).toBe(summary);
+    expect(repairOperationSchema.parse(ops[0]).summary).toBe(summary);
+  });
 });
 
 describe("U06 byte reading helpers", () => {
