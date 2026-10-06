@@ -408,6 +408,11 @@ describe("squad bridge contract", () => {
     expect(straddling.message.length).toBeLessThanOrEqual(PUBLISH_DIAGNOSTIC_LIMIT);
   });
 
+  it("clips a publish diagnostic on a whole emoji", () => {
+    expect(sanitizePublishMessage(`${"a".repeat(511)}😀z`)).toBe("a".repeat(511));
+    expect(sanitizePublishMessage(`${"a".repeat(510)}😀`)).toBe(`${"a".repeat(510)}😀`);
+  });
+
   it("probes unavailable when squadctl is not on PATH or skill installs", () => {
     const probe = probeSquadBridge({
       PATH: "/tmp/does-not-have-squadctl",

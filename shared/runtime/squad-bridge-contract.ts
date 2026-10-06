@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { FULL_COMMIT_SHA } from "./cli-ledger";
+import { clipUtf16CodeUnits } from "./seat-result";
 
 export const SQUAD_BRIDGE_CONTRACT_VERSION = "squad-bridge.v1";
 
@@ -173,7 +174,7 @@ export function sanitizePublishMessage(
     .replace(/\s+/g, " ")
     .trim();
   if (redacted.length <= limit) return redacted;
-  return redacted.slice(0, limit);
+  return clipUtf16CodeUnits(redacted, limit);
 }
 
 export function isTrustedIntegrateReceipt(receipt: unknown): boolean {
