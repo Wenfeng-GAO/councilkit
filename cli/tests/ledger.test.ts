@@ -246,6 +246,33 @@ describe("ledger extract", () => {
     expect(file.findings).toHaveLength(1);
     expect(file.findings[0]?.id).not.toBe("persist--lost");
   });
+
+  it("keeps a finding title and body on a whole emoji at the clip boundary", () => {
+    const emoji = "😀";
+    const titleLine = `${"a".repeat(199)}${emoji}`;
+    const rest = `${"b".repeat(3797)}${emoji}`;
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        `- [major] ${titleLine}`,
+        rest,
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+      extractedAt: "2026-08-20T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(1);
+    expect(file.findings[0]?.title).toBe("a".repeat(199));
+    expect(file.findings[0]?.text).toBe(`${titleLine}\n${"b".repeat(3797)}`);
+  });
 });
 
 describe("againstDiffRange", () => {
@@ -752,6 +779,31 @@ describe("plan.lock parse", () => {
     expect(closes.length).toBeGreaterThan(0);
   });
 
+  it("keeps a cluster title, body, and deferred row on a whole emoji at the clip boundary", () => {
+    const emoji = "😀";
+    const lock = parsePlanDocument(
+      [
+        "# 修复方案",
+        "",
+        "## 落地顺序",
+        "",
+        `### 集群 1: ${"c".repeat(199)}${emoji}`,
+        `${"b".repeat(15999)}${emoji}`,
+        "",
+        "## 本轮不落地",
+        `- ${"d".repeat(399)}${emoji}: ${"e".repeat(799)}${emoji}`,
+      ].join("\n"),
+      {
+        sourceRunId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+        approvedAt: "2026-08-20T00:00:00.000Z",
+        verdict: "approve",
+      },
+    );
+    expect(lock.clusters[0]?.title).toBe("c".repeat(199));
+    expect(lock.clusters[0]?.body).toBe("b".repeat(15999));
+    expect(lock.deferred[0]).toEqual({ title: "d".repeat(399), reason: "e".repeat(799) });
+  });
+
   it("ignores fenced plan headings when reading clusters and deferred items", () => {
     const lock = parsePlanDocument(
       [
@@ -1212,6 +1264,68 @@ describe("ledger persist", () => {
     expect(hashed.source.findingsSha256).not.toBe("0".repeat(64));
     expect(hashed.source.findingsSha256).toBe(
       hashFindingsBytes(readFileSync(join(hashedDir, "findings.json"), "utf8")),
+    );
+  });
+
+  it("keeps merged finding text and the repair prompt on a whole emoji", () => {
+    const emoji = "😀";
+    const idPrefix = "`pkg.log.go--hole` ";
+    const aggText = idPrefix + "a".repeat(4000 - idPrefix.length);
+    const rowBody = "b".repeat(3956);
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-emoji-"));
+    dirs.push(dir);
+    const file = persistFindingsFromReport({
+      runDir: dir,
+      runId: "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c",
+      sha: CANDIDATE_SHA,
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        `- [major] ${aggText}${"a".repeat(50)}`,
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      attempts: [
+        reviewer([], {
+          output: `## Findings\n- [major] ${idPrefix}${rowBody}${emoji}\n`,
+        }),
+      ],
+      reviewComplete: true,
+    });
+    expect(file.findings).toHaveLength(1);
+    expect(file.findings[0]?.text).toBe(
+      `${aggText}\n\nindependent reviewer: ${idPrefix}${rowBody}`,
+    );
+    const title = `${"x".repeat(11789)}${emoji}`;
+    const runId = "ck-review-34e2b26f-46c4-42c4-9336-b6e1ff6e7e8c";
+    const prompt = formatLedgerForPrompt(
+      {
+        version: 1,
+        runId,
+        extractedAt: "2026-08-20T00:00:00.000Z",
+        sha: null,
+        againstRunId: null,
+        againstRange: null,
+        findings: [finding({ id: "hole", title, text: "short" })],
+      },
+      null,
+    );
+    expect(prompt).toBe(
+      [
+        `对照账本 run ${runId}。`,
+        "这是增量复审：不要把整份 PR 相对 master 再发现一遍。",
+        "检查未解决、声明已修复和历史未验证项；仅有绑定本次完整 SHA 的独立验证可关闭。未提及不等于关闭。",
+        "账本标 accepted 的项不要再当成阻塞，除非实现偏离了已接受的合同。",
+        "",
+        "open (1)",
+        `- hole [major] [未解决] ${"x".repeat(11789)}`,
+      ].join("\n"),
     );
   });
 });

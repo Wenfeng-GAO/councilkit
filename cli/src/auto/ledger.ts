@@ -41,6 +41,7 @@ import {
   type DiagnosedAssessment,
   buildAssessmentDiagnostics,
 } from "@shared/runtime/reviewer-assessment";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { errors } from "../errors";
 import { atomicWriteJson } from "../store/atomic-write";
 import {
@@ -268,7 +269,8 @@ export function resolveClusterCloses(
     );
     const titleCore = finding.title.replace(/^[\w./-]+:\s*/, "").toLowerCase();
     const titleHit =
-      (titleCore.length >= 8 && hay.includes(titleCore.slice(0, Math.min(40, titleCore.length)))) ||
+      (titleCore.length >= 8 &&
+        hay.includes(clipUtf16CodeUnits(titleCore, Math.min(40, titleCore.length)))) ||
       tokenOverlap(tokens(finding.title), hayTokens) >= 0.4;
     if (fileHit || titleHit) matched.push(finding.id);
   }
@@ -360,7 +362,7 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
     }
     if (rows.length > 40) lines.push(`- …另有 ${rows.length - 40} 条`);
   }
-  return lines.join("\n").slice(0, 12_000);
+  return clipUtf16CodeUnits(lines.join("\n"), 12_000);
 }
 
 export function buildClusterPlanMarkdown(lock: PlanLockFile, cluster: PlanCluster): string {
@@ -429,6 +431,12 @@ export function appendLanding(runDir: string, record: LandingRecord): void {
   });
 }
 
+function mergeFindingEvidence(stronger: boolean, evidence: string, summary: string): string {
+  const kept = stronger ? evidence : summary;
+  const rest = stronger ? `聚合摘要: ${summary}` : evidence;
+  return clipUtf16CodeUnits(`${kept}\n\n${rest}`, 8000);
+}
+
 export function persistFindingsFromReport(input: {
   runDir: string;
   runId: string;
@@ -479,11 +487,11 @@ export function persistFindingsFromReport(input: {
           matched.reviewer = attempt.agentName;
         }
         if (row.text !== matched.text) {
-          // Put the stronger evidence first so the bounded field cannot truncate it away.
-          const evidence = `${attempt.agentName}: ${row.text}`;
-          matched.text = (
-            stronger ? `${evidence}\n\n聚合摘要: ${matched.text}` : `${matched.text}\n\n${evidence}`
-          ).slice(0, 8000);
+          matched.text = mergeFindingEvidence(
+            stronger,
+            `${attempt.agentName}: ${row.text}`,
+            matched.text,
+          );
         }
         matched.files = [...new Set([...matched.files, ...row.files])].slice(0, 32);
       }
@@ -668,7 +676,7 @@ function toLedgerFinding(
   if (item.severity === null) return null;
   const text = item.text.trim();
   if (text.length === 0) return null;
-  const title = firstLine(text).slice(0, 200);
+  const title = clipUtf16CodeUnits(firstLine(text), 200);
   if (title.length === 0) return null;
   const files = extractPaths(text);
   const id = uniqueId(
@@ -681,7 +689,7 @@ function toLedgerFinding(
     severity: item.severity,
     status: "open",
     title,
-    text: text.slice(0, 4000),
+    text: clipUtf16CodeUnits(text, 4000),
     source,
     reviewer,
     files,
@@ -998,7 +1006,7 @@ function clusterFromBlock(
   used.add(id);
   return {
     id,
-    title: heading.slice(0, 200) || id,
+    title: clipUtf16CodeUnits(heading, 200) || id,
     closes: splitCsv(keys.closes),
     files: unique([...splitCsv(keys.files), ...extractPaths(machine)]),
     gates: splitCsv(keys.gates),
@@ -1007,7 +1015,7 @@ function clusterFromBlock(
     forbidden: keys.forbidden ?? "",
     tests: keys.tests ?? "",
     mentions: keys.mentions ?? "",
-    body: body.slice(0, 16_000),
+    body: clipUtf16CodeUnits(body, 16_000),
   };
 }
 
@@ -1066,14 +1074,11 @@ function parseDeferred(markdown: string): Array<{ title: string; reason: string 
     const raw = match[1].trim();
     const split = raw.search(/[:：]/);
     if (split < 0) {
-      rows.push({ title: raw.slice(0, 400), reason: "" });
+      rows.push({ title: clipUtf16CodeUnits(raw, 400), reason: "" });
     } else {
       rows.push({
-        title: raw.slice(0, split).trim().slice(0, 400),
-        reason: raw
-          .slice(split + 1)
-          .trim()
-          .slice(0, 800),
+        title: clipUtf16CodeUnits(raw.slice(0, split).trim(), 400),
+        reason: clipUtf16CodeUnits(raw.slice(split + 1).trim(), 800),
       });
     }
   }
