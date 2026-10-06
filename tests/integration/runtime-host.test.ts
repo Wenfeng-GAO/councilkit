@@ -873,6 +873,52 @@ describe("runtime host integration", () => {
     expect(stopped.data.state).toBe("interrupted");
   });
 
+  it("ack against a scope that does not own the execution is rejected and leaves it pending", async () => {
+    const rig = await createRig();
+    rigs.push(rig);
+    const owner = await createActiveScope(rig.host, "req-scope-ack-owner", ["p-ack-owner"]);
+    const started = await api(rig.host, "POST", `/api/v1/scopes/${owner.scopeId}/executions`, {
+      ...ctrl(owner),
+      executionId: "exec-cross-scope-ack",
+      participantId: "p-ack-owner",
+      snapshot: snapshot("p-ack-owner", [{ id: "m1", content: "x" }], "go", 1),
+    });
+    expect(started.status).toBe(200);
+    const events = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-ack/events`,
+      (event) => event.type === "completed",
+    );
+    const terminal = events.at(-1);
+    if (terminal?.type !== "completed") throw new Error("expected completed terminal");
+
+    const other = await createActiveScope(rig.host, "req-scope-ack-other", ["p-ack-other"]);
+    const crossAck = await api<{ code: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${other.scopeId}/executions/exec-cross-scope-ack/ack`,
+      { ...ctrl(other), finalSeq: terminal.finalSeq, disposition: "committed" },
+    );
+    expect(crossAck.status).toBe(404);
+    expect(crossAck.data.code).toBe("EXECUTION_NOT_FOUND");
+
+    const replay = await collectEvents(
+      rig.host,
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-ack/events`,
+      (event) => event.type === "completed",
+    );
+    expect(replay.map((event) => event.type)).toContain("completed");
+
+    const owned = await api<{ ackState: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-ack/ack`,
+      { ...ctrl(owner), finalSeq: terminal.finalSeq, disposition: "committed" },
+    );
+    expect(owned.status).toBe(200);
+    expect(owned.data.ackState).toBe("acknowledged");
+  });
+
   it("ACK on an unknown execution converges to expired", async () => {
     const rig = await createRig();
     rigs.push(rig);

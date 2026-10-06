@@ -597,6 +597,10 @@ export function createScopeManager(deps: ScopeManagerDeps) {
   ) {
     const scope = getScope(scopeId);
     fenced(scope, controller.controllerId, controller.leaseEpoch);
+    const record = executions.get(executionId);
+    if (record && record.scopeId !== scopeId) {
+      throw err(404, makeError("EXECUTION_NOT_FOUND", "commit", "Unknown execution."));
+    }
     const result = executions.ack(executionId, finalSeq, disposition);
     if (result.outcome === "conflict") {
       throw err(409, result.error ?? makeError("EXECUTION_CONFLICT", "commit", "ACK conflict."));
