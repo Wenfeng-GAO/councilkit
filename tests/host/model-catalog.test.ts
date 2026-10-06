@@ -285,16 +285,26 @@ afterEach(async () => {
 async function getCatalog(
   target: TestHost,
   query: string,
-): Promise<{ status: number; data?: ModelCatalogResponse; errorCode?: string }> {
+): Promise<{
+  status: number;
+  data?: ModelCatalogResponse;
+  errorCode?: string;
+  errorMessage?: string;
+}> {
   const res = await fetch(`${target.baseUrl}/api/v1/models/catalog?${query}`, {
     headers: authedHeaders(target),
   });
   const envelope = (await res.json()) as {
     ok: boolean;
     data?: ModelCatalogResponse;
-    error?: { code: string };
+    error?: { code: string; message: string };
   };
-  return { status: res.status, data: envelope.data, errorCode: envelope.error?.code };
+  return {
+    status: res.status,
+    data: envelope.data,
+    errorCode: envelope.error?.code,
+    errorMessage: envelope.error?.message,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -452,6 +462,27 @@ describe("GET /api/v1/models/catalog", () => {
     );
     expect(res.status).toBe(403);
     expect(res.errorCode).toBe("AUTH_REQUIRED");
+  });
+
+  it("keeps a catalog handshake error on a whole emoji", async () => {
+    const emoji = "😀";
+    const message = `${"a".repeat(255)}${emoji}tail`;
+    const rig = await createRig(fakeRegistry({}), {
+      "codex-app-server": (participantId: string) =>
+        createErroringDriver(
+          participantId,
+          Object.assign(new Error(message), { runtimeCode: "AUTH_REQUIRED" }),
+        ),
+    });
+    host = rig.host;
+
+    const res = await getCatalog(
+      host,
+      `driverId=codex-app-server&installationId=${TRUSTED_DTO.installationId}`,
+    );
+    expect(res.status).toBe(403);
+    expect(res.errorCode).toBe("AUTH_REQUIRED");
+    expect(res.errorMessage).toBe("a".repeat(255));
   });
 
   it("claude catalog is route-specific: the query route reaches the prewarm spec", async () => {
