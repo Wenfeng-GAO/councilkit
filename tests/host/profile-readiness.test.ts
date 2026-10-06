@@ -372,6 +372,19 @@ describe("POST /api/v1/profiles/readiness (dynamic probe)", () => {
     expect(rig.drivers[0]?.closeCount).toBe(1);
   });
 
+  it("keeps a prewarm error on a whole emoji in the readiness detail", async () => {
+    const emoji = "😀";
+    const message = `${"a".repeat(255)}${emoji}tail`;
+    const prewarmError = Object.assign(new Error(message), { runtimeCode: "AUTH_REQUIRED" });
+    const rig = await createRig(fakeRegistry(), { prewarmError });
+    host = rig.host;
+
+    const res = await postReadiness(host, readinessBody(TRUSTED_DTO.installationId));
+    expect(res.status).toBe(200);
+    expect(res.data?.readiness.state).toBe("runtime_unavailable");
+    expect(res.data?.readiness.detail).toBe("a".repeat(255));
+  });
+
   it("rejects injection fields with 400 BAD_REQUEST (strict schema)", async () => {
     const rig = await createRig(fakeRegistry());
     host = rig.host;
