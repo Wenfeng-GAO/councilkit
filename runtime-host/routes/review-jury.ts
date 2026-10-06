@@ -7,6 +7,7 @@ import {
   reviewJuryResponseSchema,
   reviewJuryUpdateSchema,
 } from "@shared/runtime/review-jury";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { resolveCouncilkitSpawn } from "../cli-launcher";
 import { type HttpError, type Route, httpError } from "../server";
 
@@ -74,7 +75,7 @@ function cliFailureMessage(error: unknown): string | null {
 
 function clipMessage(message: string): string {
   const oneLine = message.replace(/\s+/g, " ").trim();
-  return oneLine.length <= 512 ? oneLine : `${oneLine.slice(0, 511)}…`;
+  return oneLine.length <= 512 ? oneLine : `${clipUtf16CodeUnits(oneLine, 511)}…`;
 }
 
 /** The Host delegates persistence to the CLI. Serialize saves from browser tabs. */

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { makeError } from "@shared/runtime/errors";
 import { type ReviewJuryResponse, reviewJuryResponseSchema } from "@shared/runtime/review-jury";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { resolveCouncilkitSpawn } from "../cli-launcher";
 import { type HttpError, type Route, httpError } from "../server";
 
@@ -63,7 +64,7 @@ function cliFailureMessage(error: unknown): string | null {
 
 function clipMessage(message: string): string {
   const oneLine = message.replace(/\s+/g, " ").trim();
-  return oneLine.length <= 512 ? oneLine : `${oneLine.slice(0, 511)}…`;
+  return oneLine.length <= 512 ? oneLine : `${clipUtf16CodeUnits(oneLine, 511)}…`;
 }
 
 export function productJuryRoutes(run: typeof runProductJuryCli = runProductJuryCli): Route[] {
