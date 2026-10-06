@@ -18,10 +18,7 @@ import type { OutputSink } from "../output";
 import { parseFlags } from "./parse";
 
 export async function runDoctor(argv: string[], out: OutputSink): Promise<void> {
-  const { values } = parseFlags(
-    { flags: { json: { type: "boolean" } }, allowPositionals: 0 },
-    argv,
-  );
+  parseFlags({ flags: { json: { type: "boolean" } }, allowPositionals: 0 }, argv);
 
   const host = new HostClient();
   let health: HealthResponse;
@@ -30,7 +27,7 @@ export async function runDoctor(argv: string[], out: OutputSink): Promise<void> 
     health = await host.health();
     installations = await host.listInstallations();
   } catch (error) {
-    reportUnreachable(out, error, values.json === true);
+    reportUnreachable(out, error);
     throw errors.hostUnavailable(`Host unreachable at ${CANONICAL_ORIGIN}`, {
       hint: "start the Runtime Host (pnpm start) and retry; the CLI never spawns it",
     });
@@ -114,12 +111,11 @@ function renderHuman(d: {
   return lines.join("\n");
 }
 
-function reportUnreachable(out: OutputSink, error: unknown, json: boolean): void {
+function reportUnreachable(out: OutputSink, error: unknown): void {
   const msg = error instanceof Error ? error.message : String(error);
   out.diag(`Host unreachable at ${CANONICAL_ORIGIN}: ${msg}`);
-  if (!json) {
-    out.progress(
-      "The Runtime Host is not running. The CLI never spawns it — start it with `pnpm start` (or `pnpm dev`) on http://127.0.0.1:43127, then retry.",
-    );
-  }
+  if (out.json) return;
+  out.progress(
+    "The Runtime Host is not running. The CLI never spawns it — start it with `pnpm start` (or `pnpm dev`) on http://127.0.0.1:43127, then retry.",
+  );
 }
