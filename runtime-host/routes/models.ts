@@ -5,6 +5,7 @@ import {
   claudeRouteSchema,
   modelCatalogResponseSchema,
 } from "@shared/runtime/schemas";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { InstallationError } from "../installations/registry";
 import type { ProfileProbe } from "../profiles/probe";
 import { type HostServices, type Route, httpError } from "../server";
@@ -39,7 +40,9 @@ export function modelRoutes(services: HostServices): Route[] {
         makeError(
           runtimeCode,
           "prewarm",
-          error instanceof Error ? error.message.slice(0, 256) : "catalog handshake failed",
+          error instanceof Error
+            ? clipUtf16CodeUnits(error.message, 256)
+            : "catalog handshake failed",
         ),
       );
     }
@@ -49,7 +52,7 @@ export function modelRoutes(services: HostServices): Route[] {
         makeError(
           runtimeCode,
           "prewarm",
-          error instanceof Error ? error.message.slice(0, 256) : "driver login required",
+          error instanceof Error ? clipUtf16CodeUnits(error.message, 256) : "driver login required",
         ),
       );
     }
