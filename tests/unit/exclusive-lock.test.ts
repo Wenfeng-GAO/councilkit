@@ -58,9 +58,12 @@ function startAlignedAcquire(lockPath: string): {
           const start = Number(line);
           while (Date.now() < start) {}
           try {
-            acquireExclusiveLock(lockPath);
+            const held = acquireExclusiveLock(lockPath);
             console.log("held");
-            setInterval(() => {}, 1000);
+            // The timer closes over the handle. Collecting it closes the database and drops the lock.
+            setInterval(() => {
+              if (held === undefined) process.exit(1);
+            }, 1000);
           } catch (error) {
             if (error instanceof LockBusyError) {
               console.log("busy");
