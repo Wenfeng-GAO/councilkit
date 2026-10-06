@@ -817,6 +817,62 @@ describe("runtime host integration", () => {
     expect(terminal.reason).toBe("user_cancelled");
   });
 
+  it("cancel against a scope that does not own the execution is rejected and leaves it running", async () => {
+    const rig = await createRig();
+    rigs.push(rig);
+    const owner = await createActiveScope(rig.host, "req-scope-cancel-owner", ["p-shared"]);
+    const ownerDriver = rig.drivers.get("p-shared") as FakeDriver;
+    const hanging = createFakeDriver("p-shared", { hangUntilCancel: true });
+    ownerDriver.execute = hanging.execute;
+    ownerDriver.cancel = hanging.cancel;
+
+    const started = await api(rig.host, "POST", `/api/v1/scopes/${owner.scopeId}/executions`, {
+      ...ctrl(owner),
+      executionId: "exec-cross-scope-cancel",
+      participantId: "p-shared",
+      snapshot: snapshot("p-shared", [{ id: "m1", content: "x" }], "go", 1),
+    });
+    expect(started.status).toBe(200);
+
+    const other = await createActiveScope(rig.host, "req-scope-cancel-other", ["p-shared"]);
+    const otherDriver = rig.drivers.get("p-shared") as FakeDriver;
+
+    const cancelled = await api<{ code: string; state?: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${other.scopeId}/executions/exec-cross-scope-cancel/cancel`,
+      { controllerId: other.controllerId, leaseEpoch: other.leaseEpoch },
+    );
+    expect(cancelled.status).toBe(404);
+    expect(cancelled.data.code).toBe("EXECUTION_NOT_FOUND");
+    expect(hanging.cancelCount).toBe(0);
+    expect(otherDriver.cancelCount).toBe(0);
+
+    const stillRunning = await api<{ state: string }>(
+      rig.host,
+      "GET",
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-cancel`,
+    );
+    expect(stillRunning.status).toBe(200);
+    expect(stillRunning.data.state).toBe("running");
+
+    const owned = await api<{ state: string }>(
+      rig.host,
+      "POST",
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-cancel/cancel`,
+      { controllerId: owner.controllerId, leaseEpoch: owner.leaseEpoch },
+    );
+    expect(owned.status).toBe(200);
+    expect(owned.data.state).toBe("cancelling");
+    expect(hanging.cancelCount).toBe(1);
+    const stopped = await api<{ state: string }>(
+      rig.host,
+      "GET",
+      `/api/v1/scopes/${owner.scopeId}/executions/exec-cross-scope-cancel`,
+    );
+    expect(stopped.data.state).toBe("interrupted");
+  });
+
   it("ACK on an unknown execution converges to expired", async () => {
     const rig = await createRig();
     rigs.push(rig);
