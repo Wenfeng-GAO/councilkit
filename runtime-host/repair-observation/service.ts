@@ -32,6 +32,7 @@ import {
   repairObservationSchema,
   roleLabel,
 } from "@shared/runtime/repair-observation";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { normalizeRecords } from "./normalizer";
 import { type TrustedSource, resolveTrustedSources } from "./resolver";
 import { readDetailChunk, readSourceWindow } from "./source-reader";
@@ -595,7 +596,7 @@ export function createRepairObservationService(options: ObservationServiceOption
       schemaVersion: REPAIR_OBS_SCHEMA_VERSION,
       eventId: input.eventId,
       operation: op,
-      body: redactObservationText(body).slice(0, REPAIR_OBS_DETAIL_CHUNK),
+      body: clipUtf16CodeUnits(redactObservationText(body), REPAIR_OBS_DETAIL_CHUNK),
       truncated,
       nextCursor,
       availability: "available",
