@@ -1,6 +1,7 @@
 import { profileReadinessView } from "@/components/settings/view-model";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { StatusPill } from "@/components/shared/StatusPill";
+import { avatarInitial } from "@/components/shared/avatar-initial";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { TextInput } from "@/components/ui/TextInput";
@@ -406,7 +407,7 @@ export function NewRoomPage() {
                     style={{ backgroundColor: agent.color }}
                     aria-hidden="true"
                   >
-                    {agent.name.slice(0, 1)}
+                    {avatarInitial(agent.name)}
                   </span>
                   <span className="flex-1">
                     <span className="block font-medium text-fg">{agent.name}</span>
@@ -443,7 +444,7 @@ export function NewRoomPage() {
                     style={{ backgroundColor: agent.color }}
                     aria-hidden="true"
                   >
-                    {agent.name.slice(0, 1)}
+                    {avatarInitial(agent.name)}
                   </span>
                   <span className="flex-1 text-sm text-fg">{agent.name}</span>
                   <button
