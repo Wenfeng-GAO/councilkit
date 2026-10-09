@@ -135,10 +135,6 @@ export function markExecutionStarted(
   return { ...execution, state: "started", pids, startedAtMs: nowMs };
 }
 
-export function markExecutionRunning(execution: RepairExecution): RepairExecution {
-  return { ...execution, state: "running" };
-}
-
 export function finishExecution(
   execution: RepairExecution,
   result: NonNullable<RepairExecution["result"]>,
