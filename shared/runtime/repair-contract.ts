@@ -100,20 +100,6 @@ export interface TaskCard {
   remainingBudget: string;
 }
 
-export function contractFingerprint(contract: GoalContract): string {
-  return createHash("sha256")
-    .update(
-      canonicalJson({
-        originalRequest: contract.originalRequest,
-        goal: contract.goal,
-        nonGoals: contract.nonGoals,
-        invariants: contract.invariants,
-        allowedScope: contract.allowedScope,
-      }),
-    )
-    .digest("hex");
-}
-
 /** Stable chain identity: original request only. Finding titles must not mint a new chain. */
 export function goalIdentityFingerprint(originalRequest: string): string {
   return createHash("sha256")
