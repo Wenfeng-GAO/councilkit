@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyDriverTerminal, isCodexReconnectDiagnostic } from "../src/auto/driver-terminal";
+import {
+  classifyDriverTerminal,
+  isCodexReconnectDiagnostic,
+  redactDriverDiagnostic,
+} from "../src/auto/driver-terminal";
 
 describe("isCodexReconnectDiagnostic", () => {
   it("matches the Codex app-server reconnect banner", () => {
@@ -158,5 +162,23 @@ describe("classifyDriverTerminal", () => {
       exitCode: 0,
     });
     expect(terminal?.errorClass).toBe("transport");
+  });
+});
+
+describe("redactDriverDiagnostic", () => {
+  it("does not split a surrogate pair at the 400-unit truncation boundary", () => {
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+
+    // emoji straddles index 400: raw slice(0, 400) leaves a lone high surrogate
+    const long = `${"a".repeat(399)}${emoji}${"x".repeat(20)}`;
+    expect(long.length).toBeGreaterThan(400);
+
+    const redacted = redactDriverDiagnostic(long);
+    expect(redacted.length).toBeLessThanOrEqual(400);
+    expect(redacted.includes("\uD83D")).toBe(false);
+    expect(redacted.endsWith("\uD83D")).toBe(false);
+    // Keep the ASCII prefix intact; drop the straddling emoji rather than split it.
+    expect(redacted).toBe("a".repeat(399));
   });
 });
