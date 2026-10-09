@@ -1633,4 +1633,31 @@ describe("skipParticipant (S3)", () => {
       skipParticipant(db, { roomId: seed.room.id, roundId: seed.round.id, token: seed.token }),
     ).rejects.toMatchObject({ code: "SKIP_NOT_APPLICABLE" });
   });
+
+  it("does not split a surrogate pair in pauseReason.detail at the 256 cut", async () => {
+    const seed = await seedRunning();
+    const execution = await beginMessageExecution(seed, seed.p1);
+    await dispatch(execution.executionId);
+
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+    // emoji straddles index 256: raw slice(0, 256) leaves a lone high surrogate
+    const message = `${"a".repeat(255)}${emoji}${"x".repeat(20)}`;
+    expect(message.length).toBeGreaterThan(256);
+
+    await failExecution(db, {
+      executionId: execution.executionId,
+      token: seed.token,
+      error: { code: "CLI_CRASH", phase: "stream", message, retryable: false },
+      kind: "failed",
+    });
+
+    const round = await getRound(seed.round.id);
+    expect(round.pauseReason?.code).toBe("execution_failed");
+    const detail = round.pauseReason?.detail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(256);
+    const last = detail.charCodeAt(detail.length - 1);
+    expect(last < 0xd800 || last > 0xdbff).toBe(true);
+    expect(detail).toBe("a".repeat(255));
+  });
 });
