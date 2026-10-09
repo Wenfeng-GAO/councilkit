@@ -199,6 +199,42 @@ describe("buildFindingChecklist", () => {
     expect(result).toContain("合并 2 条");
   });
 
+  it("does not split a surrogate pair when truncating a long suggestion", () => {
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+
+    // emoji straddles index 197: raw slice(0, 197) leaves a lone high surrogate before "..."
+    const longSuggestion = `${"a".repeat(196)}${emoji}${"x".repeat(20)}`;
+    expect(longSuggestion.length).toBeGreaterThan(200);
+
+    const run: CliRunDetailResponse = {
+      ...mockRun,
+      findings: [
+        {
+          id: "finding-emoji",
+          title: "长建议截断",
+          severity: "minor",
+          source: "unique",
+          status: "open",
+          text: `触发与后果：演示\n建议：${longSuggestion}`,
+          files: [],
+          reviewer: "review-maintainability",
+        },
+      ],
+    };
+
+    const result = buildFindingChecklist(run, { filter: "all" });
+    const line = result.split("\n").find((row) => row.startsWith("**建议**: "));
+    expect(line).toBeDefined();
+    const clipped = line!.slice("**建议**: ".length);
+    expect(clipped.endsWith("...")).toBe(true);
+    const beforeEllipsis = clipped.slice(0, -3);
+    expect(beforeEllipsis.endsWith(emoji)).toBe(false);
+    const last = beforeEllipsis.charCodeAt(beforeEllipsis.length - 1);
+    expect(last < 0xd800 || last > 0xdbff).toBe(true);
+    expect(beforeEllipsis).toBe("a".repeat(196));
+  });
+
   it("extracts actionable suggestions without full text blocks", () => {
     const result = buildFindingChecklist(mockRun, { filter: "all" });
 
