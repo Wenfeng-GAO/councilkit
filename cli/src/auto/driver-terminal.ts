@@ -1,3 +1,5 @@
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+
 /**
  * Classify provider terminal evidence. Structured JSON/protocol errors beat
  * unrelated stderr warnings. Does not echo secret values.
@@ -54,7 +56,7 @@ const SECRET_ASSIGN =
 
 /** Redact provider diagnostics before any failure/transcript/report persistence. */
 export function redactDriverDiagnostic(text: string): string {
-  return text
+  const redacted = text
     .replace(COOKIE_HEADER, "Cookie: [redacted]")
     .replace(CSRF_HEADER, "CSRF-Token: [redacted]")
     .replace(CSRF_ASSIGN, "csrf=[redacted]")
@@ -63,8 +65,8 @@ export function redactDriverDiagnostic(text: string): string {
     .replace(BASIC_CRED, "Basic [redacted]")
     .replace(SESSION_ASSIGN, "session=[redacted]")
     .replace(SECRET_ASSIGN, "[redacted]")
-    .replace(SK_TOKEN, "[redacted]")
-    .slice(0, 400);
+    .replace(SK_TOKEN, "[redacted]");
+  return clipUtf16CodeUnits(redacted, 400);
 }
 
 function pickClass(text: string): DriverErrorClass | null {
