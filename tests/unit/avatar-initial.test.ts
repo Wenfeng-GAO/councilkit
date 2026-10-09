@@ -1,5 +1,6 @@
 import { AgentConfigCard } from "@/components/agent/AgentConfigCard";
 import { MessageBubble } from "@/components/message/MessageBubble";
+import { avatarInitial } from "@/components/shared/avatar-initial";
 import type { DiscussionAgent } from "@/models/discussion/entities";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -50,5 +51,23 @@ describe("avatar initials", () => {
       createElement(MessageBubble, { name: "安", color: "#112233", content: "好" }),
     );
     expect(avatarText(html)).toBe("安");
+  });
+});
+
+describe("avatarInitial", () => {
+  it("keeps a family ZWJ sequence as the first grapheme", () => {
+    expect(avatarInitial("👨‍👩‍👧审查员")).toBe("👨‍👩‍👧");
+  });
+
+  it("keeps a skin-tone modifier as the first grapheme", () => {
+    expect(avatarInitial("👍🏽审查员")).toBe("👍🏽");
+  });
+
+  it("keeps a regional-indicator flag as the first grapheme", () => {
+    expect(avatarInitial("🇨🇳审查员")).toBe("🇨🇳");
+  });
+
+  it("returns an empty string for an empty name", () => {
+    expect(avatarInitial("")).toBe("");
   });
 });
