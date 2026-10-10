@@ -311,7 +311,7 @@ export function envHasProxy(env: NodeJS.ProcessEnv): boolean {
 }
 
 /** If the parent (often a Host started without shell proxy) has no proxy, and a
- * local HTTP proxy is listening, point grok at it so cli-chat-proxy.grok.com
+ * local HTTP proxy is listening, point grok/codex at it so cli-chat-proxy.grok.com
  * is reachable. */
 export function withLocalHttpProxy(
   env: NodeJS.ProcessEnv,
@@ -377,7 +377,33 @@ export function spawnEnvForDriver(
     };
     return withLocalHttpProxy(next, opts?.localProxyPort ?? detectListeningLocalProxy);
   }
+  if (driverId === "codex-app-server") {
+    // Same as grok: a Host LaunchAgent has no shell proxy, but codex needs it.
+    return withLocalHttpProxy(
+      { ...base, PWD: cwd },
+      opts?.localProxyPort ?? detectListeningLocalProxy,
+    );
+  }
+  if (driverId === "kimi-stream-json") return withoutProxy({ ...base, PWD: cwd });
   return { ...base, PWD: cwd };
+}
+
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+] as const;
+
+/** kimi must reach its endpoint directly: drop every proxy var and bypass all. */
+export function withoutProxy(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next: NodeJS.ProcessEnv = { ...env };
+  for (const k of PROXY_ENV_KEYS) delete next[k];
+  next.NO_PROXY = "*";
+  next.no_proxy = "*";
+  return next;
 }
 
 /** Best-effort removal of the per-cwd credential copy. Never follows a symlink. */
