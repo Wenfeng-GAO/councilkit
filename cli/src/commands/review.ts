@@ -245,6 +245,8 @@ export async function runReview(
         "repair-package": { type: "string" },
         "pin-sha": { type: "string" },
         spec: { type: "string" },
+        "require-spec": { type: "boolean" },
+        "no-require-spec": { type: "boolean" },
       },
       allowPositionals: 1,
     },
@@ -283,10 +285,16 @@ export async function runReview(
     councilTopic: undefined,
   };
   const explicitSpecFlag = values.spec as string | undefined;
+  if (values["require-spec"] === true && values["no-require-spec"] === true) {
+    throw errors.usage("--require-spec and --no-require-spec are mutually exclusive");
+  }
+  // Default true: force contract review. `--no-require-spec` opts into unbound legacy mode.
+  const requireSpec = values["no-require-spec"] === true ? false : true;
+  task.requireSpec = requireSpec;
   // Snapshot CLI identity before any freeze overlay. Resume must reject a
   // mismatched --pr/--task/--focus even when execution later binds the frozen
   // spec (P1-6). Spec is resolved after local-repo / PR body are available
-  // (hard gate: no conventional contract → refuse).
+  // (soft-start: missing contract no longer exits before the run; review-stage gate).
   const requestedPr = task.pr;
   const requestedTask = task.task;
   const requestedFocus = task.focus;
@@ -360,6 +368,8 @@ export async function runReview(
     if (frozenManifest.task.focus !== undefined) task.focus = frozenManifest.task.focus;
     if (frozenManifest.task.specSource !== undefined) task.specSource = frozenManifest.task.specSource;
     if (frozenManifest.task.specText !== undefined) task.specText = frozenManifest.task.specText;
+    // Resume must honor the frozen require-spec preference (flag may be omitted on argv).
+    task.requireSpec = frozenManifest.requireSpec !== false;
     councilTopic = frozenManifest.task.councilTopic;
     task.councilTopic = councilTopic;
     councilBackground = frozenManifest.task.councilBackground;
@@ -528,7 +538,7 @@ export async function runReview(
     out.progress(`  local repo: ${localRepo.path} (${localRepo.source})`);
   }
 
-  // --- spec-contract hard gate (FINAL): detect / bind / verify, or refuse ---
+  // --- spec-contract soft bind: detect / bind / verify when found; never exit here for SPEC_REQUIRED ---
   await ensureSpecContractBound({
     task,
     explicitSpec: explicitSpecFlag,
@@ -538,8 +548,21 @@ export async function runReview(
     runCommand,
     env,
     out,
+    softMissing: true,
   });
   requestedSpecSource = task.specSource;
+  // Keep requireSpec on the task (resume may have overlaid it from the manifest).
+  if (resumeRaw && frozenManifest) {
+    if (frozenManifest.requireSpec === false && requireSpec !== false) {
+      throw errors.usage("--require-spec must match the resumed run (was --no-require-spec)");
+    }
+    if (frozenManifest.requireSpec !== false && requireSpec === false) {
+      throw errors.usage("--no-require-spec must match the resumed run (was require-spec)");
+    }
+    task.requireSpec = frozenManifest.requireSpec !== false;
+  } else {
+    task.requireSpec = requireSpec;
+  }
 
   const concurrencyRaw = values.concurrency as string | undefined;
   const concurrency =
@@ -730,6 +753,12 @@ export async function runReview(
     /* already logged in ensureSpecContractBound */
   } else if (task.specSource) {
     out.progress(`  spec: ${task.specSource}`);
+  } else {
+    out.progress(
+      task.requireSpec !== false
+        ? "  spec: (unbound — will refuse in review stage if still missing)"
+        : "  spec: (unbound — --no-require-spec / non-contract mode)",
+    );
   }
   let attemptIndexCounter = 0;
   for (const a of attemptAgents) {
@@ -835,6 +864,7 @@ export async function runReview(
         reviewedSha: sha,
         timeoutMs,
         concurrency: concurrency ?? null,
+        requireSpec: task.requireSpec !== false,
         agents: attemptAgents,
         aggregator: aggregatorAgent,
         tools: frozenTools,
@@ -1150,6 +1180,43 @@ export async function runReview(
           code: "DRIVER_UNREACHABLE",
           message: `aggregator driver ${aggregatorAgent.driverSelection.driverId} health probe failed: ${aggProbe?.failure?.message ?? "no probe result"}`,
         },
+      });
+    } else if (
+      task.requireSpec !== false &&
+      !(task.specSource?.trim() && task.specText?.trim() && (task.acceptanceIds?.length ?? 0) > 0)
+    ) {
+      // Review-stage SPEC_REQUIRED gate (soft-start already created the run / probes).
+      const message = formatSpecRefusal({
+        searched: [task.task, task.focus].filter(Boolean).join("\n\n"),
+        repoRoot: localRepo?.path ?? (values.repo as string | undefined) ?? null,
+      });
+      out.progress(`  spec gate: SPEC_REQUIRED (require-spec) — refusing in review stage`);
+      for (const spec of runnableSpecs) {
+        const cancelled: AttemptResult = {
+          attemptId: spec.attemptId,
+          agentId: spec.agentId,
+          agentName: spec.agentName,
+          driverId: spec.driverId,
+          modelId: spec.modelId,
+          status: "failure",
+          output: "",
+          exitCode: null,
+          durationMs: 0,
+          workspace: spec.cwd,
+          failure: {
+            code: "SPEC_REQUIRED",
+            message: "run aborted before this attempt started (no boundable spec-contract)",
+          },
+        };
+        presolved.push(cancelled);
+        recordAttemptFinished(cancelled);
+      }
+      const params = buildExecuteParams();
+      outcome = await finalize(params, new Date().toISOString(), mergeOrdered(presolved), null, {
+        status: "failed",
+        exitCode: EXIT.usage,
+        incomplete: true,
+        failure: { phase: "review", code: "SPEC_REQUIRED", message },
       });
     } else {
       try {
@@ -2403,9 +2470,14 @@ function noteLiveBeat(
 
 
 /**
- * Hard gate: bind a conventional spec-contract (explicit `--spec` or auto-detect)
- * and schedule verify against named acceptance points. PR description alone is
+ * Bind a conventional spec-contract (explicit `--spec` or auto-detect) and
+ * schedule verify against named acceptance points. PR description alone is
  * never accepted as the contract.
+ *
+ * Soft-start (`softMissing: true`, the review entry path): missing contract does
+ * **not** throw SPEC_REQUIRED here — the review-stage gate refuses later when
+ * `requireSpec` is still true. Broken bound contracts (SPEC_VERIFY_UNBOUND)
+ * still refuse immediately.
  */
 async function ensureSpecContractBound(input: {
   task: ReviewTask;
@@ -2416,6 +2488,8 @@ async function ensureSpecContractBound(input: {
   runCommand: RunCommand;
   env: NodeJS.ProcessEnv;
   out: OutputSink;
+  /** When true, unbound contract returns without throwing SPEC_REQUIRED. */
+  softMissing?: boolean;
 }): Promise<void> {
   const { task, out } = input;
   if (input.explicitSpec !== undefined && input.explicitSpec.trim().length === 0) {
@@ -2472,6 +2546,10 @@ async function ensureSpecContractBound(input: {
     repoRoot,
   });
   if (!detected) {
+    if (input.softMissing) {
+      out.progress("  spec: no boundable contract yet (soft-start; gate deferred to review stage)");
+      return;
+    }
     throw errors.usage(formatSpecRefusal({ searched: searchText, repoRoot }), {
       code: "SPEC_REQUIRED",
     });

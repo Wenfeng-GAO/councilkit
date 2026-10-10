@@ -139,7 +139,7 @@ describe("spec hard-gate prompt posture", () => {
       },
     });
     expect(prompt).not.toContain("规格来源（默认）：本任务的 PR 描述");
-    expect(prompt).toContain("硬拒绝开审");
+    expect(prompt).toMatch(/不得把 PR 描述单独当作合同|硬拒绝|审查阶段会拒绝/);
     expect(prompt).toContain("## 验收点（verify）");
     expect(prompt).toContain("AC-12");
   });

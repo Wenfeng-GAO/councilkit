@@ -50,6 +50,10 @@ test("/reports 开始审查表单在有 fixture 时也可见", async ({ page }) 
   await expect(page.getByRole("heading", { name: "审查与报告" })).toBeVisible();
   await expect(page.getByRole("button", { name: "开始审查" })).toBeVisible();
   await expect(page.getByLabel("PR URL")).toBeVisible();
+  const requireSpec = page.locator("#review-require-spec");
+  await expect(requireSpec).toBeVisible();
+  await expect(requireSpec).toBeChecked();
+  await expect(page.getByText("强制按 spec review")).toBeVisible();
 });
 
 test("against 查询参数把表单切成对照复审", async ({ page }) => {

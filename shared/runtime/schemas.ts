@@ -813,6 +813,13 @@ export const cliRunStartReviewRequestSchema = z
       .regex(/^ck-review-[0-9a-fA-F-]+$/, "against must be a ck-review run id")
       .optional(),
     reviewModels: reviewModelsSchema.optional(),
+    /**
+     * Force contract (spec) review. Default true.
+     * When true and no bindable spec is found, the run soft-starts then refuses
+     * in the review stage with SPEC_REQUIRED (never dies solely at Host start).
+     * When false, unbound / non-contract (legacy additive) mode is allowed.
+     */
+    requireSpec: z.boolean().optional(),
   })
   .strict();
 export type CliRunStartReviewRequest = z.infer<typeof cliRunStartReviewRequestSchema>;
