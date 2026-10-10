@@ -42,12 +42,17 @@ export interface ReviewTask {
   task?: string;
   focus?: string;
   /**
-   * Named spec-contract source for subtractive review (path label and/or body).
-   * When omitted, the PR description / `--task` text is the bound contract.
+   * Bound spec-contract source for subtractive review (path or label).
+   * Required: auto-detected from conventional sources, or set via `--spec`.
+   * Missing spec is a hard gate (review refuses); PR body alone is never the contract.
    */
   specSource?: string;
-  /** Prompt-only body of the bound spec (from `--spec` file or inline). */
+  /** Prompt-only body of the bound spec (from `--spec` / auto-detect file). */
   specText?: string;
+  /** Named acceptance / agentverify points scheduled for verify after contract review. */
+  acceptanceIds?: string[];
+  /** Prompt-only verify schedule note derived from the bound spec. */
+  verifyScheduleNote?: string;
   /** Injected only under `--council` when the Council has a non-empty topic. */
   councilTopic?: string;
   /** Prior run id whose findings.json this review classifies against. */
@@ -430,17 +435,28 @@ function renderSpecBinding(task: ReviewTask): string {
     "",
     "本审查为规格合同减法：Act On 默认只接受「违反下列绑定规格中具名不变量 / 验收 ID」且带可复现反例的发现。",
     "规格未覆盖的重大问题必须使用 [suggest-amend-spec]，写入「建议修订规格」，默认不阻塞合并。",
+    "无绑定规格时 CLI 已硬拒绝开审；不得把 PR 描述单独当作合同做加法对抗审查。",
   ];
   if (source) {
     lines.push("", `规格来源：${source}`);
   } else {
-    lines.push(
-      "",
-      "规格来源（默认）：本任务的 PR 描述 / `--task` 正文，以及其中点名的 plan / design / acceptance / agentverify 场景。",
-    );
+    lines.push("", "规格来源：（缺失 — 不应到达此处）");
   }
   if (body) {
     lines.push("", "规格正文：", "", body);
+  }
+  const ids = task.acceptanceIds?.filter((id) => id.trim().length > 0) ?? [];
+  if (ids.length > 0) {
+    lines.push(
+      "",
+      "## 验收点（verify）",
+      "",
+      "合同审查之后 / 同时，必须对照下列具名验收点 / agentverify 场景做验证（写入「验证」）；不得无落脚点地自由狩猎：",
+      ...ids.map((id) => `- \`${id}\``),
+    );
+  }
+  if (task.verifyScheduleNote?.trim()) {
+    lines.push("", task.verifyScheduleNote.trim());
   }
   return lines.join("\n");
 }

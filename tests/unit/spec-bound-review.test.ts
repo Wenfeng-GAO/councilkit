@@ -1,8 +1,9 @@
 /**
- * Spec-contract subtractive review policy:
- * Act On requires invariant + counterexample; out-of-spec is tagged and
- * non-blocking; nits never block; legacy rows without contractClass keep
- * severity-based blocking.
+ * Spec-contract subtractive review policy (FINAL hard gate companions):
+ * (c) Act On requires invariant + counterexample footing;
+ * (d) out-of-spec is tagged and non-blocking;
+ * nits never block; legacy rows without contractClass keep severity-based blocking.
+ * Detection / refuse / auto-bind live in cli/tests/spec-detect.test.ts (a)(b).
  */
 import {
   type LedgerFinding,

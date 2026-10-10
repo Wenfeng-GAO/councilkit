@@ -118,3 +118,23 @@ describe("spec-bound prompts", () => {
     expect(prompt).toContain("不得因规格外或 nit 阻塞合并");
   });
 });
+
+describe("spec hard-gate prompt posture", () => {
+  it("does not claim PR body alone is the default contract", () => {
+    const prompt = buildAttemptPrompt({
+      agentName: "review-adversarial",
+      personaPrompt: "adversarial",
+      task: {
+        pr: "https://github.com/acme/repo/pull/1",
+        specSource: "docs/plans/example.md",
+        specText: "AC-12: cancel deregisters waiters",
+        acceptanceIds: ["AC-12"],
+        verifyScheduleNote: "Verify schedule: after/with contract review, verify against AC-12",
+      },
+    });
+    expect(prompt).not.toContain("规格来源（默认）：本任务的 PR 描述");
+    expect(prompt).toContain("硬拒绝开审");
+    expect(prompt).toContain("## 验收点（verify）");
+    expect(prompt).toContain("AC-12");
+  });
+});

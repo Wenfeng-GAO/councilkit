@@ -1,6 +1,5 @@
-import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { type Stats, existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   FULL_COMMIT_SHA,
@@ -103,6 +102,14 @@ import {
   readReviewRepairPackage,
   repairPackageHash,
 } from "../auto/repair-acceptance";
+import {
+  SPEC_VERIFY_UNBOUND_MESSAGE,
+  applySpecToTask,
+  bindVerifyFromSpec,
+  fetchPrSpecSearchText,
+  formatSpecRefusal,
+  resolveSpecContract,
+} from "../auto/spec-detect";
 import {
   copyFrozenContextIntoWorkspace,
   freezeReviewContext,
@@ -275,14 +282,16 @@ export async function runReview(
     focus: values.focus !== undefined ? (values.focus as string) : undefined,
     councilTopic: undefined,
   };
-  bindSpecSource(task, values.spec as string | undefined);
+  const explicitSpecFlag = values.spec as string | undefined;
   // Snapshot CLI identity before any freeze overlay. Resume must reject a
   // mismatched --pr/--task/--focus even when execution later binds the frozen
-  // spec (P1-6).
+  // spec (P1-6). Spec is resolved after local-repo / PR body are available
+  // (hard gate: no conventional contract → refuse).
   const requestedPr = task.pr;
   const requestedTask = task.task;
   const requestedFocus = task.focus;
-  const requestedSpecSource = task.specSource;
+  let requestedSpecSource: string | undefined =
+    explicitSpecFlag !== undefined ? explicitSpecFlag.trim() || undefined : undefined;
 
   const assignedRunIdRaw = values["run-id"] as string | undefined;
   const resumeRaw = values.resume as string | undefined;
@@ -518,6 +527,20 @@ export async function runReview(
     }
     out.progress(`  local repo: ${localRepo.path} (${localRepo.source})`);
   }
+
+  // --- spec-contract hard gate (FINAL): detect / bind / verify, or refuse ---
+  await ensureSpecContractBound({
+    task,
+    explicitSpec: explicitSpecFlag,
+    frozenManifest,
+    resumeRaw,
+    localRepoPath: localRepo?.path ?? (values.repo as string | undefined) ?? null,
+    runCommand,
+    env,
+    out,
+  });
+  requestedSpecSource = task.specSource;
+
   const concurrencyRaw = values.concurrency as string | undefined;
   const concurrency =
     concurrencyRaw !== undefined ? parsePositiveInt(concurrencyRaw, "concurrency") : undefined;
@@ -703,7 +726,9 @@ export async function runReview(
   if (task.against) {
     out.progress(`  against: ${task.against}${task.againstRange ? ` ${task.againstRange}` : ""}`);
   }
-  if (task.specSource) {
+  if (task.specSource && task.acceptanceIds) {
+    /* already logged in ensureSpecContractBound */
+  } else if (task.specSource) {
     out.progress(`  spec: ${task.specSource}`);
   }
   let attemptIndexCounter = 0;
@@ -2377,38 +2402,96 @@ function noteLiveBeat(
 }
 
 
-/** Bind `--spec <path|label>`: file contents become the contract body; else label-only. */
-function bindSpecSource(task: ReviewTask, raw: string | undefined): void {
-  if (raw === undefined) return;
-  const value = raw.trim();
-  if (value.length === 0) {
+/**
+ * Hard gate: bind a conventional spec-contract (explicit `--spec` or auto-detect)
+ * and schedule verify against named acceptance points. PR description alone is
+ * never accepted as the contract.
+ */
+async function ensureSpecContractBound(input: {
+  task: ReviewTask;
+  explicitSpec: string | undefined;
+  frozenManifest: InvocationManifest | null;
+  resumeRaw: string | undefined;
+  localRepoPath: string | null;
+  runCommand: RunCommand;
+  env: NodeJS.ProcessEnv;
+  out: OutputSink;
+}): Promise<void> {
+  const { task, out } = input;
+  if (input.explicitSpec !== undefined && input.explicitSpec.trim().length === 0) {
     throw errors.usage("--spec must not be empty or whitespace");
   }
-  const MAX_SPEC_BYTES = 200 * 1024;
-  if (existsSync(value)) {
-    let st: Stats;
-    try {
-      st = lstatSync(value);
-    } catch {
-      throw errors.usage(`--spec cannot stat "${value}"`);
+
+  // Resume / frozen manifest already carries the bound contract.
+  if (
+    input.resumeRaw &&
+    input.frozenManifest &&
+    (input.frozenManifest.task.specSource || task.specSource)
+  ) {
+    if (!task.specSource && input.frozenManifest.task.specSource) {
+      task.specSource = input.frozenManifest.task.specSource;
     }
-    if (!st.isFile()) {
-      throw errors.usage(`--spec must be a file or named label, got "${value}"`);
+    if (!task.specText && input.frozenManifest.task.specText) {
+      task.specText = input.frozenManifest.task.specText;
     }
-    let body: string;
-    try {
-      body = readFileSync(value, "utf8");
-    } catch {
-      throw errors.usage(`--spec cannot read "${value}"`);
+  }
+
+  const repoRoot = input.localRepoPath;
+  let searchText = [task.task, task.focus].filter(Boolean).join("\n\n");
+  if (task.pr) {
+    const prText = await fetchPrSpecSearchText({
+      prUrl: task.pr,
+      runCommand: input.runCommand,
+      env: input.env,
+      cwd: repoRoot ?? process.cwd(),
+    });
+    if (prText.trim()) searchText = `${searchText}\n\n${prText}`.trim();
+  }
+
+  // Already bound (explicit early path via frozen, or caller set): still require verify.
+  if (task.specSource?.trim() && task.specText?.trim()) {
+    const verify = bindVerifyFromSpec({
+      specSource: task.specSource,
+      specText: task.specText,
+    });
+    if (!verify) {
+      throw errors.usage(SPEC_VERIFY_UNBOUND_MESSAGE, {
+        specSource: task.specSource,
+        code: "SPEC_VERIFY_UNBOUND",
+      });
     }
-    if (Buffer.byteLength(body, "utf8") > MAX_SPEC_BYTES) {
-      throw errors.usage(`--spec file exceeds ${MAX_SPEC_BYTES} bytes`);
-    }
-    task.specSource = value;
-    task.specText = body;
+    task.acceptanceIds = verify.acceptanceIds;
+    task.verifyScheduleNote = verify.scheduleNote;
+    out.progress(`  spec: ${task.specSource} (bound; ${verify.acceptanceIds.length} acceptance point(s))`);
     return;
   }
-  task.specSource = value;
+
+  const detected = resolveSpecContract({
+    explicitSpec: input.explicitSpec,
+    searchText,
+    repoRoot,
+  });
+  if (!detected) {
+    throw errors.usage(formatSpecRefusal({ searched: searchText, repoRoot }), {
+      code: "SPEC_REQUIRED",
+    });
+  }
+
+  // Explicit `--spec` label without readable body: refuse verify unbound.
+  const verify = bindVerifyFromSpec({
+    specSource: detected.source,
+    specText: detected.text,
+  });
+  if (!verify) {
+    throw errors.usage(SPEC_VERIFY_UNBOUND_MESSAGE, {
+      specSource: detected.source,
+      code: "SPEC_VERIFY_UNBOUND",
+    });
+  }
+  applySpecToTask(task, detected, verify);
+  out.progress(
+    `  spec: ${task.specSource} (${detected.origin}; ${verify.acceptanceIds.length} acceptance point(s))`,
+  );
 }
 
 function isHttpUrl(value: string): boolean {
