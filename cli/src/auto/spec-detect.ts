@@ -33,7 +33,13 @@ export const SPEC_CONTRACT_BASENAMES = new Set([
   "contract.md",
 ]);
 
-const MAX_SPEC_BYTES = 200 * 1024;
+/**
+ * Max UTF-8 bytes kept when binding a contract file. Matches
+ * `MAX_SPEC_TEXT_IN_PROMPT` (= AGGREGATE_PROMPT_BUDGET − AGGREGATE_PROMPT_RESERVED_OVERHEAD)
+ * so a bound body cannot consume the entire aggregate prompt budget.
+ * Larger readable files are truncated (not refused) with a marker.
+ */
+export const MAX_SPEC_BYTES = 200 * 1024 - 48 * 1024; // 152 KiB; keep in sync with templates/review.ts
 
 /** Path-like tokens that look like conventional contract sources. */
 const PATH_REF_RE =
@@ -270,6 +276,16 @@ function extractAcceptanceChecklistIds(specText: string): string[] {
   return items;
 }
 
+
+/** Truncate a bound spec body to `cap` UTF-8 bytes without splitting a code unit. */
+function truncateSpecBody(text: string, cap: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= cap) return text;
+  let end = cap;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
+  return `${buf.subarray(0, end).toString("utf8")}\n[truncated at ${cap} bytes]`;
+}
+
 function resolveReadableSpecFile(
   pathOrLabel: string,
   repoRoot: string | null,
@@ -296,12 +312,14 @@ function resolveReadableSpecFile(
     } catch {
       continue;
     }
-    if (Buffer.byteLength(body, "utf8") > MAX_SPEC_BYTES) continue;
+    // Hard refuse absurdly large files (cannot be a useful contract); otherwise
+    // truncate to MAX_SPEC_BYTES so aggregate prompts keep reserved overhead.
+    if (Buffer.byteLength(body, "utf8") > 200 * 1024) continue;
     const source =
       repoRoot && candidate.startsWith(repoRoot)
         ? normalizeSpecRef(relative(repoRoot, candidate).split(sep).join("/")) ?? candidate
         : normalized;
-    return { source, text: body };
+    return { source, text: truncateSpecBody(body, MAX_SPEC_BYTES) };
   }
   return null;
 }

@@ -5,7 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { extractFindingsFromReport } from "../src/auto/ledger";
 import { isFindingBlocking } from "@shared/runtime/cli-ledger";
-import { buildAggregatePrompt, buildAttemptPrompt } from "../src/auto/templates/review";
+import {
+  AGGREGATE_PROMPT_BUDGET,
+  AGGREGATE_PROMPT_RESERVED_OVERHEAD,
+  MAX_SPEC_TEXT_IN_PROMPT,
+  buildAggregatePrompt,
+  buildAttemptPrompt,
+} from "../src/auto/templates/review";
 
 describe("spec-bound extraction", () => {
   const report = `# Autonomous Review Report
@@ -136,5 +142,66 @@ describe("spec hard-gate prompt posture", () => {
     expect(prompt).toContain("硬拒绝开审");
     expect(prompt).toContain("## 验收点（verify）");
     expect(prompt).toContain("AC-12");
+  });
+});
+
+describe("spec size vs aggregate budget", () => {
+  it("documents reserved overhead so MAX_SPEC_TEXT_IN_PROMPT leaves room", () => {
+    expect(AGGREGATE_PROMPT_RESERVED_OVERHEAD).toBe(48 * 1024);
+    expect(MAX_SPEC_TEXT_IN_PROMPT).toBe(
+      AGGREGATE_PROMPT_BUDGET - AGGREGATE_PROMPT_RESERVED_OVERHEAD,
+    );
+    expect(MAX_SPEC_TEXT_IN_PROMPT).toBeLessThan(AGGREGATE_PROMPT_BUDGET);
+  });
+
+  it("near-max spec still leaves room for Attempt content in aggregate", () => {
+    const nearMaxSpec = "S".repeat(MAX_SPEC_TEXT_IN_PROMPT);
+    const attemptMarker = "UNIQUE_ATTEMPT_EVIDENCE_xyz";
+    const prompt = buildAggregatePrompt({
+      aggregatorName: "R",
+      task: {
+        task: "review the change",
+        specSource: "docs/plans/near-max.md",
+        specText: nearMaxSpec,
+      },
+      attempts: [
+        {
+          attemptId: "a1",
+          name: "ReviewerA",
+          status: "success",
+          output: `## 发现\n- [major][act-on] ${attemptMarker}\n  不变量：\`AC-1\`\n  反例：y\n\n## 结论\nchanges-requested\n`,
+        },
+      ],
+    });
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(AGGREGATE_PROMPT_BUDGET);
+    expect(prompt).toContain("### ReviewerA");
+    expect(prompt).toContain(attemptMarker);
+    expect(prompt).not.toContain("（无成功的审查者交付物可供对比。）");
+  });
+
+  it("a formerly near-200KiB spec is truncated so Attempt outputs are kept", () => {
+    const formerNearMax = "S".repeat(200 * 1024 - 64);
+    const attemptMarker = "KEPT_AFTER_SPEC_TRUNCATION";
+    const prompt = buildAggregatePrompt({
+      aggregatorName: "R",
+      task: {
+        task: "review the change",
+        specSource: "docs/plans/huge.md",
+        specText: formerNearMax,
+      },
+      attempts: [
+        {
+          attemptId: "a1",
+          name: "ReviewerB",
+          status: "success",
+          output: `## 发现\n- [major][act-on] ${attemptMarker}\n`,
+        },
+      ],
+    });
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(AGGREGATE_PROMPT_BUDGET);
+    expect(prompt).toContain("### ReviewerB");
+    expect(prompt).toContain(attemptMarker);
+    expect(prompt).toContain("[truncated at");
+    expect(prompt).toContain(String(MAX_SPEC_TEXT_IN_PROMPT));
   });
 });

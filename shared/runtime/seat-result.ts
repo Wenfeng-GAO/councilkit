@@ -23,10 +23,14 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
   const visible = textOutsideFences(text);
   const matches = [...visible.matchAll(SEVERITY_RE)];
   const findingCount = matches.length;
-  const blockingCount = matches.filter((row) => {
+  const blockingCount = matches.filter((row, index) => {
     const severity = row[1]?.toLowerCase();
     if (severity !== "critical" && severity !== "major") return false;
-    const around = visible.slice(row.index ?? 0, (row.index ?? 0) + 80).toLowerCase();
+    // Scope out-of-spec markers to this finding only (stop at the next severity tag).
+    const start = row.index ?? 0;
+    const end =
+      index + 1 < matches.length ? (matches[index + 1]!.index ?? visible.length) : visible.length;
+    const around = visible.slice(start, end).toLowerCase();
     // Out-of-spec / suggest-amend-spec majors are non-blocking by default.
     if (
       around.includes("suggest-amend-spec") ||

@@ -32,6 +32,20 @@ export const CORRECTION_PROMPT_MARKER = "有界 assessment 格式纠错";
  * budget is enforced by proportional truncation then oldest-output omission. */
 export const AGGREGATE_PROMPT_BUDGET = 200 * 1024;
 
+/**
+ * Bytes reserved within {@link AGGREGATE_PROMPT_BUDGET} for non-spec content:
+ * aggregator intro, task framing, requirements, failure/omitted notices, and
+ * room for Attempt deliverables. Without this reserve, a near-budget `--spec`
+ * body would force {@link buildAggregatePrompt} to drop every Attempt output
+ * while still over budget (empty `kept`). Spec bodies embedded in prompts are
+ * capped to `AGGREGATE_PROMPT_BUDGET - AGGREGATE_PROMPT_RESERVED_OVERHEAD`.
+ */
+export const AGGREGATE_PROMPT_RESERVED_OVERHEAD = 48 * 1024;
+
+/** Max UTF-8 bytes of bound spec body allowed in Attempt/Aggregate prompts. */
+export const MAX_SPEC_TEXT_IN_PROMPT =
+  AGGREGATE_PROMPT_BUDGET - AGGREGATE_PROMPT_RESERVED_OVERHEAD;
+
 /** Below this per-output allowance we drop an output instead of shrinking it to
  * uselessness. */
 const MIN_PER_OUTPUT_BYTES = 512;
@@ -443,7 +457,8 @@ function renderSpecBinding(task: ReviewTask): string {
     lines.push("", "规格来源：（缺失 — 不应到达此处）");
   }
   if (body) {
-    lines.push("", "规格正文：", "", body);
+    // Cap so a near-AGGREGATE_PROMPT_BUDGET spec cannot starve Attempt outputs.
+    lines.push("", "规格正文：", "", truncateBytes(body, MAX_SPEC_TEXT_IN_PROMPT));
   }
   const ids = task.acceptanceIds?.filter((id) => id.trim().length > 0) ?? [];
   if (ids.length > 0) {

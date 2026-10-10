@@ -13,6 +13,7 @@ import {
   extractConventionalSpecRefs,
   formatSpecRefusal,
   isConventionalSpecPath,
+  MAX_SPEC_BYTES,
   resolveSpecContract,
 } from "../src/auto/spec-detect";
 
@@ -123,5 +124,26 @@ describe("verify binding from bound spec", () => {
         specText: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe("spec body size cap", () => {
+  it("truncates a near-200KiB spec to MAX_SPEC_BYTES with reserved overhead", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-spec-"));
+    const rel = "docs/plans/big-plan.md";
+    mkdirSync(join(root, "docs", "plans"), { recursive: true });
+    const body = "AC-99 keep\n" + "x".repeat(200 * 1024 - 80);
+    writeFileSync(join(root, rel), body, "utf8");
+    const detected = resolveSpecContract({
+      explicitSpec: rel,
+      repoRoot: root,
+    });
+    expect(detected?.text).toBeDefined();
+    expect(Buffer.byteLength(detected!.text!, "utf8")).toBeLessThanOrEqual(
+      MAX_SPEC_BYTES + 64, // allow truncation marker
+    );
+    expect(detected!.text).toContain("[truncated at");
+    expect(detected!.text).toContain("AC-99");
+    expect(MAX_SPEC_BYTES).toBe(200 * 1024 - 48 * 1024);
   });
 });
