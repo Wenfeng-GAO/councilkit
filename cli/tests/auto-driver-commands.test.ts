@@ -587,6 +587,66 @@ describe("cli auto driver-commands", () => {
       expect(env.NO_PROXY).toMatch(/localhost/);
     });
 
+    it("codex spawn env fills a local HTTP proxy when the parent has none", () => {
+      const env = spawnEnvForDriver(
+        "codex-app-server",
+        "/tmp/ck-codex",
+        { PATH: "/bin" },
+        { localProxyPort: () => 7897 },
+      );
+      expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7897");
+      expect(env.HTTP_PROXY).toBe("http://127.0.0.1:7897");
+      expect(env.https_proxy).toBe("http://127.0.0.1:7897");
+      expect(env.NO_PROXY).toMatch(/localhost/);
+      expect(env.PWD).toBe("/tmp/ck-codex");
+    });
+
+    it("codex spawn env keeps a user-provided proxy", () => {
+      const env = spawnEnvForDriver(
+        "codex-app-server",
+        "/tmp/ck-codex",
+        { PATH: "/bin", https_proxy: "http://10.0.0.1:3128" },
+        { localProxyPort: () => 7897 },
+      );
+      expect(env.https_proxy).toBe("http://10.0.0.1:3128");
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.HTTP_PROXY).toBeUndefined();
+    });
+
+    it("kimi spawn env strips every proxy var and never probes", () => {
+      const env = spawnEnvForDriver(
+        "kimi-stream-json",
+        "/tmp/ck-kimi",
+        {
+          PATH: "/bin",
+          HTTPS_PROXY: "http://127.0.0.1:7897",
+          https_proxy: "http://127.0.0.1:7897",
+          HTTP_PROXY: "http://127.0.0.1:7897",
+          http_proxy: "http://127.0.0.1:7897",
+          ALL_PROXY: "socks5://127.0.0.1:7897",
+          all_proxy: "socks5://127.0.0.1:7897",
+        },
+        {
+          localProxyPort: () => {
+            throw new Error("kimi must not probe for a proxy");
+          },
+        },
+      );
+      for (const k of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]) {
+        expect(env[k]).toBeUndefined();
+      }
+      expect(env.NO_PROXY).toBe("*");
+      expect(env.no_proxy).toBe("*");
+      expect(env.PWD).toBe("/tmp/ck-kimi");
+    });
+
+    it("claude/cursor spawn env is parent env + PWD (no proxy injection)", () => {
+      for (const id of ["claude-stream-json", "cursor-stream-json"]) {
+        const env = spawnEnvForDriver(id, "/tmp/x", { PATH: "/bin" }, { localProxyPort: () => 7897 });
+        expect(env).toEqual({ PATH: "/bin", PWD: "/tmp/x" });
+      }
+    });
+
     it("withLocalHttpProxy is a no-op when nothing is listening", () => {
       const env = withLocalHttpProxy({ PATH: "/bin" }, () => null);
       expect(env.HTTPS_PROXY).toBeUndefined();
