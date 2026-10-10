@@ -1,5 +1,6 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { type Stats, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   FULL_COMMIT_SHA,
@@ -236,6 +237,7 @@ export async function runReview(
         against: { type: "string" },
         "repair-package": { type: "string" },
         "pin-sha": { type: "string" },
+        spec: { type: "string" },
       },
       allowPositionals: 1,
     },
@@ -273,12 +275,14 @@ export async function runReview(
     focus: values.focus !== undefined ? (values.focus as string) : undefined,
     councilTopic: undefined,
   };
+  bindSpecSource(task, values.spec as string | undefined);
   // Snapshot CLI identity before any freeze overlay. Resume must reject a
   // mismatched --pr/--task/--focus even when execution later binds the frozen
   // spec (P1-6).
   const requestedPr = task.pr;
   const requestedTask = task.task;
   const requestedFocus = task.focus;
+  const requestedSpecSource = task.specSource;
 
   const assignedRunIdRaw = values["run-id"] as string | undefined;
   const resumeRaw = values.resume as string | undefined;
@@ -345,6 +349,8 @@ export async function runReview(
     if (frozenManifest.task.pr !== undefined) task.pr = frozenManifest.task.pr;
     if (frozenManifest.task.task !== undefined) task.task = frozenManifest.task.task;
     if (frozenManifest.task.focus !== undefined) task.focus = frozenManifest.task.focus;
+    if (frozenManifest.task.specSource !== undefined) task.specSource = frozenManifest.task.specSource;
+    if (frozenManifest.task.specText !== undefined) task.specText = frozenManifest.task.specText;
     councilTopic = frozenManifest.task.councilTopic;
     task.councilTopic = councilTopic;
     councilBackground = frozenManifest.task.councilBackground;
@@ -604,6 +610,9 @@ export async function runReview(
     if ((started.task.focus ?? undefined) !== requestedFocus) {
       throw errors.usage("--focus must match the resumed run");
     }
+    if ((started.task.specSource ?? undefined) !== requestedSpecSource) {
+      throw errors.usage("--spec must match the resumed run");
+    }
     if ((started.task.councilTopic ?? undefined) !== councilTopic) {
       throw errors.usage("council topic must match the resumed run");
     }
@@ -693,6 +702,9 @@ export async function runReview(
   out.progress(`  task: ${task.pr ? `PR ${task.pr}` : "<task text>"}`);
   if (task.against) {
     out.progress(`  against: ${task.against}${task.againstRange ? ` ${task.againstRange}` : ""}`);
+  }
+  if (task.specSource) {
+    out.progress(`  spec: ${task.specSource}`);
   }
   let attemptIndexCounter = 0;
   for (const a of attemptAgents) {
@@ -941,6 +953,7 @@ export async function runReview(
         pr: task.pr,
         task: task.task,
         focus: task.focus,
+        ...(task.specSource ? { specSource: task.specSource } : {}),
         councilTopic,
         against: task.against,
         ...(task.repairPackageHash ? { repairPackageHash: task.repairPackageHash } : {}),
@@ -2361,6 +2374,41 @@ function noteLiveBeat(
   } catch {
     // Live status is a sidecar; never fail the review because of it.
   }
+}
+
+
+/** Bind `--spec <path|label>`: file contents become the contract body; else label-only. */
+function bindSpecSource(task: ReviewTask, raw: string | undefined): void {
+  if (raw === undefined) return;
+  const value = raw.trim();
+  if (value.length === 0) {
+    throw errors.usage("--spec must not be empty or whitespace");
+  }
+  const MAX_SPEC_BYTES = 200 * 1024;
+  if (existsSync(value)) {
+    let st: Stats;
+    try {
+      st = lstatSync(value);
+    } catch {
+      throw errors.usage(`--spec cannot stat "${value}"`);
+    }
+    if (!st.isFile()) {
+      throw errors.usage(`--spec must be a file or named label, got "${value}"`);
+    }
+    let body: string;
+    try {
+      body = readFileSync(value, "utf8");
+    } catch {
+      throw errors.usage(`--spec cannot read "${value}"`);
+    }
+    if (Buffer.byteLength(body, "utf8") > MAX_SPEC_BYTES) {
+      throw errors.usage(`--spec file exceeds ${MAX_SPEC_BYTES} bytes`);
+    }
+    task.specSource = value;
+    task.specText = body;
+    return;
+  }
+  task.specSource = value;
 }
 
 function isHttpUrl(value: string): boolean {

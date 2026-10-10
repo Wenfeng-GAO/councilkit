@@ -205,6 +205,13 @@ councilkit review <pr-url> --against <ck-review-id> --repair-package <file> [--j
 
 ### Finding 账本
 
+审查默认按**规格合同减法**分类：
+
+- **合同内 Act On**：违反绑定规格具名不变量，且含可复现反例 → 可阻塞合并（critical/major）
+- **建议修订规格（out-of-spec）**：规格未覆盖的重大问题 → 展示但不默认阻塞
+- **nit / 风格**：不阻塞
+
+
 - 每次 review 产生 `findings.json`
 - `--against <prior-run>` 优先保留原问题 ID，并保留独立审查者报告的发现
 - 失败、未覆盖、聚合报告未再提及都不会关闭旧问题

@@ -26,6 +26,11 @@ export const invocationManifestSchema = z
         pr: z.string().max(2048).optional(),
         task: z.string().max(8000).optional(),
         focus: z.string().max(8000).optional(),
+        specSource: z.string().max(2048).optional(),
+        specText: z
+          .string()
+          .max(200 * 1024)
+          .optional(),
         against: z.string().max(160).optional(),
         repairPackageHash: z
           .string()
@@ -247,6 +252,8 @@ export function buildInvocationManifest(input: {
       ...(input.task.pr ? { pr: input.task.pr } : {}),
       ...(input.task.task ? { task: input.task.task } : {}),
       ...(input.task.focus ? { focus: input.task.focus } : {}),
+      ...(input.task.specSource ? { specSource: input.task.specSource } : {}),
+      ...(input.task.specText ? { specText: input.task.specText } : {}),
       ...(input.task.against ? { against: input.task.against } : {}),
       ...(input.task.repairPackageHash ? { repairPackageHash: input.task.repairPackageHash } : {}),
       ...(input.task.councilTopic ? { councilTopic: input.task.councilTopic } : {}),
@@ -435,6 +442,7 @@ export function resumeArgvFromManifest(manifest: InvocationManifest): string[] {
   argv.push("--resume", manifest.runId);
   if (manifest.task.task) argv.push("--task", manifest.task.task);
   if (manifest.task.focus) argv.push("--focus", manifest.task.focus);
+  if (manifest.task.specSource) argv.push("--spec", manifest.task.specSource);
   if (manifest.task.against) argv.push("--against", manifest.task.against);
   return argv;
 }
@@ -476,6 +484,8 @@ export function taskFromManifest(manifest: InvocationManifest): ReviewTask {
     pr: manifest.task.pr,
     task: manifest.task.task,
     focus: manifest.task.focus,
+    specSource: manifest.task.specSource,
+    specText: manifest.task.specText,
     against: manifest.task.against,
     repairPackageHash: manifest.task.repairPackageHash,
     councilTopic: manifest.task.councilTopic,

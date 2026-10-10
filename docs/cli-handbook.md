@@ -239,8 +239,13 @@ councilkit review <url> --resume <run-id> [--json]
 - `--codex-timeout 90m`：默认 90 分钟
 - `--concurrency 10`：默认并发 10
 - `--focus "<text>"`：审查焦点（注入任务模板）
+- `--spec <path|label>`：绑定规格合同来源（文件则注入正文；否则作具名来源标签）。缺省时以 PR 描述 / `--task` 为合同
 - `--against <run-id>`：增量陪审，优先保留原问题 ID
 - `--repair-package <file>`：与 `--against` 配合，验证不可变的选定修复任务
+
+#### 规格合同减法（默认）
+
+对抗式审查默认是**减法**：只对绑定规格中的具名不变量 / 验收 ID / agentverify 场景作 **Act On**（须同时给出可复现反例）。规格未覆盖的重大问题必须标为 **`[suggest-amend-spec]` /「建议修订规格」**，可展示但**默认不阻塞合并**。Aggregator 去重；nit / 纯风格 / 仅注释行号不阻塞。旧账本行若无 `contractClass` 字段，仍按原来的 critical/major 严重度门禁（兼容）。
 
 #### 账本与闭环
 

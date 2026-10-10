@@ -41,6 +41,13 @@ export interface ReviewTask {
   pr?: string;
   task?: string;
   focus?: string;
+  /**
+   * Named spec-contract source for subtractive review (path label and/or body).
+   * When omitted, the PR description / `--task` text is the bound contract.
+   */
+  specSource?: string;
+  /** Prompt-only body of the bound spec (from `--spec` file or inline). */
+  specText?: string;
   /** Injected only under `--council` when the Council has a non-empty topic. */
   councilTopic?: string;
   /** Prior run id whose findings.json this review classifies against. */
@@ -72,16 +79,25 @@ export interface AttemptPromptInput {
   frozenContext?: FrozenAttemptContext;
 }
 
-const FINDING_FORMAT = `每条发现使用一个顶层列表项，首行只写严重程度和 16–32 字中文短标题。
-标题概括「关键条件 + 实际后果」，让代码作者不读函数调用链也能理解；不要截取正文开头，不要以文件路径、函数名、Finding ID 或“本次新增”开头。
-标题用普通中文说明风险与影响，不堆叠函数名、内部状态名或缩写；技术细节放正文。
-后续正文缩进两个空格，完整保留文件与行号、触发前提、函数调用链、证据和建议；不要为缩短标题省略正文。
-格式如下（替换占位内容）：
-- [critical|major|minor|nit] 关键条件 + 实际后果
+const FINDING_FORMAT = `审查是**规格合同减法**：只对「绑定规格」里的具名不变量 / 验收项作 Act On；规格外重大问题可指出，但必须显式标为建议修订规格，且默认不阻塞合并。
+每条发现使用一个顶层列表项。首行：严重程度 + 合同类别标签 + 16–32 字中文短标题。
+合同类别标签二选一：
+- \`[act-on]\`：合同内，违反绑定规格中的具名不变量 / 验收 ID / agentverify 场景；**必须**写不变量与可复现反例，否则不得进入 Act On。
+- \`[suggest-amend-spec]\`：规格外 / 合同未覆盖的重大问题；建议修订规格，**不得**与合同内 Act On 混写，默认不阻塞合并。
+标题概括「关键条件 + 实际后果」；不要以文件路径、函数名、Finding ID 或“本次新增”开头。
+后续正文缩进两个空格。格式如下（替换占位内容）：
+- [critical|major|minor|nit][act-on] 关键条件 + 实际后果
   位置：\`file:location\`
+  不变量：\`<INV|AC|agentverify:scenario 等绑定规格中的 ID>\`
+  反例：可复现的输入 / 时序 / 状态，说明该不变量如何被违反。
   触发与后果：完整描述触发条件、函数调用链和实际影响。
   证据：已有验证及其结果；没有验证就写未验证。
   建议：具体改法。
+- [major][suggest-amend-spec] 规格未覆盖的重大风险短标题
+  位置：\`file:location\`
+  触发与后果：……
+  建议：应如何修订规格（新增哪条不变量 / 验收）。
+nit / 纯风格 / 仅注释行号意见可写，但**不得**据此给出 changes-requested，也不阻塞合并。
 引用已有 Finding 账本项时，在该项缩进正文另写 原 Finding ID：\`<原 ID>\`，逐字保留账本中的原 ID；新问题不要虚构原 ID。`;
 
 const ATTEMPT_CONTRACT = `## 发现
@@ -110,6 +126,7 @@ code_trace 的 evidence 写调用链及原反例已被消除的具体证据。�
 
 const AGGREGATE_STRUCTURE = `## 概览
 ## 共识发现
+## 建议修订规格
 ## 独有发现
 ## 分歧
 ## 结论`;
@@ -199,6 +216,7 @@ export function buildAttemptPrompt(input: AttemptPromptInput): string {
   if (focus && focus.length > 0) {
     lines.push("", "审查重点：", focus);
   }
+  lines.push("", renderSpecBinding(input.task));
   if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
     lines.push("", "## Finding 账本", "", input.task.againstLedger.trim());
   }
@@ -312,6 +330,7 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
   const taskLines: string[] = ["", "## 原始任务", "", taskStatement(input.task)];
   const focus = input.task.focus?.trim();
   if (focus && focus.length > 0) taskLines.push("", "审查重点：", focus);
+  taskLines.push("", renderSpecBinding(input.task));
   if (input.task.againstLedger && input.task.againstLedger.trim().length > 0) {
     taskLines.push("", "## Finding 账本", "", input.task.againstLedger.trim());
   }
@@ -340,15 +359,20 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "",
     "点名引用每位被保留的成功的审查者。对比他们的发现与验证过程，区分共识、独有发现、分歧。",
     "reviewer 可能使用 Findings/Verification/Verdict 等英文标题，请按语义理解，不要当作格式错误。",
+    "去重：同一不变量 ID + 同一根因只保留一条最强证据；不要把 nit / 风格 / 仅注释行号意见升为阻塞。",
     "必须保留有具体证据的严重独有发现；少数意见不能因无人重复而删除。逐项验证 JSON 来自独立 Attempt，你不能补造关闭证据。",
-    "「共识发现」与「独有发现」中的每条发现都遵守以下标题与正文格式：",
+    "把发现分成两类，不得混写：",
+    "- 「共识发现」/「独有发现」：仅合同内 Act On（标签 [act-on]，且含不变量 ID + 可复现反例）。",
+    "- 「建议修订规格」：规格外重大问题（标签 [suggest-amend-spec]），默认不阻塞合并。",
+    "每条发现遵守以下标题与正文格式：",
     FINDING_FORMAT,
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
     "结论章节给出单行英文 verdict token：approve | changes-requested | comment。",
+    "仅当仍存在合同内 Act On（critical/major + 不变量 + 反例）时用 changes-requested；只有 nit / 规格外建议时用 comment，不得因规格外或 nit 阻塞合并。",
     input.task.against
       ? "若有 Finding 账本：在「共识发现」里用原 id 标注仍成立或回归的项；新洞另起条目。历史 closed 无验证不等于解决；未报告/未覆盖不等于关闭。已验证关闭另述证据，不混入仍成立的发现列表。"
       : "",
-    "最终消息即交付物，只输出下面的 Markdown 五章节结构：",
+    "最终消息即交付物，只输出下面的 Markdown 结构：",
     "",
     AGGREGATE_STRUCTURE,
   ].join("\n");
@@ -396,6 +420,29 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     assembled = assemble();
   }
   return assembled;
+}
+
+function renderSpecBinding(task: ReviewTask): string {
+  const source = task.specSource?.trim();
+  const body = task.specText?.trim();
+  const lines = [
+    "## 绑定规格（审查合同）",
+    "",
+    "本审查为规格合同减法：Act On 默认只接受「违反下列绑定规格中具名不变量 / 验收 ID」且带可复现反例的发现。",
+    "规格未覆盖的重大问题必须使用 [suggest-amend-spec]，写入「建议修订规格」，默认不阻塞合并。",
+  ];
+  if (source) {
+    lines.push("", `规格来源：${source}`);
+  } else {
+    lines.push(
+      "",
+      "规格来源（默认）：本任务的 PR 描述 / `--task` 正文，以及其中点名的 plan / design / acceptance / agentverify 场景。",
+    );
+  }
+  if (body) {
+    lines.push("", "规格正文：", "", body);
+  }
+  return lines.join("\n");
 }
 
 function taskStatement(task: ReviewTask): string {

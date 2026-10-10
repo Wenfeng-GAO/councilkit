@@ -13,7 +13,7 @@ export interface CliRunAttemptResult {
 }
 
 const SEVERITY_RE = /\[(critical|major|minor|nit)\]/gi;
-const REVIEW_HEADING_RE = /^## (?:概览|发现|共识发现|独有发现|分歧|结论|问题)\s*$/m;
+const REVIEW_HEADING_RE = /^## (?:概览|发现|共识发现|建议修订规格|独有发现|分歧|结论|问题)\s*$/m;
 
 export function summarizeSeatOutput(output: string | null | undefined): CliRunAttemptResult {
   const text = output?.trim() ?? "";
@@ -25,7 +25,17 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
   const findingCount = matches.length;
   const blockingCount = matches.filter((row) => {
     const severity = row[1]?.toLowerCase();
-    return severity === "critical" || severity === "major";
+    if (severity !== "critical" && severity !== "major") return false;
+    const around = visible.slice(row.index ?? 0, (row.index ?? 0) + 80).toLowerCase();
+    // Out-of-spec / suggest-amend-spec majors are non-blocking by default.
+    if (
+      around.includes("suggest-amend-spec") ||
+      around.includes("out-of-spec") ||
+      around.includes("规格外")
+    ) {
+      return false;
+    }
+    return true;
   }).length;
   const structured = findingCount > 0 || REVIEW_HEADING_RE.test(visible);
   const summary = clipSeatSummary(extractOverview(visible) ?? firstParagraph(visible));

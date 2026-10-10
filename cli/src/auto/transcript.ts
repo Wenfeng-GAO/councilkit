@@ -62,6 +62,8 @@ export interface ReviewTaskRecord {
   pr?: string;
   task?: string;
   focus?: string;
+  /** Named bound spec source (--spec path or label). Body stays in the manifest. */
+  specSource?: string;
   councilTopic?: string;
   against?: string;
   repairPackageHash?: string;
@@ -79,6 +81,7 @@ export const reviewStartedRecordSchema = z
         pr: z.string().optional(),
         task: z.string().optional(),
         focus: z.string().optional(),
+        specSource: z.string().optional(),
         councilTopic: z.string().optional(),
         against: z.string().optional(),
         repairPackageHash: z
