@@ -69,7 +69,7 @@ export interface SpecVerifyBinding {
 
 export const SPEC_REFUSAL_MESSAGE = [
   "review refused: no boundable spec-contract found for this PR/task.",
-  "A review needs a contract document from project-conventional sources before it starts;",
+  "A review needs a contract document from project-conventional sources (refused in the review stage when --require-spec);",
   "PR description / --task text alone is not a contract and will not be used as a fallback.",
   "",
   "Where to put a spec (any one is enough):",
@@ -94,7 +94,7 @@ export const SPEC_VERIFY_UNBOUND_MESSAGE = [
  * Resolve the review contract.
  * - `--spec` wins (explicit bind).
  * - Otherwise auto-detect from search text + optional repo root.
- * - Returns null when nothing boundable is found (caller must hard-refuse).
+ * - Returns null when nothing boundable is found (caller soft-starts; review-stage gate may refuse).
  */
 export function resolveSpecContract(input: {
   explicitSpec?: string | null;

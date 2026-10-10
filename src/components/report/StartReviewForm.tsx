@@ -1,6 +1,10 @@
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/TextInput";
 import { mapStartReviewError, parseStartReviewQuery } from "@/lib/start-review-hints";
+import {
+  DEFAULT_REQUIRE_SPEC,
+  REQUIRE_SPEC_CHECKBOX_LABEL,
+} from "@/lib/review-require-spec";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { CliRunStartReviewRequest } from "@shared/runtime/schemas";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -21,6 +25,8 @@ export function StartReviewForm() {
   const against = query.against;
   const [pr, setPr] = useState(query.pr ?? "");
   const [repo, setRepo] = useState("");
+  /** Default checked: force contract (spec) review — refuse in-stage if unbound. */
+  const [requireSpec, setRequireSpec] = useState(DEFAULT_REQUIRE_SPEC);
   const [hint, setHint] = useState<{ text: string; copyCommand: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -38,7 +44,7 @@ export function StartReviewForm() {
 
   const start = useMutation({
     mutationFn: () => {
-      const body: CliRunStartReviewRequest = { pr: pr.trim() };
+      const body: CliRunStartReviewRequest = { pr: pr.trim(), requireSpec };
       const repoPath = repo.trim();
       if (repoPath.length > 0) body.repo = repoPath;
       if (against) body.against = against;
@@ -97,6 +103,25 @@ export function StartReviewForm() {
           autoComplete="off"
         />
         <DefaultReviewJury disabled={start.isPending} onStatusChange={setJuryStatus} />
+        <label
+          htmlFor="review-require-spec"
+          className="flex cursor-pointer items-start gap-2 text-sm text-fg"
+        >
+          <input
+            id="review-require-spec"
+            type="checkbox"
+            className="mt-1"
+            checked={requireSpec}
+            onChange={(event) => setRequireSpec(event.target.checked)}
+          />
+          <span>
+            <span className="font-medium">{REQUIRE_SPEC_CHECKBOX_LABEL}</span>
+            <span className="mt-0.5 block text-xs text-muted">
+              默认开启。无绑定规格时进入审查阶段后拒绝（不会在点「开始审查」时立刻因
+              SPEC_REQUIRED 退出）。取消勾选则允许非合同 / 遗留加法审查。
+            </span>
+          </span>
+        </label>
         <details className="ck-review-advanced">
           <summary className="cursor-pointer select-none text-sm text-muted">
             高级 · 本地仓库

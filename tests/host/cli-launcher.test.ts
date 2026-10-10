@@ -60,7 +60,9 @@ describe("launchArgs", () => {
       pr: "https://github.com/acme/repo/pull/1",
       reviewModels,
     });
-    expect(args.slice(-2)).toEqual(["--review-models", JSON.stringify(reviewModels)]);
+    expect(args).toContain("--review-models");
+    expect(args[args.indexOf("--review-models") + 1]).toBe(JSON.stringify(reviewModels));
+    expect(args).toContain("--require-spec");
   });
   it("passes ideate idea after -- so leading dashes stay positional", () => {
     expect(
@@ -92,7 +94,13 @@ describe("launchArgs", () => {
         logPath: "/tmp/x.log",
         pr: "https://github.com/acme/repo/pull/126",
       }),
-    ).toEqual(["review", "https://github.com/acme/repo/pull/126", "--run-id", RUN_ID]);
+    ).toEqual([
+      "review",
+      "https://github.com/acme/repo/pull/126",
+      "--run-id",
+      RUN_ID,
+      "--require-spec",
+    ]);
   });
   it("builds repair run argv from frozen identity, not fix --run", () => {
     const repairId = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
@@ -142,6 +150,25 @@ describe("launchArgs", () => {
       RUN_ID,
       "--against",
       "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+      "--require-spec",
+    ]);
+  });
+
+  it("passes --no-require-spec when requireSpec is false", () => {
+    expect(
+      launchArgs({
+        action: "review",
+        runId: RUN_ID,
+        logPath: "/tmp/x.log",
+        pr: "https://github.com/acme/repo/pull/126",
+        requireSpec: false,
+      }),
+    ).toEqual([
+      "review",
+      "https://github.com/acme/repo/pull/126",
+      "--run-id",
+      RUN_ID,
+      "--no-require-spec",
     ]);
   });
 });

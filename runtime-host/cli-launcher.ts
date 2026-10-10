@@ -36,6 +36,8 @@ export interface CliRunLaunchRequest {
   repo?: string;
   against?: string;
   reviewModels?: ReviewModels;
+  /** Default true; false → pass --no-require-spec. */
+  requireSpec?: boolean;
   idea?: string;
   background?: string;
   debateRounds?: number;
@@ -171,6 +173,8 @@ export function launchArgs(input: CliRunLaunchRequest): string[] {
     }
     if (input.reviewModels) args.push("--review-models", JSON.stringify(input.reviewModels));
     if (input.against) args.push("--against", input.against);
+    if (input.requireSpec === false) args.push("--no-require-spec");
+    else args.push("--require-spec");
     return args;
   }
   if (input.action === "re-review") {

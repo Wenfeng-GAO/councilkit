@@ -417,7 +417,7 @@ describe("councilkit init", () => {
     await runInit([], makeSink());
     const sink = makeSink();
     try {
-      await runReview(["--council", "pr-jury", "--task", "fixture review"], sink, {
+      await runReview(["--council", "pr-jury", "--task", "fixture review", "--no-require-spec"], sink, {
         spawnImpl: fakeSpawn(),
       });
     } catch (error) {

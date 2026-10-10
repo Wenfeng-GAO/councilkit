@@ -54,6 +54,8 @@ export const invocationManifestSchema = z
       .nullable(),
     timeoutMs: z.number().int().positive(),
     concurrency: z.number().int().positive().nullable(),
+    /** Soft-start preference: refuse unbound contract in the review stage (default true when omitted). */
+    requireSpec: z.boolean().optional(),
     agents: z
       .array(
         z
@@ -240,6 +242,7 @@ export function buildInvocationManifest(input: {
   reviewedSha: string | null;
   timeoutMs: number;
   concurrency: number | null;
+  requireSpec?: boolean;
   agents: readonly AgentRecord[];
   aggregator: AgentRecord;
   tools: ToolFingerprint[];
@@ -248,6 +251,7 @@ export function buildInvocationManifest(input: {
     version: 1,
     kind: "councilkit-invocation-manifest",
     runId: input.runId,
+    requireSpec: input.requireSpec !== false,
     task: {
       ...(input.task.pr ? { pr: input.task.pr } : {}),
       ...(input.task.task ? { task: input.task.task } : {}),
@@ -444,6 +448,7 @@ export function resumeArgvFromManifest(manifest: InvocationManifest): string[] {
   if (manifest.task.focus) argv.push("--focus", manifest.task.focus);
   if (manifest.task.specSource) argv.push("--spec", manifest.task.specSource);
   if (manifest.task.against) argv.push("--against", manifest.task.against);
+  if (manifest.requireSpec === false) argv.push("--no-require-spec");
   return argv;
 }
 
@@ -489,5 +494,6 @@ export function taskFromManifest(manifest: InvocationManifest): ReviewTask {
     against: manifest.task.against,
     repairPackageHash: manifest.task.repairPackageHash,
     councilTopic: manifest.task.councilTopic,
+    requireSpec: manifest.requireSpec !== false,
   };
 }

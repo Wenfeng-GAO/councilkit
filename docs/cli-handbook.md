@@ -239,13 +239,14 @@ councilkit review <url> --resume <run-id> [--json]
 - `--codex-timeout 90m`：默认 90 分钟
 - `--concurrency 10`：默认并发 10
 - `--focus "<text>"`：审查焦点（注入任务模板）
-- `--spec <path|label>`：显式绑定规格合同（文件则注入正文）。**缺省时自动检测**；检测失败则硬拒绝开审（exit 2），不以 PR 描述单独作合同
+- `--spec <path|label>`：显式绑定规格合同（文件则注入正文）。**缺省时自动检测**；AntCode / 本地 `--repo` 流程仍建议在有合同文件时传 `--spec`
+- `--require-spec` / `--no-require-spec`：是否强制按 spec 审查（**默认 `--require-spec` / true**）。软启动：命令入口与 Host「开始审查」**不会**因缺规格立刻 `SPEC_REQUIRED` 退出；有绑定时走合同减法，无绑定且仍强制时在**审查阶段**（probe 之后、Attempt 开跑前）拒绝（exit 2，文案清晰）。`--no-require-spec` 允许非合同 / 遗留加法模式（写入 invocation manifest，resume 一致）
 - `--against <run-id>`：增量陪审，优先保留原问题 ID
 - `--repair-package <file>`：与 `--against` 配合，验证不可变的选定修复任务
 
-#### 规格合同减法（硬门禁）
+#### 规格合同减法（审查阶段门禁）
 
-开审前必须绑定一份**合同文档**（规格）。检测与绑定规则：
+检测与绑定规则（入口软启动，门禁在审查阶段）：
 
 1. **`--spec <path>`** 显式指定（优先）。
 2. 否则从 PR 描述 / `--task` 正文中扫描项目约定路径引用并读取本地文件：
@@ -253,9 +254,11 @@ councilkit review <url> --resume <run-id> [--json]
    - `docs/design/**`
    - `docs/vibespec/**`（含 PRD/DESIGN/TECH/TASKS/VERIFY.md）
    - `docs/verification/**`（含 `*acceptance*` / contract 文档）
-3. **找不到可读合同 → 硬拒绝**（exit 2）。拒绝文案说明缺失物与应放置路径；**不会**回退成对 PR 描述的加法对抗审查。
+3. **找不到可读合同**：
+   - **默认强制（`--require-spec`）**：不在 Host/CLI 启动瞬间硬退出；进入 run 后在审查阶段拒绝（`SPEC_REQUIRED`，exit 2）。拒绝文案说明缺失物与应放置路径；**不会**静默改成无合同加法对抗审查。
+   - **`--no-require-spec`**：允许继续，非合同 / 遗留模式（prompt 标明未绑定；blocking 回退严重度门禁）。
 4. **有合同 → 自动绑定**，审查为减法：只对绑定规格中的具名不变量 / 验收 ID / agentverify 场景作 **Act On**（须同时给出可复现反例）。
-5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `A01` / `INV-*` / `VT*` / `agentverify:*`，或「验收」章节 checklist），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若规格无可具名验收点 → 硬拒绝（`SPEC_VERIFY_UNBOUND`）。
+5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `A01` / `INV-*` / `VT*` / `agentverify:*`，或「验收」章节 checklist），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若规格无可具名验收点 → 仍拒绝（`SPEC_VERIFY_UNBOUND`）。
 
 规格未覆盖的重大问题必须标为 **`[suggest-amend-spec]` /「建议修订规格」**，可展示但**默认不阻塞合并**。Aggregator 去重；nit / 纯风格 / 仅注释行号不阻塞。旧账本行若无 `contractClass` 字段，仍按原来的 critical/major 严重度门禁（兼容）。
 

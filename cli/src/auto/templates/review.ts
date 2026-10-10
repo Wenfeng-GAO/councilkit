@@ -57,8 +57,10 @@ export interface ReviewTask {
   focus?: string;
   /**
    * Bound spec-contract source for subtractive review (path or label).
-   * Required: auto-detected from conventional sources, or set via `--spec`.
-   * Missing spec is a hard gate (review refuses); PR body alone is never the contract.
+   * Auto-detected from conventional sources, or set via `--spec`.
+   * When missing: soft-start still enters the run; the review-stage gate
+   * (`requireSpec`, default true) refuses mid-stage unless `--no-require-spec`.
+   * PR body alone is never the contract.
    */
   specSource?: string;
   /** Prompt-only body of the bound spec (from `--spec` / auto-detect file). */
@@ -67,6 +69,11 @@ export interface ReviewTask {
   acceptanceIds?: string[];
   /** Prompt-only verify schedule note derived from the bound spec. */
   verifyScheduleNote?: string;
+  /**
+   * When true (default), unbound contract refuses in the review stage.
+   * When false (`--no-require-spec`), run continues in non-contract / legacy mode.
+   */
+  requireSpec?: boolean;
   /** Injected only under `--council` when the Council has a non-empty topic. */
   councilTopic?: string;
   /** Prior run id whose findings.json this review classifies against. */
@@ -444,17 +451,35 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
 function renderSpecBinding(task: ReviewTask): string {
   const source = task.specSource?.trim();
   const body = task.specText?.trim();
+  const requireSpec = task.requireSpec !== false;
   const lines = [
     "## 绑定规格（审查合同）",
     "",
-    "本审查为规格合同减法：Act On 默认只接受「违反下列绑定规格中具名不变量 / 验收 ID」且带可复现反例的发现。",
-    "规格未覆盖的重大问题必须使用 [suggest-amend-spec]，写入「建议修订规格」，默认不阻塞合并。",
-    "无绑定规格时 CLI 已硬拒绝开审；不得把 PR 描述单独当作合同做加法对抗审查。",
   ];
   if (source) {
-    lines.push("", `规格来源：${source}`);
+    lines.push(
+      "本审查为规格合同减法：Act On 默认只接受「违反下列绑定规格中具名不变量 / 验收 ID」且带可复现反例的发现。",
+      "规格未覆盖的重大问题必须使用 [suggest-amend-spec]，写入「建议修订规格」，默认不阻塞合并。",
+      "不得把 PR 描述单独当作合同做加法对抗审查。",
+      "",
+      `规格来源：${source}`,
+    );
+  } else if (requireSpec) {
+    lines.push(
+      "本审查要求绑定规格合同（强制按 spec review）。",
+      "无绑定规格时审查阶段会拒绝继续；不得把 PR 描述单独当作合同。",
+      "",
+      "规格来源：（缺失 — 审查阶段将拒绝）",
+    );
   } else {
-    lines.push("", "规格来源：（缺失 — 不应到达此处）");
+    lines.push(
+      "未绑定规格合同（`--no-require-spec` / 取消「强制按 spec review」）。",
+      "本审查以**非合同 / 遗留加法**模式运行：可做一般代码审查，但不得假装已有合同减法；",
+      "重大发现仍建议标注 [suggest-amend-spec] 若明显超出任何隐含需求；blocking 回退为严重度门禁（无 contractClass 时）。",
+      "PR 描述本身仍不是合同。",
+      "",
+      "规格来源：（未绑定 — 非强制模式）",
+    );
   }
   if (body) {
     // Cap so a near-AGGREGATE_PROMPT_BUDGET spec cannot starve Attempt outputs.

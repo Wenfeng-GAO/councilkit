@@ -150,6 +150,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
               repo: body.repo,
               against: body.against,
               reviewModels: body.reviewModels,
+              requireSpec: body.requireSpec,
               logPath,
             }),
           );
