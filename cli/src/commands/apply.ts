@@ -37,6 +37,7 @@ import {
   buildSpawnSpec,
   probeTimeoutMs,
 } from "../auto/driver-commands";
+import { runDriverProbe } from "../auto/driver-probe";
 import { formatDurationMs } from "../auto/duration";
 import {
   appendLanding,
@@ -328,10 +329,18 @@ export async function runApply(
       cwd: probeCwd,
       prompt: DRIVER_PROBE_PROMPT,
     });
-    const probe = await spawnOnce(probeSpec, {
-      timeoutMs: probeTimeoutMs(agent.driverSelection.driverId),
+    const probe = await runDriverProbe({
+      agent,
+      probeId: probeSpec.attemptId,
+      cwd: probeCwd,
       signal: controller.signal,
       spawnImpl: deps.spawnImpl,
+      runLlmProbe: () =>
+        spawnOnce(probeSpec, {
+          timeoutMs: probeTimeoutMs(agent.driverSelection.driverId),
+          signal: controller.signal,
+          spawnImpl: deps.spawnImpl,
+        }),
     });
     if (controller.signal.aborted) {
       await finish({

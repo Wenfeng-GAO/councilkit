@@ -114,6 +114,8 @@ export interface SpawnInput {
   onLiveEvent?: (events: RawLiveEvent[]) => void;
   /** Merged after driver isolation env (ideate home / sandbox). */
   envOverlay?: NodeJS.ProcessEnv;
+  /** Probe-only warm GROK_HOME (see AttemptSpec.warmGrokHome). */
+  warmGrokHome?: boolean;
 }
 
 export interface SpawnOutput {
@@ -476,6 +478,7 @@ async function runOneSpawn(
       signal: opts.signal,
       driverId: spec.driverId,
       envOverlay: spec.envOverlay,
+      warmGrokHome: spec.warmGrokHome,
       onActivity: (hint) => {
         lastActivity = hint;
         opts.onActivity?.(spec.attemptId, hint);
@@ -682,7 +685,12 @@ export function defaultSpawn(
     try {
       child = spawnFn(input.executable, input.argv, {
         cwd: input.cwd,
-        env: { ...spawnEnvForDriver(input.driverId, input.cwd), ...input.envOverlay },
+        env: {
+          ...spawnEnvForDriver(input.driverId, input.cwd, process.env, {
+            warmGrokHome: input.warmGrokHome,
+          }),
+          ...input.envOverlay,
+        },
         shell: false,
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],
