@@ -93,4 +93,43 @@ comment
     const output = `## 概览\n\n${"a".repeat(239)}😀\n`;
     expect(summarizeSeatOutput(output).summary).toBe("a".repeat(239));
   });
+
+  it("counts a short act-on major even when the next item is suggest-amend-spec", () => {
+    // Regression: an 80-char lookahead used to see the next item's marker and
+    // wrongly exclude the first finding from blockingCount.
+    const output = `## 概览
+
+短项回归。
+
+## 发现
+
+- [major][act-on] 短阻塞项
+- [major][suggest-amend-spec] 规格外建议
+`;
+    expect(summarizeSeatOutput(output)).toEqual({
+      parseStatus: "parsed",
+      summary: "短项回归。",
+      findingCount: 2,
+      blockingCount: 1,
+    });
+  });
+
+  it("does not count suggest-amend-spec majors as blocking", () => {
+    const output = `## 概览
+
+仅规格外。
+
+## 发现
+
+- [major][suggest-amend-spec] 规格未覆盖缓存上限
+- [critical][out-of-spec] 规格外临界项
+`;
+    expect(summarizeSeatOutput(output)).toEqual({
+      parseStatus: "parsed",
+      summary: "仅规格外。",
+      findingCount: 2,
+      blockingCount: 0,
+    });
+  });
+
 });

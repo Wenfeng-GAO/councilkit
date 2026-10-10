@@ -29,6 +29,7 @@ import {
   findingStatusLabel,
   isFindingVerifiedClosed,
   lastLandingRange,
+  parseFindingContractFields,
   parseFindingsFile,
   parseLandingsText,
   parsePlanLockFile,
@@ -83,8 +84,26 @@ export function againstDiffRange(input: {
 }
 export type { FindingsFile, LandingRecord, LedgerFinding, PlanCluster, PlanLockFile };
 
-const CONSENSUS_TITLES = new Set(["共识发现", "consensus findings", "consensus"]);
+const CONSENSUS_TITLES = new Set([
+  "共识发现",
+  "consensus findings",
+  "consensus",
+  "共识发现（合同内 act on）",
+  "共识发现（合同内 Act On）",
+  "合同内 act on",
+  "合同内 Act On",
+]);
 const UNIQUE_TITLES = new Set(["独有发现", "unique findings", "unique"]);
+/** Out-of-spec / suggest-amend-spec — extracted but never merge-blocking by default. */
+const OUT_OF_SPEC_TITLES = new Set([
+  "建议修订规格",
+  "suggest amend spec",
+  "suggest-amend-spec",
+  "out-of-spec",
+  "out of spec",
+  "规格外发现",
+  "规格外",
+]);
 const SKIP_TITLES = new Set([
   "概览",
   "overview",
@@ -120,20 +139,21 @@ export function extractFindingsFromReport(input: {
   const findings: LedgerFinding[] = [];
   if (parsed) {
     for (const section of parsed.sections) {
-      const source = sectionSource(section.title);
-      if (source === null) continue;
+      const classified = classifySection(section.title);
+      if (classified === null) continue;
+      const { source, outOfSpec } = classified;
       if (section.groups && section.groups.length > 0) {
         for (const group of section.groups) {
           const reviewer =
             source === "unique" && group.title.trim().length > 0 ? group.title : null;
           for (const item of group.findings) {
-            const row = toLedgerFinding(item, source, reviewer, used);
+            const row = toLedgerFinding(item, source, reviewer, used, outOfSpec);
             if (row) findings.push(row);
           }
         }
       } else if (section.findings) {
         for (const item of section.findings) {
-          const row = toLedgerFinding(item, source, null, used);
+          const row = toLedgerFinding(item, source, null, used, outOfSpec);
           if (row) findings.push(row);
         }
       }
@@ -659,10 +679,13 @@ function projectLandingClaims(
 
 const FINDING_STATUS_ORDER: FindingStatus[] = ["open", "regress", "closed", "accepted"];
 
-function sectionSource(title: string): FindingSource | null {
+function classifySection(
+  title: string,
+): { source: FindingSource; outOfSpec: boolean } | null {
   const key = title.trim().toLowerCase();
-  if (CONSENSUS_TITLES.has(key)) return "consensus";
-  if (UNIQUE_TITLES.has(key)) return "unique";
+  if (OUT_OF_SPEC_TITLES.has(key)) return { source: "unique", outOfSpec: true };
+  if (CONSENSUS_TITLES.has(key)) return { source: "consensus", outOfSpec: false };
+  if (UNIQUE_TITLES.has(key)) return { source: "unique", outOfSpec: false };
   if (SKIP_TITLES.has(key)) return null;
   return null;
 }
@@ -672,6 +695,7 @@ function toLedgerFinding(
   source: FindingSource,
   reviewer: string | null,
   used: Set<string>,
+  sectionImpliesOutOfSpec = false,
 ): LedgerFinding | null {
   if (item.severity === null) return null;
   const text = item.text.trim();
@@ -684,6 +708,11 @@ function toLedgerFinding(
     used,
   );
   used.add(id);
+  const contract = parseFindingContractFields({
+    qualifier: item.qualifier,
+    text,
+    sectionImpliesOutOfSpec,
+  });
   return {
     id,
     severity: item.severity,
@@ -693,6 +722,13 @@ function toLedgerFinding(
     source,
     reviewer,
     files,
+    ...(contract.contractClass
+      ? {
+          contractClass: contract.contractClass,
+          invariantId: contract.invariantId,
+          counterexample: contract.counterexample,
+        }
+      : {}),
   };
 }
 

@@ -90,7 +90,7 @@ export function FindingLedger({
       <p className="ck-finding-list-summary">{summary}</p>
       {projection.blockingCount > 0 ? (
         <p className="ck-finding-list-note">
-          阻塞依据：账本中重大或致命的问题，尚未验证解决或接受不修。报告中的“本轮不阻塞”不会自动改变这项门禁。
+          阻塞依据（规格合同减法）：合同内 Act On——重大/致命且引用具名不变量 ID + 可复现反例，尚未验证解决或接受不修。标为规格外 / 建议修订规格的项默认不阻塞；nit 不阻塞。报告中的“本轮不阻塞”不会自动改变这项门禁。
         </p>
       ) : null}
       {countNote ? <p className="ck-finding-list-note">{countNote}</p> : null}

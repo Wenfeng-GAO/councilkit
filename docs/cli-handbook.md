@@ -239,8 +239,25 @@ councilkit review <url> --resume <run-id> [--json]
 - `--codex-timeout 90m`：默认 90 分钟
 - `--concurrency 10`：默认并发 10
 - `--focus "<text>"`：审查焦点（注入任务模板）
+- `--spec <path|label>`：显式绑定规格合同（文件则注入正文）。**缺省时自动检测**；检测失败则硬拒绝开审（exit 2），不以 PR 描述单独作合同
 - `--against <run-id>`：增量陪审，优先保留原问题 ID
 - `--repair-package <file>`：与 `--against` 配合，验证不可变的选定修复任务
+
+#### 规格合同减法（硬门禁）
+
+开审前必须绑定一份**合同文档**（规格）。检测与绑定规则：
+
+1. **`--spec <path>`** 显式指定（优先）。
+2. 否则从 PR 描述 / `--task` 正文中扫描项目约定路径引用并读取本地文件：
+   - `docs/plans/**`
+   - `docs/design/**`
+   - `docs/vibespec/**`（含 PRD/DESIGN/TECH/TASKS/VERIFY.md）
+   - `docs/verification/**`（含 `*acceptance*` / contract 文档）
+3. **找不到可读合同 → 硬拒绝**（exit 2）。拒绝文案说明缺失物与应放置路径；**不会**回退成对 PR 描述的加法对抗审查。
+4. **有合同 → 自动绑定**，审查为减法：只对绑定规格中的具名不变量 / 验收 ID / agentverify 场景作 **Act On**（须同时给出可复现反例）。
+5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `A01` / `INV-*` / `VT*` / `agentverify:*`，或「验收」章节 checklist），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若规格无可具名验收点 → 硬拒绝（`SPEC_VERIFY_UNBOUND`）。
+
+规格未覆盖的重大问题必须标为 **`[suggest-amend-spec]` /「建议修订规格」**，可展示但**默认不阻塞合并**。Aggregator 去重；nit / 纯风格 / 仅注释行号不阻塞。旧账本行若无 `contractClass` 字段，仍按原来的 critical/major 严重度门禁（兼容）。
 
 #### 账本与闭环
 

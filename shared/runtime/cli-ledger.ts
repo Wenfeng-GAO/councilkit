@@ -53,6 +53,10 @@ export const findingRepairClaimSchema = z
   .strict();
 export type FindingRepairClaim = z.infer<typeof findingRepairClaimSchema>;
 
+/** Spec-bound review: Act On vs suggest-amend-spec. Absent = legacy ledger row. */
+export const FINDING_CONTRACT_CLASSES = ["in_contract", "out_of_spec"] as const;
+export type FindingContractClass = (typeof FINDING_CONTRACT_CLASSES)[number];
+
 export const ledgerFindingSchema = z
   .object({
     id: z.string().min(1).max(160),
@@ -63,6 +67,10 @@ export const ledgerFindingSchema = z
     source: z.enum(FINDING_SOURCES),
     reviewer: z.string().max(120).nullable(),
     files: z.array(z.string().min(1).max(400)).max(32),
+    /** Present on spec-bound extracts; omitted on legacy findings.json rows. */
+    contractClass: z.enum(FINDING_CONTRACT_CLASSES).nullable().optional(),
+    invariantId: z.string().trim().min(1).max(200).nullable().optional(),
+    counterexample: z.string().trim().min(1).max(4000).nullable().optional(),
     repairClaim: findingRepairClaimSchema.optional(),
     verification: findingVerificationSchema.optional(),
     acceptedReason: z.string().trim().min(1).max(2000).optional(),
@@ -88,12 +96,85 @@ export function isFindingVerifiedClosed(row: LedgerFinding, sha?: string | null)
   );
 }
 
+/** True when a finding has the Act On contract footing (named invariant + counterexample). */
+export function hasActOnFooting(
+  row: Pick<LedgerFinding, "invariantId" | "counterexample">,
+): boolean {
+  const invariant = row.invariantId?.trim() ?? "";
+  const counterexample = row.counterexample?.trim() ?? "";
+  return invariant.length > 0 && counterexample.length > 0;
+}
+
+/**
+ * Merge / repair gate. Spec-bound subtractive policy:
+ * - nit / minor never block
+ * - out_of_spec (suggest-amend-spec) never blocks by default
+ * - in_contract Act On blocks only with invariantId + counterexample
+ * - legacy rows (no contractClass) keep severity-based blocking
+ */
 export function isFindingBlocking(row: LedgerFinding, sha?: string | null): boolean {
-  return (
-    (row.severity === "critical" || row.severity === "major") &&
-    row.status !== "accepted" &&
-    !isFindingVerifiedClosed(row, sha)
-  );
+  if (row.severity !== "critical" && row.severity !== "major") return false;
+  if (row.status === "accepted") return false;
+  if (isFindingVerifiedClosed(row, sha)) return false;
+  if (row.contractClass === "out_of_spec") return false;
+  if (row.contractClass === "in_contract") return hasActOnFooting(row);
+  // Legacy findings.json without contractClass: severity-only gate.
+  return true;
+}
+
+/** Parse Act On / out-of-spec tags and 不变量 / 反例 lines from report text.
+ * Returns contractClass null when the finding has no new-format tags/fields so
+ * legacy report extracts keep severity-based blocking. */
+export function parseFindingContractFields(input: {
+  qualifier?: string | null;
+  text: string;
+  sectionImpliesOutOfSpec?: boolean;
+}): {
+  contractClass: FindingContractClass | null;
+  invariantId: string | null;
+  counterexample: string | null;
+} {
+  const qualifier = (input.qualifier ?? "").trim().toLowerCase();
+  const text = input.text;
+  const outOfSpec =
+    input.sectionImpliesOutOfSpec === true ||
+    /^(?:suggest-amend-spec|out-of-spec|out_of_spec|amend-spec|规格外|建议修订规格)$/i.test(
+      qualifier,
+    ) ||
+    /\b(?:suggest-amend-spec|out-of-spec)\b/i.test(qualifier);
+  const actOnTagged =
+    /^(?:act-on|合同内)$/i.test(qualifier) || /\bact-on\b/i.test(qualifier);
+  const invariantId = firstField(text, [
+    /(?:^|\n)\s*(?:不变量|不变式|invariant|acceptance(?:\s*id)?|验收)\s*[:：]\s*`?([^`\n]+?)`?\s*(?:\n|$)/i,
+    /\b((?:AC|INV|AV)[-_][A-Za-z0-9][\w.-]{0,80})\b/,
+  ]);
+  const counterexample = firstField(text, [
+    /(?:^|\n)\s*(?:反例|counter(?:\s*-?\s*example)?|复现)\s*[:：]\s*(.+?)(?=\n\s*(?:建议|位置|证据|不变量|不变式|invariant|acceptance|验收)\s*[:：]|\n\s*-\s|\n\n|$)/is,
+  ]);
+  if (outOfSpec) {
+    return {
+      contractClass: "out_of_spec",
+      invariantId,
+      counterexample,
+    };
+  }
+  if (actOnTagged || invariantId !== null || counterexample !== null) {
+    return {
+      contractClass: "in_contract",
+      invariantId,
+      counterexample,
+    };
+  }
+  return { contractClass: null, invariantId: null, counterexample: null };
+}
+
+function firstField(text: string, patterns: RegExp[]): string | null {
+  for (const re of patterns) {
+    const match = re.exec(text);
+    const raw = match?.[1]?.trim();
+    if (raw && raw.length > 0) return raw.slice(0, 4000);
+  }
+  return null;
 }
 
 export function findingStatusLabel(row: LedgerFinding, sha?: string | null): string {
@@ -105,6 +186,10 @@ export function findingStatusLabel(row: LedgerFinding, sha?: string | null): str
   if (row.verification?.outcome === "still_open") return "验证仍成立";
   if (row.repairClaim) return "声明已修复 · 待验证";
   if (row.status === "regress") return "回归";
+  if (row.contractClass === "out_of_spec") return "规格外 · 建议修订规格";
+  if (row.contractClass === "in_contract" && !hasActOnFooting(row)) {
+    return "合同内缺脚注 · 不入 Act On";
+  }
   return "未解决";
 }
 
