@@ -68,6 +68,7 @@ import {
   buildSpawnSpec,
   probeTimeoutMs,
 } from "../auto/driver-commands";
+import { runDriverProbe } from "../auto/driver-probe";
 import { redactDriverDiagnostic } from "../auto/driver-terminal";
 import { formatDurationMs } from "../auto/duration";
 import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
@@ -855,51 +856,62 @@ export async function runReview(
         frozenTools,
         executionRevision,
       };
-      let result = await spawnOnce(job.spec, probeOptions);
-      let probeDurationMs = result.durationMs;
-      logProbeAttempt({
-        driverId: job.probeAgent.driverSelection.driverId,
-        modelId: job.probeAgent.modelId,
-        attemptNumber: 1,
-        durationMs: result.durationMs,
-        status: result.status,
-        failureCode: result.failure?.code,
+      // TTL cache + lightweight connectivity first; escalate to LLM when needed.
+      // TIMEOUT retry for cursor/codex/kimi stays on the LLM path only.
+      const outcome = await runDriverProbe({
+        agent: job.probeAgent,
+        probeId: job.probeId,
+        cwd: job.spec.cwd,
+        signal: controller.signal,
+        spawnImpl: deps.spawnImpl,
+        runLlmProbe: async () => {
+          const result = await spawnOnce(job.spec, probeOptions);
+          logProbeAttempt({
+            driverId: job.probeAgent.driverSelection.driverId,
+            modelId: job.probeAgent.modelId,
+            attemptNumber: 1,
+            durationMs: result.durationMs,
+            status: result.status,
+            failureCode: result.failure?.code,
+          });
+          const retryableDriver =
+            job.probeAgent.driverSelection.driverId === "cursor-stream-json" ||
+            job.probeAgent.driverSelection.driverId === "codex-app-server" ||
+            job.probeAgent.driverSelection.driverId === "kimi-stream-json";
+          if (retryableDriver && result.failure?.code === "TIMEOUT" && !controller.signal.aborted) {
+            out.progress(
+              `  probe ${job.probeAgent.driverSelection.driverId} (${job.probeAgent.modelId}) timed out; retrying once`,
+            );
+            const retry = await spawnOnce(job.spec, probeOptions);
+            logProbeAttempt({
+              driverId: job.probeAgent.driverSelection.driverId,
+              modelId: job.probeAgent.modelId,
+              attemptNumber: 2,
+              durationMs: retry.durationMs,
+              status: retry.status,
+              failureCode: retry.failure?.code,
+            });
+            return {
+              ...retry,
+              durationMs: result.durationMs + retry.durationMs,
+            };
+          }
+          return result;
+        },
       });
-      // A slow startup under concurrency is recoverable for cursor, codex, and
-      // kimi; invalid models and cancellation are not. spawnOnce has already
-      // reaped the timed-out process here.
-      const retryableDriver =
-        job.probeAgent.driverSelection.driverId === "cursor-stream-json" ||
-        job.probeAgent.driverSelection.driverId === "codex-app-server" ||
-        job.probeAgent.driverSelection.driverId === "kimi-stream-json";
-      if (retryableDriver && result.failure?.code === "TIMEOUT" && !controller.signal.aborted) {
-        out.progress(
-          `  probe ${job.probeAgent.driverSelection.driverId} (${job.probeAgent.modelId}) timed out; retrying once`,
-        );
-        result = await spawnOnce(job.spec, probeOptions);
-        probeDurationMs += result.durationMs;
-        logProbeAttempt({
-          driverId: job.probeAgent.driverSelection.driverId,
-          modelId: job.probeAgent.modelId,
-          attemptNumber: 2,
-          durationMs: result.durationMs,
-          status: result.status,
-          failureCode: result.failure?.code,
-        });
-      }
       const record: DriverProbeRecord = {
-        driverId: job.probeAgent.driverSelection.driverId,
-        modelId: job.probeAgent.modelId,
-        status: result.status,
-        durationMs: probeDurationMs,
-        failure: persistableFailure(result.failure),
+        driverId: outcome.driverId,
+        modelId: outcome.modelId,
+        status: outcome.status,
+        durationMs: outcome.durationMs,
+        failure: persistableFailure(outcome.failure ?? undefined),
       };
       probeSlots[i] = record;
       probeByModel.set(job.key, record);
       runningProbe.delete(i);
       await preflightWriter.write(probeSeats());
       out.progress(
-        `  probe ${record.driverId} (${record.modelId}) -> ${result.status === "success" ? "ok" : "unreachable"}`,
+        `  probe ${record.driverId} (${record.modelId}) -> ${record.status === "success" ? "ok" : "unreachable"} [${outcome.path}]`,
       );
     }
   };

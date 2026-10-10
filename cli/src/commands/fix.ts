@@ -25,6 +25,7 @@ import {
   buildSpawnSpec,
   probeTimeoutMs,
 } from "../auto/driver-commands";
+import { runDriverProbe } from "../auto/driver-probe";
 import { formatDurationMs } from "../auto/duration";
 import {
   attachClosesFromFindings,
@@ -910,18 +911,26 @@ async function probeAgent(
   spawnImpl: SpawnImpl | undefined,
   probeCwd: string,
 ): Promise<boolean> {
-  const probe = await spawnOnce(
-    buildProbeSpec(agent, {
-      probeId: `probe-${agent.driverSelection.driverId}`,
-      cwd: probeCwd,
-      prompt: DRIVER_PROBE_PROMPT,
-    }),
-    {
-      timeoutMs: probeTimeoutMs(agent.driverSelection.driverId, PROBE_TIMEOUT_MS),
-      signal,
-      spawnImpl,
-    },
-  );
+  const probe = await runDriverProbe({
+    agent,
+    probeId: `probe-${agent.driverSelection.driverId}`,
+    cwd: probeCwd,
+    signal,
+    spawnImpl,
+    runLlmProbe: () =>
+      spawnOnce(
+        buildProbeSpec(agent, {
+          probeId: `probe-${agent.driverSelection.driverId}`,
+          cwd: probeCwd,
+          prompt: DRIVER_PROBE_PROMPT,
+        }),
+        {
+          timeoutMs: probeTimeoutMs(agent.driverSelection.driverId, PROBE_TIMEOUT_MS),
+          signal,
+          spawnImpl,
+        },
+      ),
+  });
   return probe.status === "success";
 }
 

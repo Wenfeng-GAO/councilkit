@@ -82,6 +82,14 @@ export interface AttemptSpec {
   envOverlay?: NodeJS.ProcessEnv;
   /** Ephemeral auth home outside the retained Run tree; caller must dispose. */
   ephemeralHome?: string;
+  /**
+   * Probe-only: reuse the process warm GROK_HOME (`/tmp/ck-grok-<uid>/warm-home`)
+   * instead of copying credentials into `<cwd>/.grok-home` on every probe.
+   * Review/apply attempt spawns keep per-cwd isolation (default false).
+   * Warm home is still credentials-only with skills forced off — never the
+   * real `~/.grok` (avoids joining the interactive leader.sock).
+   */
+  warmGrokHome?: boolean;
   /** codex: path to the `-o` last-message file (also read for extraction). */
   lastMessageFile?: string;
   /** Per-Attempt timeout; the runner falls back to its pool default when absent. */
@@ -352,7 +360,7 @@ export function spawnEnvForDriver(
   driverId: string | undefined,
   cwd: string,
   base: NodeJS.ProcessEnv = process.env,
-  opts?: { localProxyPort?: () => number | null },
+  opts?: { localProxyPort?: () => number | null; warmGrokHome?: boolean },
 ): NodeJS.ProcessEnv {
   if (driverId === "grok-stream-json") {
     const {
@@ -363,7 +371,7 @@ export function spawnEnvForDriver(
       GROK_CURSOR_SKILLS_ENABLED: _cursorSkills,
       ...rest
     } = base;
-    const isolated = isolateGrokHome(cwd, origHome);
+    const isolated = isolateGrokHome(cwd, origHome, { warm: opts?.warmGrokHome === true });
     const next: NodeJS.ProcessEnv = {
       ...rest,
       PWD: cwd,
@@ -419,7 +427,69 @@ export function disposeIsolatedGrokHome(cwd: string | null | undefined): void {
   }
 }
 
-function isolateGrokHome(cwd: string, origHome: string | undefined): string | null {
+/** Process-lifetime warm GROK_HOME for probes (credentials + skills=false only). */
+let warmGrokHomeDir: string | null = null;
+
+/** Test seam: drop the cached warm path and remove the on-disk warm home. */
+export function resetWarmGrokHomeForTests(): void {
+  const dir = warmGrokHomeDir ?? join(grokLeaderSocketDir(), "warm-home");
+  warmGrokHomeDir = null;
+  try {
+    const st = lstatSync(dir);
+    if (st.isDirectory() && !st.isSymbolicLink()) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  } catch {
+    // missing — fine
+  }
+}
+
+/**
+ * Reusable probe GROK_HOME under `/tmp/ck-grok-<uid>/warm-home`.
+ * Same isolation contract as per-cwd `.grok-home`: auth/credentials only,
+ * `skills = false`, never the live `~/.grok` tree (no host skills, no shared
+ * interactive leader.sock). Safe to reuse across probes in one process;
+ * review attempt spawns still use per-cwd copies.
+ */
+export function ensureWarmGrokHome(origHome: string | undefined): string | null {
+  if (warmGrokHomeDir !== null) {
+    try {
+      const st = lstatSync(warmGrokHomeDir);
+      if (st.isDirectory() && !st.isSymbolicLink()) {
+        refreshWarmGrokHome(warmGrokHomeDir, origHome);
+        return warmGrokHomeDir;
+      }
+    } catch {
+      warmGrokHomeDir = null;
+    }
+  }
+  const dir = join(grokLeaderSocketDir(), "warm-home");
+  try {
+    mkdirSync(grokLeaderSocketDir(), { recursive: true, mode: 0o700 });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch {
+    return null;
+  }
+  refreshWarmGrokHome(dir, origHome);
+  warmGrokHomeDir = dir;
+  return dir;
+}
+
+function refreshWarmGrokHome(dir: string, origHome: string | undefined): void {
+  const src =
+    origHome !== undefined && origHome.trim().length > 0 ? origHome : join(homedir(), ".grok");
+  copyGrokCredentials(src, dir, { overwrite: true });
+  writeIsolatedGrokConfig(dir, ISOLATED_GROK_CONFIG);
+}
+
+function isolateGrokHome(
+  cwd: string,
+  origHome: string | undefined,
+  opts?: { warm?: boolean },
+): string | null {
+  if (opts?.warm === true) {
+    return ensureWarmGrokHome(origHome);
+  }
   const isolated = join(cwd, GROK_ISOLATED_HOME_DIR);
   try {
     mkdirSync(isolated, { recursive: true, mode: 0o700 });
@@ -440,7 +510,7 @@ function isolateGrokHome(cwd: string, origHome: string | undefined): string | nu
   return isolated;
 }
 
-function copyGrokCredentials(srcDir: string, dstDir: string): void {
+function copyGrokCredentials(srcDir: string, dstDir: string, opts?: { overwrite?: boolean }): void {
   for (const name of ["auth.json", "credentials.json"] as const) {
     const src = join(srcDir, name);
     const dest = join(dstDir, name);
@@ -448,6 +518,25 @@ function copyGrokCredentials(srcDir: string, dstDir: string): void {
       const st = lstatSync(src);
       if (!st.isFile() || st.isSymbolicLink()) continue;
       const data = readFileSync(src);
+      if (opts?.overwrite === true) {
+        try {
+          const existing = lstatSync(dest);
+          if (existing.isSymbolicLink()) continue;
+        } catch {
+          // dest missing
+        }
+        const fd = openSync(
+          dest,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC,
+          0o600,
+        );
+        try {
+          writeSync(fd, data);
+        } finally {
+          closeSync(fd);
+        }
+        continue;
+      }
       const fd = openSync(dest, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
       try {
         writeSync(fd, data);
@@ -936,6 +1025,8 @@ export function buildProbeSpec(
     executable,
     cwd,
     prompt,
+    /** Probe spawns reuse warm GROK_HOME; see AttemptSpec.warmGrokHome. */
+    warmGrokHome: driverId === "grok-stream-json",
     envOverlay: { TMPDIR: tmp, TMP: tmp, TEMP: tmp },
     ...invocation,
   };
