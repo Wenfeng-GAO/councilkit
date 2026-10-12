@@ -1,3 +1,4 @@
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import type { ReviewModels } from "@shared/runtime/schemas";
 import type { AgentRecord } from "../store/schemas";
 
@@ -5,7 +6,7 @@ import type { AgentRecord } from "../store/schemas";
 export function reviewModelAgents(config: ReviewModels): AgentRecord[] {
   return config.models.map((model, index) => ({
     id: `review-model-${index + 1}`,
-    name: `${model.modelId} · ${index + 1}`.slice(0, 128),
+    name: clipUtf16CodeUnits(`${model.modelId} · ${index + 1}`, 128),
     modelId: model.modelId,
     driverSelection: model.driverSelection,
     enabled: true,
