@@ -6,14 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SPEC_BYTES,
   SPEC_REFUSAL_MESSAGE,
   autoDetectSpec,
   bindVerifyFromSpec,
   extractAcceptanceIds,
   extractConventionalSpecRefs,
+  fetchPrSpecSearchText,
   formatSpecRefusal,
   isConventionalSpecPath,
-  MAX_SPEC_BYTES,
   resolveSpecContract,
 } from "../src/auto/spec-detect";
 
@@ -22,9 +23,9 @@ describe("conventional path detection", () => {
     expect(isConventionalSpecPath("docs/plans/feat-plan.md")).toBe(true);
     expect(isConventionalSpecPath("docs/design/2026-09-20-review-workspace/README.md")).toBe(true);
     expect(isConventionalSpecPath("docs/vibespec/councilkit/VERIFY.md")).toBe(true);
-    expect(isConventionalSpecPath("docs/verification/2026-09-23-review-explainer-acceptance.md")).toBe(
-      true,
-    );
+    expect(
+      isConventionalSpecPath("docs/verification/2026-09-23-review-explainer-acceptance.md"),
+    ).toBe(true);
     expect(isConventionalSpecPath("src/foo.ts")).toBe(false);
     expect(isConventionalSpecPath("README.md")).toBe(false);
   });
@@ -38,6 +39,15 @@ Also docs/vibespec/councilkit/PRD.md.
     expect(refs).toContain("docs/plans/2026-09-28-review-workspace-v2.md");
     expect(refs).toContain("docs/verification/foo-acceptance.md");
     expect(refs).toContain("docs/vibespec/councilkit/PRD.md");
+  });
+
+  it("extracts date-heavy docs/plans paths from AntCode-style PR description prose", () => {
+    const text = `
+## Spec
+Contract: \`docs/plans/2026-09-20-session-shutdown-recovery.md\`
+`;
+    const refs = extractConventionalSpecRefs(text);
+    expect(refs).toEqual(["docs/plans/2026-09-20-session-shutdown-recovery.md"]);
   });
 });
 
@@ -100,12 +110,10 @@ describe("with-spec auto-bind", () => {
 });
 
 describe("verify binding from bound spec", () => {
-  it("extracts AC/INV/A0x/VT/agentverify IDs", () => {
-    const ids = extractAcceptanceIds(
-      "AC-12 and INV-1; also A01, VT3, agentverify:cancel-path",
-    );
+  it("extracts AC/INV/A0x/A1/VT/agentverify IDs", () => {
+    const ids = extractAcceptanceIds("AC-12 and INV-1; also A1, A01, VT3, agentverify:cancel-path");
     expect(ids).toEqual(
-      expect.arrayContaining(["AC-12", "INV-1", "A01", "VT3", "agentverify:cancel-path"]),
+      expect.arrayContaining(["AC-12", "INV-1", "A1", "A01", "VT3", "agentverify:cancel-path"]),
     );
   });
 
@@ -145,5 +153,97 @@ describe("spec body size cap", () => {
     expect(detected!.text).toContain("[truncated at");
     expect(detected!.text).toContain("AC-99");
     expect(MAX_SPEC_BYTES).toBe(200 * 1024 - 48 * 1024);
+  });
+});
+
+describe("fetchPrSpecSearchText", () => {
+  it("fetches GitHub title+body via gh pr view", async () => {
+    const calls: string[][] = [];
+    const text = await fetchPrSpecSearchText({
+      prUrl: "https://github.com/acme/repo/pull/9",
+      runCommand: async (input) => {
+        calls.push([input.executable, ...input.argv]);
+        return {
+          stdout: JSON.stringify({
+            title: "Ship plan",
+            body: "See docs/plans/2026-09-20-session-shutdown-recovery.md",
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    });
+    expect(calls[0]?.[0]).toBe("gh");
+    expect(text).toContain("Ship plan");
+    expect(text).toContain("docs/plans/2026-09-20-session-shutdown-recovery.md");
+  });
+
+  it("fetches AntCode title+description via antcode pr show (root cause of SPEC_REQUIRED)", async () => {
+    const calls: Array<{ exe: string; argv: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const text = await fetchPrSpecSearchText({
+      prUrl: "https://code.alipay.com/paas-core/agentrun/pull_requests/130",
+      env: { PATH: "/bin", HTTPS_PROXY: "http://proxy.example:8080" },
+      runCommand: async (input) => {
+        calls.push({ exe: input.executable, argv: input.argv, env: input.env });
+        expect(input.executable).toBe("antcode");
+        return {
+          stdout: JSON.stringify({
+            title: "session shutdown recovery",
+            description:
+              "Plan path: `docs/plans/2026-09-20-session-shutdown-recovery.md`\n\nAcceptance: A1",
+            source_branch: "feat/x",
+            target_branch: "master",
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      },
+    });
+    expect(calls).toHaveLength(1);
+    const antCall = calls[0];
+    expect(antCall?.argv).toEqual([
+      "pr",
+      "show",
+      "130",
+      "-P",
+      "paas-core/agentrun",
+      "--json",
+      "--raw",
+      "--no-pager",
+    ]);
+    expect(antCall?.env?.NO_PROXY).toBe("*");
+    expect(antCall?.env?.HTTPS_PROXY).toBe("");
+    expect(text).toContain("session shutdown recovery");
+    expect(text).toContain("docs/plans/2026-09-20-session-shutdown-recovery.md");
+    // End-to-end: fetched AntCode description is enough for auto-detect + A1 bind.
+    const root = mkdtempSync(join(tmpdir(), "ck-spec-ant-"));
+    mkdirSync(join(root, "docs", "plans"), { recursive: true });
+    const rel = "docs/plans/2026-09-20-session-shutdown-recovery.md";
+    writeFileSync(
+      join(root, rel),
+      ["# Recovery", "", "## 验收", "", "- A1 waiter deregisters on shutdown", ""].join("\n"),
+      "utf8",
+    );
+    const detected = resolveSpecContract({ searchText: text, repoRoot: root });
+    expect(detected?.source).toContain(rel);
+    expect(detected).not.toBeNull();
+    const verify = bindVerifyFromSpec({
+      specSource: detected?.source ?? "",
+      specText: detected?.text,
+    });
+    expect(verify?.acceptanceIds).toContain("A1");
+  });
+
+  it("returns empty string for unsupported hosts without spawning", async () => {
+    let spawned = false;
+    const text = await fetchPrSpecSearchText({
+      prUrl: "https://example.com/not-a-pr/1",
+      runCommand: async () => {
+        spawned = true;
+        return { stdout: "", stderr: "", exitCode: 1 };
+      },
+    });
+    expect(text).toBe("");
+    expect(spawned).toBe(false);
   });
 });

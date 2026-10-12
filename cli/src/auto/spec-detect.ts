@@ -13,6 +13,7 @@
 import { Buffer } from "node:buffer";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
+import { parseAntCodePrUrl, parseApplyPrUrl } from "@shared/runtime/pr-url";
 
 /** Directories this repo already treats as plans / design / acceptance / vibespec. */
 export const SPEC_CONVENTIONAL_PREFIXES = [
@@ -47,7 +48,7 @@ const PATH_REF_RE =
 
 /** Named acceptance / agentverify IDs inside a bound contract body. */
 const ACCEPTANCE_ID_RE =
-  /\b(?:agentverify:[A-Za-z0-9][\w.:-]{0,80}|(?:AC|INV|AV)[-_][A-Za-z0-9][\w.-]{0,80}|A\d{2,}|VT\d+)\b/g;
+  /\b(?:agentverify:[A-Za-z0-9][\w.:-]{0,80}|(?:AC|INV|AV)[-_][A-Za-z0-9][\w.-]{0,80}|A\d+|VT\d+)\b/g;
 
 export interface DetectedSpec {
   /** Path or label used as `task.specSource`. */
@@ -86,7 +87,7 @@ export const SPEC_REFUSAL_MESSAGE = [
 export const SPEC_VERIFY_UNBOUND_MESSAGE = [
   "review refused: a spec was bound, but verify cannot be scheduled —",
   "the contract has no named acceptance points / agentverify scenarios.",
-  "Add IDs such as AC-12, A01, INV-1, VT3, or agentverify:<scenario>",
+  "Add IDs such as AC-12, A1, A01, INV-1, VT3, or agentverify:<scenario>",
   "in the bound document (or under an ## 验收 / ## Acceptance section).",
 ].join("\n");
 
@@ -206,7 +207,7 @@ export function isConventionalSpecPath(pathLike: string): boolean {
 export function normalizeSpecRef(raw: string): string | null {
   let value = raw.trim().replace(/\\/g, "/");
   if (!value) return null;
-  // Strip leading ./ 
+  // Strip leading ./
   value = value.replace(/^\.\//, "");
   // Reject absolute / parent traversal for auto-detect safety.
   if (value.startsWith("/") || value.includes("..")) return null;
@@ -276,7 +277,6 @@ function extractAcceptanceChecklistIds(specText: string): string[] {
   return items;
 }
 
-
 /** Truncate a bound spec body to `cap` UTF-8 bytes without splitting a code unit. */
 function truncateSpecBody(text: string, cap: number): string {
   const buf = Buffer.from(text, "utf8");
@@ -317,7 +317,7 @@ function resolveReadableSpecFile(
     if (Buffer.byteLength(body, "utf8") > 200 * 1024) continue;
     const source =
       repoRoot && candidate.startsWith(repoRoot)
-        ? normalizeSpecRef(relative(repoRoot, candidate).split(sep).join("/")) ?? candidate
+        ? (normalizeSpecRef(relative(repoRoot, candidate).split(sep).join("/")) ?? candidate)
         : normalized;
     return { source, text: truncateSpecBody(body, MAX_SPEC_BYTES) };
   }
@@ -331,7 +331,10 @@ function scanRepoForReferencedContract(
 ): { source: string; text: string } | null {
   const lower = searchText.toLowerCase();
   const wanted = [...SPEC_CONTRACT_BASENAMES].filter((name) => lower.includes(name));
-  if (wanted.length === 0 && !/(vibespec|docs\/plans|docs\/design|docs\/verification)/i.test(searchText)) {
+  if (
+    wanted.length === 0 &&
+    !/(vibespec|docs\/plans|docs\/design|docs\/verification)/i.test(searchText)
+  ) {
     return null;
   }
   for (const prefix of SPEC_CONVENTIONAL_PREFIXES) {
@@ -380,15 +383,15 @@ function listMarkdownFiles(dir: string, limit: number): string[] {
 }
 
 /** Exact refusal copy for the CLI hard gate (usage / exit 2). */
-export function formatSpecRefusal(detail?: { searched?: string; repoRoot?: string | null }): string {
+export function formatSpecRefusal(detail?: {
+  searched?: string;
+  repoRoot?: string | null;
+}): string {
   const extra: string[] = [];
   if (detail?.searched && detail.searched.trim()) {
     const refs = extractConventionalSpecRefs(detail.searched);
     if (refs.length > 0) {
-      extra.push(
-        "",
-        `Referenced but not readable under the local repo: ${refs.join(", ")}`,
-      );
+      extra.push("", `Referenced but not readable under the local repo: ${refs.join(", ")}`);
     }
   }
   if (detail?.repoRoot) {
@@ -397,7 +400,7 @@ export function formatSpecRefusal(detail?: { searched?: string; repoRoot?: strin
   return SPEC_REFUSAL_MESSAGE + (extra.length > 0 ? `\n${extra.join("\n")}` : "");
 }
 
-/** Best-effort PR title+body for auto-detect (GitHub via `gh`; AntCode ignored). */
+/** Best-effort PR title+body for auto-detect (GitHub via `gh`; AntCode via `antcode`). */
 export async function fetchPrSpecSearchText(input: {
   prUrl: string;
   runCommand: (args: {
@@ -411,21 +414,58 @@ export async function fetchPrSpecSearchText(input: {
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
   try {
-    const view = await input.runCommand({
-      executable: "gh",
-      argv: ["pr", "view", input.prUrl, "--json", "title,body"],
-      cwd: input.cwd ?? process.cwd(),
-      env: input.env ?? process.env,
+    const parsedUrl = parseApplyPrUrl(input.prUrl);
+    if (parsedUrl === null) return "";
+    const cwd = input.cwd ?? process.cwd();
+    const baseEnv = input.env ?? process.env;
+    if (parsedUrl.kind === "github") {
+      const view = await input.runCommand({
+        executable: "gh",
+        argv: ["pr", "view", input.prUrl, "--json", "title,body"],
+        cwd,
+        env: baseEnv,
+        timeoutMs: 30_000,
+      });
+      if (view.exitCode !== 0) return "";
+      return joinPrTitleBody(JSON.parse(view.stdout));
+    }
+    const ant = parseAntCodePrUrl(parsedUrl.url);
+    if (ant === null) return "";
+    const shown = await input.runCommand({
+      executable: "antcode",
+      argv: ["pr", "show", ant.iid, "-P", ant.project, "--json", "--raw", "--no-pager"],
+      cwd,
+      // AntCode is an internal CLI — strip proxies on this one command only.
+      env: {
+        ...baseEnv,
+        NO_PROXY: "*",
+        no_proxy: "*",
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        https_proxy: "",
+        http_proxy: "",
+      },
       timeoutMs: 30_000,
     });
-    if (view.exitCode !== 0) return "";
-    const parsed = JSON.parse(view.stdout) as { title?: unknown; body?: unknown };
-    const title = typeof parsed.title === "string" ? parsed.title : "";
-    const body = typeof parsed.body === "string" ? parsed.body : "";
-    return [title, body].filter((s) => s.trim().length > 0).join("\n\n");
+    if (shown.exitCode !== 0) return "";
+    return joinPrTitleBody(JSON.parse(shown.stdout));
   } catch {
     return "";
   }
+}
+
+/** Normalize GitHub (`title`/`body`) and AntCode/GitLab (`title`/`description`) payloads. */
+function joinPrTitleBody(parsed: unknown): string {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "";
+  const row = parsed as Record<string, unknown>;
+  const title = typeof row.title === "string" ? row.title : "";
+  const body =
+    typeof row.body === "string"
+      ? row.body
+      : typeof row.description === "string"
+        ? row.description
+        : "";
+  return [title, body].filter((s) => s.trim().length > 0).join("\n\n");
 }
 
 /** Apply a DetectedSpec + verify binding onto a ReviewTask-shaped object. */
