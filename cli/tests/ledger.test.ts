@@ -419,6 +419,113 @@ describe("ledger locus dedupe", () => {
     expect(file.findings).toHaveLength(1);
     expect(file.findings[0]?.title).toContain("已接受重试在等待运行时未登记");
   });
+
+  it("does not collapse same locus + severity when invariantIds differ", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major][act-on] 复合语句缺少输入校验允许空载荷",
+        "  位置：`src/handler.ts:42`",
+        "  不变量：`AC-VALIDATE`",
+        "  反例：body={} 仍写入存储",
+        "- [major][act-on] 复合语句跳过授权检查可越权写入",
+        "  位置：`src/handler.ts:42`",
+        "  不变量：`AC-AUTHORIZE`",
+        "  反例：role=guest 调用写接口成功",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-locus-distinct-inv",
+      extractedAt: "2026-10-12T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(2);
+    expect(file.findings.map((row) => row.invariantId).sort()).toEqual([
+      "AC-AUTHORIZE",
+      "AC-VALIDATE",
+    ]);
+    expect(file.findings.every((row) => isFindingBlocking(row))).toBe(true);
+  });
+
+  it("collapses same locus + severity when invariantIds match (paraphrase)", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 独有发现",
+        "",
+        "### review-a",
+        "",
+        "- [major][act-on] 取消路径仍泄漏 waiter",
+        "  位置：`src/wait.ts:10`",
+        "  不变量：`AC-12`",
+        "  反例：并发 cancel 后 registry.size > 0",
+        "",
+        "## 共识发现",
+        "",
+        "- [major][act-on] cancel 后 waiter 未注销导致泄漏",
+        "  位置：`src/wait.ts:10`",
+        "  不变量：`AC-12`",
+        "  反例：cancel 竞态下 registry 残留",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-locus-same-inv",
+      extractedAt: "2026-10-12T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(1);
+    expect(file.findings[0]?.invariantId).toBe("AC-12");
+    expect(file.findings[0]?.title).toContain("取消路径仍泄漏 waiter");
+    expect(file.findings[0]?.counterexample).toContain("registry.size");
+    expect(isFindingBlocking(file.findings[0]!)).toBe(true);
+  });
+
+  it("preserves later contract footing when collapsing a same-locus duplicate", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 独有发现",
+        "",
+        "### review-a",
+        "",
+        "- [major] DenyAll 权限策略未生效",
+        "  位置：`internal/auth/policy.go:88`",
+        "",
+        "## 共识发现",
+        "",
+        "- [major][act-on] permission DenyAll 绕过检查",
+        "  位置：`internal/auth/policy.go:88`",
+        "  不变量：`INV-DENY-ALL`",
+        "  反例：DenyAll 策略下仍放行 /admin",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-locus-fill-footing",
+      extractedAt: "2026-10-12T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(1);
+    const row = file.findings[0];
+    expect(row?.title).toContain("DenyAll 权限策略未生效");
+    expect(row?.contractClass).toBe("in_contract");
+    expect(row?.invariantId).toBe("INV-DENY-ALL");
+    expect(row?.counterexample).toContain("DenyAll");
+    expect(isFindingBlocking(row!)).toBe(true);
+  });
 });
 
 describe("againstDiffRange", () => {
