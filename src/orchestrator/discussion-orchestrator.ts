@@ -775,6 +775,9 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         executionScopeId: scopeId,
         dispatchState: "unknown",
       });
+      // Keep the in-memory anchor aligned with Dexie so driveToTerminal can
+      // follow/ACK on the execution's own scope (not a later latestBinding).
+      execution.executionScopeId = scopeId;
     } catch (error) {
       await failExecution(db, {
         executionId: execution.executionId,
@@ -801,8 +804,9 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     token: ControllerToken,
     afterSeq: number,
   ): Promise<boolean> {
-    const binding = await latestBinding(room.id);
-    const scopeId = binding?.executionScopeId as string;
+    // Host event/status/ACK paths are scope-scoped. Use the execution's own
+    // scope — latestBinding can diverge to a newer closing decoy (#182 class).
+    const scopeId = execution.executionScopeId as string;
     let resumeAt = afterSeq;
     let streamFailures = 0;
     let statusFailures = 0;
@@ -882,7 +886,9 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         {
           db,
           client,
-          scopeId: (await latestBinding(room.id))?.executionScopeId as string,
+          // Same as cancelTargetForActiveExecution / pending-ACK recovery:
+          // ACK the execution's own scope, not latestBinding (closing decoy).
+          scopeId: current.executionScopeId as string,
           token,
           currentHostInstanceId: await hostInstanceId(),
         },
