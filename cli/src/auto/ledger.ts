@@ -166,7 +166,7 @@ export function extractFindingsFromReport(input: {
     sha: input.sha ?? null,
     againstRunId: input.againstRunId ?? null,
     againstRange: input.againstRange ?? null,
-    findings: sortLedgerFindings(findings),
+    findings: sortLedgerFindings(dedupeFindingsByLocus(findings)),
   };
 }
 
@@ -517,6 +517,7 @@ export function persistFindingsFromReport(input: {
       }
     }
   }
+  extracted.findings = dedupeFindingsByLocus(extracted.findings);
   extracted.findings = separateChangedAssertions(
     input.prior?.findings ?? [],
     extracted.findings,
@@ -760,6 +761,136 @@ function uniqueId(base: string, used: Set<string>): string {
   return `${base}-${n}`;
 }
 
+interface FindingLocus {
+  path: string;
+  start: number;
+  end: number;
+}
+
+const LOCUS_FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
+const LOCUS_CITATION_RE = new RegExp(
+  String.raw`((?:[\w.-]+\/)*${LOCUS_FILE_EXT}):(\d+)(?:-(\d+))?`,
+  "g",
+);
+const LOCUS_NARRATIVE_LINE = /^\s*(?:触发与后果|证据|建议|验证|结论)\s*[:：]/;
+
+/**
+ * Same primary file:line (path-compatible) + same severity collapses to one
+ * finding. Keeps the earlier title/id and folds later evidence. Findings without
+ * a cited line are left alone — no fuzzy title-only merge.
+ */
+function dedupeFindingsByLocus(findings: readonly LedgerFinding[]): LedgerFinding[] {
+  const kept: LedgerFinding[] = [];
+  for (const row of findings) {
+    const locus = primaryFindingLocus(row);
+    if (!locus) {
+      kept.push(row);
+      continue;
+    }
+    const existingIndex = kept.findIndex(
+      (candidate) =>
+        candidate.severity === row.severity &&
+        lociEqual(locus, primaryFindingLocus(candidate)),
+    );
+    if (existingIndex < 0) {
+      kept.push(row);
+      continue;
+    }
+    const existing = kept[existingIndex];
+    if (!existing) {
+      kept.push(row);
+      continue;
+    }
+    kept[existingIndex] = collapseSameLocusFindings(existing, row);
+  }
+  return kept;
+}
+
+function collapseSameLocusFindings(earlier: LedgerFinding, later: LedgerFinding): LedgerFinding {
+  const text =
+    later.text !== earlier.text
+      ? mergeFindingEvidence(true, earlier.text, later.text)
+      : earlier.text;
+  return {
+    ...earlier,
+    text,
+    files: [...new Set([...earlier.files, ...later.files])].slice(0, 32),
+    source:
+      earlier.source === "consensus" || later.source === "consensus"
+        ? "consensus"
+        : earlier.source,
+    reviewer: earlier.reviewer ?? later.reviewer,
+  };
+}
+
+function primaryFindingLocus(
+  row: Pick<LedgerFinding, "title" | "text" | "files">,
+): FindingLocus | null {
+  const cited = parseLocusCitations(declaredLocusText(row));
+  if (cited[0]) return cited[0];
+  const head = `${firstLine(row.title)}\n${firstLine(row.text)}`;
+  const line = firstLocusLineNumber(head);
+  if (line === null) return null;
+  const file = row.files.find((path) => path.includes("."));
+  if (!file) return null;
+  return { path: file, start: line, end: line };
+}
+
+function declaredLocusText(row: Pick<LedgerFinding, "title" | "text">): string {
+  const kept: string[] = [];
+  for (const line of `${row.title}\n${row.text}`.split("\n")) {
+    if (LOCUS_NARRATIVE_LINE.test(line)) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+function parseLocusCitations(text: string): FindingLocus[] {
+  const out: FindingLocus[] = [];
+  const seen = new Set<string>();
+  const re = new RegExp(LOCUS_CITATION_RE.source, "g");
+  let match = re.exec(text);
+  while (match) {
+    const path = match[1];
+    const start = Number(match[2]);
+    const end = match[3] ? Number(match[3]) : start;
+    if (path && Number.isFinite(start)) {
+      const key = `${normalizeLocusPath(path)}:${start}-${end}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ path, start, end });
+      }
+    }
+    match = re.exec(text);
+  }
+  return out;
+}
+
+function firstLocusLineNumber(text: string): number | null {
+  const match = /:(\d+)(?:-\d+)?/.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function normalizeLocusPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").toLowerCase();
+}
+
+function lociEqual(left: FindingLocus, right: FindingLocus | null): boolean {
+  if (!right) return false;
+  if (left.start !== right.start || left.end !== right.end) return false;
+  return locusPathsCompatible(left.path, right.path);
+}
+
+function locusPathsCompatible(left: string, right: string): boolean {
+  const a = normalizeLocusPath(left);
+  const b = normalizeLocusPath(right);
+  if (a.length === 0 || b.length === 0) return false;
+  if (a === b) return true;
+  return a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+}
+
 function extractPaths(text: string): string[] {
   const files: string[] = [];
   const seen = new Set<string>();
@@ -834,6 +965,14 @@ function matchFinding(
       declaredFindingIds(prior.text).includes(row.id),
   );
   if (byReference) return byReference;
+  const priorLocus = primaryFindingLocus(prior);
+  if (priorLocus) {
+    const byLocus = eligible.find(
+      (row) =>
+        row.severity === prior.severity && lociEqual(priorLocus, primaryFindingLocus(row)),
+    );
+    if (byLocus) return byLocus;
+  }
   let best: { row: LedgerFinding; score: number } | null = null;
   const priorTokens = tokens(prior.title);
   for (const row of eligible) {

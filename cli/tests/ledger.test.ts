@@ -275,6 +275,152 @@ describe("ledger extract", () => {
   });
 });
 
+describe("ledger locus dedupe", () => {
+  it("collapses same file:line + severity paraphrase titles into one finding", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 独有发现",
+        "",
+        "### review-correctness",
+        "",
+        "- [major][act-on] 已接受重试在等待运行时未登记导致停机提前返回",
+        "  位置：`pkg/runtime/session_recovery.go:446`",
+        "  触发与后果：Retry 在 flightsWG.Go 前阻塞，Stop 见 WG=0 提前返回。",
+        "",
+        "## 共识发现",
+        "",
+        "- [major][act-on] 等待运行时的重试未被托管导致停机提前返回",
+        "  位置：`session_recovery.go:446`",
+        "  触发与后果：accepted Retry 等待 runtime 时未登记，停机窗口提前结束。",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-a26f1281-cb0f-45f2-8a4e-b03fca0d958c",
+      extractedAt: "2026-10-12T00:00:00.000Z",
+    });
+    const flights = file.findings.filter((row) =>
+      row.title.includes("重试") || row.text.includes("flightsWG") || row.text.includes("runtime"),
+    );
+    expect(flights).toHaveLength(1);
+    expect(flights[0]?.title).toContain("已接受重试在等待运行时未登记");
+    expect(flights[0]?.text).toContain("聚合摘要");
+    expect(flights[0]?.files.some((path) => path.includes("session_recovery.go"))).toBe(true);
+  });
+
+  it("collapses DenyAll and race paraphrases that share a primary locus", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] permission DenyAll 绕过检查",
+        "  位置：`internal/auth/policy.go:88`",
+        "- [major] DenyAll 权限策略未生效",
+        "  位置：`internal/auth/policy.go:88`",
+        "- [critical] 启动竞态丢失首次心跳",
+        "  位置：`pkg/daemon/boot.go:12-14`",
+        "- [critical] boot 竞态使首次心跳丢失",
+        "  位置：`pkg/daemon/boot.go:12-14`",
+        "- [minor] 注释风格不一致",
+        "  位置：`pkg/daemon/boot.go:12`",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-dedupe-sample",
+      extractedAt: "2026-10-12T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(3);
+    expect(file.findings.map((row) => row.severity).sort()).toEqual([
+      "critical",
+      "major",
+      "minor",
+    ]);
+    expect(file.findings.find((row) => row.severity === "major")?.title).toContain("DenyAll");
+    expect(file.findings.find((row) => row.severity === "critical")?.title).toContain("启动竞态");
+  });
+
+  it("does not collapse same-file findings that lack a shared line locus", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] short write loses text in pkg/eventlog/log.go",
+        "- [major] concurrent truncate races in pkg/eventlog/log.go",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-no-locus",
+      extractedAt: "2026-10-12T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(2);
+  });
+
+  it("merges an independent paraphrase at the same locus during persist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-ledger-locus-"));
+    const file = persistFindingsFromReport({
+      runDir: dir,
+      runId: "ck-review-locus-persist",
+      sha: "a".repeat(40),
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] 已接受重试在等待运行时未登记导致停机提前返回",
+        "  位置：`pkg/runtime/session_recovery.go:446`",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          agentId: "reviewer",
+          agentName: "review-correctness",
+          driverId: "grok-stream-json",
+          modelId: "configured",
+          status: "success",
+          exitCode: 0,
+          output: [
+            "## 发现",
+            "- [major] 等待运行时的重试未被托管导致停机提前返回",
+            "  位置：`session_recovery.go:446`",
+            "",
+            "## 结论",
+            "changes-requested",
+          ].join("\n"),
+          durationMs: 10,
+          workspace: "/isolated/reviewer",
+        },
+      ],
+      reviewComplete: true,
+    });
+    rmSync(dir, { recursive: true, force: true });
+    expect(file.findings).toHaveLength(1);
+    expect(file.findings[0]?.title).toContain("已接受重试在等待运行时未登记");
+  });
+});
+
 describe("againstDiffRange", () => {
   it("spans prior review SHA to current HEAD and falls back otherwise", () => {
     expect(
