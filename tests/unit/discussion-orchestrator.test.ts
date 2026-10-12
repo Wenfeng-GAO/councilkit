@@ -167,6 +167,7 @@ interface ExecuteCall {
 
 interface AckCall {
   executionId: string;
+  scopeId: string;
   disposition: string;
   result: string;
   /** Dexie execution state read in-process at ACK time (persist→ACK proof). */
@@ -719,6 +720,10 @@ class FakeHost {
     if (stale) return stale;
     const request = body as unknown as { finalSeq: number; disposition: "committed" | "discarded" };
     const execution = this.executions.get(executionId);
+    // Match real Host: ACK is scope-scoped (record.scopeId !== scopeId → 404).
+    if (execution && execution.scopeId !== scopeId) {
+      return errorResponse(404, "EXECUTION_NOT_FOUND", "unknown execution");
+    }
 
     const respond = async (data: {
       executionId: string;
@@ -727,6 +732,7 @@ class FakeHost {
     }): Promise<Response> => {
       this.ackCalls.push({
         executionId,
+        scopeId,
         disposition: request.disposition,
         result: data.ackState,
         stateAtAck: this.ackStateProbe ? await this.ackStateProbe(executionId) : null,
@@ -2229,6 +2235,87 @@ describe("discussion orchestrator (U5)", () => {
     expect(round?.phase).toBe("paused");
     expect(round?.pauseReason?.code).toBe("user_cancelled");
     expect((await db.modelExecutions.get(live?.executionId ?? ""))?.state).toBe("discarded");
+  });
+
+  it("13c. handleTerminal ACK uses the execution's scope when latestBinding differs", async () => {
+    // Same decoy shape as 13b: latestBinding is a newer "closing" row. Host ACK
+    // is scope-scoped (and fenced to that scope's controller). handleTerminal
+    // must ACK via the execution's own executionScopeId, not latestBinding —
+    // otherwise the decoy scope 404s / STALE_CONTROLLERs and ackState stays
+    // pending (or wrongly expires) after a successful commit.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, previews } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    expect(ownerScopeId).toBeTruthy();
+
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(previews.some((event) => event.type === "started")).toBe(true);
+    });
+    const live = (await db.modelExecutions.where("roomId").equals(room.id).toArray())[0];
+    expect(live?.executionScopeId).toBe(ownerScopeId);
+    expect(live?.executionId).toBeTruthy();
+
+    host.seedScope({
+      scopeId: "scope-decoy-ack",
+      controllerId: "ctrl-decoy-ack",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-ack",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-ack",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-ack",
+      controllerId: "ctrl-decoy-ack",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+    const latest = (
+      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
+    )
+      .filter((binding) => binding.state !== "closed")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    expect(latest?.id).toBe("binding-decoy-ack");
+    expect(latest?.executionScopeId).not.toBe(ownerScopeId);
+
+    host.complete(live?.executionId as string, "ack-on-owner-scope");
+    // Prove the completed-terminal ACK path (handleTerminal), not the rest of
+    // the round: a later dispatchTurn may still see the closing decoy via
+    // latestBinding and pause — that is a separate leftover seed.
+    await vi.waitFor(async () => {
+      expect((await db.modelExecutions.get(live?.executionId ?? ""))?.ackState).toBe(
+        "acknowledged",
+      );
+    });
+    expect(
+      (await db.messages.where("roomId").equals(room.id).toArray()).some(
+        (message) => message.content === "ack-on-owner-scope",
+      ),
+    ).toBe(true);
+    expect(host.ackCalls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          executionId: live?.executionId,
+          scopeId: ownerScopeId,
+          disposition: "committed",
+          result: "acknowledged",
+        }),
+      ]),
+    );
+    expect(host.ackCalls.some((call) => call.scopeId === "scope-decoy-ack")).toBe(false);
+    await roundPromise; // settle; phase may be completed or paused after later turns
   });
 
   it("14. abortPausedRound ends only a paused round", async () => {
