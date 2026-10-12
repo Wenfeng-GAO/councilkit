@@ -1613,6 +1613,94 @@ describe("recovery orchestration: rotateScope", () => {
       .first()) as { executionScopeId: string } | undefined;
     expect(activeBinding).toBeDefined();
   });
+
+  it("rotateScope closes the active owner when latestBinding is a newer closing decoy", async () => {
+    // Same decoy shape as discussion-orchestrator 13b–13f. rotateScope used
+    // latestBinding, which picks the newer "closing" row; it then closeScope'd
+    // / markBindingClosed the decoy and left the older active owner warm.
+    // startRound → ensureScope (#185) then reuses that owner instead of
+    // cold-building — so needs_rebase rotation never rotates. Prefer the
+    // active scoped binding (ensureScope/controlRoom's rule) so the warm
+    // owner is closed and the next round cold-builds.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, {
+      kind: "fail",
+      code: "NEEDS_REBASE",
+      retryable: false,
+      dispatchState: "not_dispatched",
+      message: "session reconciliation: context_window_threshold",
+    });
+    const round1 = await orchestrator.startRound(room.id);
+    expect(round1?.phase).toBe("paused");
+
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    expect(ownerScopeId).toBeTruthy();
+
+    host.seedScope({
+      scopeId: "scope-decoy-rotate",
+      controllerId: "ctrl-decoy-rotate",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-rotate",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-rotate",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-rotate",
+      controllerId: "ctrl-decoy-rotate",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+    const latest = (
+      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
+    )
+      .filter((binding) => binding.state !== "closed")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    expect(latest?.id).toBe("binding-decoy-rotate");
+    expect(latest?.executionScopeId).not.toBe(ownerScopeId);
+
+    const closeCallsBefore = host.closeCalls.length;
+    const createScopeCallsBefore = host.createScopeCalls.length;
+    // Plan a full successful round after rotation.
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+
+    await orchestrator.rotateScope(room.id);
+
+    const ownerAfter = await db.runtimeBindings.get(owner?.id ?? "");
+    expect(ownerAfter?.state).toBe("closed");
+    expect(host.closeCalls.some((call) => call.scopeId === ownerScopeId)).toBe(true);
+    expect(host.closeCalls.some((call) => call.scopeId === "scope-decoy-rotate")).toBe(false);
+    expect(host.closeCalls.length).toBe(closeCallsBefore + 1);
+
+    const newBinding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    expect(newBinding).toBeDefined();
+    expect(newBinding?.id).not.toBe(owner?.id);
+    expect(newBinding?.executionScopeId).not.toBe(ownerScopeId);
+    expect(host.createScopeCalls.length).toBe(createScopeCallsBefore + 1);
+
+    const rounds = (await db.rounds.where("roomId").equals(room.id).toArray()).sort(
+      (a, b) => a.roundNumber - b.roundNumber,
+    );
+    expect(rounds[0]?.phase).toBe("aborted");
+    expect(rounds[1]?.phase).toBe("completed");
+  });
 });
 
 describe("recovery orchestration: releaseRuntime (S5)", () => {
