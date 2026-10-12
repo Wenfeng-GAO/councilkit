@@ -2441,6 +2441,78 @@ describe("discussion orchestrator (U5)", () => {
     ]);
   });
 
+  it("13f. controlRoom takeovers the active scope when latestBinding is a newer closing decoy", async () => {
+    // Same decoy shape as 13b–13e. controlRoom used latestBinding, which picks
+    // the newer "closing" row; the state === "active" gate then skipped Host
+    // takeover entirely — the page claimed "controlling" while the older active
+    // owner kept its prior controller/epoch. Prefer the active scoped binding
+    // (ensureScope's rule) so takeover lands on the warm owner.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    const ownerControllerBefore = owner?.controllerId as string;
+    const ownerEpochBefore = owner?.leaseEpoch as number;
+    expect(ownerScopeId).toBeTruthy();
+    expect(ownerControllerBefore).toBeTruthy();
+    expect(ownerEpochBefore).toBe(1);
+
+    host.seedScope({
+      scopeId: "scope-decoy-control",
+      controllerId: "ctrl-decoy-control",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-control",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-control",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-control",
+      controllerId: "ctrl-decoy-control",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+    const latest = (
+      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
+    )
+      .filter((binding) => binding.state !== "closed")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    expect(latest?.id).toBe("binding-decoy-control");
+    expect(latest?.executionScopeId).not.toBe(ownerScopeId);
+
+    const takeoversBefore = host.takeoverCalls.length;
+    const handle = await orchestrator.controlRoom(room.id);
+    expect(handle).not.toBeNull();
+    expect(host.takeoverCalls.length).toBe(takeoversBefore + 1);
+    expect(host.takeoverCalls[takeoversBefore]).toEqual(
+      expect.objectContaining({
+        scopeId: ownerScopeId,
+        leaseEpoch: ownerEpochBefore + 1,
+      }),
+    );
+    expect(host.takeoverCalls.some((call) => call.scopeId === "scope-decoy-control")).toBe(false);
+
+    const active = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    expect(active?.id).toBe(owner?.id);
+    expect(active?.executionScopeId).toBe(ownerScopeId);
+    expect(active?.leaseEpoch).toBe(ownerEpochBefore + 1);
+    expect(active?.controllerId).toBe(host.takeoverCalls[takeoversBefore]?.controllerId);
+    expect(active?.controllerId).not.toBe(ownerControllerBefore);
+  });
+
   it("14. abortPausedRound ends only a paused round", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
