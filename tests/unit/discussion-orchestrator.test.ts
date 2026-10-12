@@ -2389,6 +2389,58 @@ describe("discussion orchestrator (U5)", () => {
     expect(executions.every((execution) => execution.state === "committed")).toBe(true);
   });
 
+  it("13e. ensureScope/startRound reuse the active scope when latestBinding is a newer closing decoy", async () => {
+    // Same decoy shape as 13b–13d, but inserted BEFORE the round starts.
+    // latestBinding picks the newer "closing" row, so ensureScope would skip
+    // the still-active owner, try to create a second binding and hit
+    // BINDING_ACTIVE_EXISTS — the round pauses with prewarm_failed even though
+    // the owner scope is warm. The prewarm readiness probe must also read the
+    // owner scope, not the decoy.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    expect(ownerScopeId).toBeTruthy();
+
+    host.seedScope({
+      scopeId: "scope-decoy-ensure",
+      controllerId: "ctrl-decoy-ensure",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-ensure",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-ensure",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-ensure",
+      controllerId: "ctrl-decoy-ensure",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+
+    const ensured = await orchestrator.ensureScope(room.id, [p1, p2]);
+    expect(ensured.binding.id).toBe(owner?.id);
+    expect(ensured.binding.executionScopeId).toBe(ownerScopeId);
+
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.pauseReason ?? null).toBeNull();
+    expect(round?.phase).toBe("completed");
+    expect(host.executeCalls.every((call) => call.scopeId === ownerScopeId)).toBe(true);
+    const bindings = await db.runtimeBindings.where("roomId").equals(room.id).toArray();
+    expect(bindings.filter((binding) => binding.state === "active").map((b) => b.id)).toEqual([
+      owner?.id,
+    ]);
+  });
+
   it("14. abortPausedRound ends only a paused round", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
