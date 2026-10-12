@@ -1246,7 +1246,18 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       throw new Error("rotateScope: pause is not a needs_rebase rotation");
     }
     await abortPausedRound(roomId);
-    const binding = await latestBinding(roomId);
+    // Prefer the active scoped binding: latestBinding is the newest non-closed
+    // row and can be a newer closing decoy (#182–#186 class) while the older
+    // active owner is still warm — closing/marking the decoy would leave the
+    // owner active, and startRound → ensureScope would reuse it instead of
+    // cold-building the needs_rebase rotation.
+    const latest = await latestBinding(roomId);
+    const active = await db.runtimeBindings
+      .where("roomId")
+      .equals(roomId)
+      .filter((candidate) => candidate.state === "active" && !!candidate.executionScopeId)
+      .first();
+    const binding = active ?? latest;
     if (binding?.executionScopeId && binding.controllerId && binding.leaseEpoch !== null) {
       await client
         .closeScope(binding.executionScopeId, {
