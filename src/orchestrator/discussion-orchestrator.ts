@@ -1337,7 +1337,17 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
             );
           }
         }
-        const binding = await latestBinding(roomId);
+        // Prefer the active scoped binding: latestBinding is the newest
+        // non-closed row and can be a newer closing decoy (#182–#188 class)
+        // while the older active owner is still warm — treating the decoy as
+        // "not active" would false-no-op and leave the owner warm.
+        const latest = await latestBinding(roomId);
+        const active = await db.runtimeBindings
+          .where("roomId")
+          .equals(roomId)
+          .filter((candidate) => candidate.state === "active" && !!candidate.executionScopeId)
+          .first();
+        const binding = active ?? latest;
         if (!binding || binding.state !== "active" || !binding.executionScopeId) {
           return null; // already cold — idempotent no-op
         }
