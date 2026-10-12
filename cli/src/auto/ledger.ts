@@ -166,7 +166,7 @@ export function extractFindingsFromReport(input: {
     sha: input.sha ?? null,
     againstRunId: input.againstRunId ?? null,
     againstRange: input.againstRange ?? null,
-    findings: sortLedgerFindings(findings),
+    findings: sortLedgerFindings(dedupeFindingsByLocus(findings)),
   };
 }
 
@@ -517,6 +517,7 @@ export function persistFindingsFromReport(input: {
       }
     }
   }
+  extracted.findings = dedupeFindingsByLocus(extracted.findings);
   extracted.findings = separateChangedAssertions(
     input.prior?.findings ?? [],
     extracted.findings,
@@ -760,6 +761,273 @@ function uniqueId(base: string, used: Set<string>): string {
   return `${base}-${n}`;
 }
 
+interface FindingLocus {
+  path: string;
+  start: number;
+  end: number;
+}
+
+const LOCUS_FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
+const LOCUS_CITATION_RE = new RegExp(
+  String.raw`((?:[\w.-]+\/)*${LOCUS_FILE_EXT}):(\d+)(?:-(\d+))?`,
+  "g",
+);
+const LOCUS_NARRATIVE_LINE = /^\s*(?:触发与后果|证据|建议|验证|结论)\s*[:：]/;
+
+/**
+ * Same primary file:line (path-compatible) + same severity collapses only when
+ * findings also share a root-cause identity (same non-empty invariantId, or —
+ * when both lack one — strong text compatibility). Keeps the earlier title/id
+ * and folds later evidence + contract footing. Findings without a cited line
+ * are left alone — no fuzzy title-only merge.
+ */
+function dedupeFindingsByLocus(findings: readonly LedgerFinding[]): LedgerFinding[] {
+  const kept: LedgerFinding[] = [];
+  for (const row of findings) {
+    const locus = primaryFindingLocus(row);
+    if (!locus) {
+      kept.push(row);
+      continue;
+    }
+    const existingIndex = kept.findIndex(
+      (candidate) =>
+        candidate.severity === row.severity &&
+        lociEqual(locus, primaryFindingLocus(candidate)) &&
+        sameRootCauseIdentity(candidate, row),
+    );
+    if (existingIndex < 0) {
+      kept.push(row);
+      continue;
+    }
+    const existing = kept[existingIndex];
+    if (!existing) {
+      kept.push(row);
+      continue;
+    }
+    kept[existingIndex] = collapseSameLocusFindings(existing, row);
+  }
+  return kept;
+}
+
+function collapseSameLocusFindings(earlier: LedgerFinding, later: LedgerFinding): LedgerFinding {
+  const text =
+    later.text !== earlier.text
+      ? mergeFindingEvidence(true, earlier.text, later.text)
+      : earlier.text;
+  const invariantId = coalesceFilledField(earlier.invariantId, later.invariantId);
+  const counterexample = coalesceFilledField(earlier.counterexample, later.counterexample);
+  const contractClass = earlier.contractClass ?? later.contractClass;
+  return {
+    ...earlier,
+    text,
+    files: [...new Set([...earlier.files, ...later.files])].slice(0, 32),
+    source:
+      earlier.source === "consensus" || later.source === "consensus"
+        ? "consensus"
+        : earlier.source,
+    reviewer: earlier.reviewer ?? later.reviewer,
+    ...(contractClass !== undefined ? { contractClass } : {}),
+    ...(invariantId !== undefined ? { invariantId } : {}),
+    ...(counterexample !== undefined ? { counterexample } : {}),
+  };
+}
+
+/** Prefer earlier when both have a non-empty value; take later when earlier is null/empty. */
+function coalesceFilledField(
+  earlier: string | null | undefined,
+  later: string | null | undefined,
+): string | null | undefined {
+  if ((earlier?.trim() ?? "").length > 0) return earlier;
+  if ((later?.trim() ?? "").length > 0) return later;
+  return earlier !== undefined ? earlier : later;
+}
+
+/**
+ * Root-cause identity for locus collapse / byLocus match:
+ * - both non-empty invariantIds → same cause iff equal (distinct IDs never merge)
+ * - otherwise → strong title/text compatibility (covers paraphrases and the
+ *   case where only one row carries contract footing yet)
+ */
+function sameRootCauseIdentity(left: LedgerFinding, right: LedgerFinding): boolean {
+  const leftInv = left.invariantId?.trim() ?? "";
+  const rightInv = right.invariantId?.trim() ?? "";
+  if (leftInv.length > 0 && rightInv.length > 0) return leftInv === rightInv;
+  return rootCauseTextCompatible(left, right);
+}
+
+const LATIN_ROOT_TOKEN_RE = /[A-Za-z][A-Za-z0-9_-]{3,}/g;
+const ROOT_CAUSE_LATIN_STOP = new Set([
+  "this",
+  "that",
+  "with",
+  "from",
+  "when",
+  "into",
+  "then",
+  "than",
+  "also",
+  "have",
+  "been",
+  "will",
+  "does",
+  "should",
+  "could",
+  "would",
+  "file",
+  "line",
+  "code",
+  "path",
+  "true",
+  "false",
+  "test",
+  "tests",
+  "http",
+  "https",
+  "todo",
+  "fixme",
+  "note",
+  "same",
+  "after",
+  "before",
+  "under",
+  "over",
+  "only",
+  "both",
+  "each",
+  "must",
+  "make",
+  "made",
+  "here",
+  "there",
+  "where",
+  "which",
+  "while",
+  "about",
+]);
+
+function rootCauseProbeText(row: Pick<LedgerFinding, "title" | "text">): string {
+  return declaredLocusText(row)
+    .replace(new RegExp(LOCUS_CITATION_RE.source, "g"), " ")
+    .replace(
+      /(?:^|\n)\s*(?:位置|不变量|不变式|invariant|acceptance|验收|反例|counter(?:\s*-?\s*example)?|复现)\s*[:：]\s*/gi,
+      "\n",
+    )
+    .replace(/`[^`]+`/g, " ");
+}
+
+function latinRootTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  const re = new RegExp(LATIN_ROOT_TOKEN_RE.source, "g");
+  let match = re.exec(text);
+  while (match) {
+    const token = match[0]?.toLowerCase() ?? "";
+    if (token.length >= 4 && !ROOT_CAUSE_LATIN_STOP.has(token)) out.add(token);
+    match = re.exec(text);
+  }
+  return out;
+}
+
+function cjkBigrams(text: string): Set<string> {
+  const chars = [...text].filter((ch) => /\p{Script=Han}/u.test(ch));
+  const out = new Set<string>();
+  for (let i = 0; i + 1 < chars.length; i += 1) {
+    out.add(`${chars[i]}${chars[i + 1]}`);
+  }
+  return out;
+}
+
+function setJaccard(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 || right.size === 0) return 0;
+  let hit = 0;
+  for (const token of left) {
+    if (right.has(token)) hit += 1;
+  }
+  return hit / (left.size + right.size - hit);
+}
+
+function rootCauseTextCompatible(left: LedgerFinding, right: LedgerFinding): boolean {
+  const probeLeft = rootCauseProbeText(left);
+  const probeRight = rootCauseProbeText(right);
+  const latinLeft = latinRootTokens(probeLeft);
+  const latinRight = latinRootTokens(probeRight);
+  for (const token of latinLeft) {
+    if (latinRight.has(token)) return true;
+  }
+  if (tokenOverlap(tokens(firstLine(left.title)), tokens(firstLine(right.title))) >= 0.34) {
+    return true;
+  }
+  if (setJaccard(cjkBigrams(probeLeft), cjkBigrams(probeRight)) >= 0.28) return true;
+  return tokenOverlap(tokens(probeLeft), tokens(probeRight)) >= 0.34;
+}
+
+function primaryFindingLocus(
+  row: Pick<LedgerFinding, "title" | "text" | "files">,
+): FindingLocus | null {
+  const cited = parseLocusCitations(declaredLocusText(row));
+  if (cited[0]) return cited[0];
+  const head = `${firstLine(row.title)}\n${firstLine(row.text)}`;
+  const line = firstLocusLineNumber(head);
+  if (line === null) return null;
+  const file = row.files.find((path) => path.includes("."));
+  if (!file) return null;
+  return { path: file, start: line, end: line };
+}
+
+function declaredLocusText(row: Pick<LedgerFinding, "title" | "text">): string {
+  const kept: string[] = [];
+  for (const line of `${row.title}\n${row.text}`.split("\n")) {
+    if (LOCUS_NARRATIVE_LINE.test(line)) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+function parseLocusCitations(text: string): FindingLocus[] {
+  const out: FindingLocus[] = [];
+  const seen = new Set<string>();
+  const re = new RegExp(LOCUS_CITATION_RE.source, "g");
+  let match = re.exec(text);
+  while (match) {
+    const path = match[1];
+    const start = Number(match[2]);
+    const end = match[3] ? Number(match[3]) : start;
+    if (path && Number.isFinite(start)) {
+      const key = `${normalizeLocusPath(path)}:${start}-${end}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ path, start, end });
+      }
+    }
+    match = re.exec(text);
+  }
+  return out;
+}
+
+function firstLocusLineNumber(text: string): number | null {
+  const match = /:(\d+)(?:-\d+)?/.exec(text);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function normalizeLocusPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").toLowerCase();
+}
+
+function lociEqual(left: FindingLocus, right: FindingLocus | null): boolean {
+  if (!right) return false;
+  if (left.start !== right.start || left.end !== right.end) return false;
+  return locusPathsCompatible(left.path, right.path);
+}
+
+function locusPathsCompatible(left: string, right: string): boolean {
+  const a = normalizeLocusPath(left);
+  const b = normalizeLocusPath(right);
+  if (a.length === 0 || b.length === 0) return false;
+  if (a === b) return true;
+  return a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+}
+
 function extractPaths(text: string): string[] {
   const files: string[] = [];
   const seen = new Set<string>();
@@ -834,6 +1102,16 @@ function matchFinding(
       declaredFindingIds(prior.text).includes(row.id),
   );
   if (byReference) return byReference;
+  const priorLocus = primaryFindingLocus(prior);
+  if (priorLocus) {
+    const byLocus = eligible.find(
+      (row) =>
+        row.severity === prior.severity &&
+        lociEqual(priorLocus, primaryFindingLocus(row)) &&
+        sameRootCauseIdentity(prior, row),
+    );
+    if (byLocus) return byLocus;
+  }
   let best: { row: LedgerFinding; score: number } | null = null;
   const priorTokens = tokens(prior.title);
   for (const row of eligible) {
