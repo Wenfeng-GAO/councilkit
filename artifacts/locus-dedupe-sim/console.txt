@@ -1,0 +1,26 @@
+=== Locus dedupe e2e simulation (Bug A / Codex P1s) ===
+
+BEFORE (naive locus+severity only — Bug A): 3
+  - [major] pkg/runtime/session_recovery.go:446 :: 已接受重试在等待运行时未登记导致停机提前返回
+  - [major] internal/auth/policy.go:88 :: DenyAll 权限策略未生效
+  - [major] src/handler.ts:42 :: 复合语句缺少输入校验允许空载荷
+
+AFTER extract: 4
+  - [major] DenyAll 权限策略未生效 | inv=INV-DENY-ALL | blocking=true
+  - [major] 复合语句缺少输入校验允许空载荷 | inv=AC-VALIDATE | blocking=true
+  - [major] 复合语句跳过授权检查可越权写入 | inv=AC-AUTHORIZE | blocking=true
+  - [major] 已接受重试在等待运行时未登记导致停机提前返回 | inv=— | blocking=true
+
+AFTER persist: 4
+  - [major] DenyAll 权限策略未生效 | inv=INV-DENY-ALL | blocking=true
+  - [major] 复合语句缺少输入校验允许空载荷 | inv=AC-VALIDATE | blocking=true
+  - [major] 复合语句跳过授权检查可越权写入 | inv=AC-AUTHORIZE | blocking=true
+  - [major] 已接受重试在等待运行时未登记导致停机提前返回 | inv=— | blocking=true
+
+Checks:
+  PASS P1-1 paraphrase collapse: same-root-cause paraphrases at session_recovery.go:446 → 1 finding (want 1)
+  PASS P1-1 distinct invariantIds retained: AC-VALIDATE vs AC-AUTHORIZE at handler.ts:42 → 2 findings (want 2)
+  PASS P1-2 contract footing preserved on collapse: DenyAll merge keeps INV-DENY-ALL + counterexample; blocking=true
+  PASS Naive before wrongly under-counts distinct causes: naive buckets=3, fixed extract=4 (fixed keeps validation≠authorization)
+
+HTML: /workspace/councilkit/artifacts/locus-dedupe-sim/report.html

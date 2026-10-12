@@ -1,0 +1,147 @@
+{
+  "before": {
+    "label": "BEFORE (naive locus+severity only — Bug A)",
+    "count": 3,
+    "rows": [
+      {
+        "title": "已接受重试在等待运行时未登记导致停机提前返回",
+        "locus": "pkg/runtime/session_recovery.go:446",
+        "severity": "major"
+      },
+      {
+        "title": "DenyAll 权限策略未生效",
+        "locus": "internal/auth/policy.go:88",
+        "severity": "major"
+      },
+      {
+        "title": "复合语句缺少输入校验允许空载荷",
+        "locus": "src/handler.ts:42",
+        "severity": "major"
+      }
+    ]
+  },
+  "afterExtract": {
+    "label": "AFTER extract",
+    "count": 4,
+    "rows": [
+      {
+        "title": "DenyAll 权限策略未生效",
+        "severity": "major",
+        "invariantId": "INV-DENY-ALL",
+        "counterexample": "DenyAll 策略下仍放行 /admin",
+        "contractClass": "in_contract",
+        "blocking": true,
+        "files": [
+          "internal/auth/policy.go"
+        ]
+      },
+      {
+        "title": "复合语句缺少输入校验允许空载荷",
+        "severity": "major",
+        "invariantId": "AC-VALIDATE",
+        "counterexample": "body={} 仍写入存储",
+        "contractClass": "in_contract",
+        "blocking": true,
+        "files": [
+          "src/handler.ts"
+        ]
+      },
+      {
+        "title": "复合语句跳过授权检查可越权写入",
+        "severity": "major",
+        "invariantId": "AC-AUTHORIZE",
+        "counterexample": "role=guest 调用写接口成功",
+        "contractClass": "in_contract",
+        "blocking": true,
+        "files": [
+          "src/handler.ts"
+        ]
+      },
+      {
+        "title": "已接受重试在等待运行时未登记导致停机提前返回",
+        "severity": "major",
+        "invariantId": null,
+        "counterexample": null,
+        "contractClass": null,
+        "blocking": true,
+        "files": [
+          "pkg/runtime/session_recovery.go",
+          "session_recovery.go"
+        ]
+      }
+    ]
+  },
+  "afterPersist": {
+    "label": "AFTER persist",
+    "count": 4,
+    "rows": [
+      {
+        "title": "DenyAll 权限策略未生效",
+        "severity": "major",
+        "invariantId": "INV-DENY-ALL",
+        "counterexample": "DenyAll 策略下仍放行 /admin",
+        "contractClass": "in_contract",
+        "blocking": true,
+        "files": [
+          "internal/auth/policy.go"
+        ]
+      },
+      {
+        "title": "复合语句缺少输入校验允许空载荷",
+        "severity": "major",
+        "invariantId": "AC-VALIDATE",
+        "counterexample": "body={} 仍写入存储",
+        "contractClass": "in_contract",
+        "blocking": true,
+        "files": [
+          "src/handler.ts"
+        ]
+      },
+      {
+        "title": "复合语句跳过授权检查可越权写入",
+        "severity": "major",
+        "invariantId": "AC-AUTHORIZE",
+        "counterexample": "role=guest 调用写接口成功",
+        "contractClass": "in_contract",
+        "blocking": true,
+        "files": [
+          "src/handler.ts"
+        ]
+      },
+      {
+        "title": "已接受重试在等待运行时未登记导致停机提前返回",
+        "severity": "major",
+        "invariantId": null,
+        "counterexample": null,
+        "contractClass": null,
+        "blocking": true,
+        "files": [
+          "pkg/runtime/session_recovery.go",
+          "session_recovery.go"
+        ]
+      }
+    ]
+  },
+  "checks": [
+    {
+      "name": "P1-1 paraphrase collapse",
+      "pass": true,
+      "detail": "same-root-cause paraphrases at session_recovery.go:446 → 1 finding (want 1)"
+    },
+    {
+      "name": "P1-1 distinct invariantIds retained",
+      "pass": true,
+      "detail": "AC-VALIDATE vs AC-AUTHORIZE at handler.ts:42 → 2 findings (want 2)"
+    },
+    {
+      "name": "P1-2 contract footing preserved on collapse",
+      "pass": true,
+      "detail": "DenyAll merge keeps INV-DENY-ALL + counterexample; blocking=true"
+    },
+    {
+      "name": "Naive before wrongly under-counts distinct causes",
+      "pass": true,
+      "detail": "naive buckets=3, fixed extract=4 (fixed keeps validation≠authorization)"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Locus dedupe e2e simulation — PR #191 / Bug A</title>
+<style>
+  :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
+  body { margin: 24px; background: #0b1020; color: #e8eefc; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  h2 { font-size: 16px; margin: 28px 0 10px; color: #9db7ff; }
+  .meta { color: #9aa7c7; font-size: 13px; margin-bottom: 18px; }
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0 8px; }
+  .card { background: #151b2f; border: 1px solid #2a3558; border-radius: 10px; padding: 14px 16px; min-width: 180px; }
+  .card .n { font-size: 32px; font-weight: 700; }
+  .card .l { font-size: 12px; color: #9aa7c7; margin-top: 4px; }
+  .card.warn .n { color: #ffb454; }
+  .card.ok .n { color: #3dd68c; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; background: #12182a; }
+  th, td { border: 1px solid #2a3558; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #1a223a; color: #c7d5ff; }
+  td { color: #dce6ff; }
+  ul.checks { list-style: none; padding: 0; }
+  ul.checks li { padding: 8px 12px; margin: 6px 0; border-radius: 8px; }
+  ul.checks li.pass { background: #10261c; border: 1px solid #1f6b45; }
+  ul.checks li.fail { background: #2a1216; border: 1px solid #8b2e3b; }
+  code { background: #1a223a; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h1>Locus dedupe e2e simulation</h1>
+  <div class="meta">
+    councilkit PR <code>#191</code> · issue <code>#190</code> Bug A · Codex P1-1 / P1-2<br/>
+    Path: <code>extractFindingsFromReport</code> + <code>persistFindingsFromReport</code> on a synthetic multi-finding report
+  </div>
+
+  <div class="cards">
+    <div class="card warn"><div class="n">3</div><div class="l">BEFORE — naive locus+severity buckets</div></div>
+    <div class="card ok"><div class="n">4</div><div class="l">AFTER extract — root-cause gated dedupe</div></div>
+    <div class="card ok"><div class="n">4</div><div class="l">AFTER persist — same ledger</div></div>
+  </div>
+
+  <h2>Checks</h2>
+  <ul class="checks">
+    <li class="pass"><strong>P1-1 paraphrase collapse</strong> — same-root-cause paraphrases at session_recovery.go:446 → 1 finding (want 1)</li>
+<li class="pass"><strong>P1-1 distinct invariantIds retained</strong> — AC-VALIDATE vs AC-AUTHORIZE at handler.ts:42 → 2 findings (want 2)</li>
+<li class="pass"><strong>P1-2 contract footing preserved on collapse</strong> — DenyAll merge keeps INV-DENY-ALL + counterexample; blocking=true</li>
+<li class="pass"><strong>Naive before wrongly under-counts distinct causes</strong> — naive buckets=3, fixed extract=4 (fixed keeps validation≠authorization)</li>
+  </ul>
+
+  <h2>BEFORE — naive collapse by file:line + severity only</h2>
+  <p class="meta">This is the Bug A failure mode: distinct causes at one line wrongly merge.</p>
+  <table><thead><tr><th>severity</th><th>locus</th><th>title</th></tr></thead><tbody><tr><td>major</td><td>pkg/runtime/session_recovery.go:446</td><td>已接受重试在等待运行时未登记导致停机提前返回</td></tr>
+<tr><td>major</td><td>internal/auth/policy.go:88</td><td>DenyAll 权限策略未生效</td></tr>
+<tr><td>major</td><td>src/handler.ts:42</td><td>复合语句缺少输入校验允许空载荷</td></tr></tbody></table>
+
+  <h2>AFTER — extractFindingsFromReport (fixed)</h2>
+  <table><thead><tr><th>severity</th><th>title</th><th>invariantId</th><th>counterexample</th><th>contractClass</th><th>blocking</th><th>files</th></tr></thead><tbody><tr><td>major</td><td>DenyAll 权限策略未生效</td><td>INV-DENY-ALL</td><td>DenyAll 策略下仍放行 /admin</td><td>in_contract</td><td>true</td><td>internal/auth/policy.go</td></tr>
+<tr><td>major</td><td>复合语句缺少输入校验允许空载荷</td><td>AC-VALIDATE</td><td>body={} 仍写入存储</td><td>in_contract</td><td>true</td><td>src/handler.ts</td></tr>
+<tr><td>major</td><td>复合语句跳过授权检查可越权写入</td><td>AC-AUTHORIZE</td><td>role=guest 调用写接口成功</td><td>in_contract</td><td>true</td><td>src/handler.ts</td></tr>
+<tr><td>major</td><td>已接受重试在等待运行时未登记导致停机提前返回</td><td>—</td><td>—</td><td>—</td><td>true</td><td>pkg/runtime/session_recovery.go, session_recovery.go</td></tr></tbody></table>
+
+  <h2>AFTER — persistFindingsFromReport</h2>
+  <table><thead><tr><th>severity</th><th>title</th><th>invariantId</th><th>counterexample</th><th>contractClass</th><th>blocking</th><th>files</th></tr></thead><tbody><tr><td>major</td><td>DenyAll 权限策略未生效</td><td>INV-DENY-ALL</td><td>DenyAll 策略下仍放行 /admin</td><td>in_contract</td><td>true</td><td>internal/auth/policy.go</td></tr>
+<tr><td>major</td><td>复合语句缺少输入校验允许空载荷</td><td>AC-VALIDATE</td><td>body={} 仍写入存储</td><td>in_contract</td><td>true</td><td>src/handler.ts</td></tr>
+<tr><td>major</td><td>复合语句跳过授权检查可越权写入</td><td>AC-AUTHORIZE</td><td>role=guest 调用写接口成功</td><td>in_contract</td><td>true</td><td>src/handler.ts</td></tr>
+<tr><td>major</td><td>已接受重试在等待运行时未登记导致停机提前返回</td><td>—</td><td>—</td><td>—</td><td>true</td><td>pkg/runtime/session_recovery.go, session_recovery.go</td></tr></tbody></table>
+</body>
+</html>
