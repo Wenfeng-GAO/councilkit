@@ -1021,6 +1021,30 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   // User actions
   // -------------------------------------------------------------------------
 
+  /** Resolve Host cancel target from the in-flight execution's own
+   * executionScopeId (and the binding that owns that scope). latestBinding is
+   * the newest non-closed row and can diverge after a closing→new-active
+   * rotation; Host cancel is scope-scoped, so the wrong scope no-ops/404s. */
+  async function cancelTargetForActiveExecution(
+    roomId: string,
+    executionId: string,
+  ): Promise<{ scopeId: string; token: ControllerToken } | null> {
+    const execution = await db.modelExecutions.get(executionId);
+    const scopeId = execution?.executionScopeId;
+    if (!scopeId) return null;
+    const owner = (await db.runtimeBindings.where("roomId").equals(roomId).toArray()).find(
+      (binding) =>
+        binding.executionScopeId === scopeId &&
+        binding.controllerId !== null &&
+        binding.leaseEpoch !== null,
+    );
+    if (!owner?.controllerId || owner.leaseEpoch === null) return null;
+    return {
+      scopeId,
+      token: { controllerId: owner.controllerId, leaseEpoch: owner.leaseEpoch },
+    };
+  }
+
   /** Pause the Room's scheduling gate; an in-flight execution is cancelled
    * and its interrupted(user_cancelled) terminal is discarded + ACKed by the
    * normal terminal path. */
@@ -1031,10 +1055,12 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     if (room?.activeRoundId) {
       const round = await db.rounds.get(room.activeRoundId);
       if (round?.activeExecutionId) {
-        const binding = await latestBinding(roomId);
-        await client
-          .cancelExecution(binding?.executionScopeId as string, round.activeExecutionId, token)
-          .catch(() => undefined);
+        const target = await cancelTargetForActiveExecution(roomId, round.activeExecutionId);
+        if (target) {
+          await client
+            .cancelExecution(target.scopeId, round.activeExecutionId, target.token)
+            .catch(() => undefined);
+        }
       }
     }
     notify(roomId);
@@ -1050,17 +1076,15 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   /** User stop of the in-flight execution (round stays resumable after the
    * discarded terminal; the loop's terminal path pauses with user_cancelled). */
   async function cancelActiveExecution(roomId: string): Promise<void> {
-    const token = await currentToken(roomId);
+    // Control gate: page must still hold an active controller for the room.
+    await currentToken(roomId);
     const room = await db.rooms.get(roomId);
     if (!room?.activeRoundId) return;
     const round = await db.rounds.get(room.activeRoundId);
     if (!round?.activeExecutionId) return;
-    const binding = await latestBinding(roomId);
-    await client.cancelExecution(
-      binding?.executionScopeId as string,
-      round.activeExecutionId,
-      token,
-    );
+    const target = await cancelTargetForActiveExecution(roomId, round.activeExecutionId);
+    if (!target) return;
+    await client.cancelExecution(target.scopeId, round.activeExecutionId, target.token);
   }
 
   /** User follow-up into the Room's ACTIVE round: a shared-projection write

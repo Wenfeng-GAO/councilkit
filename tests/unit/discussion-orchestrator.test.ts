@@ -199,7 +199,7 @@ class FakeHost {
 
   executeCalls: ExecuteCall[] = [];
   ackCalls: AckCall[] = [];
-  cancelCalls: string[] = [];
+  cancelCalls: { scopeId: string; executionId: string }[] = [];
   closeCalls: { scopeId: string; controllerId: string; leaseEpoch: number }[] = [];
   takeoverCalls: { scopeId: string; controllerId: string; leaseEpoch: number }[] = [];
   getExecutionCalls: string[] = [];
@@ -773,7 +773,10 @@ class FakeHost {
     const stale = this.fenced(scopeOrError, body);
     if (stale) return stale;
     const execution = this.executions.get(executionId);
-    if (!execution) return errorResponse(404, "EXECUTION_NOT_FOUND", "unknown execution");
+    // Match real Host: cancel is scope-scoped (record.scopeId !== scopeId → 404).
+    if (!execution || execution.scopeId !== scopeId) {
+      return errorResponse(404, "EXECUTION_NOT_FOUND", "unknown execution");
+    }
     if (execution.state === "running") {
       this.emit(executionId, {
         type: "interrupted",
@@ -782,7 +785,7 @@ class FakeHost {
         toolState: "none",
       });
     }
-    this.cancelCalls.push(executionId);
+    this.cancelCalls.push({ scopeId, executionId });
     return jsonResponse({ executionId, state: "cancelling" });
   }
 
@@ -2161,6 +2164,71 @@ describe("discussion orchestrator (U5)", () => {
     expect((await db.modelExecutions.get(execution?.executionId ?? ""))?.ackState).toBe(
       "acknowledged",
     );
+  });
+
+  it("13b. cancelActiveExecution uses the execution's scope when latestBinding differs", async () => {
+    // latestBinding = newest non-closed row (includes "closing"). Host cancel is
+    // scope-scoped (record.scopeId !== scopeId → 404). A newer closing decoy
+    // with a different scope must not steal cancel away from the in-flight
+    // execution's own executionScopeId / owning binding.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, previews } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    expect(ownerScopeId).toBeTruthy();
+
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(previews.some((event) => event.type === "started")).toBe(true);
+    });
+    const live = (await db.modelExecutions.where("roomId").equals(room.id).toArray())[0];
+    expect(live?.executionScopeId).toBe(ownerScopeId);
+    expect(live?.executionId).toBeTruthy();
+
+    // Decoy: newer non-closed ("closing") binding on an unrelated scope so
+    // latestBinding diverges from the execution's owning active binding.
+    host.seedScope({
+      scopeId: "scope-decoy-closing",
+      controllerId: "ctrl-decoy-closing",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-closing",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-closing",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-closing",
+      controllerId: "ctrl-decoy-closing",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+    const latest = (
+      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
+    )
+      .filter((binding) => binding.state !== "closed")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    expect(latest?.id).toBe("binding-decoy-closing");
+    expect(latest?.executionScopeId).not.toBe(ownerScopeId);
+
+    await orchestrator.cancelActiveExecution(room.id);
+    expect(host.cancelCalls).toEqual([
+      expect.objectContaining({ scopeId: ownerScopeId, executionId: live?.executionId }),
+    ]);
+
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("user_cancelled");
+    expect((await db.modelExecutions.get(live?.executionId ?? ""))?.state).toBe("discarded");
   });
 
   it("14. abortPausedRound ends only a paused round", async () => {
