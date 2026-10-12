@@ -692,7 +692,15 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     const token = await currentToken(room.id);
     const participant = await db.participants.get(participantId);
     if (!participant) throw new Error(`unknown participant ${participantId}`);
-    const binding = await latestBinding(room.id);
+    // Host execute is scope-scoped and controller-fenced. latestBinding is the
+    // newest non-closed row and can diverge to a newer closing decoy (#182/#183
+    // class) while currentToken still resolves the older active binding —
+    // execute must use that active scope, not latestBinding.
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
     if (!binding || !binding.executionScopeId) throw new Error("no active scope");
     const scopeId = binding.executionScopeId;
 
