@@ -210,7 +210,17 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       },
     };
     heldLocks.set(roomId, tracked);
-    const binding = await latestBinding(roomId);
+    // Prefer the active scoped binding: latestBinding is the newest non-closed
+    // row and can be a newer closing decoy (#182–#185 class) while the older
+    // active owner is still warm — skipping it would claim "controlling"
+    // without Host takeover on the scope that still owns live work.
+    const latest = await latestBinding(roomId);
+    const active = await db.runtimeBindings
+      .where("roomId")
+      .equals(roomId)
+      .filter((candidate) => candidate.state === "active" && !!candidate.executionScopeId)
+      .first();
+    const binding = active ?? latest;
     if (binding && binding.state === "active" && binding.executionScopeId) {
       try {
         const controllerId = ids.uuid();
