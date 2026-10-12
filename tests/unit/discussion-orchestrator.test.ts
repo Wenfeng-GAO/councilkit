@@ -163,6 +163,7 @@ interface ExecuteCall {
   executionId: string;
   participantId: string;
   instructionKind: "message" | "summary";
+  scopeId: string;
 }
 
 interface AckCall {
@@ -591,6 +592,7 @@ class FakeHost {
       executionId: execution.executionId,
       participantId: request.participantId,
       instructionKind: request.snapshot.instruction.kind,
+      scopeId,
     });
     this.emit(execution.executionId, { type: "started", requestedModel: participant.modelId });
     if (plan.kind === "complete") {
@@ -2291,9 +2293,8 @@ describe("discussion orchestrator (U5)", () => {
     expect(latest?.executionScopeId).not.toBe(ownerScopeId);
 
     host.complete(live?.executionId as string, "ack-on-owner-scope");
-    // Prove the completed-terminal ACK path (handleTerminal), not the rest of
-    // the round: a later dispatchTurn may still see the closing decoy via
-    // latestBinding and pause — that is a separate leftover seed.
+    // Prove the completed-terminal ACK path (handleTerminal). Next-turn
+    // dispatchTurn vs closing decoy is covered by 13d.
     await vi.waitFor(async () => {
       expect((await db.modelExecutions.get(live?.executionId ?? ""))?.ackState).toBe(
         "acknowledged",
@@ -2316,6 +2317,76 @@ describe("discussion orchestrator (U5)", () => {
     );
     expect(host.ackCalls.some((call) => call.scopeId === "scope-decoy-ack")).toBe(false);
     await roundPromise; // settle; phase may be completed or paused after later turns
+  });
+
+  it("13d. dispatchTurn executes on the active scope when latestBinding differs", async () => {
+    // Same decoy shape as 13b/13c: latestBinding is a newer "closing" row.
+    // Inserted after the first turn is live so ensureScope/prewarm already used
+    // the owner. The next dispatchTurn must still execute on the active owner
+    // scope — latestBinding would pick the decoy, Host execute is
+    // controller-fenced per scope, and the turn would DISPATCH_FAILED / pause.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator, previews } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    expect(ownerScopeId).toBeTruthy();
+
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(previews.some((event) => event.type === "started")).toBe(true);
+    });
+    const first = (await db.modelExecutions.where("roomId").equals(room.id).toArray())[0];
+    expect(first?.executionScopeId).toBe(ownerScopeId);
+    expect(first?.executionId).toBeTruthy();
+    const executesBeforeDecoy = host.executeCalls.length;
+    expect(executesBeforeDecoy).toBeGreaterThan(0);
+
+    host.seedScope({
+      scopeId: "scope-decoy-dispatch",
+      controllerId: "ctrl-decoy-dispatch",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-dispatch",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-dispatch",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-dispatch",
+      controllerId: "ctrl-decoy-dispatch",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+    const latest = (
+      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
+    )
+      .filter((binding) => binding.state !== "closed")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    expect(latest?.id).toBe("binding-decoy-dispatch");
+    expect(latest?.executionScopeId).not.toBe(ownerScopeId);
+
+    host.complete(first?.executionId as string, "focus-then-continue");
+    const round = await roundPromise;
+    expect(round?.phase).toBe("completed");
+    expect(host.executeCalls.length).toBeGreaterThan(executesBeforeDecoy);
+    expect(
+      host.executeCalls.slice(executesBeforeDecoy).every((call) => call.scopeId === ownerScopeId),
+    ).toBe(true);
+    expect(host.executeCalls.some((call) => call.scopeId === "scope-decoy-dispatch")).toBe(false);
+    const executions = await db.modelExecutions.where("roomId").equals(room.id).toArray();
+    expect(executions.every((execution) => execution.executionScopeId === ownerScopeId)).toBe(
+      true,
+    );
+    expect(executions.every((execution) => execution.state === "committed")).toBe(true);
   });
 
   it("14. abortPausedRound ends only a paused round", async () => {
