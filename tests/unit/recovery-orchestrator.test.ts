@@ -1751,6 +1751,73 @@ describe("recovery orchestration: releaseRuntime (S5)", () => {
     expect(warmAgain?.executionScopeId).not.toBe(warmBinding?.executionScopeId);
   });
 
+  it("17b. releaseRuntime closes the active owner when latestBinding is a newer closing decoy", async () => {
+    // Same decoy shape as rotateScope / discussion-orchestrator 13b–13f.
+    // releaseRuntime used latestBinding, which picks the newer "closing" row;
+    // state !== "active" then made it return null (false cold no-op) while the
+    // older active owner stayed warm — so 释放运行时 appeared to succeed but
+    // left the Host scope alive and the next startRound reused it. Prefer the
+    // active scoped binding so the warm owner is closed.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "complete" }, { kind: "complete" });
+    host.plan(p2.id, { kind: "complete" });
+    const round1 = await orchestrator.startRound(room.id);
+    expect(round1?.phase).toBe("completed");
+
+    const owner = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const ownerScopeId = owner?.executionScopeId as string;
+    expect(ownerScopeId).toBeTruthy();
+
+    host.seedScope({
+      scopeId: "scope-decoy-release",
+      controllerId: "ctrl-decoy-release",
+      leaseEpoch: 1,
+      participantIds: [],
+    });
+    const decoyCreatedAt = "2099-01-01T00:00:00.000Z";
+    await db.runtimeBindings.add({
+      id: "binding-decoy-release",
+      roomId: room.id,
+      scopeRequestId: "req-decoy-release",
+      state: "closing",
+      hostInstanceId: host.hostInstanceId,
+      executionScopeId: "scope-decoy-release",
+      controllerId: "ctrl-decoy-release",
+      leaseEpoch: 1,
+      createdAt: decoyCreatedAt,
+      updatedAt: decoyCreatedAt,
+    });
+    const latest = (
+      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
+    )
+      .filter((binding) => binding.state !== "closed")
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+    expect(latest?.id).toBe("binding-decoy-release");
+    expect(latest?.executionScopeId).not.toBe(ownerScopeId);
+
+    const closeCallsBefore = host.closeCalls.length;
+    await orchestrator.releaseRuntime(room.id);
+
+    const ownerAfter = await db.runtimeBindings.get(owner?.id ?? "");
+    expect(ownerAfter?.state).toBe("closed");
+    expect(host.closeCalls.some((call) => call.scopeId === ownerScopeId)).toBe(true);
+    expect(host.closeCalls.some((call) => call.scopeId === "scope-decoy-release")).toBe(false);
+    expect(host.closeCalls.length).toBe(closeCallsBefore + 1);
+
+    const activeAfter = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    expect(activeAfter).toBeUndefined();
+  });
+
   it("18. 有 live execution 拒绝：hang plan 起轮 → releaseRuntime rejects；complete() 收尾", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator, previews } = makeOrchestrator();
