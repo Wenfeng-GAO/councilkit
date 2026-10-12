@@ -271,7 +271,17 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     roomId: string,
     participants: Participant[],
   ): Promise<{ binding: RuntimeBinding; token: ControllerToken }> {
-    const existing = await latestBinding(roomId);
+    // Prefer the active scoped binding: latestBinding is the newest non-closed
+    // row and can be a newer closing decoy (#182–#184 class) while the older
+    // active owner is still warm — skipping it would try a second create and
+    // hit BINDING_ACTIVE_EXISTS. latestBinding still drives creating-resume.
+    const latest = await latestBinding(roomId);
+    const active = await db.runtimeBindings
+      .where("roomId")
+      .equals(roomId)
+      .filter((candidate) => candidate.state === "active" && !!candidate.executionScopeId)
+      .first();
+    const existing = active ?? latest;
     if (existing && existing.state === "active" && existing.executionScopeId) {
       try {
         const status = await client.getScopeStatus(existing.executionScopeId);
@@ -303,7 +313,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     // recreated under the same request id). Without this, a failed first
     // startRound would poison the room with BINDING_ACTIVE_EXISTS until the
     // startup audit converges the leftover row.
-    const reusable = existing && existing.state === "creating" ? existing : null;
+    const reusable = latest && latest.state === "creating" ? latest : null;
     const scopeRequestId = reusable ? reusable.scopeRequestId : ids.uuid();
     const binding = reusable ?? (await createRuntimeBindingTx(db, { roomId, scopeRequestId }));
     const specs = await Promise.all(
@@ -604,10 +614,11 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     notify(roomId);
 
     try {
-      const { token: scopeToken } = await ensureScope(roomId, participants);
+      const { binding, token: scopeToken } = await ensureScope(roomId, participants);
       token = scopeToken;
-      const binding = await latestBinding(roomId);
-      const status = await client.getScopeStatus(binding?.executionScopeId as string);
+      // Probe readiness on the scope ensureScope resolved, not latestBinding
+      // (a newer closing decoy would report the wrong scope's participants).
+      const status = await client.getScopeStatus(binding.executionScopeId as string);
       const notReady = status.participants.filter((participant) => participant.runtime !== "ready");
       if (notReady.length > 0) {
         await pauseRound(db, {
