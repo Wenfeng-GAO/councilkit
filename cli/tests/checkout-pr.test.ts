@@ -378,3 +378,31 @@ describe("defaultRunCommand capture", () => {
     }
   });
 });
+
+describe("trimCmdError UTF-16 boundary", () => {
+  it("does not split a surrogate pair at the 300-unit truncation boundary", async () => {
+    const { trimCmdError } = await import("../src/auto/checkout-pr");
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+
+    // emoji straddles index 300: raw slice(0, 300) leaves a lone high surrogate
+    const long = `${"a".repeat(299)}${emoji}${"x".repeat(20)}`;
+    expect(long.length).toBeGreaterThan(300);
+
+    const rawSlice = long.slice(0, 300);
+    expect(rawSlice.endsWith("\uD83D")).toBe(true);
+    expect(rawSlice.length).toBe(300);
+
+    const clipped = trimCmdError({
+      stdout: "",
+      stderr: long,
+      exitCode: 1,
+    });
+    expect(clipped.length).toBeLessThanOrEqual(301); // 300 content + optional …
+    expect(clipped.includes("\uD83D")).toBe(false);
+    expect(clipped.endsWith("\uD83D")).toBe(false);
+    // Keep the ASCII prefix; drop the straddling emoji rather than split it.
+    expect(clipped.startsWith("a".repeat(299))).toBe(true);
+    expect(clipped).toBe(`${"a".repeat(299)}…`);
+  });
+});
