@@ -5,6 +5,7 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { errors } from "../errors";
 import { findExecutable, resolveExecutable } from "./driver-commands";
 
@@ -598,7 +599,7 @@ function parseAntCodePrShow(
   } catch {
     const hint = (stderr.trim() || stdout.trim() || "empty stdout").replace(/\s+/g, " ");
     throw errors.runFailed(
-      `antcode pr show did not return JSON (${hint.length > 300 ? `${hint.slice(0, 300)}…` : hint})`,
+      `antcode pr show did not return JSON (${clipCheckoutHint(hint)})`,
     );
   }
   if (rec === null || typeof rec !== "object") {
@@ -686,10 +687,16 @@ function assertOk(result: RunCommandResult, label: string): void {
   }
 }
 
-function trimCmdError(result: RunCommandResult): string {
+export function trimCmdError(result: RunCommandResult): string {
   const text = (result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`).replace(
     /\s+/g,
     " ",
   );
-  return text.length > 300 ? `${text.slice(0, 300)}…` : text;
+  return clipCheckoutHint(text);
+}
+
+/** Clip checkout/push diagnostic text on a UTF-16 code-unit boundary. */
+function clipCheckoutHint(text: string): string {
+  if (text.length <= 300) return text;
+  return `${clipUtf16CodeUnits(text, 300)}…`;
 }
