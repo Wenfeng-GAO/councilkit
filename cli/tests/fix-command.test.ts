@@ -14,7 +14,7 @@ import type { RunCommand } from "../src/auto/checkout-pr";
 import { DRIVER_PROBE_PROMPT, GROK_ISOLATED_HOME_DIR } from "../src/auto/driver-commands";
 import { acquireWriterLease } from "../src/auto/repair-lease";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
-import { FixExit, runFix } from "../src/commands/fix";
+import { FixExit, clipPlanExcerpt, runFix } from "../src/commands/fix";
 import { ReviewExit } from "../src/commands/review";
 import { CliError } from "../src/errors";
 import { Store } from "../src/store/store";
@@ -471,5 +471,31 @@ describe("cli fix command", () => {
       expect(error).toBeInstanceOf(CliError);
       expect((error as CliError).message).toMatch(/writer already holds/i);
     }
+  });
+});
+
+describe("clipPlanExcerpt UTF-16 boundary", () => {
+  it("does not split a surrogate pair at the 6000-unit truncation boundary", () => {
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+
+    // emoji straddles index 6000: raw slice(0, 6000) leaves a lone high surrogate
+    const long = `${"a".repeat(5999)}${emoji}${"x".repeat(20)}`;
+    expect(long.length).toBeGreaterThan(6000);
+
+    const rawSlice = long.slice(0, 6000);
+    expect(rawSlice.endsWith("\uD83D")).toBe(true);
+    expect(rawSlice.length).toBe(6000);
+
+    const clipped = clipPlanExcerpt(long);
+    expect(clipped.length).toBeLessThanOrEqual(6000);
+    expect(clipped.includes("\uD83D")).toBe(false);
+    expect(clipped.endsWith("\uD83D")).toBe(false);
+    // Keep the ASCII prefix; drop the straddling emoji rather than split it.
+    expect(clipped).toBe("a".repeat(5999));
+  });
+
+  it("passes through short plan text unchanged (aside from trim)", () => {
+    expect(clipPlanExcerpt("  short plan  ")).toBe("short plan");
   });
 });
