@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16CodeUnits, clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { errors } from "../errors";
 import { findExecutable, resolveExecutable } from "./driver-commands";
 
@@ -119,7 +119,7 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += stderrDecoder.write(chunk);
-      if (stderr.length > 1 * 1024 * 1024) stderr = stderr.slice(-512 * 1024);
+      if (stderr.length > 1 * 1024 * 1024) stderr = clipUtf16TailCodeUnits(stderr, 512 * 1024);
     });
     const timeout = setTimeout(() => {
       try {

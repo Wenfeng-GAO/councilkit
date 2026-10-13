@@ -17,6 +17,7 @@ import {
   atomicJson,
   readBounded,
 } from "@shared/runtime/review-explainer/io";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import {
   type AttemptSpec,
   executableForDriver,
@@ -332,7 +333,7 @@ export function createExplanationService(services: HostServices) {
               ? { ...result.failure, message: executionError(result, timeoutMs).message }
               : undefined,
             activity: redact(result.activity),
-            output: result.output.slice(0, 256000),
+            output: clipUtf16CodeUnits(result.output, 256000),
           };
           atomicJson(rawPath, execution);
           if (result.status !== "success") throw executionError(result, timeoutMs);

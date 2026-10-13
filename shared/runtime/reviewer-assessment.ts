@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import { ASSESSMENT_LOCATION, FULL_COMMIT_SHA } from "./cli-ledger";
+import { clipUtf16CodeUnits } from "./seat-result";
 
 export const reviewerAssessmentSchema = z
   .object({
@@ -140,7 +141,7 @@ export function diagnoseAttemptAssessments(input: {
           typeof row === "object" &&
           "findingId" in row &&
           typeof row.findingId === "string"
-            ? row.findingId.slice(0, 160)
+            ? clipUtf16CodeUnits(row.findingId, 160)
             : null;
         const first = result.error.issues[0];
         items.push({

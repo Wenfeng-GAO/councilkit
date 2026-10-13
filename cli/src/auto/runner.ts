@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { redact } from "../redact";
 import {
   type AttemptActivity,
@@ -1030,5 +1031,5 @@ function stderrTail(stderr: string): string {
   const trimmed = redacted.trim();
   if (trimmed.length === 0) return "";
   if (trimmed.length <= STDERR_TAIL_BYTES) return trimmed;
-  return `…${trimmed.slice(trimmed.length - STDERR_TAIL_BYTES)}`;
+  return `…${clipUtf16TailCodeUnits(trimmed, STDERR_TAIL_BYTES)}`;
 }

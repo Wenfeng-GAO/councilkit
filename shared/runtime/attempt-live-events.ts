@@ -4,6 +4,8 @@
  * reads them. Bad lines are skipped — never thrown on.
  */
 
+import { clipUtf16CodeUnits } from "./seat-result";
+
 export const LIVE_SUMMARY_MAX = 240;
 
 /** Closed attemptId token used as a sidecar filename. */
@@ -23,12 +25,7 @@ export type AttemptLiveEvent = AttemptLiveEventPayload & {
 
 export function clipLiveSummary(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length <= LIVE_SUMMARY_MAX) return trimmed;
-  // Host zod `.max(240)` counts UTF-16 code units (JS string.length), not code points.
-  let end = LIVE_SUMMARY_MAX;
-  const unit = trimmed.charCodeAt(end - 1);
-  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
-  return trimmed.slice(0, end);
+  return clipUtf16CodeUnits(trimmed, LIVE_SUMMARY_MAX);
 }
 
 export function parseAttemptLiveEventLine(line: string): AttemptLiveEvent | null {
