@@ -29,6 +29,7 @@ import { isAbsolute, join, relative } from "node:path";
 import type { Duplex, Readable, Writable } from "node:stream";
 import { TIMEOUTS } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import type { HostConfig } from "../config";
 import type { Logger } from "../logging";
 
@@ -218,8 +219,13 @@ export function createBoundedRing(limitBytes: number): BoundedRing {
 
 const PARTICIPANT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/** Clip spawn/prewarm error details on a UTF-16 code-unit boundary (max 512). */
+export function clipSpawnErrorDetail(message: string): string {
+  return clipUtf16CodeUnits(message, 512);
+}
+
 function spawnFailed(message: string, participantId?: string): RuntimeError {
-  return makeError("DRIVER_SPAWN_FAILED", "prewarm", message.slice(0, 512), {
+  return makeError("DRIVER_SPAWN_FAILED", "prewarm", clipSpawnErrorDetail(message), {
     ...(participantId ? { participantId } : {}),
   });
 }
@@ -375,7 +381,7 @@ export function createProcessSupervisor(deps: {
         break;
       }
       case "spawn-error": {
-        record.spawnError = String(message.message ?? "unknown spawn error").slice(0, 512);
+        record.spawnError = clipSpawnErrorDetail(String(message.message ?? "unknown spawn error"));
         record.expectingWatchdogExit = true; // the watchdog exits itself after spawn-error
         record.events.emit("spawn-error", { message: record.spawnError });
         if (record.supervised && !record.driverSettled) {
