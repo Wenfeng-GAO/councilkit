@@ -94,6 +94,29 @@ describe("with-spec auto-bind", () => {
     expect(detected!.text).toContain("AC-12");
   });
 
+  it("binds a nested vibespec PRD.md mentioned only by basename", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-spec-"));
+    const rel = "docs/vibespec/demo/PRD.md";
+    mkdirSync(join(root, "docs", "vibespec", "demo"), { recursive: true });
+    writeFileSync(
+      join(root, rel),
+      ["# PRD", "", "## 验收", "", "- [ ] cancel deregisters waiters", ""].join("\n"),
+      "utf8",
+    );
+    const detected = autoDetectSpec({
+      searchText: "Spec contract: PRD.md",
+      repoRoot: root,
+    });
+    expect(detected?.source).toBe(rel);
+    expect(detected?.text).toContain("cancel deregisters waiters");
+    expect(
+      autoDetectSpec({
+        searchText: "See docs/plans/missing-plan.md for the contract.",
+        repoRoot: root,
+      }),
+    ).toBeNull();
+  });
+
   it("--spec explicit override binds file body", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-spec-"));
     const rel = "docs/verification/demo-acceptance.md";

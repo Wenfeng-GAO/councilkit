@@ -161,8 +161,13 @@ export function autoDetectSpec(input: {
     }
   }
 
-  // No path refs, but repo has a vibespec VERIFY/PRD mentioned by basename in text.
-  if (input.repoRoot && candidates.length === 0) {
+  // Bare basenames (PRD.md, VERIFY.md) match as path refs, so they never
+  // reach this scan when the guard is `candidates.length === 0`. A nested
+  // vibespec file is only found here. An explicit docs/... path that did
+  // not read must not fall through onto a different file.
+  const basenameOnly =
+    candidates.length === 0 || candidates.every((candidate) => !candidate.includes("/"));
+  if (input.repoRoot && basenameOnly) {
     const fromTree = scanRepoForReferencedContract(input.searchText, input.repoRoot);
     if (fromTree) {
       return {
