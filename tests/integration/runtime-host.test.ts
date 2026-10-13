@@ -1606,4 +1606,38 @@ describe("scope-manager CANCELLED vs AUTH_REQUIRED prewarm (CK-RS-001)", () => {
     // A prewarm failure never closes the driver (no close during this scope).
     expect(driver.closeCount).toBe(0);
   });
+
+  it("does not split a surrogate pair in readiness.detail at the 256 cut", async () => {
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+    // emoji straddles index 256: raw slice(0, 256) leaves a lone high surrogate
+    const message = `${"a".repeat(255)}${emoji}${"x".repeat(20)}`;
+    expect(message.length).toBeGreaterThan(256);
+    expect(message.slice(0, 256).endsWith("\uD83D")).toBe(true);
+
+    const rig = await createRig({
+      driverOptions: {
+        "p-utf16-1": {
+          prewarmError: Object.assign(new Error(message), {
+            runtimeCode: "AUTH_REQUIRED",
+          }),
+        },
+      },
+    });
+    rigs.push(rig);
+
+    await rig.scopeManager.createScope({
+      scopeRequestId: "req-utf16-prewarm-0001",
+      participants: [spec("p-utf16-1")],
+    });
+
+    const scope = [...rig.scopeManager._scopes.values()].find(
+      (s) => s.scopeRequestId === "req-utf16-prewarm-0001",
+    );
+    const detail = scope?.participants.get("p-utf16-1")?.readiness?.detail ?? "";
+    expect(detail.length).toBeLessThanOrEqual(256);
+    const last = detail.charCodeAt(detail.length - 1);
+    expect(last < 0xd800 || last > 0xdbff).toBe(true);
+    expect(detail).toBe("a".repeat(255));
+  });
 });

@@ -6,6 +6,7 @@ import type {
   ScopeState,
 } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import type {
   ContextSnapshot,
   CreateScopeRequest,
@@ -300,7 +301,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
             : runtimeCode === "MODEL_UNAVAILABLE"
               ? "model_unavailable"
               : "runtime_unavailable",
-        detail: error instanceof Error ? error.message.slice(0, 256) : "prewarm failed",
+        detail: error instanceof Error ? clipUtf16CodeUnits(error.message, 256) : "prewarm failed",
       };
       logger.warn("scope.prewarm_failed", {
         scopeId: scope.scopeId,
@@ -554,7 +555,7 @@ export function createScopeManager(deps: ScopeManagerDeps) {
           error: makeError(
             "INTERNAL",
             "dispatch",
-            error instanceof Error ? error.message.slice(0, 256) : "execute failed",
+            error instanceof Error ? clipUtf16CodeUnits(error.message, 256) : "execute failed",
             { executionId: request.executionId, participantId: request.participantId },
           ),
           dispatchState: "unknown",
