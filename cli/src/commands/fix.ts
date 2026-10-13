@@ -17,6 +17,7 @@ import {
   type CliRunProgressPhase,
 } from "@shared/runtime/cli-run-progress";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
 import {
   type AttemptSpec,
@@ -787,6 +788,11 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   }
 }
 
+/** Clip follow-up review plan excerpts on a UTF-16 code-unit boundary (max 6000). */
+export function clipPlanExcerpt(text: string): string {
+  return clipUtf16CodeUnits(text.trim(), 6000);
+}
+
 async function startFollowUpReview(input: {
   pr: string;
   sourceRunId: string;
@@ -801,7 +807,7 @@ async function startFollowUpReview(input: {
   let created: string | null = null;
   let planExcerpt = "";
   try {
-    planExcerpt = readFileSync(input.planPath, "utf8").trim().slice(0, 6000);
+    planExcerpt = clipPlanExcerpt(readFileSync(input.planPath, "utf8"));
   } catch {
     planExcerpt = "";
   }
