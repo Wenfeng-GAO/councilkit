@@ -10,6 +10,7 @@
  * report.md and plan.md lives in the CLI (`cli/src/auto/ledger.ts`).
  */
 import { z } from "zod";
+import { clipUtf16CodeUnits } from "./seat-result";
 
 export const CLI_RUN_FINDINGS_FILE = "findings.json";
 export const CLI_RUN_PLAN_LOCK_FILE = "plan.lock.json";
@@ -172,7 +173,7 @@ function firstField(text: string, patterns: RegExp[]): string | null {
   for (const re of patterns) {
     const match = re.exec(text);
     const raw = match?.[1]?.trim();
-    if (raw && raw.length > 0) return raw.slice(0, 4000);
+    if (raw && raw.length > 0) return clipUtf16CodeUnits(raw, 4000);
   }
   return null;
 }

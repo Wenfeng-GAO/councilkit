@@ -4,6 +4,8 @@ import {
   findingStatusLabel,
   isFindingBlocking,
   isFindingVerifiedClosed,
+  ledgerFindingSchema,
+  parseFindingContractFields,
   parseFindingsFile,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
@@ -139,5 +141,28 @@ describe("countLedgerFindings", () => {
     expect(counts.total).toBe(3);
     expect(counts.byStatus).toEqual({ open: 2, closed: 1, accepted: 0, regress: 0 });
     expect(counts.bySeverity).toEqual({ critical: 0, major: 2, minor: 0, nit: 1 });
+  });
+});
+
+describe("parseFindingContractFields UTF-16 clip", () => {
+  it("does not split a surrogate pair when clipping counterexample to 4000 units", () => {
+    const emoji = "😀";
+    expect(emoji.length).toBe(2);
+
+    // emoji straddles index 4000: raw slice(0, 4000) leaves a lone high surrogate
+    const body = `${"a".repeat(3999)}${emoji}${"x".repeat(20)}`;
+    expect(body.length).toBeGreaterThan(4000);
+    expect(body.slice(0, 4000).endsWith("\uD83D")).toBe(true);
+
+    const parsed = parseFindingContractFields({
+      text: `反例：${body}`,
+    });
+    expect(parsed.counterexample).not.toBeNull();
+    expect(parsed.counterexample!.length).toBeLessThanOrEqual(4000);
+    expect(parsed.counterexample!.endsWith("\uD83D")).toBe(false);
+    expect(parsed.counterexample).toBe("a".repeat(3999));
+    expect(ledgerFindingSchema.shape.counterexample.safeParse(parsed.counterexample).success).toBe(
+      true,
+    );
   });
 });
