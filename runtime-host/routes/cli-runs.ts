@@ -26,6 +26,7 @@ import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-h
 import { CLI_RUN_STATUS_FILE, type CliRunProgressPhase } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { makeError } from "@shared/runtime/errors";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
@@ -1065,17 +1066,23 @@ function isHandshakeTimeout(error: unknown): boolean {
   );
 }
 
+
+/** Clip cli-run spawn/handshake error details on a UTF-16 code-unit boundary (max 1024). */
+export function clipCliSpawnErrorDetail(message: string): string {
+  return clipUtf16CodeUnits(message, 1024);
+}
+
 function mapRepairSpawnError(error: unknown): never {
   const message = error instanceof Error ? error.message : "failed to spawn councilkit";
   if (isHandshakeTimeout(error)) {
     throw httpError(
       500,
-      makeError("HANDSHAKE_TIMEOUT", "dispatch", message.slice(0, 1024), { retryable: true }),
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipCliSpawnErrorDetail(message), { retryable: true }),
     );
   }
   throw httpError(
     500,
-    makeError("DRIVER_SPAWN_FAILED", "dispatch", message.slice(0, 1024), { retryable: false }),
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipCliSpawnErrorDetail(message), { retryable: false }),
   );
 }
 
@@ -1142,7 +1149,7 @@ function mapIdeateSpawnError(error: unknown): never {
   if (code === "HANDSHAKE_TIMEOUT" || message.includes("HANDSHAKE_TIMEOUT")) {
     throw httpError(
       500,
-      makeError("HANDSHAKE_TIMEOUT", "dispatch", message.slice(0, 1024), { retryable: true }),
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipCliSpawnErrorDetail(message), { retryable: true }),
     );
   }
   if (message.includes("product-jury")) {
@@ -1160,7 +1167,7 @@ function mapIdeateSpawnError(error: unknown): never {
   }
   throw httpError(
     500,
-    makeError("DRIVER_SPAWN_FAILED", "dispatch", message.slice(0, 1024), { retryable: false }),
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipCliSpawnErrorDetail(message), { retryable: false }),
   );
 }
 
@@ -1173,7 +1180,7 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
   if (code === "HANDSHAKE_TIMEOUT" || message.includes("HANDSHAKE_TIMEOUT")) {
     throw httpError(
       500,
-      makeError("HANDSHAKE_TIMEOUT", "dispatch", message.slice(0, 1024), { retryable: true }),
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipCliSpawnErrorDetail(message), { retryable: true }),
     );
   }
   if (/no local clone/i.test(message)) {
@@ -1198,7 +1205,7 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
   }
   throw httpError(
     500,
-    makeError("DRIVER_SPAWN_FAILED", "dispatch", message.slice(0, 1024), { retryable: false }),
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipCliSpawnErrorDetail(message), { retryable: false }),
   );
 }
 
