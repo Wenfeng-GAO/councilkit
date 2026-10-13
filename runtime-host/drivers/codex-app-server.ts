@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { DispatchState, ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { sanitizeString } from "../logging";
 import type { DriverProcess } from "../process/process-supervisor";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
@@ -66,6 +67,11 @@ interface ActiveTurn {
 }
 
 type DriverState = "cold" | "starting" | "ready" | "busy" | "closing" | "closed";
+
+/** Clip codex RPC error JSON details on a UTF-16 code-unit boundary (max 300). */
+export function clipCodexRpcErrorDetail(message: string): string {
+  return clipUtf16CodeUnits(message, 300);
+}
 
 export function createCodexAppServerDriver(
   deps: DriverDeps,
@@ -386,7 +392,7 @@ export function createCodexAppServerDriver(
           pending.delete(String(id));
           const errorValue = message.error;
           if (errorValue) {
-            entry.reject(new Error(sanitizeString(JSON.stringify(errorValue).slice(0, 300))));
+            entry.reject(new Error(sanitizeString(clipCodexRpcErrorDetail(JSON.stringify(errorValue)))));
           } else {
             entry.resolve(message.result);
           }
