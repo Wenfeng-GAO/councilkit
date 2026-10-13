@@ -18,6 +18,14 @@ export default defineConfig({
     // global mocks in legacy unit tests cannot leak across files.
     pool: "forks",
     poolOptions: { forks: { minForks: 1, maxForks: 1 } },
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}", "shared/**/*.ts", "runtime-host/**/*.ts", "cli/src/**/*.ts"],
+      exclude: ["**/*.d.ts", "**/*.test.ts"],
+      reporter: ["text-summary", "json-summary", "json"],
+      reportsDirectory: "coverage",
+      reportOnFailure: true,
+    },
   },
   resolve: {
     alias: {
