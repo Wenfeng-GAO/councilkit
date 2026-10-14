@@ -263,7 +263,7 @@ function startLockHolder(lockPath: string): {
       "tsx",
       "--input-type=module",
       "-e",
-      `import { acquireExclusiveLock } from ${JSON.stringify(join(process.cwd(), "shared/runtime/exclusive-lock.ts"))};\nconst held = acquireExclusiveLock(${JSON.stringify(lockPath)});\nconsole.log("held");\nsetInterval(() => {}, 1000);\nvoid held;\n`,
+      `import { acquireExclusiveLock, LockBusyError } from ${JSON.stringify(join(process.cwd(), "shared/runtime/exclusive-lock.ts"))};\ntry {\n  const held = acquireExclusiveLock(${JSON.stringify(lockPath)});\n  console.log("held");\n  // The timer closes over the handle. Collecting it closes the database and drops the lock.\n  setInterval(() => { if (held === undefined) process.exit(1); }, 1000);\n} catch (error) {\n  if (error instanceof LockBusyError) process.exit(0);\n  console.error(error instanceof Error ? error.message : String(error));\n  process.exit(1);\n}\n`,
     ],
     { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
   );
