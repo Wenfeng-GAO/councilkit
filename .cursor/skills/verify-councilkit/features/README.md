@@ -45,5 +45,5 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Home landing](./home-landing.md) opens `/` and follows `贴 URL 开审查` to the focused PR URL field.
 - [Host settings](./host-settings.md) opens Settings and checks that this Host instance is online.
 - [Reports library](./reports-library.md) opens the report library, search box, and case filters on an empty home.
-- [New room](./new-room.md) opens the new-discussion gate. Creating a room needs Execution Profiles this fresh origin does not have.
+- [New Council](./new-council.md) opens the new-discussion gate. Creating a Council needs Execution Profiles this fresh origin does not have.
 - [CLI init](./cli-init.md) writes the default `pr-jury` council into a disposable `COUNCILKIT_HOME`.

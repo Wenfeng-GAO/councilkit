@@ -26,7 +26,10 @@ import {
   compareLintCounts,
   diagnosticCounts,
   inLintScope,
+  lintConfigChanged,
+  lintPairsForConfigChange,
   lintPairsFromRecords,
+  listLintScopedFiles,
   mergeCounts,
   parseArgs,
   resolveMergeBase,
@@ -128,7 +131,7 @@ async function biomeCounts(biomeBin, cwd, files, pathRoot) {
   return counts;
 }
 
-function detailLine(base, filesChecked, compared) {
+function detailLine(base, filesChecked, compared, fullScope) {
   const regressionNote =
     compared.regressions.length === 0
       ? "regressions=0"
@@ -136,7 +139,10 @@ function detailLine(base, filesChecked, compared) {
           .slice(0, 20)
           .map((item) => `${item.file} ${item.baseline}->${item.head} (${item.reason})`)
           .join("; ")}`;
-  return `biome check on ${filesChecked} changed lint-scoped files vs ${base.ref} ${base.sha}; headDiagnostics=${compared.headDiagnostics} baselineDiagnostics=${compared.baselineDiagnostics}; ${regressionNote}`;
+  const which = fullScope
+    ? "lint-scoped files after a biome config change"
+    : "changed lint-scoped files";
+  return `biome check on ${filesChecked} ${which} vs ${base.ref} ${base.sha}; headDiagnostics=${compared.headDiagnostics} baselineDiagnostics=${compared.baselineDiagnostics}; ${regressionNote}`;
 }
 
 async function main() {
@@ -165,12 +171,27 @@ async function main() {
   }
 
   const { records, untracked } = changedRecords(repo, base.sha);
-  const pairs = lintPairsFromRecords(records, untracked, inLintScope, (path) =>
+  let pairs = lintPairsFromRecords(records, untracked, inLintScope, (path) =>
     existsSync(join(repo, path)),
   );
+  const configChanged = lintConfigChanged(records, untracked);
+  if (configChanged) {
+    const expanded = new Map(
+      lintPairsForConfigChange(
+        listLintScopedFiles(repo).filter((path) => existsSync(join(repo, path))),
+      ).map((pair) => [pair.headPath, pair]),
+    );
+    for (const pair of pairs) expanded.set(pair.headPath, pair);
+    pairs = [...expanded.values()].sort((a, b) => a.headPath.localeCompare(b.headPath));
+    console.log("biome config changed; comparing the full lint scope");
+  }
   console.log(`node=${process.version} repo=${repo}`);
   console.log(`merge-base ${base.ref} ${base.sha}`);
-  console.log(`lint-scoped changed files: ${pairs.length}`);
+  console.log(
+    configChanged
+      ? `lint-scoped files: ${pairs.length} (full scope; biome config changed)`
+      : `lint-scoped changed files: ${pairs.length}`,
+  );
   for (const pair of pairs) {
     const note =
       pair.baselinePath == null
@@ -183,7 +204,7 @@ async function main() {
 
   if (pairs.length === 0) {
     const compared = { headDiagnostics: 0, baselineDiagnostics: 0, regressions: [] };
-    const detail = detailLine(base, 0, compared);
+    const detail = detailLine(base, 0, compared, configChanged);
     writeExtra(extraOut, {
       detail,
       mergeBase: base.sha,
@@ -247,7 +268,7 @@ async function main() {
       console.log("no changed lint files exist at the merge-base");
     }
     const compared = compareLintCounts(pairs, headCounts, baselineCounts);
-    const detail = detailLine(base, pairs.length, compared);
+    const detail = detailLine(base, pairs.length, compared, configChanged);
     writeExtra(extraOut, {
       detail,
       mergeBase: base.sha,

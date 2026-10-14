@@ -43,6 +43,17 @@ if (expectedSha && state.sha !== expectedSha) {
 }
 
 const supervisor = readProc(state.supervisorPid);
+if (
+  supervisor &&
+  state.supervisorStarttime != null &&
+  supervisor.starttime !== state.supervisorStarttime
+) {
+  fail("PID reused / start time mismatch", {
+    supervisorPid: state.supervisorPid,
+    expectedStarttime: state.supervisorStarttime,
+    actualStarttime: supervisor.starttime,
+  }, 10);
+}
 if (!supervisor || !isVerificationProcess(supervisor, state.cwd)) {
   fail("supervisor pid is not the verification host we started", {
     supervisorPid: state.supervisorPid,

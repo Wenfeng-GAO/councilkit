@@ -151,6 +151,33 @@ export function inLintScope(path) {
   return LINT_EXTENSIONS.has(extensionOf(path));
 }
 
+/** Repo-root Biome config. A nested `biome.json` does not drive the lint step. */
+export function isLintConfigPath(path) {
+  return path === "biome.json" || path === "biome.jsonc";
+}
+
+/** True when a changed or untracked path is the Biome config the lint step uses. */
+export function lintConfigChanged(records, untracked) {
+  for (const record of records) {
+    if (isLintConfigPath(record.to) || isLintConfigPath(record.from)) return true;
+  }
+  return untracked.some((path) => isLintConfigPath(path));
+}
+
+/** Tracked files the lint step would check. Untracked paths stay with the diff pairs. */
+export function listLintScopedFiles(repo) {
+  const text = gitOutput(repo, ["ls-files", "-z", "--", ...LINT_PREFIXES, ...LINT_FILES]);
+  return text
+    .split("\0")
+    .filter((path) => path.length > 0 && inLintScope(path))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/** Full-scope pairs. A missing merge-base blob is cleared later by the lint step. */
+export function lintPairsForConfigChange(scopedFiles) {
+  return scopedFiles.map((headPath) => ({ headPath, baselinePath: headPath }));
+}
+
 /**
  * @param {Array<{kind: string, from: string, to: string}>} records
  * @param {string[]} untracked
@@ -336,6 +363,25 @@ export function compareFailingTests(headNames, baselineNames) {
 }
 
 /**
+ * A partial, empty, or aborted Vitest JSON report cannot be compared.
+ * Null means the report is usable. Missing failure counts count as zero.
+ */
+export function vitestReportProblem(report, exitCode) {
+  if (!report || typeof report !== "object") return "vitest JSON report is empty";
+  if (typeof report.numTotalTests !== "number" || !Array.isArray(report.testResults)) {
+    return "vitest JSON report is incomplete";
+  }
+  if (report.numTotalTests === 0) return "vitest JSON report contains no tests";
+  if (exitCode === null) return "vitest was killed before a complete report";
+  const failedTests = report.numFailedTests ?? 0;
+  const failedSuites = report.numFailedTestSuites ?? 0;
+  if (exitCode !== 0 && failedTests === 0 && failedSuites === 0) {
+    return "vitest aborted with an unexplained nonzero exit";
+  }
+  return null;
+}
+
+/**
  * Playwright JSON paths are already repo-relative. Absolute paths are stripped
  * against `repoRoot`. Relative paths are left as written so a worktree report
  * parsed from another cwd does not pick up that cwd's realpath.
@@ -503,6 +549,33 @@ function runSelfTest() {
     throw new Error("skill scripts are outside lint scope");
   }
   if (!inLintScope("playwright.config.ts")) throw new Error("playwright config is in lint scope");
+  if (!isLintConfigPath("biome.json") || !isLintConfigPath("biome.jsonc")) {
+    throw new Error("repo-root biome config is a lint config path");
+  }
+  if (isLintConfigPath("src/biome.json")) throw new Error("nested biome.json is not the lint config");
+  if (inLintScope("biome.json") || inLintScope("biome.jsonc")) {
+    throw new Error("biome config itself is not a linted source");
+  }
+  if (!lintConfigChanged([{ kind: "M", from: "biome.json", to: "biome.json" }], [])) {
+    throw new Error("a biome-only diff changes lint config");
+  }
+  if (!lintConfigChanged([{ kind: "R", from: "biome.json", to: "biome.jsonc" }], [])) {
+    throw new Error("renaming the biome config changes lint config");
+  }
+  if (!lintConfigChanged([], ["biome.jsonc"])) {
+    throw new Error("an untracked biome.jsonc changes lint config");
+  }
+  if (lintConfigChanged([{ kind: "M", from: "src/a.ts", to: "src/a.ts" }], ["src/new.ts"])) {
+    throw new Error("source edits are not a lint config change");
+  }
+  assertEqual(
+    lintPairsForConfigChange(["cli/a.ts", "src/b.ts"]),
+    [
+      { headPath: "cli/a.ts", baselinePath: "cli/a.ts" },
+      { headPath: "src/b.ts", baselinePath: "src/b.ts" },
+    ],
+    "config change pairs keep the head path as the baseline path",
+  );
 
   const head = new Map([
     ["src/a.ts", 2],
@@ -602,6 +675,46 @@ function runSelfTest() {
   );
   const unchanged = compareFailingTests(names, names);
   assertEqual(unchanged.newFailures, [], "identical sets pass");
+
+  assertEqual(vitestReportProblem(null, 1), "vitest JSON report is empty", "empty vitest report");
+  assertEqual(
+    vitestReportProblem({ numTotalTests: 1 }, 0),
+    "vitest JSON report is incomplete",
+    "incomplete vitest report",
+  );
+  assertEqual(
+    vitestReportProblem({ testResults: [] }, 0),
+    "vitest JSON report is incomplete",
+    "vitest report missing numTotalTests",
+  );
+  assertEqual(
+    vitestReportProblem({ numTotalTests: 0, testResults: [] }, 1),
+    "vitest JSON report contains no tests",
+    "vitest report contains no tests",
+  );
+  assertEqual(
+    vitestReportProblem({ numTotalTests: 3, testResults: [] }, 1),
+    "vitest aborted with an unexplained nonzero exit",
+    "unexplained nonzero vitest exit",
+  );
+  assertEqual(
+    vitestReportProblem({ numTotalTests: 3, numFailedTests: 1, testResults: [] }, null),
+    "vitest was killed before a complete report",
+    "vitest killed before a complete report",
+  );
+  assertEqual(
+    vitestReportProblem(
+      {
+        numTotalTests: 4,
+        numFailedTests: 1,
+        numFailedTestSuites: 1,
+        testResults: [{ name: "a.test.ts", status: "failed", assertionResults: [] }],
+      },
+      1,
+    ),
+    null,
+    "a normal failing vitest report is usable",
+  );
 
   const e2eReport = {
     stats: { expected: 1, unexpected: 2, skipped: 1, flaky: 1 },

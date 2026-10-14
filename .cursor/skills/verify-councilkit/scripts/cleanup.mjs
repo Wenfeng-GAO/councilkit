@@ -1,15 +1,16 @@
 /**
  * Stop the verification host this run started, then delete its scratch home.
- * Evidence under artifacts/verify stays. A PID is signaled only when its cwd
- * and command line still match the recorded host.
+ * Evidence under artifacts/verify stays. A PID is signaled only when its cwd,
+ * command line, and recorded start time still match the host this run started.
  */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { descendants, isVerificationProcess, readProc } from "./proc.mjs";
 
-function snapshotTree(supervisorPid, cwd) {
+function snapshotTree(supervisorPid, cwd, expectedStarttime) {
   const supervisor = readProc(supervisorPid);
   if (!supervisor || !isVerificationProcess(supervisor, cwd)) return [];
+  if (expectedStarttime != null && supervisor.starttime !== expectedStarttime) return [];
   const rows = [];
   for (const pid of descendants(supervisorPid)) {
     const proc = readProc(pid);
@@ -66,7 +67,13 @@ if (state.status === "stopped") {
   process.exit(0);
 }
 
-const snapshot = snapshotTree(state.supervisorPid, state.cwd);
+const expectedStarttime = state.supervisorStarttime;
+const supervisorNow = readProc(state.supervisorPid);
+const starttimeMismatch =
+  supervisorNow !== null &&
+  expectedStarttime != null &&
+  supervisorNow.starttime !== expectedStarttime;
+const snapshot = snapshotTree(state.supervisorPid, state.cwd, expectedStarttime);
 if (snapshot.length === 0) {
   state.status = "stopped";
   state.stoppedAt = new Date().toISOString();
@@ -75,8 +82,13 @@ if (snapshot.length === 0) {
   writeReport({
     ok: true,
     stopped: false,
-    reason: "recorded supervisor is gone or no longer matches the verification host",
+    reason: starttimeMismatch
+      ? "PID reused / start time mismatch"
+      : "recorded supervisor is gone or no longer matches the verification host",
     supervisorPid: state.supervisorPid,
+    ...(starttimeMismatch
+      ? { expectedStarttime, actualStarttime: supervisorNow.starttime }
+      : {}),
   });
   process.exit(0);
 }

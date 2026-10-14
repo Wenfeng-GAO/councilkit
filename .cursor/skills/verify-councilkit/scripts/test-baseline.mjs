@@ -27,6 +27,7 @@ import {
   productPathsDiffer,
   readBaselineCache,
   resolveMergeBase,
+  vitestReportProblem,
 } from "./baseline-lib.mjs";
 
 const procScript = fileURLToPath(new URL("./proc.mjs", import.meta.url));
@@ -106,12 +107,20 @@ function runVitest(cwd, outputFile) {
         reject(new Error(`vitest did not write ${outputFile} (exit ${code ?? "null"})`));
         return;
       }
+      let report;
       try {
-        resolve(JSON.parse(readFileSync(outputFile, "utf8")));
+        report = JSON.parse(readFileSync(outputFile, "utf8"));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         reject(new Error(`vitest JSON report is unreadable (${outputFile}): ${message}`));
+        return;
       }
+      const problem = vitestReportProblem(report, code);
+      if (problem) {
+        reject(new Error(`${problem} (vitest exit ${code ?? "null"})`));
+        return;
+      }
+      resolve(report);
     });
   });
 }

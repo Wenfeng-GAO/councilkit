@@ -10,7 +10,7 @@ refuse_shared_if_held
 
 FEATURE="${1:-}"
 if [[ -z "$FEATURE" ]]; then
-  echo "usage: drive.sh <home-landing|host-settings|reports-library|new-room|cli-init>" >&2
+  echo "usage: drive.sh <home-landing|host-settings|reports-library|new-council|cli-init>" >&2
   exit 2
 fi
 

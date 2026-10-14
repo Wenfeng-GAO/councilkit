@@ -7,7 +7,7 @@ description: "Drive the CouncilKit Runtime Host UI and councilkit CLI on an isol
 
 CouncilKit is a local-first multi-agent decision app. Verification drives two surfaces:
 
-- The browser UI served by the Runtime Host (home, settings, reports, new room).
+- The browser UI served by the Runtime Host (home, settings, reports, new Council).
 - The `councilkit` CLI (`init`, `doctor`, `council`, `runs`, `review`, and the other commands in `cli/src/main.ts`).
 
 Browser data (IndexedDB) and CLI data (`COUNCILKIT_HOME`) do not mix. Autonomous commands such as `review`, `apply`, `fix`, `repair`, and `ideate` spawn real agent processes. This skill does not start them.
@@ -23,7 +23,7 @@ Run every command from the repo root of an isolated worktree. The shared checkou
 - Node.js **22.x** is required (`SUPPORTED_NODE_MAJOR` in `shared/runtime/contracts.ts`). Scripts prepend a Node 22 binary from `COUNCILKIT_NODE`, then `PATH`, then `/home/box/.local/node/bin/node` when that file is Node 22, then `~/.nvm/versions/node/v22.*/bin/node`.
 - If this repo's toplevel is `/workspace/councilkit` and any other process has that tree as its cwd, `launch.sh`, `doctor.sh`, `drive.sh`, `cleanup.sh`, and `gate.sh` exit 2 before they create `artifacts/verify/`. They do not install, build, bind, or signal anything.
 - `node_modules` and `cli/node_modules` may be symlinks into another checkout. The gitignore rule `node_modules/` matches directories only, so those symlinks show up as untracked. The gate records them in `externalNodeModules` and does not count them as source dirt. It never runs `pnpm install` while either symlink resolves outside this worktree. When the lockfile is newer than that outside tree, the install step fails instead of rewriting the other checkout.
-- Cleanup signals only the recorded supervisor and the child tree whose cwd is still this repo and whose process start time is unchanged. It never uses `pkill`, `killall`, or a process-name match. It never signals whatever is listening on 43127.
+- Cleanup signals only the recorded supervisor and the child tree whose cwd is still this repo and whose process start time is unchanged. Launch stores that supervisor start time next to the PID. A reused PID, whose start time no longer matches, is not signaled. It never uses `pkill`, `killall`, or a process-name match. It never signals whatever is listening on 43127.
 - `pnpm test` binds 43127 inside `tests/host`. The gate records the listener and leaves it alone. A failure caused only on this run, and absent from the merge-base set, still fails the test step.
 - The e2e step also stays off 43127. Specs that require that port are not proven by the isolated run. They are covered only by the baseline comparison described in Pre-merge gate.
 
@@ -45,7 +45,7 @@ That runs `pnpm start` (`node dist-host/main.mjs`) with the same isolation. It e
 
 Ready means all of the following, not merely an open socket:
 
-- The supervisor PID is still the `host-supervise.mjs` process this launch started, with cwd at this repo.
+- The supervisor PID is still the `host-supervise.mjs` process this launch started, with cwd at this repo and the same recorded start time.
 - The listener on the chosen port is inside that process tree.
 - Host stderr contains the JSON event `"event":"host.started"` (`runtime-host/main.ts`).
 - `GET /api/v1/health` is `{ ok: true, data: { apiVersion: "v1", node: { major: 22 } } }`.
@@ -71,7 +71,7 @@ Recipes live in `features/`. Read `features/README.md`, then one feature file. T
 .cursor/skills/verify-councilkit/scripts/drive.sh home-landing
 .cursor/skills/verify-councilkit/scripts/drive.sh host-settings
 .cursor/skills/verify-councilkit/scripts/drive.sh reports-library
-.cursor/skills/verify-councilkit/scripts/drive.sh new-room
+.cursor/skills/verify-councilkit/scripts/drive.sh new-council
 .cursor/skills/verify-councilkit/scripts/drive.sh cli-init
 ```
 
@@ -86,7 +86,7 @@ with `COUNCILKIT_HOME` pointed at the evidence directory for that feature. `cli/
 
 Do not click `开始审查`, do not submit the ideate form, and do not run `review`, `run`, `fix`, `apply`, or `repair` from this skill. Those paths spawn agents.
 
-`new-room` on a fresh origin stops on the Execution Profile gate and exits 2 for sub-feature `new-room-create`. That is an unmet precondition, not a pass. `cli-init` exits non-zero when PATH has none of `cld`, `kimi`, `grok`, or `cursor-agent`. Do not weaken either journey.
+`new-council` on a fresh origin stops on the Execution Profile gate and exits 2 for sub-feature `new-council-create`. That is an unmet precondition, not a pass. `cli-init` exits non-zero when PATH has none of `cld`, `kimi`, `grok`, or `cursor-agent`. Do not weaken either journey.
 
 ## Evidence
 
@@ -96,7 +96,7 @@ Proof goes to `artifacts/verify/<full git SHA>/`. Cleanup never deletes that dir
 | --- | --- |
 | `doctor.json` | Ready check, origin, SHA, node, host instance id. No cookie or CSRF. |
 | `host.log` | Runtime Host stdout and stderr, including `host.started`. |
-| `run-state.json` | Supervisor PID, port, mode, scratch path, SHA. |
+| `run-state.json` | Supervisor PID, supervisor start time, port, mode, scratch path, SHA. |
 | `cleanup.json` | PIDs signaled and whether scratch was removed. |
 | `drive/<feature>/` | Screenshots, ARIA snapshot, `transcript.json`. |
 | `summary.json` | Gate pass/fail per step, SHA, dirty paths, merge rule. Lint step records `headDiagnostics` and `baselineDiagnostics`. Test and e2e steps record `headFailed` and `baselineFailed`. |
@@ -128,7 +128,7 @@ Confirm survival with `test -f artifacts/verify/<sha>/drive/home-landing/02-revi
 
 1. `pnpm install --frozen-lockfile` only when `node_modules/.bin` or `node_modules/.modules.yaml` is missing, or `pnpm-lock.yaml` is newer than `.modules.yaml`, and only when `node_modules` is a real directory inside this worktree. An outside symlink with a current lockfile is `skip`. An outside symlink that still needs an install is a failure. Otherwise a matching tree is `skip`.
 2. `pnpm typecheck`
-3. Baseline-relative Biome lint (`scripts/lint-baseline.mjs`). Plain `pnpm lint` is not the gate. `origin/main` already has on the order of 204 Biome errors, so a full `biome check` of the lint paths fails before this branch changes a file. The step takes every path changed versus the merge-base with `origin/main` (working tree versus that commit, plus untracked files; `git diff -M` keeps renames paired). It keeps paths `pnpm lint` would check — `src/`, `shared/`, `runtime-host/`, `tests/`, `scripts/`, `cli/`, `playwright.config.ts`, and `playwright.review-explainer.config.ts` — when the extension is one Biome lints (`.js`, `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.cts`, `.mts`, `.json`, `.jsonc`, `.css`). It skips `node_modules`, `dist`, `dist-host`, `coverage`, `tests/fixtures`, `test-results`, and `playwright-report`. It runs `biome check --reporter=json --max-diagnostics=none --diagnostic-level=error` on the working-tree bytes, then again on the merge-base blobs of those paths (`git cat-file` into a temp directory that contains the merge-base `biome.json`). The step fails when a file's error-diagnostic count is higher than at the merge-base, or when a file that did not exist at the merge-base has any error diagnostic. Warnings are not counted, which matches `biome check` without `--error-on-warnings`. A file that trades one error for a different error, with the count unchanged, does not fail. Both totals are recorded on the lint step as `headDiagnostics` and `baselineDiagnostics`. No lint-scoped diff records 0 and 0 and passes. Node 22 is required; `verify_init` puts it on `PATH`, and this script exits 1 when `process.versions.node` is not 22.
+3. Baseline-relative Biome lint (`scripts/lint-baseline.mjs`). Plain `pnpm lint` is not the gate. `origin/main` already has on the order of 204 Biome errors, so a full `biome check` of the lint paths fails before this branch changes a file. The step takes every path changed versus the merge-base with `origin/main` (working tree versus that commit, plus untracked files; `git diff -M` keeps renames paired). It keeps paths `pnpm lint` would check — `src/`, `shared/`, `runtime-host/`, `tests/`, `scripts/`, `cli/`, `playwright.config.ts`, and `playwright.review-explainer.config.ts` — when the extension is one Biome lints (`.js`, `.jsx`, `.cjs`, `.mjs`, `.ts`, `.tsx`, `.cts`, `.mts`, `.json`, `.jsonc`, `.css`). It skips `node_modules`, `dist`, `dist-host`, `coverage`, `tests/fixtures`, `test-results`, and `playwright-report`. It runs `biome check --reporter=json --max-diagnostics=none --diagnostic-level=error` on the working-tree bytes, then again on the merge-base blobs of those paths (`git cat-file` into a temp directory that contains the merge-base `biome.json`). The step fails when a file's error-diagnostic count is higher than at the merge-base, or when a file that did not exist at the merge-base has any error diagnostic. Warnings are not counted, which matches `biome check` without `--error-on-warnings`. A file that trades one error for a different error, with the count unchanged, does not fail. Both totals are recorded on the lint step as `headDiagnostics` and `baselineDiagnostics`. No lint-scoped diff records 0 and 0 and passes. When `biome.json` or `biome.jsonc` changes, the step compares the full lint scope, not an empty pair list. Node 22 is required; `verify_init` puts it on `PATH`, and this script exits 1 when `process.versions.node` is not 22.
 4. Baseline-relative Vitest (`scripts/test-baseline.mjs`). The suite is the same one `pnpm test` runs (`vitest run`, includes from `vitest.config.ts`: unit, host, integration, and `cli/tests`). The command is `pnpm exec vitest run --reporter=default --reporter=json`. Before the suite it records who is listening on 43127 and does not signal them. A failing name is `<repo-relative file> :: <suite > test>`, with empty ancestor titles dropped. A suite that fails to load is `<file> :: <suite failed>`. The step fails only when HEAD's set contains a name the merge-base set does not. Failures that already fail on the merge-base stay green for this gate, including environment failures in `tests/host/installation-registry`, `cli/tests/fix-command` probe tests, `review-title-format`, and `review-explainer-skip` / `review-explainer-repair-export` when this machine still produces them. Both counts are recorded on the test step as `headFailed` and `baselineFailed`, plus `newFailures`. The merge-base set is cached at `artifacts/verify/baseline-<merge-base SHA>/failing-tests.json` (raw report in `vitest.json` beside it). A cache file is reused only when `mergeBase` is that SHA and `node` equals the full `process.version`. Delete the directory to force a new baseline run. On a cache miss, a product-file diff runs Vitest in a detached `git worktree` at the merge-base. When `pnpm-lock.yaml` matches this worktree, `node_modules` and `cli/node_modules` are copied in; otherwise the worktree runs `pnpm install --frozen-lockfile` and this checkout is left alone. The worktree is removed when that run finishes. When no product file differs, the HEAD run is the baseline and is written to the cache. Product files are every changed path except `.cursor/`, `artifacts/verify/`, and `.gitignore`. The HEAD side is the working tree. The raw HEAD report is `logs/vitest.json`. Node 22 is required the same way as lint.
 5. `pnpm build` (`tsc --noEmit`, Vite, `dist-host`, and `cli/dist`).
 6. Baseline-relative Playwright (`scripts/e2e-baseline.mjs`) when the diff touches src or UI, then the home-landing screenshot drive.

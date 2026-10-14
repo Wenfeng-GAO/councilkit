@@ -61,12 +61,28 @@ write_state() {
   local supervisor="$2"
   local status="$3"
   node --input-type=module - "$STATE" "$port" "$supervisor" "$status" "$MODE" "$SHA" "$ROOT_REAL" "$SCRATCH" "$LOG" <<'NODE'
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 const [path, port, supervisor, status, mode, sha, cwd, scratch, log] = process.argv.slice(2);
+let stat;
+try {
+  stat = readFileSync(`/proc/${supervisor}/stat`, "utf8");
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`cannot read /proc/${supervisor}/stat: ${message}\n`);
+  process.exit(1);
+}
+const rparen = stat.lastIndexOf(")");
+const rest = rparen < 0 ? [] : stat.slice(rparen + 2).trim().split(/\s+/);
+const supervisorStarttime = Number(rest[19]);
+if (!Number.isInteger(supervisorStarttime)) {
+  process.stderr.write(`cannot parse starttime from /proc/${supervisor}/stat\n`);
+  process.exit(1);
+}
 const state = {
   status,
   mode,
   supervisorPid: Number(supervisor),
+  supervisorStarttime,
   port: Number(port),
   origin: `http://127.0.0.1:${port}`,
   cwd,

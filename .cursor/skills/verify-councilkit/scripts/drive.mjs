@@ -210,7 +210,7 @@ async function driveReports(origin) {
   });
 }
 
-async function driveNewRoom(origin) {
+async function driveNewCouncil(origin) {
   let unmet = null;
   await withPage(async (page) => {
     await page.goto(`${origin}/rooms/new`, { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -221,16 +221,16 @@ async function driveNewRoom(origin) {
     const topicCount = await topic.count();
     const gateShot = await shot(page, "01-empty-profiles.png");
     const aria = await ariaDump(page);
-    writeFileSync(join(outDir, "new-room.aria.txt"), aria);
+    writeFileSync(join(outDir, "new-council.aria.txt"), aria);
     if (topicCount === 0) {
       unmet = {
-        subFeature: "new-room-create",
+        subFeature: "new-council-create",
         reason:
           "Fresh verification origin has no Execution Profile in IndexedDB, so the topic form is not rendered.",
       };
     }
     writeJson("transcript.json", {
-      feature: "new-room",
+      feature: "new-council",
       origin,
       ok: unmet === null,
       unmet,
@@ -344,7 +344,7 @@ async function driveCliInit() {
 }
 
 const state = loadState();
-const uiFeatures = new Set(["home-landing", "host-settings", "reports-library", "new-room"]);
+const uiFeatures = new Set(["home-landing", "host-settings", "reports-library", "new-council"]);
 try {
   if (feature === "cli-init") {
     await driveCliInit();
@@ -355,10 +355,10 @@ try {
     if (feature === "home-landing") await driveHome(state.origin);
     else if (feature === "host-settings") await driveSettings(state.origin);
     else if (feature === "reports-library") await driveReports(state.origin);
-    else await driveNewRoom(state.origin);
+    else await driveNewCouncil(state.origin);
   } else {
     process.stderr.write(
-      "unknown feature. expected home-landing, host-settings, reports-library, new-room, or cli-init\n",
+      "unknown feature. expected home-landing, host-settings, reports-library, new-council, or cli-init\n",
     );
     process.exit(2);
   }
