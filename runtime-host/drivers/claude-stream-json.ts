@@ -7,6 +7,7 @@ import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { sanitizeString, sanitizeValue } from "../logging";
 import type { DriverProcess } from "../process/process-supervisor";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
+import { deadlineMaySettle } from "./turn-deadline";
 import type {
   DriverDeps,
   DriverEvent,
@@ -132,9 +133,11 @@ interface ActiveTurn {
   dispatchState: "not_dispatched" | "accepted" | "unknown";
   sawAssistantText: boolean;
   cancelling?: boolean;
+  settled?: boolean;
   acceptedAt?: number;
   idleTimer?: NodeJS.Timeout;
   turnTimer?: NodeJS.Timeout;
+  dispatchTimer?: NodeJS.Timeout;
   resolve(): void;
 }
 
@@ -240,11 +243,17 @@ export function createClaudeStreamJsonDriver(
     function clearTurnTimers(turn: ActiveTurn) {
       if (turn.idleTimer) clearTimeout(turn.idleTimer);
       if (turn.turnTimer) clearTimeout(turn.turnTimer);
+      if (turn.dispatchTimer) clearTimeout(turn.dispatchTimer);
+      turn.idleTimer = undefined;
+      turn.turnTimer = undefined;
+      turn.dispatchTimer = undefined;
     }
 
     function armIdleTimer(turn: ActiveTurn) {
+      if (turn.cancelling || turn.settled) return;
       if (turn.idleTimer) clearTimeout(turn.idleTimer);
       turn.idleTimer = setTimeout(() => {
+        if (!deadlineMaySettle(turn, activeTurn === turn)) return;
         terminateTurn(
           turn,
           "failed",
@@ -270,7 +279,8 @@ export function createClaudeStreamJsonDriver(
       error?: ReturnType<typeof makeError>,
       reason?: string,
     ) {
-      if (activeTurn !== turn) return;
+      if (turn.settled || activeTurn !== turn) return;
+      turn.settled = true;
       if (kind === "failed" && error) {
         emitTerminal(turn, {
           type: "failed",
@@ -487,21 +497,25 @@ export function createClaudeStreamJsonDriver(
       );
       const turn = activeTurn;
       if (turn) {
-        terminateTurn(
-          turn,
-          "failed",
-          makeError(
-            "DRIVER_CRASH",
-            "stream",
-            `driver process exited (code=${code} signal=${signal})`,
-            {
-              driverId: "claude-stream-json",
-              executionId: turn.executionId,
-              participantId,
-              retryable: turn.dispatchState === "not_dispatched",
-            },
-          ),
-        );
+        if (turn.cancelling) {
+          terminateTurn(turn, "interrupted", undefined, "user_cancelled");
+        } else {
+          terminateTurn(
+            turn,
+            "failed",
+            makeError(
+              "DRIVER_CRASH",
+              "stream",
+              `driver process exited (code=${code} signal=${signal})`,
+              {
+                driverId: "claude-stream-json",
+                executionId: turn.executionId,
+                participantId,
+                retryable: turn.dispatchState === "not_dispatched",
+              },
+            ),
+          );
+        }
       }
     }
 
@@ -525,6 +539,7 @@ export function createClaudeStreamJsonDriver(
         },
         onLimitExceeded() {
           const turn = activeTurn;
+          if (turn?.cancelling) return;
           if (turn) {
             terminateTurn(
               turn,
@@ -787,6 +802,7 @@ export function createClaudeStreamJsonDriver(
         }
         armIdleTimer(turn);
         turn.turnTimer = setTimeout(() => {
+          if (!deadlineMaySettle(turn, activeTurn === turn)) return;
           terminateTurn(turn, "interrupted", undefined, "timeout");
           void respawn("turn_timeout");
         }, timeouts.turnMs);
@@ -798,6 +814,9 @@ export function createClaudeStreamJsonDriver(
         });
         process?.stdin.write(`${frame}\n`, (error) => {
           if (error) {
+            // A write that fails after cancel/close latched must not steal
+            // user_cancelled with DRIVER_CRASH.
+            if (!deadlineMaySettle(turn, activeTurn === turn)) return;
             terminateTurn(
               turn,
               "failed",
@@ -812,25 +831,25 @@ export function createClaudeStreamJsonDriver(
           }
           // Bytes left the Host; acceptance = replay within the dispatch window.
           turn.dispatchState = "unknown";
-          setTimeout(() => {
-            if (activeTurn === turn && turn.dispatchState === "unknown") {
-              // No replay in time: the CLI may or may not have enqueued it.
-              terminateTurn(
-                turn,
-                "failed",
-                makeError(
-                  "DISPATCH_TIMEOUT",
-                  "dispatch",
-                  "No enqueue replay within the dispatch window.",
-                  {
-                    driverId: "claude-stream-json",
-                    executionId: turn.executionId,
-                    participantId,
-                  },
-                ),
-              );
-              void respawn("dispatch_timeout");
-            }
+          turn.dispatchTimer = setTimeout(() => {
+            if (!deadlineMaySettle(turn, activeTurn === turn)) return;
+            if (turn.dispatchState !== "unknown") return;
+            // No replay in time: the CLI may or may not have enqueued it.
+            terminateTurn(
+              turn,
+              "failed",
+              makeError(
+                "DISPATCH_TIMEOUT",
+                "dispatch",
+                "No enqueue replay within the dispatch window.",
+                {
+                  driverId: "claude-stream-json",
+                  executionId: turn.executionId,
+                  participantId,
+                },
+              ),
+            );
+            void respawn("dispatch_timeout");
           }, timeouts.dispatchAckMs);
         });
       });
@@ -961,6 +980,7 @@ export function createClaudeStreamJsonDriver(
         const turn = activeTurn;
         if (!turn || turn.executionId !== executionId) return;
         turn.cancelling = true;
+        clearTurnTimers(turn);
         try {
           await sendControl({ subtype: "interrupt" });
         } catch {
@@ -984,6 +1004,8 @@ export function createClaudeStreamJsonDriver(
         state = "closing";
         const turn = activeTurn;
         if (turn) {
+          turn.cancelling = true;
+          clearTurnTimers(turn);
           try {
             await sendControl({ subtype: "interrupt" });
           } catch {

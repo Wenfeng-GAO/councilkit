@@ -8,6 +8,7 @@ import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime"
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { withDeadline } from "./ndjson";
+import { deadlineMaySettle } from "./turn-deadline";
 import type {
   DriverDeps,
   DriverEvent,
@@ -492,7 +493,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
             if (!drain.graceTimer) {
               drain.graceTimer = setTimeout(() => {
                 drain.graceTimer = undefined;
-                if (!drain.settled && !turn.settled && activeTurn === turn) {
+                if (!drain.settled && deadlineMaySettle(turn, activeTurn === turn)) {
                   drain.settled = true;
                   clearTurnTimers(turn);
                   activeTurn = null;
@@ -555,7 +556,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
             activeProcess = spawned;
             turnProcess = spawned;
             spawned.stdin.write(renderedPrompt, (error) => {
-              if (error && activeTurn === turn && !turn.settled) {
+              if (error && deadlineMaySettle(turn, activeTurn === turn)) {
                 invalidateSession("stdin_write_failed");
                 failTurn(
                   turn,
@@ -592,7 +593,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
               if (state === "busy") state = "ready";
             });
             spawned.waitSupervised(timeouts.handshakeMs).catch((error: unknown) => {
-              if (activeTurn === turn && !turn.settled) {
+              if (deadlineMaySettle(turn, activeTurn === turn)) {
                 const msg = error instanceof Error ? error.message : "supervised spawn failed";
                 invalidateSession("spawn_failed");
                 failTurn(
@@ -607,7 +608,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
               }
             });
             turn.turnTimer = setTimeout(() => {
-              if (activeTurn === turn && !turn.settled && !turn.cancelling) {
+              if (deadlineMaySettle(turn, activeTurn === turn)) {
                 invalidateSession("turn_timeout");
                 interruptTurn(turn, "timeout");
                 void reapActiveProcess();
@@ -616,7 +617,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
           })
           .catch((error: unknown) => {
             pendingSpawn = null;
-            if (activeTurn === turn && !turn.settled) {
+            if (deadlineMaySettle(turn, activeTurn === turn)) {
               const msg = error instanceof Error ? error.message : "spawn failed";
               invalidateSession("spawn_threw");
               failTurn(

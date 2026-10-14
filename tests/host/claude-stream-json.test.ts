@@ -437,6 +437,60 @@ describe("claude-stream-json driver protocol", () => {
     await waitFor(() => aggregateStats().counts.results === 3, 5000);
   });
 
+  it("CK-RS-002: cancel wins when turnMs expires during the interrupt grace", async () => {
+    // hang + ignoreInterrupt keeps the turn open after the interrupt ACK.
+    // turnMs is shorter than the grace window, so an uncleared turn timer
+    // fires while cancel is waiting and reports timeout instead of
+    // user_cancelled.
+    const rig = await createRig({
+      config: { hang: true, ignoreInterrupt: true },
+      timeouts: {
+        turnMs: 200,
+        interruptGraceMs: 1_000,
+        streamIdleMs: 30_000,
+        dispatchAckMs: 30_000,
+      },
+    });
+    const run = executeCollecting(rig.driver, execInput("exec-1", "Cancel me."));
+    await rig.driver.cancel("exec-1");
+    await run.done;
+    const terminals = run.events.filter(
+      (event) =>
+        event.type === "completed" || event.type === "failed" || event.type === "interrupted",
+    );
+    expect(terminals).toHaveLength(1);
+    const terminal = terminals[0];
+    expect(terminal?.type).toBe("interrupted");
+    if (terminal?.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+  });
+
+  it("CK-RS-002: cancel wins when the idle timer fires during the interrupt grace", async () => {
+    // Deltas re-arm the idle timer. A cancel that does not latch the turn
+    // lets that re-armed idle deadline fail the turn as STREAM_IDLE_TIMEOUT.
+    const rig = await createRig({
+      config: { hang: true, ignoreInterrupt: true, deltaDelayMs: 5 },
+      timeouts: {
+        turnMs: 30_000,
+        streamIdleMs: 200,
+        interruptGraceMs: 1_500,
+        dispatchAckMs: 30_000,
+      },
+    });
+    const run = executeCollecting(rig.driver, execInput("exec-1", "Cancel the idle turn."));
+    await rig.driver.cancel("exec-1");
+    await run.done;
+    const terminals = run.events.filter(
+      (event) =>
+        event.type === "completed" || event.type === "failed" || event.type === "interrupted",
+    );
+    expect(terminals).toHaveLength(1);
+    const terminal = terminals[0];
+    expect(terminal?.type).toBe("interrupted");
+    if (terminal?.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+  });
+
   it("escalates a ignored interrupt to SIGKILL and respawns a usable driver", async () => {
     const rig = await createRig({ config: { deltaDelayMs: 200, ignoreInterrupt: true } });
     const run = executeCollecting(rig.driver, execInput("exec-1", "Cancel me."));

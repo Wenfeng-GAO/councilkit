@@ -6,6 +6,7 @@ import { makeError } from "@shared/runtime/errors";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
+import { deadlineMaySettle } from "./turn-deadline";
 import type {
   DriverDeps,
   DriverEvent,
@@ -633,7 +634,7 @@ export function createKimiStreamJsonDriver(
                 // invalidate the session, and reap the process group so a
                 // late frame can never land into a settled turn.
                 drain.graceTimer = undefined;
-                if (!drain.settled && !turn.settled && activeTurn === turn) {
+                if (!drain.settled && deadlineMaySettle(turn, activeTurn === turn)) {
                   drain.settled = true;
                   clearTurnTimers(turn);
                   activeTurn = null;
@@ -743,7 +744,7 @@ export function createKimiStreamJsonDriver(
                 if (activeTurn === turn) onFrame(turn, message);
               },
               onLimitExceeded() {
-                if (activeTurn === turn && !turn.settled) {
+                if (deadlineMaySettle(turn, activeTurn === turn)) {
                   // H1: the splitter stops parsing permanently after the limit
                   // trip (no further onLine/onEnd), so this turn can never
                   // settle from frames — and the CLI process may keep running
@@ -788,7 +789,7 @@ export function createKimiStreamJsonDriver(
             spawned.waitSupervised(timeouts.handshakeMs).catch((error: unknown) => {
               // The turn may have already settled via the exit path (fast-exit
               // race). Only fail if still outstanding.
-              if (activeTurn === turn && !turn.settled) {
+              if (deadlineMaySettle(turn, activeTurn === turn)) {
                 const msg = error instanceof Error ? error.message : "supervised spawn failed";
                 invalidateSession("spawn_failed");
                 failTurn(
@@ -817,7 +818,7 @@ export function createKimiStreamJsonDriver(
               // already queued on the event loop) must NOT preempt an in-flight
               // cancel()/close() — both set turn.cancelling, which owns the
               // user_cancelled terminal.
-              if (activeTurn === turn && !turn.settled && !turn.cancelling) {
+              if (deadlineMaySettle(turn, activeTurn === turn)) {
                 // F3: synchronously invalidate the session BEFORE the terminal so
                 // the next turn cold-rebases — the timed-out process may have
                 // already accepted/persisted an unknown incremental prompt.
@@ -829,7 +830,7 @@ export function createKimiStreamJsonDriver(
           })
           .catch((error: unknown) => {
             pendingSpawn = null;
-            if (activeTurn === turn && !turn.settled) {
+            if (deadlineMaySettle(turn, activeTurn === turn)) {
               const msg = error instanceof Error ? error.message : "spawn failed";
               invalidateSession("spawn_threw");
               failTurn(
@@ -1022,7 +1023,8 @@ export function createKimiStreamJsonDriver(
         }
         // Fallback: if no exit event ever settled the turn (e.g. the process
         // vanished before the watchdog reported an exit), emit the terminal
-        // here so the execute promise never hangs.
+        // here so the execute promise never hangs. This is the cancel terminal
+        // itself, so it must run while the cancel latch is set.
         if (activeTurn === turn && !turn.settled) {
           invalidateSession("user_cancelled");
           interruptTurn(turn, "user_cancelled");

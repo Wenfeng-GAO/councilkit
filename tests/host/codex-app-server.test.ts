@@ -356,6 +356,33 @@ describe("codex-app-server driver protocol", () => {
     expect(aggregateStats().counts.turnStarts).toBe(1);
     expect(aggregateStats().pids).toHaveLength(1);
   });
+
+  it("CK-RS-002: cancel wins when turnMs expires during the interrupt grace", async () => {
+    // silentInterrupt ACKs turn/interrupt and never emits turn/completed, so
+    // cancel stays in the grace window. turnMs is shorter than that window.
+    // An uncleared turn timer reports timeout instead of user_cancelled.
+    const rig = await createRig({
+      config: { hang: true, silentInterrupt: true },
+      timeouts: {
+        turnMs: 200,
+        interruptGraceMs: 1_000,
+        streamIdleMs: 30_000,
+        dispatchAckMs: 30_000,
+      },
+    });
+    const run = executeCollecting(rig.driver, execInput("exec-1", "Cancel me."));
+    await rig.driver.cancel("exec-1");
+    await run.done;
+    const terminals = run.events.filter(
+      (event) =>
+        event.type === "completed" || event.type === "failed" || event.type === "interrupted",
+    );
+    expect(terminals).toHaveLength(1);
+    const terminal = terminals[0];
+    expect(terminal?.type).toBe("interrupted");
+    if (terminal?.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+  });
 });
 
 /**

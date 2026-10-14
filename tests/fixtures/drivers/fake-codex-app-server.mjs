@@ -21,6 +21,9 @@
  *   crashAfterTurnStart  bool    exit(3) on turn/start WITHOUT responding
  *                                (dispatch state stays "unknown" upstream)
  *   hang                 bool    deltas but no item/completed + turn/completed
+ *   silentInterrupt      bool    answer turn/interrupt but never emit
+ *                                turn/completed, so the client's grace window
+ *                                stays open
  *   unknownNotifications bool    interleave unknown notifications before deltas
  *   compacted            bool    emit thread/compacted after the first delta
  *   deltaDelayMs         number  delay between deltas   (default 8)
@@ -35,7 +38,7 @@
  * - turn/start -> {turn:{id}} then, in order: item/agentMessage/delta xN,
  *   item/completed (authoritative text), thread/tokenUsage/updated (per-turn
  *   `last` usage + modelContextWindow 258400), turn/completed completed
- * - turn/interrupt -> {} then turn/completed interrupted
+ * - turn/interrupt -> {} then turn/completed interrupted (unless silentInterrupt)
  * - approval server requests carry their own id and are answered by the client
  *
  * On stdin EOF the fixture exits 0.
@@ -50,6 +53,7 @@ const DEFAULTS = {
   reroute: false,
   crashAfterTurnStart: false,
   hang: false,
+  silentInterrupt: false,
   unknownNotifications: false,
   compacted: false,
   deltaDelayMs: 8,
@@ -285,9 +289,11 @@ function handleRequest(frame, config) {
       if (turn) {
         clearTurnTimers(turn);
         currentTurn = null;
-        setTimeout(() => {
-          notify("turn/completed", { turn: { id: turn.id, status: "interrupted" } });
-        }, 30);
+        if (!config.silentInterrupt) {
+          setTimeout(() => {
+            notify("turn/completed", { turn: { id: turn.id, status: "interrupted" } });
+          }, 30);
+        }
       }
       return;
     }

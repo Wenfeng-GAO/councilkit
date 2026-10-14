@@ -7,6 +7,7 @@ import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { withDeadline } from "./ndjson";
+import { deadlineMaySettle } from "./turn-deadline";
 import type {
   DriverDeps,
   DriverEvent,
@@ -532,7 +533,7 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
             if (!drain.graceTimer) {
               drain.graceTimer = setTimeout(() => {
                 drain.graceTimer = undefined;
-                if (!drain.settled && !turn.settled && activeTurn === turn) {
+                if (!drain.settled && deadlineMaySettle(turn, activeTurn === turn)) {
                   drain.settled = true;
                   clearTurnTimers(turn);
                   activeTurn = null;
@@ -616,7 +617,7 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
               if (state === "busy") state = "ready";
             });
             spawned.waitSupervised(timeouts.handshakeMs).catch((error: unknown) => {
-              if (activeTurn === turn && !turn.settled) {
+              if (deadlineMaySettle(turn, activeTurn === turn)) {
                 const msg = error instanceof Error ? error.message : "supervised spawn failed";
                 invalidateSession("spawn_failed");
                 failTurn(
@@ -631,7 +632,7 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
               }
             });
             turn.turnTimer = setTimeout(() => {
-              if (activeTurn === turn && !turn.settled && !turn.cancelling) {
+              if (deadlineMaySettle(turn, activeTurn === turn)) {
                 invalidateSession("turn_timeout");
                 interruptTurn(turn, "timeout");
                 void reapActiveProcess();
@@ -640,7 +641,7 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
           })
           .catch((error: unknown) => {
             pendingSpawn = null;
-            if (activeTurn === turn && !turn.settled) {
+            if (deadlineMaySettle(turn, activeTurn === turn)) {
               const msg = error instanceof Error ? error.message : "spawn failed";
               invalidateSession("spawn_threw");
               failTurn(
