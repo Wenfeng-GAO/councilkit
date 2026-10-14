@@ -56,7 +56,12 @@ import {
 } from "@shared/runtime/squad-pr-profile";
 import { errors } from "../errors";
 import { redact } from "../redact";
-import { atomicWriteJson, readFileText } from "../store/atomic-write";
+import {
+  atomicWriteJson,
+  readDurableJson,
+  readFileText,
+  requireDurableJson,
+} from "../store/atomic-write";
 import { ensureHome } from "../store/paths";
 import { bindPublishableCandidateProfile, protectedGitEnv } from "./candidate-source-ref";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
@@ -1550,12 +1555,11 @@ export class SquadctlBridge implements SquadBridge {
   }
 
   private readIdentity(taskId: string): BridgeIdentity | null {
-    const text = readFileText(this.identityPath(taskId));
-    if (text === null) return null;
-    try {
-      const parsed = JSON.parse(text) as BridgeIdentity;
-      if (parsed && typeof parsed.taskId === "string") {
-        this.tasks.set(taskId, parsed.taskDir);
+    const identity = requireDurableJson(
+      readDurableJson(this.identityPath(taskId), (value) => {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+        const parsed = value as BridgeIdentity;
+        if (typeof parsed.taskId !== "string") return null;
         return {
           ...parsed,
           observedModel: parsed.observedModel ?? null,
@@ -1564,11 +1568,11 @@ export class SquadctlBridge implements SquadBridge {
           observedSignal: parsed.observedSignal ?? null,
           executionId: parsed.executionId ?? null,
         };
-      }
-    } catch {
-      return null;
-    }
-    return null;
+      }),
+      IDENTITY_FILE,
+    );
+    if (identity) this.tasks.set(taskId, identity.taskDir);
+    return identity;
   }
 
   private writeIdentity(taskId: string, identity: BridgeIdentity): BridgeIdentity {

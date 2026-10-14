@@ -1,7 +1,6 @@
 import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ExclusiveLock, acquireExclusiveLock } from "@shared/runtime/exclusive-lock";
-import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairBudget,
   type RepairChain,
@@ -14,7 +13,7 @@ import {
   repairChainSchema,
 } from "@shared/runtime/repair-chain";
 import { errors } from "../errors";
-import { atomicWriteJson, readFileText } from "../store/atomic-write";
+import { atomicWriteJson, readDurableJson, requireDurableJson } from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
 
 export function chainPath(chainId: string): string {
@@ -24,11 +23,14 @@ export function chainPath(chainId: string): string {
   return join(dir, `${chainId}.json`);
 }
 
-export function readRepairChain(chainId: string): RepairChain | null {
-  const text = readFileText(chainPath(chainId));
-  if (text === null) return null;
-  const parsed = repairChainSchema.safeParse(jsonParse(text));
+function acceptRepairChain(value: unknown): RepairChain | null {
+  const parsed = repairChainSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+export function readRepairChain(chainId: string): RepairChain | null {
+  const read = readDurableJson(chainPath(chainId), acceptRepairChain);
+  return read.status === "ok" ? read.value : null;
 }
 
 export function writeRepairChain(chain: RepairChain): void {
@@ -72,7 +74,10 @@ export function loadOrCreateChain(input: {
     }
   }
   const created = bootstrapChain(input);
-  const existing = readRepairChain(created.chainId);
+  const existing = requireDurableJson(
+    readDurableJson(chainPath(created.chainId), acceptRepairChain),
+    "repair chain file",
+  );
   if (existing === null) {
     writeRepairChain(created);
     return { chain: created, inherited: false };

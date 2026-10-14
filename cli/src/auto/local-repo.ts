@@ -13,7 +13,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { projectKeyFromPr } from "@shared/runtime/pr-url";
 import { errors } from "../errors";
-import { atomicWriteJson, readFileText } from "../store/atomic-write";
+import { atomicWriteJson, readDurableJson, requireDurableJson } from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
 import type { RunCommand } from "./checkout-pr";
 import { gitPositional } from "./git-argv";
@@ -180,22 +180,23 @@ function reposPath(env: NodeJS.ProcessEnv): string {
   return join(resolvePaths(env).home, "repos.json");
 }
 
-function readRepos(env: NodeJS.ProcessEnv): ReposFile {
-  const text = readFileText(reposPath(env));
-  if (text === null) return { format: "councilkit-repos", version: 1, repos: [] };
-  try {
-    const parsed = JSON.parse(text) as ReposFile;
-    if (
-      parsed.format !== "councilkit-repos" ||
-      parsed.version !== 1 ||
-      !Array.isArray(parsed.repos)
-    ) {
-      return { format: "councilkit-repos", version: 1, repos: [] };
-    }
-    return parsed;
-  } catch {
-    return { format: "councilkit-repos", version: 1, repos: [] };
+function acceptRepos(value: unknown): ReposFile | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const parsed = value as ReposFile;
+  if (
+    parsed.format !== "councilkit-repos" ||
+    parsed.version !== 1 ||
+    !Array.isArray(parsed.repos)
+  ) {
+    return null;
   }
+  return parsed;
+}
+
+function readRepos(env: NodeJS.ProcessEnv): ReposFile | null {
+  const read = readDurableJson(reposPath(env), acceptRepos);
+  if (read.status === "invalid") return null;
+  return read.status === "ok" ? read.value : { format: "councilkit-repos", version: 1, repos: [] };
 }
 
 function sameProjectKey(left: string, right: string): boolean {
@@ -203,13 +204,16 @@ function sameProjectKey(left: string, right: string): boolean {
 }
 
 function lookupRepo(project: string, env: NodeJS.ProcessEnv): string | null {
-  const hit = readRepos(env).repos.find((r) => sameProjectKey(r.project, project));
+  const file = readRepos(env);
+  if (file === null) return null;
+  const hit = file.repos.find((r) => sameProjectKey(r.project, project));
   return hit?.path ?? null;
 }
 
 function rememberRepo(project: string, path: string, env: NodeJS.ProcessEnv): void {
   ensureHome(env);
-  const file = readRepos(env);
+  const read = requireDurableJson(readDurableJson(reposPath(env), acceptRepos), "repos.json");
+  const file = read ?? { format: "councilkit-repos" as const, version: 1 as const, repos: [] };
   const idx = file.repos.findIndex((r) => sameProjectKey(r.project, project));
   if (idx >= 0) file.repos[idx] = { project, path };
   else file.repos.push({ project, path });

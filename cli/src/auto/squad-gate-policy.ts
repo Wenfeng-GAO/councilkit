@@ -19,7 +19,12 @@ import {
   squadPrProfileSchema,
 } from "@shared/runtime/squad-pr-profile";
 import { errors } from "../errors";
-import { atomicWriteJson, readFileText } from "../store/atomic-write";
+import {
+  atomicWriteJson,
+  readDurableJson,
+  readFileText,
+  requireDurableJson,
+} from "../store/atomic-write";
 
 export const CK_POLICY_FREEZE_FILE = "councilkit-policy-freeze.json";
 export const CK_POLICY_INTENT_FILE = "councilkit-policy-intent.json";
@@ -70,6 +75,10 @@ export function writePolicyIntent(
   if (!hasSupervisedReviewerAndVerifier(policy)) {
     throw errors.usage("gate policy must include supervised reviewer and verifier");
   }
+  requireDurableJson(
+    readDurableJson(join(taskDir, CK_POLICY_INTENT_FILE), acceptPolicyIntent),
+    CK_POLICY_INTENT_FILE,
+  );
   mkdirSync(taskDir, { recursive: true, mode: 0o700 });
   const policyFile = join(taskDir, "councilkit-gate-policy.json");
   const body = `${JSON.stringify(policy, null, 2)}\n`;
@@ -89,36 +98,19 @@ export function readRegisteredIntent(
   taskDir: string,
   taskId: string,
 ): RegisteredPolicyIntent | null {
-  const parsed = readJson(join(taskDir, CK_POLICY_INTENT_FILE));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const row = parsed as Record<string, unknown>;
-  const policyFileHash = typeof row.policyFileHash === "string" ? row.policyFileHash : "";
-  if (!/^[a-f0-9]{64}$/.test(policyFileHash)) return null;
-  if (!Array.isArray(row.required_gates)) return null;
-  if (
-    row.independence === null ||
-    typeof row.independence !== "object" ||
-    Array.isArray(row.independence)
-  ) {
-    return null;
-  }
-  const recordedTaskId =
-    typeof row.taskId === "string" && row.taskId.length > 0 ? row.taskId : null;
-  if (recordedTaskId && recordedTaskId !== taskId) return null;
-  const independence = row.independence as RegisteredPolicyIntent["independence"];
-  const delivery =
-    row.delivery_authority !== null &&
-    typeof row.delivery_authority === "object" &&
-    Array.isArray(row.delivery_authority) === false
-      ? (row.delivery_authority as RegisteredPolicyIntent["delivery_authority"])
-      : undefined;
+  const intent = requireDurableJson(
+    readDurableJson(join(taskDir, CK_POLICY_INTENT_FILE), acceptPolicyIntent),
+    CK_POLICY_INTENT_FILE,
+  );
+  if (!intent) return null;
+  if (intent.taskId && intent.taskId !== taskId) return null;
   return {
-    policyFileHash,
+    policyFileHash: intent.policyFileHash,
     taskId,
     taskDir,
-    required_gates: row.required_gates as RegisteredPolicyIntent["required_gates"],
-    independence,
-    ...(delivery ? { delivery_authority: delivery } : {}),
+    required_gates: intent.required_gates,
+    independence: intent.independence,
+    ...(intent.delivery_authority ? { delivery_authority: intent.delivery_authority } : {}),
   };
 }
 
@@ -240,13 +232,60 @@ function ensurePlanningFrozen(input: {
 }
 
 export function persistFreezeRecord(taskDir: string, freeze: OfficialGatePolicyFreeze): void {
+  requireDurableJson(
+    readDurableJson(join(taskDir, CK_POLICY_FREEZE_FILE), acceptPersistedFreeze),
+    CK_POLICY_FREEZE_FILE,
+  );
   atomicWriteJson(join(taskDir, CK_POLICY_FREEZE_FILE), freeze);
 }
 
 export function readPersistedFreeze(taskDir: string): OfficialGatePolicyFreeze | null {
-  const parsed = readJson(join(taskDir, CK_POLICY_FREEZE_FILE));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const row = parsed as Partial<OfficialGatePolicyFreeze>;
+  return requireDurableJson(
+    readDurableJson(join(taskDir, CK_POLICY_FREEZE_FILE), acceptPersistedFreeze),
+    CK_POLICY_FREEZE_FILE,
+  );
+}
+
+interface PolicyIntentDocument {
+  policyFileHash: string;
+  taskId: string | null;
+  required_gates: RegisteredPolicyIntent["required_gates"];
+  independence: RegisteredPolicyIntent["independence"];
+  delivery_authority?: RegisteredPolicyIntent["delivery_authority"];
+}
+
+function acceptPolicyIntent(value: unknown): PolicyIntentDocument | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const policyFileHash = typeof row.policyFileHash === "string" ? row.policyFileHash : "";
+  if (!/^[a-f0-9]{64}$/.test(policyFileHash)) return null;
+  if (!Array.isArray(row.required_gates)) return null;
+  if (
+    row.independence === null ||
+    typeof row.independence !== "object" ||
+    Array.isArray(row.independence)
+  ) {
+    return null;
+  }
+  const taskId = typeof row.taskId === "string" && row.taskId.length > 0 ? row.taskId : null;
+  const delivery =
+    row.delivery_authority !== null &&
+    typeof row.delivery_authority === "object" &&
+    Array.isArray(row.delivery_authority) === false
+      ? (row.delivery_authority as RegisteredPolicyIntent["delivery_authority"])
+      : undefined;
+  return {
+    policyFileHash,
+    required_gates: row.required_gates as RegisteredPolicyIntent["required_gates"],
+    independence: row.independence as RegisteredPolicyIntent["independence"],
+    taskId,
+    ...(delivery ? { delivery_authority: delivery } : {}),
+  };
+}
+
+function acceptPersistedFreeze(value: unknown): OfficialGatePolicyFreeze | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Partial<OfficialGatePolicyFreeze>;
   if (typeof row.policyHash !== "string" || !/^[a-f0-9]{64}$/.test(row.policyHash)) return null;
   return row as OfficialGatePolicyFreeze;
 }

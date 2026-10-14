@@ -17,7 +17,12 @@ import { V2_TRIAL_DEFAULTS } from "@shared/runtime/repair-chain";
 import { isRepairProfileName } from "@shared/runtime/repair-lease";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import { errors } from "../errors";
-import { atomicWriteJson, readFileText } from "../store/atomic-write";
+import {
+  atomicWriteJson,
+  readDurableJson,
+  readFileText,
+  requireDurableJson,
+} from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
 
 export { REPAIR_CAPABILITIES, profileIntegrityHash, protocolIntegrityHash };
@@ -131,10 +136,13 @@ export function revokeRepairProfile(name: string, now = new Date().toISOString()
 }
 
 export function readRepairGrantFile(runDir: string): RepairGrant | null {
-  const text = readFileText(join(runDir, "repair-grant.json"));
-  if (text === null) return null;
-  const parsed = repairGrantRecordSchema.safeParse(jsonParse(text));
-  return parsed.success ? parsed.data : null;
+  return requireDurableJson(
+    readDurableJson(join(runDir, "repair-grant.json"), (value) => {
+      const parsed = repairGrantRecordSchema.safeParse(value);
+      return parsed.success ? parsed.data : null;
+    }),
+    "repair-grant.json",
+  );
 }
 
 export function loadReusableRepairGrant(input: {

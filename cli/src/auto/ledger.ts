@@ -33,6 +33,7 @@ import {
   parseFindingsFile,
   parseLandingsText,
   parsePlanLockFile,
+  planLockFileSchema,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
 import type { DecisionsFile } from "@shared/runtime/review-explainer/contracts";
@@ -44,7 +45,7 @@ import {
 } from "@shared/runtime/reviewer-assessment";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
-import { atomicWriteJson } from "../store/atomic-write";
+import { atomicWriteJson, parseDurableJsonText, requireDurableJson } from "../store/atomic-write";
 import {
   FINDING_GROUPS_FILE,
   FINDING_GROUPS_KIND,
@@ -427,7 +428,15 @@ export function readFindings(runDir: string): FindingsFile | null {
 }
 
 export function readPlanLock(runDir: string): PlanLockFile | null {
-  return parsePlanLockFile(readOptional(join(runDir, CLI_RUN_PLAN_LOCK_FILE)));
+  const text = readOptional(join(runDir, CLI_RUN_PLAN_LOCK_FILE));
+  if (text === null) return null;
+  return requireDurableJson(
+    parseDurableJsonText(text, (value) => {
+      const parsed = planLockFileSchema.safeParse(value);
+      return parsed.success ? parsed.data : null;
+    }),
+    CLI_RUN_PLAN_LOCK_FILE,
+  );
 }
 
 export function readLandings(runDir: string): LandingRecord[] {
@@ -439,6 +448,7 @@ export function writeFindings(runDir: string, file: FindingsFile): void {
 }
 
 export function writePlanLock(runDir: string, file: PlanLockFile): void {
+  readPlanLock(runDir);
   atomicWriteJson(join(runDir, CLI_RUN_PLAN_LOCK_FILE), file);
 }
 
