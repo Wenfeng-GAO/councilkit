@@ -3,8 +3,9 @@
  * of `src/orchestrator/context-snapshot.ts` into the CLI's no-Dexie world —
  * copied + annotated, NOT imported (the source pulls Dexie entities).
  *
- * Sync-point: if `src/orchestrator/context-snapshot.ts` changes its digest
- * projection or the stable-first-item convention, mirror it here.
+ * The digest projection lives in `shared/runtime/snapshot-digest.ts`. This
+ * file hashes that projection with node:crypto. The stable-first-item
+ * convention below is still CLI-only: items are appended, never rewritten.
  *
  * SessionReconciler contract (verified against
  * `runtime-host/scopes/session-reconciler.ts`): the reconciler records each
@@ -28,8 +29,14 @@ import {
   type SnapshotItem,
   contextSnapshotSchema,
 } from "@shared/runtime/schemas";
+import {
+  SNAPSHOT_DIGEST_VERSION,
+  contextDigestMaterial,
+  instructionDigestMaterial,
+  participantPromptDigestMaterial,
+} from "@shared/runtime/snapshot-digest";
 
-export const SNAPSHOT_DIGEST_VERSION = 1 as const;
+export { SNAPSHOT_DIGEST_VERSION };
 
 /** sha256 hex over the shared canonical form (same algorithm as the Host's
  * `hashItem` / the browser's `digestOf`; the reconciler records-then-compares
@@ -41,10 +48,7 @@ export function digestOf(value: unknown): string {
 /** Participant digest = sha256(canonicalJson({digestVersion, personaPrompt})).
  * Stable for the whole Scope life of one agent (reconciler keys on it). */
 export function computeParticipantDigest(personaPrompt: string): string {
-  return digestOf({
-    digestVersion: SNAPSHOT_DIGEST_VERSION,
-    personaPrompt: personaPrompt.length > 0 ? personaPrompt : undefined,
-  });
+  return digestOf(participantPromptDigestMaterial(personaPrompt));
 }
 
 /** Instruction digest = sha256(canonicalJson({digestVersion, kind, text})). */
@@ -52,15 +56,10 @@ export function computeInstructionDigest(instruction: {
   kind: "message" | "summary";
   text: string;
 }): string {
-  return digestOf({
-    digestVersion: SNAPSHOT_DIGEST_VERSION,
-    kind: instruction.kind,
-    text: instruction.text,
-  });
+  return digestOf(instructionDigestMaterial(instruction));
 }
 
-/** The normalized shared projection — the contextDigest input. Mirrors the
- * source's `SharedProjection` (sync-point). */
+/** The normalized shared projection — the contextDigest input. */
 export interface SharedProjection {
   topic: string;
   background: string;
@@ -68,18 +67,7 @@ export interface SharedProjection {
 }
 
 export function computeContextDigest(projection: SharedProjection): string {
-  return digestOf({
-    digestVersion: SNAPSHOT_DIGEST_VERSION,
-    topic: projection.topic,
-    background: projection.background,
-    items: projection.items.map((item) => ({
-      id: item.id,
-      role: item.role,
-      participantId: item.participantId,
-      content: item.content,
-      sourceExecutionId: item.sourceExecutionId,
-    })),
-  });
+  return digestOf(contextDigestMaterial(projection));
 }
 
 export function contextItem(
