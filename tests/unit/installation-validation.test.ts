@@ -1,10 +1,10 @@
 import { statSync } from "node:fs";
 import { chmod, mkdir, realpath, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateExecutable } from "../../runtime-host/installations/validation";
 import {
+  RUNNING_AS_ROOT,
   cleanupInstallationFixtures,
   fingerprintOf,
   privateDir,
@@ -57,7 +57,7 @@ describe("validateExecutable", () => {
     });
   });
 
-  it("returns unreadable when the path cannot be resolved", async () => {
+  it.skipIf(RUNNING_AS_ROOT)("returns unreadable when the path cannot be resolved", async () => {
     const root = await privateDir("unreadable-");
     const locked = join(root, "locked");
     const hidden = await writeExecutable(locked, "codex", "secret");
@@ -134,24 +134,28 @@ describe("validateExecutable", () => {
     });
   });
 
-  it("rejects an executable placed under a world-writable temp directory", async () => {
+  it("rejects an executable placed under a world-writable directory", async () => {
     const root = await worldWritableDir("ck-world-");
     const path = await writeExecutable(root, "codex", "x");
+    await chmod(root, 0o777);
     expect(validateExecutable(path)).toEqual({
       ok: false,
       reason: "writable_path",
-      detail: `Directory "${tmpdir()}" in the path chain is group- or other-writable.`,
+      detail: `Directory "${await realpath(root)}" in the path chain is group- or other-writable.`,
     });
   });
 
-  it("returns unreadable when the executable bytes cannot be hashed", async () => {
-    const root = await privateDir("hash-");
-    const path = await writeExecutable(root, "codex", "secret-bytes", 0o111);
-    const resolved = await realpath(path);
-    expect(validateExecutable(path)).toEqual({
-      ok: false,
-      reason: "unreadable",
-      detail: `"${resolved}" cannot be fingerprinted (EACCES).`,
-    });
-  });
+  it.skipIf(RUNNING_AS_ROOT)(
+    "returns unreadable when the executable bytes cannot be hashed",
+    async () => {
+      const root = await privateDir("hash-");
+      const path = await writeExecutable(root, "codex", "secret-bytes", 0o111);
+      const resolved = await realpath(path);
+      expect(validateExecutable(path)).toEqual({
+        ok: false,
+        reason: "unreadable",
+        detail: `"${resolved}" cannot be fingerprinted (EACCES).`,
+      });
+    },
+  );
 });

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Logger } from "../../runtime-host/logging";
 
@@ -60,10 +59,14 @@ export async function privateDir(prefix: string): Promise<string> {
 
 /** Directory whose path chain is group/other-writable, for rejection tests. */
 export async function worldWritableDir(prefix: string): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), prefix));
-  roots.push(root);
+  // Do not rely on os.tmpdir(): on macOS it is a 0700 per-user directory.
+  const root = await privateDir(prefix);
+  await chmod(root, 0o777);
   return root;
 }
+
+/** Root bypasses permission bits, so EACCES-based cases cannot run as uid 0. */
+export const RUNNING_AS_ROOT = process.getuid?.() === 0;
 
 export async function writeExecutable(
   dir: string,

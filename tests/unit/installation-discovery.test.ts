@@ -8,7 +8,12 @@ import {
   discoveryDirs,
 } from "../../runtime-host/installations/discovery";
 import { defaultDriverWellKnownBinDirs } from "../../shared/runtime/driver-bins";
-import { cleanupInstallationFixtures, privateDir, writeExecutable } from "./installation-fixtures";
+import {
+  RUNNING_AS_ROOT,
+  cleanupInstallationFixtures,
+  privateDir,
+  writeExecutable,
+} from "./installation-fixtures";
 
 afterEach(cleanupInstallationFixtures);
 
@@ -156,38 +161,41 @@ describe("discoverInstallations", () => {
     expect(backendsOnly).toEqual({ installations: [] });
   });
 
-  it("keeps the first PATH hit and skips non-files, broken symlinks, and unreadable directories", async () => {
-    const root = await privateDir("skip-");
-    const decoy = await pathBin(root, "decoy");
-    const locked = await pathBin(root, "locked");
-    const real = await pathBin(root, "real");
-    await mkdir(join(decoy, "codex"), { recursive: true });
-    await symlink(join(decoy, "missing-target"), join(decoy, "kimi"));
-    const marker = join(root, "executed");
-    const chosen = await writeExecutable(
-      real,
-      "codex",
-      `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`,
-    );
-    await writeExecutable(locked, "codex", "hidden");
-    await chmod(locked, 0o000);
-    const outcome = discoverInstallations({
-      env: { PATH: `${decoy}:${locked}:${real}` },
-      wellKnownDirs: [],
-    });
-    expect(outcome).toEqual({
-      installations: [
-        {
-          name: "codex",
-          driverId: "codex-app-server",
-          wrapper: { name: "codex", path: chosen, source: "path", pathIndex: 2 },
-          claude: null,
-          cfuse: null,
-        },
-      ],
-    });
-    expect(existsSync(marker)).toBe(false);
-  });
+  it.skipIf(RUNNING_AS_ROOT)(
+    "keeps the first PATH hit and skips non-files, broken symlinks, and unreadable directories",
+    async () => {
+      const root = await privateDir("skip-");
+      const decoy = await pathBin(root, "decoy");
+      const locked = await pathBin(root, "locked");
+      const real = await pathBin(root, "real");
+      await mkdir(join(decoy, "codex"), { recursive: true });
+      await symlink(join(decoy, "missing-target"), join(decoy, "kimi"));
+      const marker = join(root, "executed");
+      const chosen = await writeExecutable(
+        real,
+        "codex",
+        `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`,
+      );
+      await writeExecutable(locked, "codex", "hidden");
+      await chmod(locked, 0o000);
+      const outcome = discoverInstallations({
+        env: { PATH: `${decoy}:${locked}:${real}` },
+        wellKnownDirs: [],
+      });
+      expect(outcome).toEqual({
+        installations: [
+          {
+            name: "codex",
+            driverId: "codex-app-server",
+            wrapper: { name: "codex", path: chosen, source: "path", pathIndex: 2 },
+            claude: null,
+            cfuse: null,
+          },
+        ],
+      });
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
 
   it("reports a well-known hit after PATH directories and returns the symlink path", async () => {
     const root = await privateDir("well-");

@@ -15,6 +15,7 @@ import { validateExecutable } from "../../runtime-host/installations/validation"
 import type { InstallationComponent, InstallationDto } from "../../shared/runtime/schemas";
 import {
   type LogCall,
+  RUNNING_AS_ROOT,
   cleanupInstallationFixtures,
   fingerprintOf,
   installationIdFor,
@@ -477,42 +478,45 @@ describe("installation registry", () => {
     expect(registry.revalidate(kimiId)).toEqual(kimiDto);
   });
 
-  it("maps a uid mismatch to discovered and an unreadable executable to invalid", async () => {
-    const root = await privateDir("owner-hash-");
-    const bin = join(root, "bin");
-    const owned = await writeExecutable(bin, "codex", "x");
-    const hidden = await writeExecutable(bin, "kimi", "secret", 0o111);
-    const ownedReal = await realpath(owned);
-    const hiddenReal = await realpath(hidden);
-    const uid = statSync(ownedReal).uid;
-    const { registry } = fromPath(bin, (path) =>
-      path.endsWith("/kimi") ? validateExecutable(path) : validateExecutable(path, { uid: 0 }),
-    );
-    const codexId = installationIdFor("codex", ownedReal);
-    const kimiId = installationIdFor("kimi", hiddenReal);
-    expect(registry.get(codexId)).toEqual({
-      installationId: codexId,
-      driverId: "codex-app-server",
-      state: "discovered",
-      executablePath: ownedReal,
-      fingerprint: null,
-      components: [],
-      detail: `Wrapper validation failed (bad_owner): "${ownedReal}" is owned by uid ${uid}, not the current user or root.`,
-    });
-    expect(registry.get(kimiId)).toEqual({
-      installationId: kimiId,
-      driverId: "kimi-stream-json",
-      state: "invalid",
-      executablePath: hiddenReal,
-      fingerprint: null,
-      components: [],
-      detail: `Wrapper validation failed (unreadable): "${hiddenReal}" cannot be fingerprinted (EACCES).`,
-    });
-    const error = catchInstallation(() => registry.assertExecutable(kimiId));
-    expect(error.runtimeError).toEqual(
-      runtimeError("INSTALLATION_UNTRUSTED", `Installation "${kimiId}" is invalid, not trusted.`),
-    );
-  });
+  it.skipIf(RUNNING_AS_ROOT)(
+    "maps a uid mismatch to discovered and an unreadable executable to invalid",
+    async () => {
+      const root = await privateDir("owner-hash-");
+      const bin = join(root, "bin");
+      const owned = await writeExecutable(bin, "codex", "x");
+      const hidden = await writeExecutable(bin, "kimi", "secret", 0o111);
+      const ownedReal = await realpath(owned);
+      const hiddenReal = await realpath(hidden);
+      const uid = statSync(ownedReal).uid;
+      const { registry } = fromPath(bin, (path) =>
+        path.endsWith("/kimi") ? validateExecutable(path) : validateExecutable(path, { uid: 0 }),
+      );
+      const codexId = installationIdFor("codex", ownedReal);
+      const kimiId = installationIdFor("kimi", hiddenReal);
+      expect(registry.get(codexId)).toEqual({
+        installationId: codexId,
+        driverId: "codex-app-server",
+        state: "discovered",
+        executablePath: ownedReal,
+        fingerprint: null,
+        components: [],
+        detail: `Wrapper validation failed (bad_owner): "${ownedReal}" is owned by uid ${uid}, not the current user or root.`,
+      });
+      expect(registry.get(kimiId)).toEqual({
+        installationId: kimiId,
+        driverId: "kimi-stream-json",
+        state: "invalid",
+        executablePath: hiddenReal,
+        fingerprint: null,
+        components: [],
+        detail: `Wrapper validation failed (unreadable): "${hiddenReal}" cannot be fingerprinted (EACCES).`,
+      });
+      const error = catchInstallation(() => registry.assertExecutable(kimiId));
+      expect(error.runtimeError).toEqual(
+        runtimeError("INSTALLATION_UNTRUSTED", `Installation "${kimiId}" is invalid, not trusted.`),
+      );
+    },
+  );
 
   it("trusts a repaired executable only on refresh, not on the revalidate that first sees it", async () => {
     const root = await privateDir("repair-");
