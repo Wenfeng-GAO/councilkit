@@ -10,6 +10,11 @@ import {
   type SnapshotItem,
   contextSnapshotSchema,
 } from "@shared/runtime/schemas";
+import {
+  SNAPSHOT_DIGEST_VERSION,
+  contextDigestMaterial,
+  instructionDigestMaterial,
+} from "@shared/runtime/snapshot-digest";
 
 /**
  * Deterministic Context Snapshot construction (U4).
@@ -20,9 +25,10 @@ import {
  * `digestVersion: 1`; only changes to the shared persisted projection bump
  * `contextRevision` — a Participant-only change touches only
  * `participantSnapshotDigest`, a single instruction only `instructionDigest`.
+ * The hashed projection is `shared/runtime/snapshot-digest.ts`.
  */
 
-export const SNAPSHOT_DIGEST_VERSION = 1 as const;
+export { SNAPSHOT_DIGEST_VERSION };
 
 /** The normalized shared persisted projection — the ONLY contextDigest input. */
 export interface SharedProjection {
@@ -34,29 +40,14 @@ export interface SharedProjection {
 /** contextDigest = sha256(canonicalJson(normalized projection)), stable across
  * object construction order (canonicalJson sorts keys; item order is semantic). */
 export function computeContextDigest(projection: SharedProjection): string {
-  return digestOf({
-    digestVersion: SNAPSHOT_DIGEST_VERSION,
-    topic: projection.topic,
-    background: projection.background,
-    items: projection.items.map((item) => ({
-      id: item.id,
-      role: item.role,
-      participantId: item.participantId,
-      content: item.content,
-      sourceExecutionId: item.sourceExecutionId,
-    })),
-  });
+  return digestOf(contextDigestMaterial(projection));
 }
 
 export function computeInstructionDigest(instruction: {
   kind: "message" | "summary";
   text: string;
 }): string {
-  return digestOf({
-    digestVersion: SNAPSHOT_DIGEST_VERSION,
-    kind: instruction.kind,
-    text: instruction.text,
-  });
+  return digestOf(instructionDigestMaterial(instruction));
 }
 
 function messageToItem(message: DiscussionMessage): SnapshotItem {

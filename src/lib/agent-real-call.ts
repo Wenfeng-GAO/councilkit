@@ -27,6 +27,12 @@ import type {
 } from "@shared/runtime/events";
 import { decideFollowAfterClose } from "@shared/runtime/follow-reconnect";
 import type { ContextSnapshot, ExecutionProfileDto, SnapshotItem } from "@shared/runtime/schemas";
+import {
+  SNAPSHOT_DIGEST_VERSION,
+  contextDigestMaterial,
+  instructionDigestMaterial,
+  participantPromptDigestMaterial,
+} from "@shared/runtime/snapshot-digest";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -1366,21 +1372,14 @@ function isErrorAbort(error: unknown): boolean {
 
 function buildProbeSnapshot(input: { participantId: string; persona: string }): ContextSnapshot {
   const instruction = { kind: "message" as const, text: PROBE_INSTRUCTION };
-  const instructionDigest = digestOf({
-    digestVersion: 1,
-    kind: instruction.kind,
-    text: instruction.text,
-  });
+  const instructionDigest = digestOf(instructionDigestMaterial(instruction));
   const items: SnapshotItem[] = [];
-  const participantSnapshotDigest = digestOf({
-    digestVersion: 1,
-    personaPrompt: input.persona || undefined,
-  });
+  const participantSnapshotDigest = digestOf(participantPromptDigestMaterial(input.persona));
   return {
-    digestVersion: 1,
+    digestVersion: SNAPSHOT_DIGEST_VERSION,
     roomContext: {
       contextRevision: 0,
-      contextDigest: digestOf({ digestVersion: 1, topic: "", background: "", items }),
+      contextDigest: digestOf(contextDigestMaterial({ topic: "", background: "", items })),
       items,
     },
     participant: {
