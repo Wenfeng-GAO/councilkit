@@ -2,6 +2,7 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { assertSquadPipelineIsolation } from "@shared/runtime/repair-isolation";
 import {
   type FrozenIntegrateIdentity,
@@ -231,7 +232,7 @@ export class SquadctlBridge implements SquadBridge {
         `squadctl history export failed: ${exported.stderr || exported.stdout}`,
       );
     }
-    const envelope = parseHistoryEnvelope(parseJson(exported.stdout));
+    const envelope = parseHistoryEnvelope(jsonParseEmbedded(exported.stdout));
     if (!envelope) {
       throw errors.runFailed("squadctl history export did not return squad-history-bridge.v1");
     }
@@ -276,7 +277,7 @@ export class SquadctlBridge implements SquadBridge {
       return { taskId: request.taskId, event: mapSquadStatus(null, { stopped: true }) };
     }
     const resumed = this.runSquadctlSync(["resume", "--task-dir", identity.taskDir, "--json"]);
-    if (resumed.exitCode !== 0 || !isOfficialSquadResumeReceipt(parseJson(resumed.stdout))) {
+    if (resumed.exitCode !== 0 || !isOfficialSquadResumeReceipt(jsonParseEmbedded(resumed.stdout))) {
       throw errors.runFailed(
         `squadctl resume failed: ${resumed.stderr || resumed.stdout || `exit ${resumed.exitCode}`}`,
       );
@@ -323,7 +324,7 @@ export class SquadctlBridge implements SquadBridge {
     }
     if (identity) {
       const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
-      const epoch = readEpoch(parseJson(snapshot.stdout));
+      const epoch = readEpoch(jsonParseEmbedded(snapshot.stdout));
       if (epoch === null) {
         throw errors.runFailed("cannot pause squad task without a journal epoch");
       }
@@ -381,7 +382,7 @@ export class SquadctlBridge implements SquadBridge {
         event: { kind: "failed", journal: mapSquadStatus(null).journal },
       };
     }
-    const event = mapSquadStatus(parseJson(snapshot.stdout), { stopped: identity?.stopped });
+    const event = mapSquadStatus(jsonParseEmbedded(snapshot.stdout), { stopped: identity?.stopped });
     if (
       identity &&
       !this.writerStillLive(identity) &&
@@ -507,7 +508,7 @@ export class SquadctlBridge implements SquadBridge {
     ]);
     if (
       check.exitCode !== 0 ||
-      !isTrustedSquadctlIntegrateReceipt(parseJson(check.stdout), expected, "check-remote")
+      !isTrustedSquadctlIntegrateReceipt(jsonParseEmbedded(check.stdout), expected, "check-remote")
     ) {
       return publishRefuse("UNTRUSTED_RECEIPT", {
         stage: "check-remote",
@@ -534,7 +535,7 @@ export class SquadctlBridge implements SquadBridge {
     ]);
     if (
       push.exitCode !== 0 ||
-      !isTrustedSquadctlIntegrateReceipt(parseJson(push.stdout), expected, "push-remote")
+      !isTrustedSquadctlIntegrateReceipt(jsonParseEmbedded(push.stdout), expected, "push-remote")
     ) {
       return publishRefuse("UNTRUSTED_RECEIPT", {
         stage: "push-remote",
@@ -639,7 +640,7 @@ export class SquadctlBridge implements SquadBridge {
         );
       }
       if (delivery && delivery.newRepairChain !== true && delivery.previousTaskId) {
-        const completeness = intakeCompleteness(parseJson(intake.stdout));
+        const completeness = intakeCompleteness(jsonParseEmbedded(intake.stdout));
         if (completeness !== "verified") {
           throw errors.runFailed(
             `subsequent intake historyCompleteness=${completeness ?? "missing"}; expected verified`,
@@ -899,7 +900,7 @@ export class SquadctlBridge implements SquadBridge {
       (signal ? `orchestrator received ${signal}` : `orchestrator exited (${code ?? "null"})`);
     const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
     if (!this.isCurrentGeneration(taskId, generation)) return;
-    const event = mapSquadStatus(parseJson(snapshot.stdout));
+    const event = mapSquadStatus(jsonParseEmbedded(snapshot.stdout));
     if ((code === 0 || (code === null && !signal && !error)) && canRequestPublish(event)) {
       const latest = this.readIdentity(taskId);
       if (!latest || !this.isCurrentGeneration(taskId, generation)) return;
@@ -946,7 +947,7 @@ export class SquadctlBridge implements SquadBridge {
     if (identity.stopped || identity.executionStatus === "failed") return identity;
     if (this.writerStillLive(identity)) return identity;
     const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
-    const event = mapSquadStatus(parseJson(snapshot.stdout));
+    const event = mapSquadStatus(jsonParseEmbedded(snapshot.stdout));
     if (canRequestPublish(event)) {
       return this.writeIdentity(taskId, {
         ...identity,
@@ -1249,7 +1250,7 @@ export class SquadctlBridge implements SquadBridge {
         `initialized squad task has unreadable official status: ${snapshot.stderr || snapshot.stdout || "exit"}`,
       );
     }
-    const raw = parseJson(snapshot.stdout);
+    const raw = jsonParseEmbedded(snapshot.stdout);
     const taskId =
       raw !== null && typeof raw === "object" && !Array.isArray(raw)
         ? (raw as { task_id?: unknown }).task_id
@@ -1333,7 +1334,7 @@ export class SquadctlBridge implements SquadBridge {
   private stabilizeTask(identity: BridgeIdentity): void {
     if (identity.stopped) return;
     const snapshot = this.runSquadctlSync(["status", "--task-dir", identity.taskDir, "--json"]);
-    const epoch = readEpoch(parseJson(snapshot.stdout));
+    const epoch = readEpoch(jsonParseEmbedded(snapshot.stdout));
     if (epoch === null) return;
     this.runSquadctlSync([
       "pause",
@@ -1355,7 +1356,7 @@ export class SquadctlBridge implements SquadBridge {
       shell: false,
     });
     if (result.status !== 0) return null;
-    const parsed = parseJson(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+    const parsed = jsonParseEmbedded(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
     return parseHistoryCapabilities(parsed)?.contract ?? null;
   }
 
@@ -1909,25 +1910,6 @@ function isOfficialSquadResumeReceipt(raw: unknown): boolean {
   if (typeof row.head_sha !== "string" || !/^[a-f0-9]{40}$/i.test(row.head_sha)) return false;
   if (typeof row.diff_hash !== "string" || !/^[a-f0-9]{64}$/i.test(row.diff_hash)) return false;
   return true;
-}
-
-function parseJson(text: string): unknown {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
 }
 
 function intakeCompleteness(raw: unknown): string | null {
