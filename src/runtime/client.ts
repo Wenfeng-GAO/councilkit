@@ -95,6 +95,40 @@ export class RuntimeClientError extends Error {
   }
 }
 
+type HostErrorClass = new (status: number, code: string, message: string) => Error;
+
+/**
+ * Read `data` from a Host JSON envelope.
+ * A failed HTTP status or `ok: false` throws. The request itself stays with the caller.
+ */
+export async function readOkData<T>(
+  response: Response,
+  schema: { parse(data: unknown): T },
+  options: {
+    fallbackMessage: string | ((status: number) => string);
+    ErrorClass?: HostErrorClass;
+  },
+): Promise<T> {
+  const envelope = (await response.json()) as {
+    ok: boolean;
+    data?: unknown;
+    error?: { code?: string; message?: string };
+  };
+  if (!response.ok || !envelope.ok) {
+    const fallback =
+      typeof options.fallbackMessage === "function"
+        ? options.fallbackMessage(response.status)
+        : options.fallbackMessage;
+    const ErrorClass = options.ErrorClass ?? RuntimeClientError;
+    throw new ErrorClass(
+      response.status,
+      envelope.error?.code ?? "UNKNOWN",
+      envelope.error?.message ?? fallback,
+    );
+  }
+  return schema.parse(envelope.data);
+}
+
 export class RuntimeClient {
   private readonly fetchFn: typeof fetch;
 
@@ -128,19 +162,9 @@ export class RuntimeClient {
       signal: options.signal ?? null,
       credentials: "same-origin",
     });
-    const envelope = (await response.json()) as {
-      ok: boolean;
-      data?: unknown;
-      error?: { code: string; message: string };
-    };
-    if (!response.ok || !envelope.ok) {
-      throw new RuntimeClientError(
-        response.status,
-        envelope.error?.code ?? "UNKNOWN",
-        envelope.error?.message ?? `HTTP ${response.status}`,
-      );
-    }
-    return options.schema.parse(envelope.data);
+    return readOkData(response, options.schema, {
+      fallbackMessage: (status) => `HTTP ${status}`,
+    });
   }
 
   health(): Promise<HealthResponse> {
