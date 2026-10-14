@@ -627,10 +627,7 @@ function summaryWithUnfinishedNote(summary: string): string {
   if (summary.includes(REPAIR_OBS_COPY.unfinishedTool)) return summary;
   const combined = `${summary}${note}`;
   if (combined.length <= REPAIR_OBS_SUMMARY_MAX) return combined;
-  let end = REPAIR_OBS_SUMMARY_MAX - note.length;
-  const unit = summary.charCodeAt(end - 1);
-  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
-  return `${summary.slice(0, Math.max(0, end))}${note}`;
+  return `${clipUtf16CodeUnits(summary, Math.max(0, REPAIR_OBS_SUMMARY_MAX - note.length))}${note}`;
 }
 
 export function clipSummary(value: string): string {

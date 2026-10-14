@@ -745,7 +745,7 @@ function findingId(
       .filter((part) => part.length > 1)
       .slice(0, 6)
       .join("-");
-    return `${fileSlug}--${titleSlug || "finding"}`.slice(0, 96);
+    return clipUtf16CodeUnits(`${fileSlug}--${titleSlug || "finding"}`, 96);
   }
   const digest = createHash("sha256")
     .update(`${severity}\0${title.trim().toLowerCase()}`)
@@ -1316,7 +1316,7 @@ function clusterFromBlock(
 ): PlanCluster {
   const keys = parseKeyedItems(machine);
   const rawId = keys.id ?? heading;
-  const id = uniqueId(slugify(rawId).slice(0, 64) || "cluster", used);
+  const id = uniqueId(clipUtf16CodeUnits(slugify(rawId), 64) || "cluster", used);
   used.add(id);
   return {
     id,

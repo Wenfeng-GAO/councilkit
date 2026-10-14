@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { makeError } from "@shared/runtime/errors";
 import type { ClaudeRoute } from "@shared/runtime/schemas";
+import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { sanitizeString, sanitizeValue } from "../logging";
 import type { DriverProcess } from "../process/process-supervisor";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
@@ -172,7 +173,7 @@ export function createClaudeStreamJsonDriver(
     }
 
     function noteStderr(text: string) {
-      stderrTail = sanitizeString(`${stderrTail}${text}`).slice(-2048);
+      stderrTail = clipUtf16TailCodeUnits(sanitizeString(`${stderrTail}${text}`), 2048);
     }
 
     function failAllPendingControls(error: Error) {

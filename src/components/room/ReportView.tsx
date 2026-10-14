@@ -3,6 +3,7 @@ import { MessageBubble } from "@/components/message/MessageBubble";
 import { Button } from "@/components/ui/Button";
 import type { DecisionReport } from "@/models/discussion/entities";
 import type { ModelExecution } from "@/models/discussion/model-execution";
+import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { useState } from "react";
 
 /**
@@ -32,7 +33,7 @@ export function reportFilename(topic: string): string {
     .replace(/[\\/:*?"<>|]|\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const base = collapsed.length === 0 ? "room" : collapsed.slice(0, 50);
+  const base = collapsed.length === 0 ? "room" : clipUtf16CodeUnits(collapsed, 50);
   return `${base}-report.md`;
 }
 

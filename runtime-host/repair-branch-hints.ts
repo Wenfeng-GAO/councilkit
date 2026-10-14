@@ -14,6 +14,7 @@ import {
 } from "@shared/runtime/pr-inspect";
 import { parseAntCodePrUrl, parseApplyPrUrl } from "@shared/runtime/pr-url";
 import { repairBranchHintsFromFrozenContext } from "@shared/runtime/repair-auth";
+import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 
 const INSPECT_TIMEOUT_MS = 4000;
 const GIT_TIMEOUT_MS = 2500;
@@ -186,11 +187,11 @@ function runCommand(
     let stderr = "";
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
-      if (stdout.length > 1024 * 1024) stdout = stdout.slice(-512 * 1024);
+      if (stdout.length > 1024 * 1024) stdout = clipUtf16TailCodeUnits(stdout, 512 * 1024);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
-      if (stderr.length > 256 * 1024) stderr = stderr.slice(-128 * 1024);
+      if (stderr.length > 256 * 1024) stderr = clipUtf16TailCodeUnits(stderr, 128 * 1024);
     });
     const timeout = setTimeout(() => {
       try {

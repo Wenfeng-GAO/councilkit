@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
+import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { withDeadline } from "./ndjson";
@@ -595,7 +596,7 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
             turnProcess = spawned;
             spawned.stdout.on("data", (chunk: Buffer) => {
               const next = turn.stdout + chunk.toString("utf8");
-              turn.stdout = next.length > STDOUT_CAP ? next.slice(next.length - STDOUT_CAP) : next;
+              turn.stdout = clipUtf16TailCodeUnits(next, STDOUT_CAP);
               if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
             });
             spawned.stdout.on("end", () => {

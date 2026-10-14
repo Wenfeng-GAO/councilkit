@@ -57,6 +57,15 @@ export function clipUtf16CodeUnits(value: string, max: number): string {
   return value.slice(0, end);
 }
 
+export function clipUtf16TailCodeUnits(value: string, max: number): string {
+  if (max <= 0) return "";
+  if (value.length <= max) return value;
+  let start = value.length - max;
+  const unit = value.charCodeAt(start);
+  if (unit >= 0xdc00 && unit <= 0xdfff) start += 1;
+  return value.slice(start);
+}
+
 export function clipSeatSummary(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
