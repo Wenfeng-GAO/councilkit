@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { FULL_COMMIT_SHA } from "./cli-ledger";
+import { redactAuthorizationMaterial } from "./redact-authorization";
 import { clipUtf16CodeUnits } from "./seat-result";
 
 export const SQUAD_BRIDGE_CONTRACT_VERSION = "squad-bridge.v1";
@@ -166,7 +167,7 @@ export function sanitizePublishMessage(
   text: string,
   limit: number = PUBLISH_DIAGNOSTIC_LIMIT,
 ): string {
-  const redacted = text
+  const redacted = redactAuthorizationMaterial(text, "[redacted]")
     .replace(URL_USERINFO, "$1[redacted]@")
     .replace(JSON_CREDENTIAL_FIELD, "$1[redacted]$2")
     .replace(CREDENTIAL_ASSIGNMENT, "$1=[redacted]")

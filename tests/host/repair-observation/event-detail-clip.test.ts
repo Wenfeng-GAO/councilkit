@@ -81,8 +81,9 @@ it("keeps a 64KB event detail body on a code-point boundary when redaction shift
   );
 
   const emoji = "😀";
+  // `;` ends the header value so the following padding stays in the body.
   const prefix =
-    '{"type":"tool.completed","callId":"c1","name":"bash","summary":"emoji-cut","role":"coder","at":"2026-09-22T06:00:01Z","output":"authorization: x ';
+    '{"type":"tool.completed","callId":"c1","name":"bash","summary":"emoji-cut","role":"coder","at":"2026-09-22T06:00:01Z","output":"authorization: x;';
   const emojiAt = 65526;
   const filler = "a".repeat(emojiAt - Buffer.byteLength(prefix));
   const line = `${prefix}${filler}${emoji}zzzzzz"}`;
