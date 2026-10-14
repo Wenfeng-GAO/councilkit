@@ -6,7 +6,7 @@ import {
   repairEventDetailSchema,
   repairObservationSchema,
 } from "@shared/runtime/repair-observation";
-import { RuntimeClientError } from "./client";
+import { RuntimeClientError, readOkData } from "./client";
 
 async function sessionGetJson<T>(
   path: string,
@@ -18,19 +18,9 @@ async function sessionGetJson<T>(
     credentials: "same-origin",
     signal: signal ?? null,
   });
-  const envelope = (await response.json()) as {
-    ok: boolean;
-    data?: unknown;
-    error?: { code: string; message: string };
-  };
-  if (!response.ok || !envelope.ok) {
-    throw new RuntimeClientError(
-      response.status,
-      envelope.error?.code ?? "UNKNOWN",
-      envelope.error?.message ?? `HTTP ${response.status}`,
-    );
-  }
-  return schema.parse(envelope.data);
+  return readOkData(response, schema, {
+    fallbackMessage: (status) => `HTTP ${status}`,
+  });
 }
 
 export function fetchRepairObservation(input: {
