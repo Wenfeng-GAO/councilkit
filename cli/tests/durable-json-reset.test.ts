@@ -3,22 +3,66 @@
  * Create-if-absent writers used to replace those bytes with a fresh default.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootstrapChain } from "@shared/runtime/repair-chain";
+import type { OfficialGatePolicyFreeze } from "@shared/runtime/squad-gate-policy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadAssessmentCorrections } from "../src/auto/assessment-correction";
+import {
+  loadAssessmentCorrections,
+  writeAssessmentCorrections,
+} from "../src/auto/assessment-correction";
 import { defaultRunCommand } from "../src/auto/checkout-pr";
+import { readPlanLock, writePlanLock } from "../src/auto/ledger";
 import { resolveLocalRepo } from "../src/auto/local-repo";
 import { chainPath, loadOrCreateChain } from "../src/auto/repair-chain-store";
 import { bootstrapRepairRun } from "../src/auto/repair-persist";
 import { loadReusableRepairGrant, saveRepairProfile } from "../src/auto/repair-profile";
+import {
+  defaultSupervisedPolicy,
+  freezeOfficialGatePolicyWithSquadctl,
+  persistFreezeRecord,
+  readRegisteredIntent,
+  writePolicyIntent,
+} from "../src/auto/squad-gate-policy";
 import { SquadctlBridge } from "../src/auto/squadctl-bridge";
 
 const TORN = "{";
 const REVIEW_ID = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
 const REPAIR_ID = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+const EMPTY_CORRECTIONS = {
+  version: 1 as const,
+  kind: "councilkit-assessment-corrections" as const,
+  records: [],
+};
+const PLAN_LOCK = {
+  version: 1 as const,
+  sourceRunId: REVIEW_ID,
+  approvedAt: "2026-09-21T00:00:00.000Z",
+  verdict: "approve" as const,
+  clusters: [],
+  deferred: [],
+};
+
+function sampleFreeze(taskDir: string, policyFileHash: string): OfficialGatePolicyFreeze {
+  return {
+    policyHash: "a".repeat(64),
+    briefHash: "b".repeat(64),
+    taskId: "task-A",
+    taskDir,
+    requiredGates: [],
+    independence: {
+      distinct_runs: true,
+      distinct_sessions: true,
+      distinct_worktrees: true,
+    },
+    source: "squadctl-gate-policy-freeze",
+    createdAt: "2026-09-21T00:00:00.000Z",
+    alreadyFrozen: false,
+    policyFileHash,
+  };
+}
 
 describe("durable JSON is not reset when the file is present but invalid", () => {
   let home: string;
@@ -145,15 +189,128 @@ describe("durable JSON is not reset when the file is present but invalid", () =>
     expect(readFileSync(path, "utf8")).toBe(TORN);
   });
 
-  it("leaves a torn assessment-corrections file in place instead of loading it as empty", () => {
+  it("leaves a torn assessment-corrections file in place instead of writing a new one", () => {
     const runDir = join(home, "runs", REVIEW_ID);
     mkdirSync(runDir, { recursive: true });
     const path = join(runDir, "assessment-corrections.v1.json");
     writeFileSync(path, TORN);
-    expect(() => loadAssessmentCorrections(runDir)).toThrow(
+    expect(() => writeAssessmentCorrections(runDir, EMPTY_CORRECTIONS)).toThrow(
       /assessment-corrections\.v1\.json is present but invalid/,
     );
     expect(readFileSync(path, "utf8")).toBe(TORN);
     expect(loadAssessmentCorrections(join(home, "runs", "missing"))).toBeNull();
+  });
+
+  it("leaves a schema-invalid assessment-corrections file in place", () => {
+    const runDir = join(home, "runs", REVIEW_ID);
+    mkdirSync(runDir, { recursive: true });
+    const path = join(runDir, "assessment-corrections.v1.json");
+    const bad = '{"version":1}\n';
+    writeFileSync(path, bad);
+    expect(() => writeAssessmentCorrections(runDir, EMPTY_CORRECTIONS)).toThrow(
+      /assessment-corrections\.v1\.json is present but invalid/,
+    );
+    expect(readFileSync(path, "utf8")).toBe(bad);
+  });
+
+  it("still writes assessment corrections when the file is absent", () => {
+    const runDir = join(home, "runs", "fresh-assess");
+    mkdirSync(runDir, { recursive: true });
+    writeAssessmentCorrections(runDir, EMPTY_CORRECTIONS);
+    expect(loadAssessmentCorrections(runDir)?.records).toEqual([]);
+  });
+
+  it("leaves a torn plan.lock.json in place instead of writing a new lock", () => {
+    const runDir = join(home, "runs", REVIEW_ID);
+    mkdirSync(runDir, { recursive: true });
+    const path = join(runDir, "plan.lock.json");
+    writeFileSync(path, TORN);
+    expect(() => writePlanLock(runDir, PLAN_LOCK)).toThrow(
+      /plan\.lock\.json is present but invalid/,
+    );
+    expect(readFileSync(path, "utf8")).toBe(TORN);
+    expect(() => readPlanLock(runDir)).toThrow(/plan\.lock\.json is present but invalid/);
+  });
+
+  it("leaves a schema-invalid plan.lock.json in place", () => {
+    const runDir = join(home, "runs", REVIEW_ID);
+    mkdirSync(runDir, { recursive: true });
+    const path = join(runDir, "plan.lock.json");
+    const bad = '{"version":1}\n';
+    writeFileSync(path, bad);
+    expect(() => writePlanLock(runDir, PLAN_LOCK)).toThrow(
+      /plan\.lock\.json is present but invalid/,
+    );
+    expect(readFileSync(path, "utf8")).toBe(bad);
+  });
+
+  it("still writes plan.lock.json when the run has none", () => {
+    const runDir = join(home, "runs", REVIEW_ID);
+    mkdirSync(runDir, { recursive: true });
+    writePlanLock(runDir, PLAN_LOCK);
+    expect(readPlanLock(runDir)?.sourceRunId).toBe(REVIEW_ID);
+  });
+
+  it("does not replace a torn policy intent or freeze file", () => {
+    const intentDir = join(home, "intent");
+    const freezeDir = join(home, "freeze");
+    mkdirSync(intentDir, { recursive: true });
+    mkdirSync(freezeDir, { recursive: true });
+    const intentPath = join(intentDir, "councilkit-policy-intent.json");
+    const freezePath = join(freezeDir, "councilkit-policy-freeze.json");
+    writeFileSync(intentPath, TORN);
+    writeFileSync(freezePath, TORN);
+    const policy = defaultSupervisedPolicy();
+    const call = (taskDir: string) =>
+      freezeOfficialGatePolicyWithSquadctl({
+        exec: { executable: "/bin/false" },
+        taskDir,
+        taskId: "task-A",
+        policy,
+      });
+    expect(() => call(intentDir)).toThrow(/councilkit-policy-intent\.json is present but invalid/);
+    expect(() => call(freezeDir)).toThrow(/councilkit-policy-freeze\.json is present but invalid/);
+    expect(readFileSync(intentPath, "utf8")).toBe(TORN);
+    expect(readFileSync(freezePath, "utf8")).toBe(TORN);
+    expect(existsSync(join(intentDir, "councilkit-gate-policy.json"))).toBe(false);
+    expect(existsSync(join(freezeDir, "councilkit-gate-policy.json"))).toBe(false);
+    expect(existsSync(join(freezeDir, "councilkit-policy-intent.json"))).toBe(false);
+  });
+
+  it("leaves a schema-invalid policy intent and freeze file in place", () => {
+    const taskDir = join(home, "policy-schema");
+    mkdirSync(taskDir, { recursive: true });
+    const intentPath = join(taskDir, "councilkit-policy-intent.json");
+    const freezePath = join(taskDir, "councilkit-policy-freeze.json");
+    const badIntent = '{"policyFileHash":"nope"}\n';
+    const badFreeze = '{"policyHash":"nope"}\n';
+    writeFileSync(intentPath, badIntent);
+    writeFileSync(freezePath, badFreeze);
+    expect(() =>
+      writePolicyIntent(taskDir, defaultSupervisedPolicy(), { taskId: "task-A" }),
+    ).toThrow(/councilkit-policy-intent\.json is present but invalid/);
+    expect(() => persistFreezeRecord(taskDir, sampleFreeze(taskDir, "c".repeat(64)))).toThrow(
+      /councilkit-policy-freeze\.json is present but invalid/,
+    );
+    expect(readFileSync(intentPath, "utf8")).toBe(badIntent);
+    expect(readFileSync(freezePath, "utf8")).toBe(badFreeze);
+  });
+
+  it("still registers a policy intent when the file is absent, and updates a valid one", () => {
+    const taskDir = join(home, "policy-fresh");
+    const policy = defaultSupervisedPolicy();
+    const written = writePolicyIntent(taskDir, policy, { taskId: "task-A" });
+    expect(written.policyFileHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(readRegisteredIntent(taskDir, "task-B")).toBeNull();
+    const again = writePolicyIntent(taskDir, policy, { taskId: "task-B" });
+    expect(again.policyFileHash).toBe(written.policyFileHash);
+    expect(readRegisteredIntent(taskDir, "task-B")?.policyFileHash).toBe(written.policyFileHash);
+    const freeze = sampleFreeze(taskDir, written.policyFileHash);
+    persistFreezeRecord(taskDir, freeze);
+    persistFreezeRecord(taskDir, { ...freeze, createdAt: "2026-09-22T00:00:00.000Z" });
+    const stored = JSON.parse(
+      readFileSync(join(taskDir, "councilkit-policy-freeze.json"), "utf8"),
+    ) as { createdAt: string };
+    expect(stored.createdAt).toBe("2026-09-22T00:00:00.000Z");
   });
 });

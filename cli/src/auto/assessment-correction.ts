@@ -289,6 +289,7 @@ export function completeCorrectionRecord(
 }
 
 export function writeAssessmentCorrections(runDir: string, file: AssessmentCorrectionsFile): void {
+  loadAssessmentCorrections(runDir);
   atomicWriteJson(
     join(runDir, ASSESSMENT_CORRECTIONS_FILE),
     assessmentCorrectionsFileSchema.parse(file),
