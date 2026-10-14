@@ -7,17 +7,19 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseFlags } from "../src/commands/parse";
-import { COMMAND_BOOLEAN_FLAGS, partitionGlobalArgs } from "../src/global-args";
+import { COMMAND_VALUE_FLAGS, partitionGlobalArgs } from "../src/global-args";
 
 const COMMANDS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../src/commands");
 
-function booleanFlagsDeclaredOnCommands(): string[] {
+function flagsDeclaredOnCommands(type: "boolean" | "string"): string[] {
   const names = new Set<string>();
+  const pattern = new RegExp(String.raw`["']?([a-z0-9-]+)["']?\s*:\s*\{\s*type:\s*"${type}"`, "g");
   for (const file of readdirSync(COMMANDS_DIR)) {
     if (!file.endsWith(".ts")) continue;
     const text = readFileSync(join(COMMANDS_DIR, file), "utf8");
-    for (const match of text.matchAll(/["']?([a-z0-9-]+)["']?\s*:\s*\{\s*type:\s*"boolean"/g)) {
-      if (match[1] !== "json") names.add(`--${match[1]}`);
+    for (const match of text.matchAll(pattern)) {
+      if (type === "boolean" && match[1] === "json") continue;
+      names.add(`--${match[1]}`);
     }
   }
   return [...names].sort();
@@ -169,6 +171,37 @@ describe("partitionGlobalArgs", () => {
     });
   });
 
+  it("does not let an unknown long option hide a later global flag", () => {
+    expect(partitionGlobalArgs(["review", "URL", "--require-specs", "--json"])).toEqual({
+      json: true,
+      help: false,
+      version: false,
+      command: "review",
+      rest: ["URL", "--require-specs"],
+    });
+    expect(partitionGlobalArgs(["review", "URL", "--require-specs", "--help"])).toEqual({
+      json: false,
+      help: true,
+      version: false,
+      command: "review",
+      rest: ["URL", "--require-specs"],
+    });
+    expect(partitionGlobalArgs(["review", "URL", "--require-specs", "-h"])).toEqual({
+      json: false,
+      help: true,
+      version: false,
+      command: "review",
+      rest: ["URL", "--require-specs"],
+    });
+    expect(partitionGlobalArgs(["review", "URL", "--require-specs", "--version"])).toEqual({
+      json: false,
+      help: false,
+      version: true,
+      command: "review",
+      rest: ["URL", "--require-specs"],
+    });
+  });
+
   it("leaves the host ideate idea after -- for the leaf parser", () => {
     const idea = "--help";
     const partitioned = partitionGlobalArgs([
@@ -177,8 +210,7 @@ describe("partitionGlobalArgs", () => {
       "ck-ideate-018f0b3e-7c3a-7a1e-8c1a-6d5e4f3a2b10",
       "--debate-rounds",
       "1",
-      "--background",
-      "solo builder, two weeks",
+      "--background=solo builder, two weeks",
       "--",
       idea,
     ]);
@@ -192,8 +224,7 @@ describe("partitionGlobalArgs", () => {
         "ck-ideate-018f0b3e-7c3a-7a1e-8c1a-6d5e4f3a2b10",
         "--debate-rounds",
         "1",
-        "--background",
-        "solo builder, two weeks",
+        "--background=solo builder, two weeks",
         "--",
         "--help",
       ],
@@ -217,9 +248,42 @@ describe("partitionGlobalArgs", () => {
     expect(parsed.values.json).toBeUndefined();
   });
 
+  it("parses a dash-leading background attached with equals", () => {
+    for (const token of ["--help", "-h", "--json", "--version"]) {
+      const partitioned = partitionGlobalArgs([
+        "ideate",
+        "--run-id",
+        "ck-ideate-018f0b3e-7c3a-7a1e-8c1a-6d5e4f3a2b10",
+        `--background=${token}`,
+        "--",
+        "ship the cheaper route",
+      ]);
+      expect(partitioned.help).toBe(false);
+      expect(partitioned.json).toBe(false);
+      expect(partitioned.version).toBe(false);
+      const parsed = parseFlags(
+        {
+          flags: {
+            json: { type: "boolean" },
+            background: { type: "string" },
+            "run-id": { type: "string" },
+          },
+          allowPositionals: 1,
+        },
+        partitioned.rest,
+      );
+      expect(parsed.values.background).toBe(token);
+      expect(parsed.positionals).toEqual(["ship the cheaper route"]);
+    }
+  });
+
   it("keeps every command boolean from swallowing the next --json", () => {
-    expect(booleanFlagsDeclaredOnCommands()).toEqual([...COMMAND_BOOLEAN_FLAGS].sort());
-    for (const flag of COMMAND_BOOLEAN_FLAGS) {
+    const booleans = flagsDeclaredOnCommands("boolean");
+    const strings = flagsDeclaredOnCommands("string");
+    expect(strings).toEqual([...COMMAND_VALUE_FLAGS].sort());
+    for (const flag of booleans) expect(COMMAND_VALUE_FLAGS.has(flag)).toBe(false);
+    expect(COMMAND_VALUE_FLAGS.has("--json")).toBe(false);
+    for (const flag of booleans) {
       expect(partitionGlobalArgs(["cmd", "pos", flag, "--json"])).toEqual({
         json: true,
         help: false,

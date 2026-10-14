@@ -3,24 +3,64 @@
  * flags and the leaf command's argv.
  *
  * `--json`, `--help`, `-h`, and `--version` are global only when they are
- * their own option. A value of a preceding long option, and any token after
- * `--`, stays in `rest` so the leaf parser sees it.
+ * their own option. The next token of a known string option, and any token
+ * after `--`, stays in `rest`. An unknown long option does not take the next
+ * token, so a typo cannot hide a later global flag.
  */
 
-/** Long options declared `type: "boolean"` on a leaf command. They do not take the next token. */
-export const COMMAND_BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
-  "--all",
-  "--all-clusters",
-  "--disabled",
-  "--dry-run",
-  "--force",
-  "--no-push",
-  "--no-re-review",
-  "--no-require-spec",
-  "--plan-only",
-  "--re-review-only",
-  "--require-spec",
-  "--selected",
+/** Long options declared `type: "string"` on a leaf command. The next token is their value. */
+export const COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--against",
+  "--agent",
+  "--agents",
+  "--aggregator",
+  "--background",
+  "--cluster",
+  "--codex-timeout",
+  "--color",
+  "--concurrency",
+  "--config",
+  "--council",
+  "--debate-rounds",
+  "--decision",
+  "--driver-id",
+  "--execution",
+  "--focus",
+  "--from",
+  "--id",
+  "--isolation",
+  "--keep",
+  "--max-outer-cycles",
+  "--model-id",
+  "--models",
+  "--name",
+  "--options",
+  "--orchestrator",
+  "--out",
+  "--persona-prompt",
+  "--pin-sha",
+  "--planner-b",
+  "--pr",
+  "--profile",
+  "--protocol",
+  "--reason",
+  "--repair-package",
+  "--repo",
+  "--reporter",
+  "--resume",
+  "--review-models",
+  "--reviewer",
+  "--revision",
+  "--rounds",
+  "--run",
+  "--run-id",
+  "--run-timeout",
+  "--spec",
+  "--target-output",
+  "--task",
+  "--timeout",
+  "--topic",
+  "--verifier",
 ]);
 
 export interface GlobalArgPartition {
@@ -33,7 +73,7 @@ export interface GlobalArgPartition {
 
 function consumesNextToken(arg: string): boolean {
   if (!arg.startsWith("--") || arg.length <= 2 || arg.includes("=")) return false;
-  return !COMMAND_BOOLEAN_FLAGS.has(arg);
+  return COMMAND_VALUE_FLAGS.has(arg);
 }
 
 export function partitionGlobalArgs(args: readonly string[]): GlobalArgPartition {
