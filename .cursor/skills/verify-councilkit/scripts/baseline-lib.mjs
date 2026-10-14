@@ -1,9 +1,11 @@
 /**
- * Shared helpers for the baseline-relative lint and test steps.
- * Pure comparisons live here so a self-test can pin them without Biome or Vitest.
+ * Shared helpers for the baseline-relative lint, test, and e2e steps.
+ * Pure comparisons live here so a self-test can pin them without Biome, Vitest, or Playwright.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const LINT_PREFIXES = ["src/", "shared/", "runtime-host/", "tests/", "scripts/", "cli/"];
@@ -333,7 +335,113 @@ export function compareFailingTests(headNames, baselineNames) {
   };
 }
 
-export function readBaselineCache(file, mergeBase, nodeVersion) {
+/**
+ * Playwright JSON paths are already repo-relative. Absolute paths are stripped
+ * against `repoRoot`. Relative paths are left as written so a worktree report
+ * parsed from another cwd does not pick up that cwd's realpath.
+ */
+export function normalizeE2eFile(file, repoRoot) {
+  let text = String(file ?? "").replaceAll("\\", "/");
+  if (text.startsWith("./")) text = text.slice(2);
+  if (!text) return "<unknown>";
+  if (!text.startsWith("/") || !repoRoot) return text;
+  let root = String(repoRoot).replaceAll("\\", "/").replace(/\/$/, "");
+  try {
+    root = realpathSync(repoRoot).replaceAll("\\", "/");
+  } catch {
+    // The self-test uses a path that is not on disk.
+  }
+  try {
+    text = realpathSync(text).replaceAll("\\", "/");
+  } catch {
+    // Keep the absolute text when the file is gone.
+  }
+  if (text === root) return "<root>";
+  if (text.startsWith(`${root}/`)) return text.slice(root.length + 1);
+  return text;
+}
+
+function e2eTestFailed(test) {
+  const status = test?.status;
+  if (status === "unexpected" || status === "flaky") return true;
+  if (status === "expected" || status === "skipped") return false;
+  return (test?.results ?? []).some(
+    (result) => result?.status === "failed" || result?.status === "timedOut",
+  );
+}
+
+function walkE2eInterrupted(suite) {
+  for (const spec of suite?.specs ?? []) {
+    for (const test of spec.tests ?? []) {
+      for (const result of test.results ?? []) {
+        if (result?.status === "interrupted") return true;
+      }
+    }
+  }
+  for (const child of suite?.suites ?? []) {
+    if (walkE2eInterrupted(child)) return true;
+  }
+  return false;
+}
+
+/** A partial or empty JSON report cannot be compared. Null means usable. */
+export function e2eReportProblem(report) {
+  if (!report || typeof report !== "object") return "playwright JSON report is empty";
+  const stats = report.stats;
+  const counts = [stats?.expected, stats?.unexpected, stats?.skipped, stats?.flaky];
+  if (counts.some((value) => typeof value !== "number")) return "playwright JSON report has no stats";
+  const total = counts.reduce((sum, value) => sum + value, 0);
+  if (total === 0) return "playwright JSON report contains no tests";
+  for (const suite of report.suites ?? []) {
+    if (walkE2eInterrupted(suite)) {
+      return "playwright run was interrupted before the suite finished";
+    }
+  }
+  return null;
+}
+
+function collectE2eTests(suite, ancestors, inheritedFile, repoRoot, tests, projects) {
+  const file = normalizeE2eFile(suite?.file || inheritedFile, repoRoot);
+  const title = String(suite?.title ?? "").trim();
+  const next = title && title !== file ? [...ancestors, title] : ancestors;
+  for (const spec of suite?.specs ?? []) {
+    const specTitle = String(spec?.title ?? "").trim();
+    const titles = specTitle ? [...next, specTitle] : [...next];
+    const specFile = normalizeE2eFile(spec?.file || file, repoRoot);
+    for (const test of spec?.tests ?? []) {
+      const project = String(test?.projectName ?? "").trim();
+      if (project) projects.add(project);
+      tests.push({ file: specFile, titles, test });
+    }
+  }
+  for (const child of suite?.suites ?? []) {
+    collectE2eTests(child, next, file, repoRoot, tests, projects);
+  }
+}
+
+/**
+ * Failing Playwright ids. `<file> :: <title path>`. The file-suite title is
+ * dropped because Playwright sets it to the file path. With more than one
+ * project, the id ends with ` [<project>]`.
+ */
+export function failingE2eNames(report, repoRoot) {
+  const tests = [];
+  const projects = new Set();
+  for (const suite of report?.suites ?? []) {
+    collectE2eTests(suite, [], suite?.file || "", repoRoot, tests, projects);
+  }
+  const qualifyProject = projects.size > 1;
+  const names = new Set();
+  for (const item of tests) {
+    if (!e2eTestFailed(item.test)) continue;
+    const project = String(item.test?.projectName ?? "").trim();
+    const suffix = qualifyProject && project ? ` [${project}]` : "";
+    names.add(`${item.file} :: ${item.titles.join(" > ")}${suffix}`);
+  }
+  return [...names].sort();
+}
+
+export function readBaselineCache(file, mergeBase, nodeVersion, expect) {
   let data;
   try {
     data = JSON.parse(readFileSync(file, "utf8"));
@@ -343,6 +451,7 @@ export function readBaselineCache(file, mergeBase, nodeVersion) {
   if (!data || data.schema !== 1) return null;
   if (data.mergeBase !== mergeBase) return null;
   if (data.node !== nodeVersion) return null;
+  if (expect && expect.suiteKey !== undefined && data.suiteKey !== expect.suiteKey) return null;
   if (!Array.isArray(data.failing) || data.failing.some((item) => typeof item !== "string")) {
     return null;
   }
@@ -494,6 +603,153 @@ function runSelfTest() {
   const unchanged = compareFailingTests(names, names);
   assertEqual(unchanged.newFailures, [], "identical sets pass");
 
+  const e2eReport = {
+    stats: { expected: 1, unexpected: 2, skipped: 1, flaky: 1 },
+    suites: [
+      {
+        title: "tests/e2e/cli-reports.spec.ts",
+        file: "tests/e2e/cli-reports.spec.ts",
+        specs: [
+          {
+            title: "侧栏有「报告」",
+            ok: true,
+            tests: [{ projectName: "chromium", status: "expected", results: [{ status: "passed" }] }],
+          },
+          {
+            title: "复制报告内容",
+            ok: false,
+            tests: [{ projectName: "chromium", status: "unexpected", results: [{ status: "failed" }] }],
+          },
+        ],
+      },
+      {
+        title: "tests/e2e/control.spec.ts",
+        file: "/repo/tests/e2e/control.spec.ts",
+        specs: [],
+        suites: [
+          {
+            title: "scope controller and observer pages",
+            file: "tests/e2e/control.spec.ts",
+            specs: [
+              {
+                title: "observer is fenced",
+                ok: false,
+                tests: [
+                  { projectName: "chromium", status: "unexpected", results: [{ status: "timedOut" }] },
+                ],
+              },
+              {
+                title: "skipped after failure",
+                ok: true,
+                tests: [{ projectName: "chromium", status: "skipped", results: [{ status: "skipped" }] }],
+              },
+              {
+                title: "flaky copy",
+                ok: true,
+                tests: [{ projectName: "chromium", status: "flaky", results: [{ status: "failed" }] }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  if (e2eReportProblem(e2eReport) !== null) throw new Error("a finished report is usable");
+  assertEqual(
+    failingE2eNames(e2eReport, "/repo"),
+    [
+      "tests/e2e/cli-reports.spec.ts :: 复制报告内容",
+      "tests/e2e/control.spec.ts :: scope controller and observer pages > flaky copy",
+      "tests/e2e/control.spec.ts :: scope controller and observer pages > observer is fenced",
+    ],
+    "e2e failing ids",
+  );
+  const multiProject = {
+    stats: { expected: 1, unexpected: 1, skipped: 0, flaky: 0 },
+    suites: [
+      {
+        title: "tests/e2e/a.spec.ts",
+        file: "tests/e2e/a.spec.ts",
+        specs: [
+          {
+            title: "same title",
+            tests: [
+              { projectName: "chromium", status: "expected", results: [{ status: "passed" }] },
+              { projectName: "firefox", status: "unexpected", results: [{ status: "failed" }] },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  assertEqual(
+    failingE2eNames(multiProject, "/repo"),
+    ["tests/e2e/a.spec.ts :: same title [firefox]"],
+    "project suffix only when more than one project is present",
+  );
+  const e2eCompared = compareFailingTests(failingE2eNames(e2eReport, "/repo"), [
+    "tests/e2e/cli-reports.spec.ts :: 复制报告内容",
+    "tests/e2e/security.spec.ts :: security gates > canonical origin",
+  ]);
+  assertEqual(
+    e2eCompared.newFailures,
+    [
+      "tests/e2e/control.spec.ts :: scope controller and observer pages > flaky copy",
+      "tests/e2e/control.spec.ts :: scope controller and observer pages > observer is fenced",
+    ],
+    "new e2e ids",
+  );
+  assertEqual(e2eReportProblem({ stats: { expected: 0, unexpected: 0, skipped: 0, flaky: 0 }, suites: [] }), "playwright JSON report contains no tests", "empty e2e report");
+  assertEqual(
+    e2eReportProblem({
+      stats: { expected: 0, unexpected: 0, skipped: 1, flaky: 0 },
+      suites: [
+        {
+          title: "tests/e2e/a.spec.ts",
+          file: "tests/e2e/a.spec.ts",
+          specs: [
+            {
+              title: "stops",
+              tests: [{ projectName: "chromium", status: "skipped", results: [{ status: "interrupted" }] }],
+            },
+          ],
+        },
+      ],
+    }),
+    "playwright run was interrupted before the suite finished",
+    "interrupted e2e report",
+  );
+
+  const cacheDir = mkdtempSync(join(tmpdir(), "verify-e2e-cache-"));
+  try {
+    const cacheFile = join(cacheDir, "failing-e2e.json");
+    const mergeBase = "a".repeat(40);
+    writeFileSync(
+      cacheFile,
+      JSON.stringify({
+        schema: 1,
+        mergeBase,
+        node: "v22.20.0",
+        suiteKey: "playwright.config.ts@isolated",
+        failing: ["tests/e2e/a.spec.ts :: one"],
+      }),
+    );
+    if (!readBaselineCache(cacheFile, mergeBase, "v22.20.0", { suiteKey: "playwright.config.ts@isolated" })) {
+      throw new Error("suite cache should hit");
+    }
+    if (readBaselineCache(cacheFile, mergeBase, "v22.20.0", { suiteKey: "playwright.preview.config.ts@fixed:4179" })) {
+      throw new Error("a different suiteKey is a cache miss");
+    }
+    if (!readBaselineCache(cacheFile, mergeBase, "v22.20.0")) {
+      throw new Error("omitting suiteKey still reads the file");
+    }
+    if (readBaselineCache(cacheFile, mergeBase, "v22.21.0", { suiteKey: "playwright.config.ts@isolated" })) {
+      throw new Error("a different node version is a cache miss");
+    }
+  } finally {
+    rmSync(cacheDir, { recursive: true, force: true });
+  }
+
   if (isNonProductPath("src/app.tsx")) throw new Error("src is product");
   if (!isNonProductPath(".cursor/skills/verify-councilkit/SKILL.md")) {
     throw new Error("skill path is non-product");
@@ -511,7 +767,9 @@ const invokedDirectly =
 if (invokedDirectly) {
   if (process.argv.includes("--self-test")) runSelfTest();
   else {
-    process.stderr.write("baseline-lib.mjs is a library. Run lint-baseline.mjs or test-baseline.mjs.\n");
+    process.stderr.write(
+      "baseline-lib.mjs is a library. Run lint-baseline.mjs, test-baseline.mjs, or e2e-baseline.mjs.\n",
+    );
     process.exit(2);
   }
 }

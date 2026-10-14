@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Pre-merge gate for an unattended CouncilKit hunt.
 # Order, fail-fast: install (only if needed), typecheck, baseline-relative
-# lint, baseline-relative test, build, then Playwright when the diff touches
-# src or UI.
+# lint, baseline-relative test, build, then baseline-relative Playwright when
+# the diff touches src or UI. The e2e step fails only on new failing ids.
+# Home-landing screenshots are captured whenever that step runs.
 set -euo pipefail
 
 SCRIPT_SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -180,17 +181,32 @@ port_busy() {
   [[ -n "$pids" ]]
 }
 
+choose_broad_e2e() {
+  E2E_PORT=$(node "$SCRIPT_DIR/proc.mjs" free-port)
+  E2E_SUITE="playwright.config.ts"
+  E2E_PORT_MODE="isolated"
+  E2E_DETAIL="pnpm exec playwright test -c playwright.config.ts --reporter=json COUNCILKIT_E2E_PORT=$E2E_PORT"
+}
+
+choose_fixed_e2e() {
+  local suite="$1"
+  local port="$2"
+  E2E_SUITE="$suite"
+  E2E_PORT="$port"
+  E2E_PORT_MODE="fixed:$port"
+  E2E_DETAIL="pnpm exec playwright test -c $suite --reporter=json (fixed port $port)"
+}
+
 pick_e2e() {
   E2E_DETAIL=""
-  E2E_CMD=()
+  E2E_SUITE=""
+  E2E_PORT=""
+  E2E_PORT_MODE=""
   if [[ "$FORCE_E2E" -eq 0 && "$NO_BASE" -eq 0 && -z "$UI_FILES" ]]; then
     E2E_DETAIL="diff does not touch src or UI; pnpm test:e2e skipped"
     return 1
   fi
   local only="$UI_FILES"
-  if [[ "$NO_BASE" -eq 1 || "$FORCE_E2E" -eq 1 ]]; then
-    only="$UI_FILES"
-  fi
   local broad=0
   if [[ "$NO_BASE" -eq 1 || "$FORCE_E2E" -eq 1 ]]; then
     broad=1
@@ -202,42 +218,60 @@ pick_e2e() {
     broad=1
   fi
   if [[ "$broad" -eq 1 ]]; then
-    E2E_PORT=$(node "$SCRIPT_DIR/proc.mjs" free-port)
-    E2E_CMD=(env "COUNCILKIT_E2E_PORT=$E2E_PORT" pnpm test:e2e)
-    E2E_DETAIL="pnpm test:e2e COUNCILKIT_E2E_PORT=$E2E_PORT"
+    choose_broad_e2e
     return 0
   fi
   local kinds=0
   if printf '%s\n' "$only" | grep -qE '^(tests/e2e/review-explainer/|playwright\.review-explainer\.config\.ts$)'; then
     kinds=$((kinds + 1))
-    E2E_CMD=(pnpm test:e2e:review-explainer)
-    E2E_PORT=43839
-    E2E_DETAIL="pnpm test:e2e:review-explainer (fixed port 43839)"
+    choose_fixed_e2e "playwright.review-explainer.config.ts" 43839
   fi
   if printf '%s\n' "$only" | grep -qE '^tests/e2e/repair-observability/'; then
     kinds=$((kinds + 1))
-    E2E_CMD=(pnpm test:e2e:repair-observability)
-    E2E_PORT=43837
-    E2E_DETAIL="pnpm test:e2e:repair-observability (fixed port 43837)"
+    choose_fixed_e2e "playwright.repair-observability.config.ts" 43837
   fi
   if printf '%s\n' "$only" | grep -qx 'tests/e2e/repair-panel-ui.spec.ts'; then
     kinds=$((kinds + 1))
-    E2E_CMD=(pnpm exec playwright test -c playwright.repair-ui.config.ts)
-    E2E_PORT=4188
-    E2E_DETAIL="pnpm exec playwright test -c playwright.repair-ui.config.ts (fixed port 4188)"
+    choose_fixed_e2e "playwright.repair-ui.config.ts" 4188
   fi
   if printf '%s\n' "$only" | grep -qx 'tests/e2e/finding-ledger-layout.spec.ts'; then
     kinds=$((kinds + 1))
-    E2E_CMD=(pnpm exec playwright test -c playwright.preview.config.ts)
-    E2E_PORT=4179
-    E2E_DETAIL="pnpm exec playwright test -c playwright.preview.config.ts (fixed port 4179)"
+    choose_fixed_e2e "playwright.preview.config.ts" 4179
   fi
   if [[ "$kinds" -ne 1 ]]; then
-    E2E_PORT=$(node "$SCRIPT_DIR/proc.mjs" free-port)
-    E2E_CMD=(env "COUNCILKIT_E2E_PORT=$E2E_PORT" pnpm test:e2e)
-    E2E_DETAIL="pnpm test:e2e COUNCILKIT_E2E_PORT=$E2E_PORT"
+    choose_broad_e2e
   fi
   return 0
+}
+
+append_extra_detail() {
+  local file="$1"
+  local note="$2"
+  [[ -f "$file" ]] || return 0
+  node --input-type=module - "$file" "$note" <<'NODE'
+import { readFileSync, writeFileSync } from "node:fs";
+const [file, note] = process.argv.slice(2);
+const data = JSON.parse(readFileSync(file, "utf8"));
+data.detail = data.detail ? `${data.detail}; ${note}` : note;
+writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+NODE
+}
+
+run_e2e_baseline() {
+  local -a cmd
+  cmd=(
+    node "$SCRIPT_DIR/e2e-baseline.mjs"
+    --extra-out "$EVIDENCE/logs/e2e.extra.json"
+    --report-out "$EVIDENCE/logs/playwright.json"
+    --artifacts-out "$EVIDENCE/e2e"
+    --suite "$E2E_SUITE"
+    --port-mode "$E2E_PORT_MODE"
+  )
+  if [[ "$E2E_PORT_MODE" == "isolated" ]]; then
+    env "COUNCILKIT_E2E_PORT=$E2E_PORT" "${cmd[@]}"
+  else
+    env -u COUNCILKIT_E2E_PORT "${cmd[@]}"
+  fi
 }
 
 capture_screenshots() {
@@ -262,7 +296,7 @@ run_e2e() {
     record_step e2e skip 0 "" "$E2E_DETAIL" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     return 0
   fi
-  if [[ "${E2E_PORT:-}" != "" && "${E2E_DETAIL}" != COUNCILKIT_E2E_PORT* && "${E2E_DETAIL}" != *COUNCILKIT_E2E_PORT* ]]; then
+  if [[ "$E2E_PORT_MODE" == fixed:* ]]; then
     if port_busy "$E2E_PORT"; then
       local started
       started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -275,7 +309,7 @@ run_e2e() {
       exit 1
     fi
   fi
-  local started code
+  local started code shot_code shot_note
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   code=0
   set +e
@@ -284,34 +318,37 @@ run_e2e() {
     echo "command: ${E2E_DETAIL}"
     echo "ui files:"
     printf '%s\n' "$UI_FILES"
-    "${E2E_CMD[@]}"
+    run_e2e_baseline
   } >"$EVIDENCE/logs/e2e.log" 2>&1
   code=$?
   set -e
-  mkdir -p "$EVIDENCE/e2e"
-  if [[ -d "$ROOT/test-results" ]]; then
-    cp -a "$ROOT/test-results" "$EVIDENCE/e2e/test-results" || true
-  fi
-  if [[ -d "$ROOT/playwright-report" ]]; then
-    cp -a "$ROOT/playwright-report" "$EVIDENCE/e2e/playwright-report" || true
-  fi
-  if [[ "$code" -ne 0 ]]; then
-    record_step e2e fail "$code" "logs/e2e.log" "$E2E_DETAIL" "$started"
-    finish false
-    echo "gate failed at e2e (exit ${code}). Log: $EVIDENCE/logs/e2e.log" >&2
-    exit "$code"
-  fi
+  # Realistic UI evidence, including when every Playwright failure is already in the baseline.
   set +e
   capture_screenshots >"$EVIDENCE/logs/e2e-screenshots.log" 2>&1
-  local shot_code=$?
+  shot_code=$?
   set -e
+  if [[ "$shot_code" -eq 0 ]]; then
+    shot_note="screenshots in drive/home-landing/"
+  else
+    shot_note="screenshot drive failed"
+  fi
+  append_extra_detail "$EVIDENCE/logs/e2e.extra.json" "$shot_note" || true
+  if [[ "$code" -ne 0 ]]; then
+    record_step e2e fail "$code" "logs/e2e.log" "$E2E_DETAIL; $shot_note" "$started"
+    finish false
+    echo "gate failed at e2e (exit ${code}). Log: $EVIDENCE/logs/e2e.log" >&2
+    if [[ -f "$EVIDENCE/logs/e2e.extra.json" ]]; then
+      node --input-type=commonjs -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (data.detail) console.error(data.detail);' "$EVIDENCE/logs/e2e.extra.json" >&2 || true
+    fi
+    exit "$code"
+  fi
   if [[ "$shot_code" -ne 0 ]]; then
-    record_step e2e fail "$shot_code" "logs/e2e-screenshots.log" "$E2E_DETAIL; screenshot drive failed" "$started"
+    record_step e2e fail "$shot_code" "logs/e2e-screenshots.log" "$E2E_DETAIL; $shot_note" "$started"
     finish false
     echo "gate failed while capturing UI screenshots (exit ${shot_code})." >&2
     exit "$shot_code"
   fi
-  record_step e2e pass 0 "logs/e2e.log" "$E2E_DETAIL; screenshots in drive/home-landing/" "$started"
+  record_step e2e pass 0 "logs/e2e.log" "$E2E_DETAIL; $shot_note" "$started"
 }
 
 run_e2e
