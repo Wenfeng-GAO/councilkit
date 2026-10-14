@@ -183,6 +183,18 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+function waitForAbort(signal: AbortSignal | null): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+    if (!signal) return;
+    if (signal.aborted) {
+      fail();
+      return;
+    }
+    signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
 function errorResponse(status: number, code: string, message: string): Response {
   return new Response(JSON.stringify({ ok: false, error: { code, message } }), {
     status,
@@ -210,9 +222,12 @@ class FakeHost {
   activateCalls: string[] = [];
   ackTombstones = 0;
   private eventStreamFailuresRemaining = 0;
+  private executeResponseDropsRemaining = 0;
   private eventStreamFetchRejectionsRemaining = 0;
   private eventStreamBodyResetsRemaining = 0;
   private executionStatusFailuresRemaining = 0;
+  /** "reject" answers 503. "hang" never answers until the request AbortSignal fires. */
+  private cancelFault: "ok" | "reject" | "hang" = "ok";
 
   private readonly prewarmFailures = new Set<string>();
   private readonly scopes = new Map<string, FakeScope>();
@@ -248,15 +263,22 @@ class FakeHost {
     this.activateCalls = [];
     this.ackTombstones = 0;
     this.eventStreamFailuresRemaining = 0;
+    this.executeResponseDropsRemaining = 0;
     this.eventStreamFetchRejectionsRemaining = 0;
     this.eventStreamBodyResetsRemaining = 0;
     this.executionStatusFailuresRemaining = 0;
+    this.cancelFault = "ok";
     this.ackBehavior = "ok";
     this.onCreateScope = null;
   }
 
   failNextEventStreams(count: number): void {
     this.eventStreamFailuresRemaining = count;
+  }
+
+  /** Accept the turn, then drop the HTTP response so the client sees a fault. */
+  dropNextExecuteResponses(count: number): void {
+    this.executeResponseDropsRemaining = count;
   }
 
   rejectNextEventStreamFetches(count: number): void {
@@ -269,6 +291,16 @@ class FakeHost {
 
   failNextExecutionStatuses(count: number): void {
     this.executionStatusFailuresRemaining = count;
+  }
+
+  /** Cancel is attempted, then the host rejects it. The execution stays running. */
+  failNextCancel(): void {
+    this.cancelFault = "reject";
+  }
+
+  /** Cancel is attempted, then the socket never answers. AbortSignal ends the wait. */
+  hangNextCancel(): void {
+    this.cancelFault = "hang";
   }
 
   openStreams(executionId: string): number {
@@ -324,6 +356,10 @@ class FakeHost {
       autoClose: true,
       streams: new Set(),
     });
+  }
+
+  executionState(executionId: string): string | null {
+    return this.executions.get(executionId)?.state ?? null;
   }
 
   /** Append a stamped event, buffer it and fan it out to open streams. */
@@ -433,7 +469,7 @@ class FakeHost {
       return this.handleAck(scopeId, executionId, body);
     }
     if (method === "POST" && segments.length === 7 && segments[6] === "cancel") {
-      return this.handleCancel(scopeId, executionId, body);
+      return this.handleCancel(scopeId, executionId, body, init?.signal ?? null);
     }
     return errorResponse(404, "NOT_FOUND", "unknown route");
   };
@@ -596,6 +632,10 @@ class FakeHost {
       scopeId,
     });
     this.emit(execution.executionId, { type: "started", requestedModel: participant.modelId });
+    if (this.executeResponseDropsRemaining > 0) {
+      this.executeResponseDropsRemaining -= 1;
+      throw new TypeError("response lost (simulated)");
+    }
     if (plan.kind === "complete") {
       const callNumber = this.executeCalls.filter(
         (call) => call.participantId === request.participantId,
@@ -772,11 +812,12 @@ class FakeHost {
     return respond({ executionId, ackState: "acknowledged", disposition: request.disposition });
   }
 
-  private handleCancel(
+  private async handleCancel(
     scopeId: string,
     executionId: string,
     body: Record<string, unknown> | null,
-  ): Response {
+    signal: AbortSignal | null,
+  ): Promise<Response> {
     const scopeOrError = this.requireScope(scopeId);
     if (scopeOrError instanceof Response) return scopeOrError;
     const stale = this.fenced(scopeOrError, body);
@@ -786,6 +827,13 @@ class FakeHost {
     if (!execution || execution.scopeId !== scopeId) {
       return errorResponse(404, "EXECUTION_NOT_FOUND", "unknown execution");
     }
+    this.cancelCalls.push({ scopeId, executionId });
+    if (this.cancelFault === "hang") {
+      await waitForAbort(signal);
+    }
+    if (this.cancelFault === "reject") {
+      return errorResponse(503, "UNAVAILABLE", "cancel failed");
+    }
     if (execution.state === "running") {
       this.emit(executionId, {
         type: "interrupted",
@@ -794,7 +842,6 @@ class FakeHost {
         toolState: "none",
       });
     }
-    this.cancelCalls.push({ scopeId, executionId });
     return jsonResponse({ executionId, state: "cancelling" });
   }
 
@@ -1859,6 +1906,119 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.executeCalls).toHaveLength(1);
   });
 
+  it("8i. giving up on a still-running turn cancels that host execution", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    const executionId = host.executeCalls[0]?.executionId as string;
+    expect(host.executionState(executionId)).toBe("running");
+    host.failNextEventStreams(5);
+    host.dropStreams(executionId);
+
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("INTERRUPTED_UNKNOWN");
+    expect(host.executeCalls).toHaveLength(1);
+    expect(host.cancelCalls).toEqual([expect.objectContaining({ executionId })]);
+    expect(host.executionState(executionId)).toBe("interrupted");
+  });
+
+  it("8j. giving up after repeated status failures cancels the live host execution", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    const executionId = host.executeCalls[0]?.executionId as string;
+    host.failNextEventStreams(5);
+    host.failNextExecutionStatuses(5);
+    host.dropStreams(executionId);
+
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("INTERRUPTED_UNKNOWN");
+    expect(host.executeCalls).toHaveLength(1);
+    expect(host.cancelCalls).toEqual([expect.objectContaining({ executionId })]);
+    expect(host.executionState(executionId)).toBe("interrupted");
+  });
+
+  it("8k. a lost execute response cancels the turn the host already accepted", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.dropNextExecuteResponses(1);
+
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(host.executeCalls).toHaveLength(1);
+    const executionId = host.executeCalls[0]?.executionId as string;
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("failed");
+    expect(execution?.error?.code).toBe("DISPATCH_FAILED");
+    expect(host.cancelCalls).toEqual([expect.objectContaining({ executionId })]);
+    expect(host.executionState(executionId)).toBe("interrupted");
+  });
+
+  it("8l. a rejected cancel still marks the lost turn failed locally", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.dropNextExecuteResponses(1);
+    host.failNextCancel();
+
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(round?.pauseReason?.detail).toBe("response lost (simulated)");
+    expect(host.executeCalls).toHaveLength(1);
+    const call = host.executeCalls[0];
+    const executionId = call?.executionId as string;
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("failed");
+    expect(execution?.error?.code).toBe("DISPATCH_FAILED");
+    expect(host.cancelCalls).toEqual([{ scopeId: call?.scopeId, executionId }]);
+    expect(host.executionState(executionId)).toBe("running");
+  });
+
+  it("8m. a cancel that never answers still marks the lost turn failed locally", async () => {
+    // The cancel promise settles only when the helper's deadline aborts it.
+    // Without that deadline this test hits the vitest timeout.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.dropNextExecuteResponses(1);
+    host.hangNextCancel();
+
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(round?.pauseReason?.detail).toBe("response lost (simulated)");
+    expect(host.executeCalls).toHaveLength(1);
+    const call = host.executeCalls[0];
+    const executionId = call?.executionId as string;
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("failed");
+    expect(execution?.error?.code).toBe("DISPATCH_FAILED");
+    expect(host.cancelCalls).toEqual([{ scopeId: call?.scopeId, executionId }]);
+    expect(host.executionState(executionId)).toBe("running");
+  }, 25_000);
+
   it("9. startup audit classifies prepared / running-404 / running-known / committed", async () => {
     async function seedRoomWithExecution(index: number): Promise<{
       room: DiscussionRoom;
@@ -1985,6 +2145,10 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.getExecutionCalls).toContain(b.executionId);
     expect(host.getExecutionCalls).toContain(c.executionId);
     expect(host.getExecutionCalls).not.toContain(a.executionId);
+    // A never reached the host. B is already gone (404). Only the still-running
+    // C must be cancelled, or the participant stays busy after reload.
+    expect(host.cancelCalls).toEqual([{ scopeId: "scope-audit-3", executionId: c.executionId }]);
+    expect(host.executionState(c.executionId)).toBe("interrupted");
   });
 
   it("10. hands control to a second client with a higher epoch; the old token is rejected", async () => {
