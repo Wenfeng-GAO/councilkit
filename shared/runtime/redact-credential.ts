@@ -94,7 +94,7 @@ export function redactCredentialMaterial(
 ): string {
   const extra = new Set((options.extraExactKeys ?? []).map((key) => key.toLowerCase()));
   let out = redactAssignments(input, placeholder, extra);
-  out = out.replace(/\b(Bearer[ \t]+)[A-Za-z0-9._~+/=-]+/gi, `$1${placeholder}`);
+  out = out.replace(/\b(Bearer[ \t]+)[^\s"'}\]]+/gi, `$1${placeholder}`);
   for (const shape of knownShapes()) out = out.replace(shape, placeholder);
   return out;
 }
@@ -125,14 +125,20 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
     // A quoted key (`"cookie":`) is JSON, so the value stays one string.
     if (!match[1] && separator.includes(":") && isCookieName(key)) {
       const valueEnd = indexOfLineEnd(input, valueStart);
-      const headEnd = valueStart - separator.length;
-      out += input.slice(cursor, headEnd);
-      out += separator;
-      out += placeholder;
+      out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
       cursor = valueEnd;
       continue;
     }
-    if (opener === "{" || opener === "[") continue;
+    // `{` / `[` on an authorization key is a structured record, not a header
+    // value (`{"authorization":{"authority_ref":…}}` stays). Any other
+    // credential value that starts with `{` or `[` is the secret itself.
+    if ((opener === "{" || opener === "[") && isAuthorizationCredentialKey(key)) continue;
+    if (opener === "{" || opener === "[") {
+      const valueEnd = scanBracketValueEnd(input, valueStart);
+      out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
+      cursor = valueEnd;
+      continue;
+    }
     if (opener === '"' || opener === "'") {
       const close = scanQuotedEnd(input, valueStart);
       const quoted = close >= 0;
@@ -144,14 +150,23 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
       continue;
     }
     const valueEnd = scanUnquotedValueEnd(input, valueStart);
-    const headEnd = valueStart - separator.length;
-    out += input.slice(cursor, headEnd);
-    out += separator.includes(":") ? separator : "=";
-    out += placeholder;
+    out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
     cursor = valueEnd;
   }
   out += input.slice(cursor);
   return out;
+}
+
+function collapsedAssignment(
+  input: string,
+  cursor: number,
+  valueStart: number,
+  separator: string,
+  placeholder: string,
+): string {
+  const headEnd = valueStart - separator.length;
+  const sep = separator.includes(":") ? separator : "=";
+  return input.slice(cursor, headEnd) + sep + placeholder;
 }
 
 function scanQuotedEnd(input: string, openIndex: number): number {
@@ -177,10 +192,62 @@ function indexOfLineEnd(input: string, start: number): number {
   return input.length;
 }
 
+function scanBearerTokenEnd(input: string, start: number): number {
+  // Comma stays inside the token (`Bearer abc,def`). Quotes and closers do not,
+  // so a JSON string around the token keeps its delimiter.
+  const match = /^bearer[ \t]+[^\s"'}\]]+/i.exec(input.slice(start));
+  if (!match) return -1;
+  return start + match[0].length;
+}
+
+function scanBracketValueEnd(input: string, start: number): number {
+  const stack: string[] = [];
+  let quote: string | null = null;
+  for (let i = start; i < input.length; i += 1) {
+    const char = input[i];
+    if (quote) {
+      if (char === "\\") {
+        i += 1;
+        continue;
+      }
+      if (char === "\n" || char === "\r") return i;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "\n" || char === "\r") return i;
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      stack.push(char === "{" ? "}" : "]");
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      if (stack.length === 0 || stack[stack.length - 1] !== char) return i;
+      stack.pop();
+      if (stack.length === 0) return i + 1;
+    }
+  }
+  return input.length;
+}
+
 function scanUnquotedValueEnd(input: string, start: number): number {
+  const bearerEnd = scanBearerTokenEnd(input, start);
+  if (bearerEnd > start) return bearerEnd;
   let i = start;
   while (i < input.length) {
     const char = input[i];
+    // A glued `;` is still the value (`password=foo;bar`). A `;` before
+    // whitespace is a field separator (`cookie=a; b cookie=c`, `key=v; tail`).
+    if (char === ";") {
+      const next = input[i + 1];
+      if (next === undefined || next === " " || next === "\t" || next === "\n" || next === "\r") {
+        return i;
+      }
+      i += 1;
+      continue;
+    }
     if (
       char === " " ||
       char === "\t" ||
@@ -189,7 +256,6 @@ function scanUnquotedValueEnd(input: string, start: number): number {
       char === "," ||
       char === "&" ||
       char === "}" ||
-      char === ";" ||
       char === '"' ||
       char === "'"
     ) {

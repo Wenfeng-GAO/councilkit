@@ -6,6 +6,7 @@
  * Exported diagnostics, observation text, publish messages, driver diagnostics,
  * and CLI redact all share that hole.
  */
+import { redactCredentialMaterial } from "@shared/runtime/redact-credential";
 import { redactObservationText, redactObservationValue } from "@shared/runtime/repair-observation";
 import { sanitizePublishMessage } from "@shared/runtime/squad-bridge-contract";
 import { describe, expect, it } from "vitest";
@@ -21,22 +22,17 @@ const ASSIGNMENTS = [
   "MY_TOKEN=plainMYTOKEN",
 ].join(" ");
 
-const SECRETS = [
-  "plainTOKENLEAK",
-  "plainAPILEAK",
-  "awsLEAKSECRET",
-  "askpass-LEAK",
-  "plainMYTOKEN",
-  "pwLEAK",
-  "keyLEAK",
-  "structLEAK",
-  "promptLEAK",
-  "atLEAK",
-  "plainANTHROPIC",
-];
+const REDACTED_ASSIGNMENTS = [
+  "GITHUB_TOKEN=[redacted]",
+  "OPENAI_API_KEY=[redacted]",
+  "AWS_SECRET_ACCESS_KEY=[redacted]",
+  "GIT_ASKPASS=[redacted]",
+  "MY_TOKEN=[redacted]",
+].join(" ");
 
-function expectSecretsGone(text: string): void {
-  for (const secret of SECRETS) {
+function expectSecretsGone(text: string, source: string, secrets: readonly string[]): void {
+  for (const secret of secrets) {
+    expect(source, `planted ${secret}`).toContain(secret);
     expect(text, secret).not.toContain(secret);
   }
 }
@@ -64,7 +60,22 @@ describe("prefixed and structural credential redaction", () => {
       problems: logger.recentProblems(),
       diagnostics: logger.diagnostics(),
     });
-    expectSecretsGone(exported);
+    expectSecretsGone(
+      exported,
+      `${ASSIGNMENTS} pwLEAK keyLEAK structLEAK promptLEAK plainANTHROPIC`,
+      [
+        "plainTOKENLEAK",
+        "plainAPILEAK",
+        "awsLEAKSECRET",
+        "askpass-LEAK",
+        "plainMYTOKEN",
+        "pwLEAK",
+        "keyLEAK",
+        "structLEAK",
+        "promptLEAK",
+        "plainANTHROPIC",
+      ],
+    );
     expect(exported).toContain("cursor-keep");
     expect(exported).toContain('"input_tokens":12');
     expect(exported).toContain("keep-persona");
@@ -77,10 +88,16 @@ describe("prefixed and structural credential redaction", () => {
   });
 
   it("drops them from observation text and structural records", () => {
-    const text = redactObservationText(
-      `${ASSIGNMENTS}\n{"access_token":"atLEAK"}\nhttps://example.test/hook?token=atLEAK`,
-    );
-    expectSecretsGone(text);
+    const observed = `${ASSIGNMENTS}\n{"access_token":"atLEAK"}\nhttps://example.test/hook?token=atLEAK`;
+    const text = redactObservationText(observed);
+    expectSecretsGone(text, observed, [
+      "plainTOKENLEAK",
+      "plainAPILEAK",
+      "awsLEAKSECRET",
+      "askpass-LEAK",
+      "plainMYTOKEN",
+      "atLEAK",
+    ]);
     expect(text).toContain("[REDACTED]");
     expect(redactObservationText("personaPrompt=keep-persona")).toContain("keep-persona");
 
@@ -100,14 +117,17 @@ describe("prefixed and structural credential redaction", () => {
   });
 
   it("drops them from publish diagnostics, driver terminal text, and CLI redact", () => {
-    const published = sanitizePublishMessage(
-      `${ASSIGNMENTS} {"access_token":"atLEAK"} token = spaced-LEAK`,
-    );
-    expect(published).not.toContain("plainTOKENLEAK");
-    expect(published).not.toContain("plainAPILEAK");
-    expect(published).not.toContain("awsLEAKSECRET");
-    expect(published).not.toContain("atLEAK");
-    expect(published).not.toContain("spaced-LEAK");
+    const publishSource = `${ASSIGNMENTS} {"access_token":"atLEAK"} token = spaced-LEAK`;
+    const published = sanitizePublishMessage(publishSource);
+    expectSecretsGone(published, publishSource, [
+      "plainTOKENLEAK",
+      "plainAPILEAK",
+      "awsLEAKSECRET",
+      "askpass-LEAK",
+      "plainMYTOKEN",
+      "atLEAK",
+      "spaced-LEAK",
+    ]);
     expect(published).toContain("GITHUB_TOKEN=[redacted]");
     expect(published).toContain('"access_token":"[redacted]"');
 
@@ -136,11 +156,78 @@ describe("prefixed and structural credential redaction", () => {
       apiKey: REDACT_PLACEHOLDER,
       GITHUB_TOKEN: REDACT_PLACEHOLDER,
       nativeSession: "cursor-keep",
-      detail: expect.stringContaining("GITHUB_TOKEN=[redacted]"),
+      detail: REDACTED_ASSIGNMENTS,
     });
-    const cliText = String(redact(ASSIGNMENTS));
-    expect(cliText).not.toContain("plainTOKENLEAK");
-    expect(cliText).not.toContain("awsLEAKSECRET");
-    expect(cliText).not.toContain("plainAPILEAK");
+    expect(String(redact(ASSIGNMENTS))).toBe(REDACTED_ASSIGNMENTS);
+  });
+
+  it("redacts a bearer second word, bracket values, and a semicolon inside the value", () => {
+    const cases = [
+      ["token: Bearer PLAINSECRET", "token: [redacted]"],
+      ["api_key: Bearer PLAINSECRET", "api_key: [redacted]"],
+      ["GITHUB_TOKEN: Bearer PLAINSECRET", "GITHUB_TOKEN: [redacted]"],
+      ["password=Bearer PLAINSECRET", "password=[redacted]"],
+      ["password={braceLEAK}", "password=[redacted]"],
+      ["password=[bracketLEAK]", "password=[redacted]"],
+      ["access_token={braceLEAK}", "access_token=[redacted]"],
+      ["access_token=[bracketLEAK]", "access_token=[redacted]"],
+      ['password={"blob":"jsonLEAK"}', "password=[redacted]"],
+      ['password={ "blob": "spacedLEAK" }', "password=[redacted]"],
+      ["password={braceLEAK} tail=visible", "password=[redacted] tail=visible"],
+      ["password=foo;semiLEAK", "password=[redacted]"],
+      ["password=semiWORD; tail=visible", "password=[redacted]; tail=visible"],
+      ["Bearer abc,commaLEAK", "Bearer [redacted]"],
+      ['{"note":"Bearer commaLEAK"}', '{"note":"Bearer [redacted]"}'],
+      ["see Bearer SECRET}", "see Bearer [redacted]}"],
+      [
+        '{"authorization":{"authority_ref":"KEEPME"}}',
+        '{"authorization":{"authority_ref":"KEEPME"}}',
+      ],
+      ["https://example.test?token=queryLEAK&x=1", "https://example.test?token=[redacted]&x=1"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(redactCredentialMaterial(input, "[redacted]"), input).toBe(expected);
+    }
+
+    const raw = [
+      "token: Bearer PLAINSECRET",
+      "password={braceLEAK}",
+      "access_token=[bracketLEAK]",
+      'api_key={"blob":"jsonLEAK"}',
+      "secret=foo;semiLEAK",
+      "Bearer abc,commaLEAK",
+      "tail=visible",
+    ].join(" ");
+    const leaks = ["PLAINSECRET", "braceLEAK", "bracketLEAK", "jsonLEAK", "semiLEAK", "commaLEAK"];
+    expectSecretsGone(redactObservationText(raw), raw, leaks);
+    expect(redactObservationText(raw)).toContain("tail=visible");
+    expect(redactObservationText("https://example.test?token=queryLEAK&x=1")).toBe(
+      "https://example.test?token=[REDACTED]&x=1",
+    );
+    expect(
+      redactObservationText("https://example.test?token=queryLEAK&key=keyLEAK&auth=authLEAK"),
+    ).toBe("https://example.test?token=[REDACTED]&key=[REDACTED]&auth=[REDACTED]");
+
+    const published = sanitizePublishMessage(raw);
+    expectSecretsGone(published, raw, leaks);
+    expect(published).toContain("tail=visible");
+    expect(sanitizePublishMessage("https://example.test?token=queryLEAK&x=1")).toBe(
+      "https://example.test?token=[redacted]&x=1",
+    );
+
+    const driver = redactDriverDiagnostic(raw);
+    expectSecretsGone(driver, raw, leaks);
+    expect(driver).toContain("tail=visible");
+
+    expectSecretsGone(String(redact(raw)), raw, leaks);
+    expect(String(redact(raw))).toContain("tail=visible");
+
+    const lines: string[] = [];
+    const logger = createLogger({ sink: (line) => lines.push(line) });
+    logger.warn("driver.env", { detail: raw });
+    const exported = JSON.stringify(logger.recentProblems());
+    expectSecretsGone(exported, raw, leaks);
+    expect(exported).toContain("tail=visible");
+    expect(lines.join("\n")).toContain("PLAINSECRET");
   });
 });
