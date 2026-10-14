@@ -17,6 +17,7 @@ import {
   type RoomRecoveryFacts,
   filterRoomScopedFacts,
   guardRoomScopedReport,
+  keepScopedPlaceholder,
   runtimeKeys,
   useActiveRuntimeBindings,
   useAgents,
@@ -32,7 +33,7 @@ import {
   useRuntimeRounds,
 } from "@/stores/runtime-queries";
 import { QueryClient } from "@tanstack/react-query";
-import { act } from "react";
+import { act, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderHook } from "./render-hook";
 
@@ -342,6 +343,19 @@ describe("runtime query keys and room guards", () => {
     expect(runtimeKeys.profiles).toEqual(["rt", "profiles"]);
   });
 
+  it("keeps a scoped placeholder only when the query key names that scope", () => {
+    const keep = keepScopedPlaceholder<string | null>("room-1");
+    expect(keep("body", { queryKey: ["rt", "room", "room-1", 3] })).toBe("body");
+    expect(keep(null, { queryKey: ["rt", "summary", "room-1", 0] })).toBeNull();
+    expect(keep("body", { queryKey: ["rt", "room", "room-2", 3] })).toBeUndefined();
+    expect(keep("body", { queryKey: ["rt", "rounds", "none"] })).toBeUndefined();
+    expect(keep(undefined, { queryKey: ["rt", "room", "room-1", 0] })).toBeUndefined();
+    expect(keep("body", undefined)).toBeUndefined();
+    expect(
+      keepScopedPlaceholder<string>(undefined)("stale", { queryKey: ["rt", "room", "room-1", 0] }),
+    ).toBeUndefined();
+  });
+
   it("returns a report only when it belongs to the queried room", () => {
     expect(guardRoomScopedReport(report1, "room-1")).toBe(report1);
     expect(guardRoomScopedReport(report1, "room-2")).toBeUndefined();
@@ -580,4 +594,119 @@ describe("runtime query hooks", () => {
     expect(mounted.read().data).toBeNull();
     expect(mounted.read().error).toBeNull();
   });
+
+  it("keeps rows across a tick bump and drops them when the room or round changes", async () => {
+    await runtimeDb.rooms.bulkAdd([roomMid, roomOld]);
+    await runtimeDb.rounds.bulkAdd([round1, roundOther]);
+    await runtimeDb.messages.bulkAdd([messageEarly, messageOther]);
+    await runtimeDb.participants.bulkAdd([participantEarly, participantOther]);
+    await runtimeDb.modelExecutions.bulkAdd([execA, execOther]);
+    await runtimeDb.runtimeBindings.bulkAdd([bindingActive, bindingOtherActive]);
+    await runtimeDb.summaries.bulkAdd([summary1, summaryOther]);
+    await runtimeDb.reports.bulkAdd([report1, reportOther]);
+
+    const scope = { roomId: "room-1", roundId: "round-b", tick: 0 };
+    let update: (() => void) | undefined;
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false },
+      },
+    });
+    const mounted = renderHook(() => {
+      const [, bump] = useState(0);
+      update = () => bump((value) => value + 1);
+      return useReads(scope.roomId, scope.roundId, scope.tick);
+    }, client);
+    unmount = mounted.unmount;
+
+    await waitFor(() => {
+      const value = mounted.read();
+      return value.room.data?.id === "room-1" && value.summary.data?.roundId === "round-b";
+    }, "room-1 scope loaded");
+
+    const gate = holdDbReads();
+    try {
+      scope.tick = 1;
+      act(() => update?.());
+      const bumped = mounted.read();
+      expect(bumped.room.data).toEqual(roomMid);
+      expect(bumped.room.isPlaceholderData).toBe(true);
+      expect(bumped.rounds.data).toEqual([round1]);
+      expect(bumped.messages.data).toEqual([messageEarly]);
+      expect(bumped.summary.data).toEqual(summary1);
+      expect(bumped.participants.data).toEqual([participantEarly]);
+      expect(bumped.executions.data).toEqual([execA]);
+      expect(bumped.report.data).toEqual(report1);
+      expect(bumped.recovery.data?.executions).toEqual([execA]);
+
+      scope.roomId = "room-2";
+      scope.roundId = "round-9";
+      act(() => update?.());
+      const switched = mounted.read();
+      expect(switched.room.data ?? null).toBeNull();
+      expect(switched.room.isPending).toBe(true);
+      expect(switched.room.isLoading).toBe(true);
+      expect(switched.rounds.data ?? null).toBeNull();
+      expect(switched.messages.data ?? null).toBeNull();
+      expect(switched.summary.data ?? null).toBeNull();
+      expect(switched.participants.data ?? null).toBeNull();
+      expect(switched.executions.data ?? null).toBeNull();
+      expect(switched.report.data ?? null).toBeNull();
+      expect(switched.recovery.data?.executions ?? []).toEqual([]);
+      expect(switched.recovery.data?.rounds ?? []).toEqual([]);
+
+      gate.release();
+      await waitFor(() => mounted.read().room.data?.id === "room-2", "room-2 scope loaded");
+      const loaded = mounted.read();
+      expect(loaded.room.data).toEqual(roomOld);
+      expect(loaded.rounds.data).toEqual([roundOther]);
+      expect(loaded.messages.data).toEqual([messageOther]);
+      expect(loaded.summary.data).toEqual(summaryOther);
+      expect(loaded.participants.data).toEqual([participantOther]);
+      expect(loaded.executions.data).toEqual([execOther]);
+      expect(loaded.report.data).toEqual(reportOther);
+      expect(loaded.recovery.data?.rounds).toEqual([roundOther]);
+      expect(loaded.recovery.data?.executions).toEqual([execOther]);
+    } finally {
+      gate.release();
+      gate.restore();
+    }
+  });
 });
+
+function holdDbReads(): { release: () => void; restore: () => void } {
+  let resolveGate: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    resolveGate = resolve;
+  });
+  const tableProto = Object.getPrototypeOf(runtimeDb.rooms) as {
+    get: (this: unknown, ...args: unknown[]) => Promise<unknown>;
+  };
+  const collectionProto = Object.getPrototypeOf(
+    runtimeDb.rounds.where("roomId").equals("none"),
+  ) as {
+    toArray: (this: unknown, ...args: unknown[]) => Promise<unknown>;
+    first: (this: unknown, ...args: unknown[]) => Promise<unknown>;
+  };
+  const originalGet = tableProto.get;
+  const originalToArray = collectionProto.toArray;
+  const originalFirst = collectionProto.first;
+  const wait = <T>(read: () => Promise<T>) => gate.then(read);
+  tableProto.get = function (this: unknown, ...args: unknown[]) {
+    return wait(() => originalGet.apply(this, args));
+  };
+  collectionProto.toArray = function (this: unknown, ...args: unknown[]) {
+    return wait(() => originalToArray.apply(this, args));
+  };
+  collectionProto.first = function (this: unknown, ...args: unknown[]) {
+    return wait(() => originalFirst.apply(this, args));
+  };
+  return {
+    release: () => resolveGate?.(),
+    restore: () => {
+      tableProto.get = originalGet;
+      collectionProto.toArray = originalToArray;
+      collectionProto.first = originalFirst;
+    },
+  };
+}

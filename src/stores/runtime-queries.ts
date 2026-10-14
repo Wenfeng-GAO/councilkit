@@ -9,11 +9,16 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
  * comes exclusively from Dexie — these hooks never trigger execution; the
  * Orchestrator drives all mutations and bumps the invalidation tick.
  *
- * Every tick-keyed hook uses keepPreviousData: a tick bump changes the query
- * key, and without a placeholder the data would transiently go undefined —
+ * Tick-keyed hooks keep the previous result across an invalidation tick.
+ * Without that placeholder the data would transiently go undefined —
  * unmounting round sections mid-render and, worse, flipping RoomPage's
  * roomExists guard so its Web-Lock effect releases/re-takes control in the
  * middle of an in-flight Round (STALE_CONTROLLER).
+ *
+ * Hooks scoped to one room or round use keepScopedPlaceholder, not
+ * keepPreviousData. A scope-id change must not keep rendering the previous
+ * entity until the next fetch resolves. Unscoped lists still use
+ * keepPreviousData, because their only key change is the tick.
  */
 
 export const runtimeKeys = {
@@ -34,6 +39,28 @@ export const runtimeKeys = {
   profiles: ["rt", "profiles"] as const,
 };
 
+/**
+ * Scope id position in `["rt", collection, scopeId, tick?]` and in the idle
+ * `["rt", collection, "none"]` keys. A tick lives in the last segment, never here.
+ */
+const RUNTIME_SCOPE_KEY_INDEX = 2;
+
+/**
+ * Keep the previous rows when an invalidation tick changes the query key.
+ * Drop them when the scope id changes, so room A's discussion is not what
+ * room B renders while B's read is in flight.
+ */
+export function keepScopedPlaceholder<T>(scopeId: string | undefined) {
+  return (
+    previousData: T | undefined,
+    previousQuery: { queryKey: readonly unknown[] } | undefined,
+  ): T | undefined => {
+    if (previousData === undefined || previousQuery === undefined) return undefined;
+    if (previousQuery.queryKey[RUNTIME_SCOPE_KEY_INDEX] !== scopeId) return undefined;
+    return previousData;
+  };
+}
+
 export function useRuntimeRooms(tick = 0) {
   return useQuery({
     placeholderData: keepPreviousData,
@@ -44,7 +71,7 @@ export function useRuntimeRooms(tick = 0) {
 
 export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roomId),
     queryKey: roomId ? [...runtimeKeys.room(roomId), tick] : ["rt", "room", "none"],
     enabled: !!roomId,
     // Dexie returns undefined when the row is missing. TanStack Query v5
@@ -55,7 +82,7 @@ export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
 
 export function useRuntimeRounds(roomId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roomId),
     queryKey: roomId ? [...runtimeKeys.rounds(roomId), tick] : ["rt", "rounds", "none"],
     enabled: !!roomId,
     queryFn: async () => {
@@ -70,7 +97,7 @@ export function useRuntimeRounds(roomId: string | undefined, tick = 0) {
 
 export function useRoundMessages(roundId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roundId),
     queryKey: roundId ? [...runtimeKeys.messages(roundId), tick] : ["rt", "messages", "none"],
     enabled: !!roundId,
     queryFn: async () => {
@@ -85,7 +112,7 @@ export function useRoundMessages(roundId: string | undefined, tick = 0) {
 
 export function useRoundSummary(roundId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roundId),
     queryKey: roundId ? [...runtimeKeys.summary(roundId), tick] : ["rt", "summary", "none"],
     enabled: !!roundId,
     queryFn: async () =>
@@ -98,7 +125,7 @@ export function useRoundSummary(roundId: string | undefined, tick = 0) {
 
 export function useParticipants(roomId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roomId),
     queryKey: roomId ? [...runtimeKeys.participants(roomId), tick] : ["rt", "participants", "none"],
     enabled: !!roomId,
     queryFn: async () => {
@@ -113,7 +140,7 @@ export function useParticipants(roomId: string | undefined, tick = 0) {
 
 export function useRoundExecutions(roundId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roundId),
     queryKey: roundId ? [...runtimeKeys.executions(roundId), tick] : ["rt", "executions", "none"],
     enabled: !!roundId,
     queryFn: () =>
@@ -129,7 +156,7 @@ export function useRoundExecutions(roundId: string | undefined, tick = 0) {
  * commits the report and bumps the invalidation tick. */
 export function useRoomReport(roomId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roomId),
     queryKey: roomId ? [...runtimeKeys.report(roomId), tick] : ["rt", "report", "none"],
     enabled: !!roomId,
     queryFn: async () =>
@@ -137,11 +164,8 @@ export function useRoomReport(roomId: string | undefined, tick = 0) {
         .where("roomId")
         .equals(roomId as string)
         .first()) ?? null,
-    // F3 cross-room guard runs in `select` so it also applies to the
-    // keepPreviousData placeholder. Without it, navigating room A → room B
-    // keeps serving A's report to B's ReportView (paired with B's topic for
-    // copy/download) until B's query resolves. Mismatch → undefined → ReportView
-    // renders "loading" rather than A's body under B's key.
+    // keepScopedPlaceholder withholds another room. select still rejects a row
+    // whose roomId does not match this query.
     select: (report) => guardRoomScopedReport(report, roomId),
   });
 }
@@ -158,7 +182,7 @@ export interface RoomRecoveryFacts {
 
 export function useRoomRecoveryFacts(roomId: string | undefined, tick = 0) {
   return useQuery({
-    placeholderData: keepPreviousData,
+    placeholderData: keepScopedPlaceholder(roomId),
     queryKey: roomId ? [...runtimeKeys.recovery(roomId), tick] : ["rt", "recovery", "none"],
     enabled: !!roomId,
     queryFn: async () => {
@@ -170,12 +194,8 @@ export function useRoomRecoveryFacts(roomId: string | undefined, tick = 0) {
       ]);
       return { executions, bindings, rounds } satisfies RoomRecoveryFacts;
     },
-    // F3 cross-room guard in `select` (covers the keepPreviousData placeholder):
-    // a room switch mid-flight would otherwise let room A's executions / bindings/
-    // rounds render under room B until B's query resolves — including A's failed-
-    // report banner. A stale placeholder's arrays filter to empty → the UI falls
-    // back to a transient "no live report" read; a same-room facts object passes
-    // through untouched.
+    // keepScopedPlaceholder withholds another room. select still drops foreign
+    // rows in a mixed payload and passes a same-room payload through.
     select: (facts) => filterRoomScopedFacts(facts, roomId),
   });
 }
