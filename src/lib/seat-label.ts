@@ -1,4 +1,5 @@
 import { IDEATE_ROLE_LABELS } from "@/lib/ideate-roster";
+import type { DriverId } from "@shared/runtime/contracts";
 
 /** Persona seats keep a fixed role title. Extra seats follow the bound model. */
 
@@ -9,13 +10,18 @@ export const REVIEW_PERSONA_LABELS: Record<string, string> = {
   "review-adversarial": "对抗审查",
 };
 
-export const DRIVER_LABELS: Record<string, string> = {
-  "codex-app-server": "Codex",
-  "claude-stream-json": "Claude",
-  "grok-stream-json": "Grok",
-  "kimi-stream-json": "Kimi",
-  "cursor-stream-json": "Cursor",
-};
+/** Short names for the ideate and review-jury driver pickers, in menu order. */
+export const DRIVER_SELECT_OPTIONS: { value: DriverId; label: string }[] = [
+  { value: "codex-app-server", label: "Codex" },
+  { value: "claude-stream-json", label: "Claude" },
+  { value: "grok-stream-json", label: "Grok" },
+  { value: "kimi-stream-json", label: "Kimi" },
+  { value: "cursor-stream-json", label: "Cursor" },
+];
+
+const DRIVER_LABELS: Record<string, string> = Object.fromEntries(
+  DRIVER_SELECT_OPTIONS.map((option) => [option.value, option.label]),
+);
 
 export type SeatLabelInput = {
   agentName: string;

@@ -1,7 +1,12 @@
 import { CLAUDE_ROUTE_LABELS } from "@/components/settings/view-model";
 import { Select } from "@/components/ui/Select";
 import { isAutomaticCursorModel, unavailableCursorSeats } from "@/lib/jury-model-validation";
-import { driverLabel, isPersonaSeat, reviewSeatTitle } from "@/lib/seat-label";
+import {
+  DRIVER_SELECT_OPTIONS,
+  driverLabel,
+  isPersonaSeat,
+  reviewSeatTitle,
+} from "@/lib/seat-label";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
 import { readOrSaveReviewJury } from "@/runtime/review-jury-client";
@@ -17,13 +22,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 const KEY = ["cli-review-jury"];
-const DRIVERS: { value: DriverId; label: string }[] = [
-  { value: "codex-app-server", label: "Codex" },
-  { value: "claude-stream-json", label: "Claude" },
-  { value: "grok-stream-json", label: "Grok" },
-  { value: "kimi-stream-json", label: "Kimi" },
-  { value: "cursor-stream-json", label: "Cursor" },
-];
 function jurySeatHeading(agentName: string, seat: ReviewJurySeat): string {
   return reviewSeatTitle({
     agentName,
@@ -270,8 +268,9 @@ export function DefaultReviewJury({
                     <div className="ck-jury-binding">
                       <span>
                         {
-                          DRIVERS.find((driver) => driver.value === seat.driverSelection.driverId)
-                            ?.label
+                          DRIVER_SELECT_OPTIONS.find(
+                            (driver) => driver.value === seat.driverSelection.driverId,
+                          )?.label
                         }
                         {seat.driverSelection.driverId === "claude-stream-json"
                           ? ` · ${seat.driverSelection.options.route}`
@@ -420,7 +419,7 @@ function SeatModelFields({
         id={`${id}-driver`}
         label="模型来源"
         value={driverId}
-        options={DRIVERS}
+        options={DRIVER_SELECT_OPTIONS}
         disabled={disabled}
         onChange={(event) => {
           const next = event.target.value as DriverId;

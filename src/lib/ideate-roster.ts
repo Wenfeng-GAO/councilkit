@@ -1,4 +1,3 @@
-import type { DriverId } from "@shared/runtime/contracts";
 import type { ReviewJurySeat } from "@shared/runtime/review-jury";
 import type { IdeateModels, ReviewModel } from "@shared/runtime/schemas";
 
@@ -8,20 +7,8 @@ export const IDEATE_ROLE_LABELS: Record<string, string> = {
   "ideate-challenger": "质疑席",
 };
 
-export const IDEATE_DRIVER_OPTIONS: { value: DriverId; label: string }[] = [
-  { value: "codex-app-server", label: "Codex" },
-  { value: "claude-stream-json", label: "Claude" },
-  { value: "grok-stream-json", label: "Grok" },
-  { value: "kimi-stream-json", label: "Kimi" },
-  { value: "cursor-stream-json", label: "Cursor" },
-];
-
 export function ideateRoleLabel(name: string): string {
   return IDEATE_ROLE_LABELS[name] ?? name;
-}
-
-export function ideateDriverLabel(driverId: string): string {
-  return IDEATE_DRIVER_OPTIONS.find((item) => item.value === driverId)?.label ?? driverId;
 }
 
 export function modelConfigKey(model: ReviewModel): string {

@@ -1,13 +1,12 @@
 import { CLAUDE_ROUTE_LABELS } from "@/components/settings/view-model";
 import { Select } from "@/components/ui/Select";
 import {
-  IDEATE_DRIVER_OPTIONS,
-  ideateDriverLabel,
   ideateRoleLabel,
   rosterToIdeateModels,
   savedRosterUnchanged,
   uniqueModelConfigCount,
 } from "@/lib/ideate-roster";
+import { DRIVER_SELECT_OPTIONS, driverLabel } from "@/lib/seat-label";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
 import { readProductJury } from "@/runtime/product-jury-client";
@@ -169,7 +168,7 @@ export function IdeateModelPicker({
                   ) : (
                     <div className="ck-jury-binding">
                       <span>
-                        {ideateDriverLabel(seat.driverSelection.driverId)}
+                        {driverLabel(seat.driverSelection.driverId)}
                         {seat.driverSelection.driverId === "claude-stream-json"
                           ? ` · ${seat.driverSelection.options.route}`
                           : ""}
@@ -240,7 +239,7 @@ function IdeateSeatModels({
         id={`${id}-driver`}
         label="模型来源"
         value={driverId}
-        options={IDEATE_DRIVER_OPTIONS}
+        options={DRIVER_SELECT_OPTIONS}
         disabled={disabled}
         onChange={(event) => {
           const next = event.target.value as DriverId;
