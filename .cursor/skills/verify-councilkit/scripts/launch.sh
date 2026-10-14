@@ -102,10 +102,13 @@ wait_ready() {
     if ! kill -0 "$supervisor" 2>/dev/null; then
       return 1
     fi
-    if node "$SCRIPT_DIR/doctor-check.mjs" >>"$LOG" 2>&1; then
+    # `if` with no else returns 0 when the check is not ready, so capture the
+    # doctor exit code directly. Exit 10 means retry; anything else stops.
+    node "$SCRIPT_DIR/doctor-check.mjs" >>"$LOG" 2>&1
+    code=$?
+    if [[ "$code" -eq 0 ]]; then
       return 0
     fi
-    code=$?
     if [[ "$code" -ne 10 ]]; then
       return "$code"
     fi
