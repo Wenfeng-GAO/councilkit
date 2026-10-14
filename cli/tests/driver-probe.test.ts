@@ -428,6 +428,21 @@ describe("driver-probe cache + lightweight", () => {
     );
   });
 
+  it("does not treat a prefix of a local proxy port as that port", () => {
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:1.9" }, () => 1)).toBe(true);
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:7890extra" }, () => 7890)).toBe(
+      true,
+    );
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "socks5://127.0.0.1:1.9" }, () => 1)).toBe(true);
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:7890/x" }, () => 7890)).toBe(
+      false,
+    );
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:07890" }, () => 7890)).toBe(
+      false,
+    );
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://example.com:1.9" }, () => 1)).toBe(false);
+  });
+
   it("warm GROK_HOME reuses one credentials-only dir across probe spawns", () => {
     const orig = mkdtempSync(join(tmpdir(), "ck-grok-src-"));
     writeFileSync(join(orig, "auth.json"), '{"token":"warm"}\n', { mode: 0o600 });

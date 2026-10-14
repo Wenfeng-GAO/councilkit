@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { parseCanonicalInt } from "../../shared/runtime/decimal-int";
 
 const runId = "ck-review-00000000-0000-4000-8000-0000000000e3";
 const makeRun = () => ({
@@ -315,7 +316,13 @@ test("过程序号回退时从头重读，不把重启后的正文丢掉", async
   });
   await page.route(`**/api/v1/cli-runs/${restartRunId}/attempts/*/live*`, (route) => {
     const afterRaw = new URL(route.request().url()).searchParams.get("afterSeq");
-    const afterSeq = afterRaw === null || afterRaw === "" ? 0 : Number(afterRaw);
+    const afterSeq = afterRaw === null || afterRaw === "" ? 0 : parseCanonicalInt(afterRaw);
+    if (afterSeq === null) {
+      return route.fulfill({
+        status: 400,
+        json: { ok: false, error: { code: "BAD_REQUEST", message: "Invalid afterSeq." } },
+      });
+    }
     const events = sidecar.filter((event) => event.seq > afterSeq);
     const nextSeq =
       sidecar.length === 0 ? afterSeq : Math.max(...sidecar.map((event) => event.seq));

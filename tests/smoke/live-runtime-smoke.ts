@@ -130,6 +130,7 @@ import type {
   InstallationDto,
 } from "@shared/runtime/schemas";
 import { type TestHost, createTestHost } from "../host/helpers";
+import { positiveIntOverride, requiredPositiveInt } from "./smoke-integers";
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -169,12 +170,10 @@ const SOAK_MIN_MINUTES = SOAK_MIN_MS / 60_000;
  * never be mistaken for a real soak pass.
  */
 function soakMinRounds(): number {
-  const override = Number.parseInt(process.env.CK_SMOKE_SOAK_MIN_ROUNDS ?? "", 10);
-  return Number.isFinite(override) && override > 0 ? override : SOAK_MIN_ROUNDS;
+  return positiveIntOverride(process.env.CK_SMOKE_SOAK_MIN_ROUNDS, SOAK_MIN_ROUNDS);
 }
 function soakMinMs(): number {
-  const override = Number.parseInt(process.env.CK_SMOKE_SOAK_MIN_MS ?? "", 10);
-  return Number.isFinite(override) && override > 0 ? override : SOAK_MIN_MS;
+  return positiveIntOverride(process.env.CK_SMOKE_SOAK_MIN_MS, SOAK_MIN_MS);
 }
 /**
  * S9 (fix-1): the soak contract is "≥ SOAK_MIN_MS of sustained real load with
@@ -300,11 +299,7 @@ function parseCli(argv: string[]): CliOptions {
         break;
       case "--rounds": {
         const value = argv[++i];
-        const parsed = Number.parseInt(value ?? "", 10);
-        if (!Number.isFinite(parsed) || parsed < 1) {
-          throw new Error(`--rounds requires a positive integer, got "${value ?? ""}"`);
-        }
-        options.rounds = parsed;
+        options.rounds = requiredPositiveInt(value, "rounds");
         break;
       }
       case "--route": {

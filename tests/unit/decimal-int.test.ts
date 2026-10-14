@@ -1,4 +1,8 @@
-import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
+import {
+  decimalIntExceeds,
+  parseCanonicalInt,
+  parseCanonicalPositiveInt,
+} from "@shared/runtime/decimal-int";
 import { describe, expect, it } from "vitest";
 
 describe("parseCanonicalInt", () => {
@@ -32,5 +36,25 @@ describe("parseCanonicalPositiveInt", () => {
     expect(parseCanonicalPositiveInt("0")).toBeNull();
     expect(parseCanonicalPositiveInt("1")).toBe(1);
     expect(parseCanonicalPositiveInt("2abc")).toBeNull();
+  });
+});
+
+describe("decimalIntExceeds", () => {
+  const limit = 4 * 1024 * 1024;
+
+  it("compares a digit string that Number cannot represent", () => {
+    expect(decimalIntExceeds("9999999999999999999", limit)).toBe(true);
+    expect(decimalIntExceeds("9007199254740993", limit)).toBe(true);
+    expect(decimalIntExceeds("0000004194305", limit)).toBe(true);
+    expect(decimalIntExceeds(String(limit + 1), limit)).toBe(true);
+  });
+
+  it("does not treat a smaller or equal length as over the limit", () => {
+    expect(decimalIntExceeds(String(limit), limit)).toBe(false);
+    expect(decimalIntExceeds("0000000007", limit)).toBe(false);
+    expect(decimalIntExceeds("0", limit)).toBe(false);
+    expect(decimalIntExceeds("5abc", limit)).toBe(false);
+    expect(decimalIntExceeds("1.9", limit)).toBe(false);
+    expect(decimalIntExceeds("", limit)).toBe(false);
   });
 });

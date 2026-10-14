@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolveE2ePort } from "./tests/e2e/e2e-port";
 
 /**
  * V1 supports Chromium only (see docs/plans/2026-07-17-001 Runtime Host cutover).
@@ -10,19 +11,7 @@ import { defineConfig, devices } from "@playwright/test";
  * COUNCILKIT_E2E_PORT to run the suite against a throwaway port without
  * sharing (or killing) a developer-hosted canonical Host.
  */
-const e2ePort = (() => {
-  const raw = process.env.COUNCILKIT_E2E_PORT;
-  if (raw === undefined || raw === "") return 43127;
-  // Strict integer: "45907" is a port, "45907x" is a typo and must fail.
-  if (!/^[0-9]+$/.test(raw)) {
-    throw new Error(`COUNCILKIT_E2E_PORT must be a valid TCP port, got "${raw}"`);
-  }
-  const port = Number(raw);
-  if (port < 1 || port > 65535) {
-    throw new Error(`COUNCILKIT_E2E_PORT must be a valid TCP port, got "${raw}"`);
-  }
-  return port;
-})();
+const e2ePort = resolveE2ePort(process.env.COUNCILKIT_E2E_PORT);
 const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
 
 export default defineConfig({
