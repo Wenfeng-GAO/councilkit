@@ -7,7 +7,7 @@ import {
   reviewJuryResponseSchema,
   reviewJuryUpdateSchema,
 } from "@shared/runtime/review-jury";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { resolveCouncilkitSpawn } from "../cli-launcher";
 import { type HttpError, type Route, httpError } from "../server";
 
@@ -34,6 +34,7 @@ export async function runJuryCli(config?: ReviewJuryUpdate): Promise<ReviewJuryR
 const MISSING_REVIEW_JURY =
   "无法读取或保存默认席位。请检查 CLI 配置；尚未初始化时先运行 councilkit init。";
 const REVIEW_JURY_CONFLICT = "默认席位已被修改，请重新加载后再保存。";
+const JURY_CLI_MESSAGE_MAX = 512;
 
 function reviewJuryFailure(error: unknown): HttpError {
   const cliMessage = cliFailureMessage(error);
@@ -52,7 +53,12 @@ function reviewJuryFailure(error: unknown): HttpError {
   const message = cliMessage ?? "无法读取或保存默认席位。";
   return httpError(
     400,
-    makeError("BAD_REQUEST", "discovery", clipMessage(message), { retryable: false }),
+    makeError(
+      "BAD_REQUEST",
+      "discovery",
+      clipUtf16(message.replace(/\s+/g, " ").trim(), JURY_CLI_MESSAGE_MAX, "…"),
+      { retryable: false },
+    ),
   );
 }
 
@@ -71,11 +77,6 @@ function cliFailureMessage(error: unknown): string | null {
   if (typeof message !== "string") return null;
   const trimmed = message.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function clipMessage(message: string): string {
-  const oneLine = message.replace(/\s+/g, " ").trim();
-  return oneLine.length <= 512 ? oneLine : `${clipUtf16CodeUnits(oneLine, 511)}…`;
 }
 
 /** The Host delegates persistence to the CLI. Serialize saves from browser tabs. */

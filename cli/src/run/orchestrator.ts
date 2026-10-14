@@ -45,7 +45,7 @@ import type {
   ResolveProfileResponse,
   ScopeStatus,
 } from "@shared/runtime/schemas";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { EXIT, type ExitCode, errors, exitCodeForHostCode } from "../errors";
 import {
   type RunCleanup,
@@ -1121,7 +1121,7 @@ class StopRun extends Error {
 /** Clip run failure messages on a UTF-16 code-unit boundary (max 512). */
 export function clipFailureMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return clipUtf16CodeUnits(raw, 512);
+  return clipUtf16(raw, 512);
 }
 
 function toFailure(phase: string, code: string, error: unknown): RunFailure {

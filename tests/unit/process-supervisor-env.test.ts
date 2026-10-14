@@ -7,14 +7,15 @@ import { createLogger } from "../../runtime-host/logging";
 import {
   type DriverSpawnSpec,
   type ProcessSupervisor,
+  SPAWN_ERROR_DETAIL_MAX,
   buildSupervisedEnv,
-  clipSpawnErrorDetail,
   createBoundedRing,
   createProcessSupervisor,
   filterDeniedEnv,
   isDeniedEnvName,
   prepareParticipantCwd,
 } from "../../runtime-host/process/process-supervisor";
+import { clipUtf16 } from "../../shared/text/clip-utf16";
 
 const WATCHDOG_PROGRAM = new URL("../../runtime-host/process/watchdog-child.mjs", import.meta.url)
   .pathname;
@@ -136,14 +137,13 @@ describe("createBoundedRing", () => {
   });
 });
 
-describe("clipSpawnErrorDetail", () => {
+describe("spawn error detail clip (SPAWN_ERROR_DETAIL_MAX)", () => {
+  const clip = (v: string) => clipUtf16(v, SPAWN_ERROR_DETAIL_MAX);
   it("drops a surrogate pair that would be split at 512 code units", () => {
     const emoji = "😀";
-    const clipped = clipSpawnErrorDetail(`${"a".repeat(511)}${emoji}${"z".repeat(20)}`);
+    const clipped = clip(`${"a".repeat(511)}${emoji}${"z".repeat(20)}`);
     expect(clipped).toBe("a".repeat(511));
-    expect(clipSpawnErrorDetail("driver cwd must not be a symlink")).toBe(
-      "driver cwd must not be a symlink",
-    );
+    expect(clip("driver cwd must not be a symlink")).toBe("driver cwd must not be a symlink");
   });
 });
 

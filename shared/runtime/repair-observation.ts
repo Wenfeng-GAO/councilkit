@@ -3,8 +3,8 @@
  * Observation is a read-only projection — never mutates repair budget/gate/journal.
  */
 import { z } from "zod";
+import { clipUtf16 } from "../text/clip-utf16";
 import { isAuthorizationCredentialKey, redactAuthorizationMaterial } from "./redact-authorization";
-import { clipUtf16CodeUnits } from "./seat-result";
 
 const SHA256_K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -488,7 +488,7 @@ export function foldPublicText(records: RawSourceRecord[]): RepairOperation[] {
       callId: first.callId,
       byteOffset: first.byteOffset,
     });
-    const summary = clipSummary(text);
+    const summary = clipUtf16(text, REPAIR_OBS_SUMMARY_MAX);
     out.push({
       eventId: buildEventId(operationId, 1),
       sourceId: first.sourceId,
@@ -579,7 +579,10 @@ export function normalizeToolRecords(records: RawSourceRecord[]): RepairOperatio
       record.detail && (record.detail.includes(REPAIR_OBS_REDACT) || record.detail.length <= 120)
         ? record.detail
         : "";
-    const summary = clipSummary(detailNote ? `${baseSummary} ${detailNote}` : baseSummary);
+    const summary = clipUtf16(
+      detailNote ? `${baseSummary} ${detailNote}` : baseSummary,
+      REPAIR_OBS_SUMMARY_MAX,
+    );
 
     const next: RepairOperation = {
       eventId: buildEventId(operationId, status === "started" ? 1 : 2),
@@ -628,11 +631,8 @@ function summaryWithUnfinishedNote(summary: string): string {
   if (summary.includes(REPAIR_OBS_COPY.unfinishedTool)) return summary;
   const combined = `${summary}${note}`;
   if (combined.length <= REPAIR_OBS_SUMMARY_MAX) return combined;
-  return `${clipUtf16CodeUnits(summary, Math.max(0, REPAIR_OBS_SUMMARY_MAX - note.length))}${note}`;
-}
-
-export function clipSummary(value: string): string {
-  return clipUtf16CodeUnits(value, REPAIR_OBS_SUMMARY_MAX);
+  // The note is always kept; only the preceding summary is clipped to make room.
+  return `${clipUtf16(summary, REPAIR_OBS_SUMMARY_MAX - note.length)}${note}`;
 }
 
 const SECRET_VALUE_KEYS = /^(cookie|csrf|token|password|secret|credential|api[_-]?key|x-api-key)$/i;

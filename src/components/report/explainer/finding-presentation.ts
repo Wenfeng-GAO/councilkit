@@ -2,7 +2,7 @@ import type {
   ExplainerFinding,
   ExplanationPayload,
 } from "@shared/runtime/review-explainer/contracts";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 
 const LEADING_SOURCE_FILE =
   /^`?(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][A-Za-z0-9-]*(?=$|[:`\s—–：-])(?::\d+(?:-\d+)?)?`?\s*(?:[—–:：-]\s*)?/;
@@ -16,7 +16,7 @@ export function displayFindingTitle(
   const title = finding.title.trim();
   const withoutPath = title.replace(LEADING_SOURCE_FILE, "").trim();
   const display = withoutPath || title;
-  return display.length > 120 ? `${clipUtf16CodeUnits(display, 119)}…` : display;
+  return clipUtf16(display, 120, "…");
 }
 
 /** Older decisions contain a system audit description, not a note written by the user. */

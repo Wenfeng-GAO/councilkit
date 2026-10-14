@@ -1,4 +1,5 @@
 /** Compact, poll-safe summary of one attempt's final output. */
+import { clipUtf16 } from "../text/clip-utf16";
 import { markdownLines } from "./aggregator-verdict";
 
 export const SEAT_RESULT_SUMMARY_MAX = 240;
@@ -49,28 +50,11 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
   return { parseStatus: "unparsed", summary, findingCount: null, blockingCount: null };
 }
 
-export function clipUtf16CodeUnits(value: string, max: number): string {
-  if (value.length <= max) return value;
-  let end = max;
-  const unit = value.charCodeAt(end - 1);
-  if (unit >= 0xd800 && unit <= 0xdbff) end -= 1;
-  return value.slice(0, end);
-}
-
-export function clipUtf16TailCodeUnits(value: string, max: number): string {
-  if (max <= 0) return "";
-  if (value.length <= max) return value;
-  let start = value.length - max;
-  const unit = value.charCodeAt(start);
-  if (unit >= 0xdc00 && unit <= 0xdfff) start += 1;
-  return value.slice(start);
-}
-
 export function clipSeatSummary(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-  return clipUtf16CodeUnits(trimmed, SEAT_RESULT_SUMMARY_MAX);
+  return clipUtf16(trimmed, SEAT_RESULT_SUMMARY_MAX);
 }
 
 function textOutsideFences(text: string): string {

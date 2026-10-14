@@ -1,5 +1,5 @@
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { describe, expect, it } from "vitest";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { clipUtf8, extractSuccessfulProposal } from "../src/auto/templates/ideate";
 
 const IDEA = `a${"👍".repeat(40)}`;
@@ -45,7 +45,7 @@ describe("extractSuccessfulProposal UTF-16 boundary", () => {
     expect(summary.includes("\uD83D")).toBe(false);
     expect(summary.endsWith("\uD83D")).toBe(false);
     // Keep the ASCII prefix; drop the straddling emoji rather than split it.
-    expect(summary).toBe(clipUtf16CodeUnits(firstParagraph, 600));
+    expect(summary).toBe(clipUtf16(firstParagraph, 600));
     expect(summary).toBe("a".repeat(599));
   });
 

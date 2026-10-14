@@ -1,5 +1,5 @@
 import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 
 /**
  * Classify provider terminal evidence. Structured JSON/protocol errors beat
@@ -63,7 +63,7 @@ export function redactDriverDiagnostic(text: string): string {
     .replace(SESSION_ASSIGN, "session=[redacted]")
     .replace(SECRET_ASSIGN, "[redacted]")
     .replace(SK_TOKEN, "[redacted]");
-  return clipUtf16CodeUnits(redacted, 400);
+  return clipUtf16(redacted, 400);
 }
 
 function pickClass(text: string): DriverErrorClass | null {

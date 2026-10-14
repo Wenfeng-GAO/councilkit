@@ -4,8 +4,8 @@
  * are stripped before parse; they never echo into diagnostics.
  */
 import { z } from "zod";
+import { clipUtf16 } from "../text/clip-utf16";
 import { ASSESSMENT_LOCATION, FULL_COMMIT_SHA } from "./cli-ledger";
-import { clipUtf16CodeUnits } from "./seat-result";
 
 export const reviewerAssessmentSchema = z
   .object({
@@ -141,7 +141,7 @@ export function diagnoseAttemptAssessments(input: {
           typeof row === "object" &&
           "findingId" in row &&
           typeof row.findingId === "string"
-            ? clipUtf16CodeUnits(row.findingId, 160)
+            ? clipUtf16(row.findingId, 160)
             : null;
         const first = result.error.issues[0];
         items.push({

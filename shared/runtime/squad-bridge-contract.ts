@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { clipUtf16 } from "../text/clip-utf16";
 import { FULL_COMMIT_SHA } from "./cli-ledger";
 import { redactAuthorizationMaterial } from "./redact-authorization";
-import { clipUtf16CodeUnits } from "./seat-result";
 
 export const SQUAD_BRIDGE_CONTRACT_VERSION = "squad-bridge.v1";
 
@@ -175,7 +175,7 @@ export function sanitizePublishMessage(
     .replace(/\s+/g, " ")
     .trim();
   if (redacted.length <= limit) return redacted;
-  return clipUtf16CodeUnits(redacted, limit);
+  return clipUtf16(redacted, limit);
 }
 
 export function isTrustedIntegrateReceipt(receipt: unknown): boolean {

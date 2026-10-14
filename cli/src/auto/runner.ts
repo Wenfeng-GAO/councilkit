@@ -11,7 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { redact } from "../redact";
 import {
   type AttemptActivity,
@@ -1031,5 +1031,6 @@ function stderrTail(stderr: string): string {
   const trimmed = redacted.trim();
   if (trimmed.length === 0) return "";
   if (trimmed.length <= STDERR_TAIL_BYTES) return trimmed;
-  return `…${clipUtf16TailCodeUnits(trimmed, STDERR_TAIL_BYTES)}`;
+  // Ellipsis sits outside the 2KB tail budget, matching the previous slice.
+  return `…${clipUtf16Tail(trimmed, STDERR_TAIL_BYTES)}`;
 }

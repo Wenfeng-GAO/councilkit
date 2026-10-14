@@ -42,7 +42,7 @@ import {
   type DiagnosedAssessment,
   buildAssessmentDiagnostics,
 } from "@shared/runtime/reviewer-assessment";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
 import { atomicWriteJson } from "../store/atomic-write";
 import {
@@ -290,7 +290,7 @@ export function resolveClusterCloses(
     const titleCore = finding.title.replace(/^[\w./-]+:\s*/, "").toLowerCase();
     const titleHit =
       (titleCore.length >= 8 &&
-        hay.includes(clipUtf16CodeUnits(titleCore, Math.min(40, titleCore.length)))) ||
+        hay.includes(clipUtf16(titleCore, Math.min(40, titleCore.length)))) ||
       tokenOverlap(tokens(finding.title), hayTokens) >= 0.4;
     if (fileHit || titleHit) matched.push(finding.id);
   }
@@ -382,7 +382,7 @@ export function formatLedgerForPrompt(file: FindingsFile, range: string | null):
     }
     if (rows.length > 40) lines.push(`- …另有 ${rows.length - 40} 条`);
   }
-  return clipUtf16CodeUnits(lines.join("\n"), 12_000);
+  return clipUtf16(lines.join("\n"), 12_000);
 }
 
 export function buildClusterPlanMarkdown(lock: PlanLockFile, cluster: PlanCluster): string {
@@ -454,7 +454,7 @@ export function appendLanding(runDir: string, record: LandingRecord): void {
 function mergeFindingEvidence(stronger: boolean, evidence: string, summary: string): string {
   const kept = stronger ? evidence : summary;
   const rest = stronger ? `聚合摘要: ${summary}` : evidence;
-  return clipUtf16CodeUnits(`${kept}\n\n${rest}`, 8000);
+  return clipUtf16(`${kept}\n\n${rest}`, 8000);
 }
 
 export function persistFindingsFromReport(input: {
@@ -701,7 +701,7 @@ function toLedgerFinding(
   if (item.severity === null) return null;
   const text = item.text.trim();
   if (text.length === 0) return null;
-  const title = clipUtf16CodeUnits(firstLine(text), 200);
+  const title = clipUtf16(firstLine(text), 200);
   if (title.length === 0) return null;
   const files = extractPaths(text);
   const id = uniqueId(
@@ -719,7 +719,7 @@ function toLedgerFinding(
     severity: item.severity,
     status: "open",
     title,
-    text: clipUtf16CodeUnits(text, 4000),
+    text: clipUtf16(text, 4000),
     source,
     reviewer,
     files,
@@ -745,7 +745,7 @@ function findingId(
       .filter((part) => part.length > 1)
       .slice(0, 6)
       .join("-");
-    return clipUtf16CodeUnits(`${fileSlug}--${titleSlug || "finding"}`, 96);
+    return clipUtf16(`${fileSlug}--${titleSlug || "finding"}`, 96);
   }
   const digest = createHash("sha256")
     .update(`${severity}\0${title.trim().toLowerCase()}`)
@@ -1316,11 +1316,11 @@ function clusterFromBlock(
 ): PlanCluster {
   const keys = parseKeyedItems(machine);
   const rawId = keys.id ?? heading;
-  const id = uniqueId(clipUtf16CodeUnits(slugify(rawId), 64) || "cluster", used);
+  const id = uniqueId(clipUtf16(slugify(rawId), 64) || "cluster", used);
   used.add(id);
   return {
     id,
-    title: clipUtf16CodeUnits(heading, 200) || id,
+    title: clipUtf16(heading, 200) || id,
     closes: splitCsv(keys.closes),
     files: unique([...splitCsv(keys.files), ...extractPaths(machine)]),
     gates: splitCsv(keys.gates),
@@ -1329,7 +1329,7 @@ function clusterFromBlock(
     forbidden: keys.forbidden ?? "",
     tests: keys.tests ?? "",
     mentions: keys.mentions ?? "",
-    body: clipUtf16CodeUnits(body, 16_000),
+    body: clipUtf16(body, 16_000),
   };
 }
 
@@ -1388,11 +1388,11 @@ function parseDeferred(markdown: string): Array<{ title: string; reason: string 
     const raw = match[1].trim();
     const split = raw.search(/[:：]/);
     if (split < 0) {
-      rows.push({ title: clipUtf16CodeUnits(raw, 400), reason: "" });
+      rows.push({ title: clipUtf16(raw, 400), reason: "" });
     } else {
       rows.push({
-        title: clipUtf16CodeUnits(raw.slice(0, split).trim(), 400),
-        reason: clipUtf16CodeUnits(raw.slice(split + 1).trim(), 800),
+        title: clipUtf16(raw.slice(0, split).trim(), 400),
+        reason: clipUtf16(raw.slice(split + 1).trim(), 800),
       });
     }
   }

@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
-import { clipUtf16CodeUnits, clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16, clipUtf16Tail } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
 import { findExecutable, resolveExecutable } from "./driver-commands";
 
@@ -42,6 +42,8 @@ export interface CheckedOutPr {
 
 const DEFAULT_CMD_TIMEOUT_MS = 5 * 60 * 1000;
 const STDOUT_CAP_BYTES = 8 * 1024 * 1024;
+/** Checkout and push diagnostics, including a trailing ellipsis when clipped. */
+const CHECKOUT_HINT_MAX = 300;
 const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const GH_JSON_FIELDS =
@@ -119,7 +121,7 @@ export async function defaultRunCommand(input: RunCommandInput): Promise<RunComm
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += stderrDecoder.write(chunk);
-      if (stderr.length > 1 * 1024 * 1024) stderr = clipUtf16TailCodeUnits(stderr, 512 * 1024);
+      if (stderr.length > 1 * 1024 * 1024) stderr = clipUtf16Tail(stderr, 512 * 1024);
     });
     const timeout = setTimeout(() => {
       try {
@@ -599,7 +601,7 @@ function parseAntCodePrShow(
   } catch {
     const hint = (stderr.trim() || stdout.trim() || "empty stdout").replace(/\s+/g, " ");
     throw errors.runFailed(
-      `antcode pr show did not return JSON (${clipCheckoutHint(hint)})`,
+      `antcode pr show did not return JSON (${clipUtf16(hint, CHECKOUT_HINT_MAX, "…")})`,
     );
   }
   if (rec === null || typeof rec !== "object") {
@@ -692,11 +694,5 @@ export function trimCmdError(result: RunCommandResult): string {
     /\s+/g,
     " ",
   );
-  return clipCheckoutHint(text);
-}
-
-/** Clip checkout/push diagnostic text on a UTF-16 code-unit boundary. */
-function clipCheckoutHint(text: string): string {
-  if (text.length <= 300) return text;
-  return `${clipUtf16CodeUnits(text, 300)}…`;
+  return clipUtf16(text, CHECKOUT_HINT_MAX, "…");
 }

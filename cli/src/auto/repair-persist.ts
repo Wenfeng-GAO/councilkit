@@ -12,7 +12,7 @@ import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteFile, atomicWriteJson, readFileText } from "../store/atomic-write";
@@ -186,11 +186,11 @@ function clipStoredRepairFields(value: unknown): unknown {
   const row = value as Record<string, unknown>;
   let next = row;
   if (typeof row.goalSummary === "string") {
-    const goalSummary = clipUtf16CodeUnits(row.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX);
+    const goalSummary = clipUtf16(row.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX);
     if (goalSummary !== row.goalSummary) next = { ...next, goalSummary };
   }
   if (typeof row.lastError === "string") {
-    const lastError = clipUtf16CodeUnits(row.lastError, CLI_RUN_LAST_ERROR_MAX);
+    const lastError = clipUtf16(row.lastError, CLI_RUN_LAST_ERROR_MAX);
     if (lastError !== row.lastError) next = { ...next, lastError };
   }
   return next;

@@ -19,6 +19,7 @@ import {
   readdirSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { clipUtf16 } from "../text/clip-utf16";
 import { resolveCliRunsRoot } from "./cli-home";
 import {
   CLI_RUN_FINDINGS_FILE,
@@ -65,7 +66,6 @@ import {
   type IdeateIntegrityDto,
   ideateIntegritySchema,
 } from "./schemas";
-import { clipUtf16CodeUnits } from "./seat-result";
 
 export type { CliRunAttemptProgress, CliRunPipeline, CliRunProgress } from "./cli-run-progress";
 export { CLI_RUN_STATUS_FILE, liveStateFromRecords } from "./cli-run-progress";
@@ -345,7 +345,7 @@ function readRepairProjection(
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : null,
       lastError:
         typeof rec.lastError === "string"
-          ? clipUtf16CodeUnits(rec.lastError, CLI_RUN_LAST_ERROR_MAX)
+          ? clipUtf16(rec.lastError, CLI_RUN_LAST_ERROR_MAX)
           : null,
       outerUsed,
       outerMax,
@@ -363,7 +363,7 @@ function readRepairProjection(
             : undefined,
       goalSummary:
         typeof rec.goalSummary === "string"
-          ? clipUtf16CodeUnits(rec.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX)
+          ? clipUtf16(rec.goalSummary, CLI_RUN_GOAL_SUMMARY_MAX)
           : null,
       acceptanceCoverage:
         typeof rec.acceptanceCoverage === "string" ? rec.acceptanceCoverage : null,
