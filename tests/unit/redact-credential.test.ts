@@ -224,6 +224,16 @@ describe("prefixed and structural credential redaction", () => {
       "unauthorized\nBearer\n[redacted]",
     );
 
+    expect(redactCredentialMaterial("Bearer 'plainLEAK'", "[redacted]")).toBe("Bearer [redacted]");
+    expect(redactCredentialMaterial('Bearer "plainLEAK"', "[redacted]")).toBe("Bearer [redacted]");
+    expect(redactCredentialMaterial("token=Bearer 'plainLEAK'", "[redacted]")).toBe("token=[redacted]");
+    expect(redactCredentialMaterial("Bearer $'ansiLEAK'", "[redacted]")).toBe("Bearer [redacted]");
+    expectSecretsGone(
+      redactDriverDiagnostic("Bearer 'plainLEAK' token=Bearer \"qLEAK\""),
+      "Bearer 'plainLEAK' token=Bearer \"qLEAK\"",
+      ["plainLEAK", "qLEAK"],
+    );
+
     // Known shapes must match after `_` / alnum prefixes (old SK_TOKEN had no \b).
     const prefixedShapes = [
       "prefix_sk-abcdefghijk",

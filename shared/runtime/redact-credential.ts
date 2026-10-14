@@ -108,8 +108,27 @@ export function redactCredentialMaterial(
 ): string {
   const extra = new Set((options.extraExactKeys ?? []).map((key) => key.toLowerCase()));
   let out = redactAssignments(input, placeholder, extra);
-  out = out.replace(/(Bearer\s+)[^\s"'}\]]+/gi, `$1${placeholder}`);
+  out = redactBareBearer(out, placeholder);
   for (const shape of knownShapes()) out = out.replace(shape, placeholder);
+  return out;
+}
+
+/** Bare `Bearer …` outside an assignment. Quoted / ANSI-C tokens are full shell words. */
+function redactBareBearer(input: string, placeholder: string): string {
+  const re = /Bearer\s+/gi;
+  let out = "";
+  let cursor = 0;
+  for (const match of input.matchAll(re)) {
+    const index = match.index ?? 0;
+    if (index < cursor) continue;
+    const end = scanBearerTokenEnd(input, index);
+    if (end < 0) continue;
+    const tokenStart = index + match[0].length;
+    if (end <= tokenStart) continue;
+    out += input.slice(cursor, tokenStart) + placeholder;
+    cursor = end;
+  }
+  out += input.slice(cursor);
   return out;
 }
 
@@ -236,11 +255,25 @@ function indexOfLineEnd(input: string, start: number): number {
 }
 
 function scanBearerTokenEnd(input: string, start: number): number {
-  // Comma stays inside the token (`Bearer abc,def`). Quotes and closers do not,
-  // so a JSON string around the token keeps its delimiter.
-  const match = /^bearer\s+[^\s"'}\]]+/i.exec(input.slice(start));
+  // Old driver matcher was Bearer\s+\S+. Quotes must be consumed as a shell
+  // word (`Bearer 'plainLEAK'`). Unquoted tokens still keep commas and stop
+  // before JSON closers / surrounding quotes.
+  const match = /^bearer\s+/i.exec(input.slice(start));
   if (!match) return -1;
-  return start + match[0].length;
+  const tokenStart = start + match[0].length;
+  if (tokenStart >= input.length) return -1;
+  const opener = input[tokenStart];
+  if (
+    opener === '"' ||
+    opener === "'" ||
+    (opener === "$" && (input[tokenStart + 1] === "'" || input[tokenStart + 1] === '"'))
+  ) {
+    const wordEnd = scanShellWordEnd(input, tokenStart);
+    return wordEnd > tokenStart ? wordEnd : -1;
+  }
+  const rest = /^[^\s"'\}\]]+/.exec(input.slice(tokenStart));
+  if (!rest) return -1;
+  return tokenStart + rest[0].length;
 }
 
 function scanBracketValueEnd(input: string, start: number): number {
