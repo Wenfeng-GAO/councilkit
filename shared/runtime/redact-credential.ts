@@ -38,7 +38,7 @@ const CREDENTIAL_PAIRS = new Set([
 
 /** All-lowercase glued forms that splitIdentifier keeps as one segment. */
 const COMPACT_CREDENTIAL_PAIRS = new Set(
-  [...CREDENTIAL_PAIRS].map((pair) => pair.replaceAll("_", "")),
+  [...CREDENTIAL_PAIRS].map((pair) => pair.replace(/_/g, "")),
 );
 
 function knownShapes(): RegExp[] {
