@@ -626,6 +626,18 @@ describe("runtime query hooks", () => {
 
     const gate = holdDbReads();
     try {
+      scope.roomId = "room-2";
+      scope.roundId = "round-9";
+      act(() => update?.());
+      const fromSettled = mounted.read();
+      expect(fromSettled.report.isPending).toBe(true);
+      expect(fromSettled.report.isPlaceholderData).toBe(false);
+      expect(fromSettled.recovery.isPending).toBe(true);
+      expect(fromSettled.recovery.isPlaceholderData).toBe(false);
+
+      scope.roomId = "room-1";
+      scope.roundId = "round-b";
+      act(() => update?.());
       scope.tick = 1;
       act(() => update?.());
       const bumped = mounted.read();
@@ -652,8 +664,12 @@ describe("runtime query hooks", () => {
       expect(switched.participants.data ?? null).toBeNull();
       expect(switched.executions.data ?? null).toBeNull();
       expect(switched.report.data ?? null).toBeNull();
+      expect(switched.report.isPending).toBe(true);
+      expect(switched.report.isPlaceholderData).toBe(false);
       expect(switched.recovery.data?.executions ?? []).toEqual([]);
       expect(switched.recovery.data?.rounds ?? []).toEqual([]);
+      expect(switched.recovery.isPending).toBe(true);
+      expect(switched.recovery.isPlaceholderData).toBe(false);
 
       gate.release();
       await waitFor(() => mounted.read().room.data?.id === "room-2", "room-2 scope loaded");
