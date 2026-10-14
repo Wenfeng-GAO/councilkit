@@ -58,6 +58,21 @@ describe("git worktree helpers", () => {
     expect(pinned).toBe(sha);
   });
 
+  it("does not pass an option-shaped ref to git rev-parse", async () => {
+    const calls: string[][] = [];
+    const sha = await gitRevParse(
+      repo,
+      "--upload-pack=/tmp/ck-not-a-helper",
+      async (input) => {
+        calls.push(input.argv);
+        return { exitCode: 0, stdout: `${"a".repeat(40)}\n`, stderr: "" };
+      },
+      process.env,
+    );
+    expect(sha).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
   it("refuses to use a local ref when git fetch fails", async () => {
     await expect(
       resolveLocalPrSha({

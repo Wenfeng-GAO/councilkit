@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { RunCommand } from "../src/auto/checkout-pr";
 import { materializeRepairWorkspace, originMatchesRepo } from "../src/auto/repair-workspace";
 
 let roots: string[] = [];
@@ -71,6 +72,39 @@ describe("materializeRepairWorkspace", () => {
         expectedPushUrl: bare,
       }),
     ).rejects.toThrow(/push/i);
+  });
+
+  it("refuses an option-shaped source path or origin URL before git clone", async () => {
+    const payload = "--upload-pack=/tmp/ck-not-a-helper";
+    const calls: string[][] = [];
+    const runCommand: RunCommand = async (input) => {
+      calls.push(input.argv);
+      if (input.argv[0] === "remote" && input.argv[1] === "get-url") {
+        return { stdout: "https://github.com/acme/repo.git\n", stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    await expect(
+      materializeRepairWorkspace({
+        dest: "/tmp/ck-repair-dest",
+        sourceRepo: payload,
+        sourceBranch: "feat-x",
+        sourceSha: "a".repeat(40),
+        runCommand,
+      }),
+    ).rejects.toThrow(/unusable/);
+    await expect(
+      materializeRepairWorkspace({
+        dest: "/tmp/ck-repair-dest",
+        sourceRepo: "/tmp/ck-safe-source",
+        sourceBranch: "feat-x",
+        sourceSha: "a".repeat(40),
+        expectedOriginUrl: payload,
+        runCommand,
+      }),
+    ).rejects.toThrow(/unusable/);
+    expect(calls.some((argv) => argv.some((arg) => arg.includes("--upload-pack")))).toBe(false);
+    expect(calls.some((argv) => argv[0] === "clone")).toBe(false);
   });
 
   it("matches host+path for SCP, ssh://, HTTPS and rejects substring spoofs", () => {

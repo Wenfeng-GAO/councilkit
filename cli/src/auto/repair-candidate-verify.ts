@@ -11,6 +11,7 @@ import {
 } from "@shared/runtime/repair-contract";
 import { atomicWriteFile, atomicWriteJson } from "../store/atomic-write";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
+import { gitPositional } from "./git-argv";
 import { detectIsolationCapability, runIsolatedCommand } from "./repair-isolated-run";
 
 export const EMPTY_EXTRA_PROBE_MANIFEST = "empty-extra-probes:none";
@@ -60,12 +61,16 @@ export async function ensureCandidateSnapshot(input: {
   });
   if (direct.ok) return direct;
   const dest = join(input.snapshotRoot, sha);
-  if (!existsSync(dest)) {
+  const safeDest = gitPositional(dest);
+  if (safeDest === null || gitPositional(sha) === null) {
+    return { ok: false, reason: "candidate snapshot path is unusable" };
+  }
+  if (!existsSync(safeDest)) {
     mkdirSync(input.snapshotRoot, { recursive: true, mode: 0o700 });
     const run = input.runCommand ?? defaultRunCommand;
     const added = await run({
       executable: "git",
-      argv: ["worktree", "add", "--detach", dest, sha],
+      argv: ["worktree", "add", "--detach", "--", safeDest, sha],
       cwd: input.sourceCwd,
       env: input.env ?? process.env,
     });
