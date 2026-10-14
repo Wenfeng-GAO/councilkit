@@ -16,9 +16,6 @@ import { resolveCouncilkitHome } from "./cli-home";
 
 export const CURSOR_REPAIR_MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]";
 
-/** Display name measured from Cursor for the exact 500K id. Receipt-only. */
-export const CURSOR_REPAIR_MODEL_DISPLAY = "Grok 4.7 500K Extra High";
-
 export const GROK_REPAIR_MODEL = "grok-4.6";
 
 export const CURSOR_REPAIR_PROFILE = "councilkit-repair-cursor";

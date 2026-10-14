@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   type FrozenIntegrateIdentity,
-  SQUAD_BRIDGE_CONTRACT_VERSION,
   type SquadBridgeEventKind,
   type SquadBridgeFailureCode,
   type SquadJournalRefs,
@@ -291,5 +290,3 @@ export class FakeSquadBridge implements SquadBridge {
     return this.frozen.get(request.taskId) ?? null;
   }
 }
-
-export const DEFAULT_SQUAD_BRIDGE_VERSION = SQUAD_BRIDGE_CONTRACT_VERSION;

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { CLI_STORE_DIR_NAME, resolveCouncilkitHome } from "@shared/runtime/cli-home";
+import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 /**
  * XDG-style data-home resolution (brief §2b, D1 §11). Priority:
  *   1. COUNCILKIT_HOME          (explicit override; tests pin a temp dir)
@@ -16,8 +16,6 @@ import {
   CLI_RUN_LANDINGS_FILE,
   CLI_RUN_PLAN_LOCK_FILE,
 } from "@shared/runtime/cli-ledger";
-
-export const STORE_DIR_NAME = CLI_STORE_DIR_NAME;
 
 export function councilkitHome(env: NodeJS.ProcessEnv = process.env): string {
   return resolveCouncilkitHome(env);

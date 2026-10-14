@@ -4,7 +4,6 @@ import { type ExclusiveLock, acquireExclusiveLock } from "@shared/runtime/exclus
 import {
   type RepairBudget,
   type RepairChain,
-  authorizeBudgetAppend,
   bootstrapChain,
   canConsumeRetry,
   canOpenSourceFix,
@@ -137,28 +136,6 @@ export function consumeLockedRetry(
     if (!consumed.ok) return consumed;
     writeRepairChain({ ...current, budget: consumed.budget, casVersion: current.casVersion + 1 });
     return { ok: true as const, budget: consumed.budget };
-  });
-}
-
-export function appendAuthorizedBudget(
-  chainId: string,
-  extra: Parameters<typeof authorizeBudgetAppend>[1],
-  parentRunId: string,
-): RepairChain {
-  return withChainLock(chainId, () => {
-    const current = readRepairChain(chainId);
-    if (!current) throw errors.runFailed("repair chain missing");
-    const budget = authorizeBudgetAppend(current.budget, extra);
-    const next = {
-      ...current,
-      budget,
-      parentRunIds: current.parentRunIds.includes(parentRunId)
-        ? current.parentRunIds
-        : [...current.parentRunIds, parentRunId],
-      casVersion: current.casVersion + 1,
-    };
-    writeRepairChain(next);
-    return next;
   });
 }
 

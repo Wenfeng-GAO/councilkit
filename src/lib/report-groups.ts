@@ -346,13 +346,3 @@ export function buildPrComment(title: string, report: ParsedReviewReport): strin
   lines.push("", "请按 critical/major 优先修复，并在评论里说明验证命令。");
   return `${lines.join("\n")}\n`;
 }
-
-export function siblingRuns(
-  runs: readonly CliRunSummaryDto[],
-  current: CliRunSummaryDto,
-): CliRunSummaryDto[] {
-  const group = groupCliRuns(runs).find((item) =>
-    item.runs.some((run) => run.runId === current.runId),
-  );
-  return group?.runs.filter((run) => run.runId !== current.runId) ?? [];
-}

@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { type LedgerFinding, isFindingVerifiedClosed } from "./cli-ledger";
-import { canonicalJson } from "./digest";
 import { type FindingGroupsFile, resolveRootCause } from "./finding-groups";
 
 export const ADJUDICATION_KINDS = [
@@ -406,10 +404,6 @@ export function gateAcceptanceView(projection: AdjudicationProjection): GateAcce
 
 export function notEvaluatedIsNotCounterEvidence(view: GateAcceptanceView): boolean {
   return view.notEvaluatedIds.length > 0 && view.openIds.length === 0 && !view.conflict;
-}
-
-export function adjudicationDigest(projection: AdjudicationProjection): string {
-  return createHash("sha256").update(canonicalJson(projection)).digest("hex");
 }
 
 function unique(values: string[]): string[] {

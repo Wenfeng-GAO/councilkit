@@ -88,10 +88,6 @@ export function signalVerifiedGroup(expected: ProcessFingerprint, signal: NodeJS
   return true;
 }
 
-export function liveMatchesFrozen(expected: ProcessFingerprint, pid = expected.pid): boolean {
-  return sameProcess(expected, fingerprintPid(pid));
-}
-
 export function groupHasLiveMembers(pgid: number, expected?: ProcessFingerprint): boolean {
   const members = listGroupPids(pgid);
   if (members.length === 0) return false;
