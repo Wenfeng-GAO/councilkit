@@ -7,6 +7,7 @@ import { existsSync, lstatSync, rmSync } from "node:fs";
 import { errors } from "../errors";
 import { type TrustedRoot, assertWithinRoot, revalidateTrustedRoot } from "../fs-safe";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
+import { gitPositional } from "./git-argv";
 
 const FETCH_REF_PREFIX = "refs/councilkit/fetch";
 const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
@@ -17,9 +18,11 @@ export async function gitRevParse(
   runCommand: RunCommand,
   env: NodeJS.ProcessEnv,
 ): Promise<string | null> {
+  const safeRef = gitPositional(ref);
+  if (safeRef === null) return null;
   const result = await runCommand({
     executable: "git",
-    argv: ["rev-parse", "--verify", ref],
+    argv: ["rev-parse", "--verify", "--end-of-options", safeRef],
     cwd: repo,
     env,
   });
@@ -111,10 +114,15 @@ export async function addDetachedWorktree(opts: {
   const env = opts.env ?? process.env;
   revalidateTrustedRoot(opts.root);
   assertWithinRoot(opts.root, opts.dest);
+  const dest = gitPositional(opts.dest);
+  const sha = gitPositional(opts.sha);
+  if (dest === null || sha === null) {
+    throw errors.io("refusing unusable worktree path or SHA");
+  }
   await removeWorktreeIfPresent(opts);
   const added = await runCommand({
     executable: "git",
-    argv: ["worktree", "add", "--detach", opts.dest, opts.sha],
+    argv: ["worktree", "add", "--detach", "--", dest, sha],
     cwd: opts.repo,
     env,
   });
@@ -135,7 +143,9 @@ export async function removeWorktreeIfPresent(opts: {
   const env = opts.env ?? process.env;
   revalidateTrustedRoot(opts.root);
   assertWithinRoot(opts.root, opts.dest);
-  if (!existsSync(opts.dest)) {
+  const dest = gitPositional(opts.dest);
+  if (dest === null) throw errors.io("refusing unusable worktree path");
+  if (!existsSync(dest)) {
     await runCommand({
       executable: "git",
       argv: ["worktree", "prune"],
@@ -144,13 +154,13 @@ export async function removeWorktreeIfPresent(opts: {
     });
     return;
   }
-  const stat = lstatSync(opts.dest);
+  const stat = lstatSync(dest);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw errors.io("the workspace path is not a real directory (refusing to remove it)");
   }
   await runCommand({
     executable: "git",
-    argv: ["worktree", "remove", "--force", opts.dest],
+    argv: ["worktree", "remove", "--force", "--", dest],
     cwd: opts.repo,
     env,
   });
@@ -160,7 +170,7 @@ export async function removeWorktreeIfPresent(opts: {
     cwd: opts.repo,
     env,
   });
-  if (existsSync(opts.dest)) {
-    rmSync(opts.dest, { recursive: true, force: true });
+  if (existsSync(dest)) {
+    rmSync(dest, { recursive: true, force: true });
   }
 }

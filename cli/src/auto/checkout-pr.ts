@@ -8,6 +8,7 @@ import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/ru
 import { clipUtf16, clipUtf16Tail } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
 import { findExecutable, resolveExecutable } from "./driver-commands";
+import { gitPositional } from "./git-argv";
 
 export { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl };
 
@@ -327,18 +328,26 @@ async function checkoutAntCode(
   });
   assertOk(shown, "antcode pr show");
   const meta = parseAntCodePrShow(shown.stdout, shown.stderr);
+  const cloneUrl = gitPositional(meta.cloneUrl);
+  const safeBranch = gitPositional(meta.branch);
+  if (cloneUrl === null) {
+    throw errors.runFailed("antcode pr show did not include a usable clone URL");
+  }
+  if (safeBranch === null) {
+    throw errors.runFailed("antcode pr show did not include a usable branch");
+  }
   const cloned = await runCommand({
     executable: "git",
-    argv: ["clone", "--depth", "1", "--branch", meta.branch, meta.cloneUrl, "."],
+    argv: ["clone", "--depth", "1", "--branch", safeBranch, "--", cloneUrl, "."],
     cwd,
     env,
   });
   assertOk(cloned, "git clone");
-  const branch = await currentBranch(cwd, runCommand, env, meta.branch);
+  const branch = await currentBranch(cwd, runCommand, env, safeBranch);
   const headSha =
     meta.headSha ??
     (await resolveRemoteBranchSha({
-      cloneUrl: meta.cloneUrl,
+      cloneUrl,
       branch: meta.branch,
       runCommand,
       env,
@@ -347,7 +356,7 @@ async function checkoutAntCode(
   const baseSha =
     meta.baseSha ??
     (await resolveRemoteBranchSha({
-      cloneUrl: meta.targetCloneUrl ?? meta.cloneUrl,
+      cloneUrl: meta.targetCloneUrl ?? cloneUrl,
       branch: meta.baseBranch,
       runCommand,
       env,
@@ -357,7 +366,7 @@ async function checkoutAntCode(
     prUrl: url.toString(),
     host: "antcode",
     branch,
-    cloneUrl: meta.cloneUrl,
+    cloneUrl,
     baseBranch: meta.baseBranch,
     ...(headSha ? { headSha } : {}),
     ...(baseSha ? { baseSha } : {}),
@@ -512,10 +521,11 @@ export async function resolveRemoteBranchSha(input: {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
 }): Promise<string | undefined> {
-  if (!BRANCH_RE.test(input.branch) || input.cloneUrl.length === 0) return undefined;
+  const cloneUrl = gitPositional(input.cloneUrl);
+  if (!BRANCH_RE.test(input.branch) || cloneUrl === null) return undefined;
   const result = await input.runCommand({
     executable: "git",
-    argv: ["ls-remote", input.cloneUrl, `refs/heads/${input.branch}`],
+    argv: ["ls-remote", "--", cloneUrl, `refs/heads/${input.branch}`],
     cwd: input.cwd ?? process.cwd(),
     env: input.env ?? process.env,
   });
@@ -657,9 +667,9 @@ function repoCloneUrl(row: unknown): string {
   if (row === null || typeof row !== "object" || Array.isArray(row)) return "";
   const rec = row as Record<string, unknown>;
   const ssh = typeof rec.ssh_url === "string" ? rec.ssh_url : "";
-  if (ssh.length > 0 && /[\n\r]/.test(ssh) === false) return ssh;
+  if (ssh.trim().length > 0) return gitPositional(ssh) ?? "";
   const http = typeof rec.http_url === "string" ? rec.http_url : "";
-  if (http.length > 0 && /[\n\r]/.test(http) === false) return http;
+  if (http.trim().length > 0) return gitPositional(http) ?? "";
   return "";
 }
 

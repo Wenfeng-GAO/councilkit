@@ -37,6 +37,18 @@ describe("project keys", () => {
       host: "github.com",
       path: "acme/repo",
     });
+    expect(parseRemoteRepoIdentity("git@github.com:acme/方案.git")).toEqual({
+      host: "github.com",
+      path: "acme/方案",
+    });
+  });
+
+  it("does not treat an option-shaped remote as a repository identity", () => {
+    expect(parseRemoteRepoIdentity("--upload-pack=/acme/repo.git")).toBeNull();
+    expect(parseRemoteRepoIdentity("--config=core.sshCommand=echo")).toBeNull();
+    expect(remoteMatchesProject("--upload-pack=/acme/repo.git", "acme/repo")).toBe(false);
+    expect(parseRemoteRepoIdentity(`git@github.com:${"a".repeat(5000)}/repo.git`)).toBeNull();
+    expect(parseRemoteRepoIdentity("git@github.com:acme/repo.git\u0000")).toBeNull();
   });
 
   it("matches gitlab/ssh remotes to an AntCode project key", () => {

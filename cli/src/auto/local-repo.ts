@@ -16,6 +16,7 @@ import { errors } from "../errors";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
 import type { RunCommand } from "./checkout-pr";
+import { gitPositional } from "./git-argv";
 
 export { projectKeyFromPr };
 
@@ -44,8 +45,8 @@ export interface RemoteRepoIdentity {
 
 /** Host + repo path from HTTPS, ssh:// (optional port), SCP-style, or a local path. */
 export function parseRemoteRepoIdentity(remote: string): RemoteRepoIdentity | null {
-  const trimmed = remote.trim();
-  if (!trimmed) return null;
+  const trimmed = gitPositional(remote);
+  if (trimmed === null) return null;
   if (isLocalRemotePath(trimmed)) {
     const path = stripGitSuffix(trimmed.replace(/^file:\/\//i, ""));
     return path.length > 0 ? { host: "", path } : null;

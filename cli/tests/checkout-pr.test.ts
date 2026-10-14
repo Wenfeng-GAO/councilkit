@@ -151,7 +151,7 @@ describe("checkoutPullRequest command sequence", () => {
         };
       }
       if (input.executable === "git" && input.argv[0] === "ls-remote") {
-        if (input.argv[2] === "refs/heads/feat/live") {
+        if (input.argv[3] === "refs/heads/feat/live") {
           return { stdout: `${remoteSha}\trefs/heads/feat/live\n`, stderr: "", exitCode: 0 };
         }
         return { stdout: "", stderr: "", exitCode: 0 };
@@ -188,7 +188,7 @@ describe("checkoutPullRequest command sequence", () => {
         };
       }
       if (input.executable === "git" && input.argv[0] === "ls-remote") {
-        if (input.argv[1] === "git@code.alipay.com:fork/repo.git") {
+        if (input.argv[2] === "git@code.alipay.com:fork/repo.git") {
           return {
             stdout: `${headSha}\trefs/heads/squad/20260920-session-recovery-k8n4\n`,
             stderr: "",
@@ -197,6 +197,7 @@ describe("checkoutPullRequest command sequence", () => {
         }
         expect(input.argv).toEqual([
           "ls-remote",
+          "--",
           "git@code.alipay.com:acme/repo.git",
           "refs/heads/master",
         ]);
@@ -217,8 +218,9 @@ describe("checkoutPullRequest command sequence", () => {
         (row) =>
           row[0] === "git" &&
           row[1] === "ls-remote" &&
-          row[2] === "git@code.alipay.com:fork/repo.git" &&
-          row[3]?.includes("squad/"),
+          row[2] === "--" &&
+          row[3] === "git@code.alipay.com:fork/repo.git" &&
+          row[4]?.includes("squad/"),
       ),
     ).toBe(true);
   });
@@ -237,7 +239,7 @@ describe("checkoutPullRequest command sequence", () => {
         };
       }
       if (input.executable === "git" && input.argv[0] === "ls-remote") {
-        if (input.argv[2] === "refs/heads/feat/live") {
+        if (input.argv[3] === "refs/heads/feat/live") {
           return {
             stdout: "e75ee6755ea846f2772aca2d13d6ec1ac9b87bed\trefs/heads/feat/live\n",
             stderr: "",
@@ -282,6 +284,71 @@ describe("checkoutPullRequest command sequence", () => {
     );
     expect(result.headSha).toBeUndefined();
     expect(() => requirePrHeadIdentity(result)).toThrow(/did not include headSha/);
+  });
+
+  it("refuses an AntCode ssh_url that git would parse as an option", async () => {
+    const calls: string[][] = [];
+    const runCommand: RunCommand = async (input) => {
+      calls.push([input.executable, ...input.argv]);
+      if (input.executable === "antcode") {
+        return {
+          stdout: JSON.stringify({
+            source_branch: "feat/live",
+            target_branch: "master",
+            source: {
+              ssh_url: "--upload-pack=/tmp/ck-not-a-helper",
+              http_url: "https://code.alipay.com/acme/repo.git",
+            },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    await expect(
+      inspectPullRequest("https://code.alipay.com/acme/repo/pull_requests/1", runCommand, {
+        PATH: process.env.PATH,
+      }),
+    ).rejects.toThrow(/usable clone URL/);
+    expect(calls.some((row) => row[0] === "git")).toBe(false);
+    expect(calls.some((row) => row.join(" ").includes("--upload-pack"))).toBe(false);
+  });
+
+  it.each([
+    ["option", "--config=core.sshCommand=echo"],
+    ["huge", `git@code.alipay.com:${"a".repeat(5000)}/repo.git`],
+    ["nul", "git@code.alipay.com:acme/repo.git\u0000"],
+    ["embedded-newline", "https://code.alipay.com/acme\n/repo.git"],
+    ["empty", ""],
+  ])("refuses a %s AntCode clone URL", async (_label, cloneUrl) => {
+    const calls: string[][] = [];
+    const runCommand: RunCommand = async (input) => {
+      calls.push([input.executable, ...input.argv]);
+      if (input.executable === "antcode") {
+        return {
+          stdout: JSON.stringify({
+            source_branch: "feat/live",
+            target_branch: "master",
+            source: cloneUrl.startsWith("https://")
+              ? { http_url: cloneUrl }
+              : { ssh_url: cloneUrl },
+          }),
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    await expect(
+      checkoutPullRequest(
+        "https://code.alipay.com/acme/repo/pull_requests/1",
+        "/tmp/ws",
+        runCommand,
+        { PATH: process.env.PATH },
+      ),
+    ).rejects.toThrow(/usable clone URL/);
+    expect(calls.some((row) => row[0] === "git")).toBe(false);
   });
 
   it("AntCode: empty stdout plus old-CLI stderr is a JSON error that names the flag", async () => {
