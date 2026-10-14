@@ -280,19 +280,20 @@ export class Store {
   updateReviewJury(input: ReviewJuryUpdate): CouncilRecord {
     const validated = reviewJuryUpdateSchema.safeParse(input);
     if (!validated.success) throw errors.usage("invalid default review roster");
+    // Persist the parsed roster. modelId is trimmed by reviewModelSchema; writing
+    // the raw input would store the spaces the schema already accepted away.
+    const { revision, seats, reporterAgentId } = validated.data;
     const council = this.getCouncil("pr-jury");
-    if (input.revision !== this.councilRevision(council))
+    if (revision !== this.councilRevision(council))
       throw errors.usage("JURY_CONFLICT: 默认席位已被修改，请重新加载后再保存。");
-    for (const seat of input.seats) {
+    for (const seat of seats) {
       if (!this.getAgent(seat.agentId).enabled) throw errors.usage("不能添加已停用的 Agent");
     }
     const next: CouncilRecord = {
       ...council,
-      agentIds: input.seats.map((seat) => seat.agentId),
-      reporterAgentId: input.reporterAgentId,
-      agentOverrides: Object.fromEntries(
-        input.seats.map(({ agentId, ...model }) => [agentId, model]),
-      ),
+      agentIds: seats.map((seat) => seat.agentId),
+      reporterAgentId,
+      agentOverrides: Object.fromEntries(seats.map(({ agentId, ...model }) => [agentId, model])),
     };
     const file = this.readCouncils();
     file.councils = file.councils.map((row) => (row.id === council.id ? next : row));

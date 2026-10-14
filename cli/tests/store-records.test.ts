@@ -944,11 +944,7 @@ describe("review jury updates", () => {
     expect(readFileSync(resolvePaths(envFor(home)).councils, "utf8")).toBe(before);
   });
 
-  it.skip("stores the schema-trimmed modelId for a jury seat", () => {
-    // BUG: updateReviewJury validates seats with reviewJuryUpdateSchema, which
-    // trims modelId, then ignores the parsed value and writes the raw input.
-    // modelId "  gpt-6  " is accepted; the return value and councils.json keep
-    // the spaces, while a later getCouncil() parses that file back as "gpt-6".
+  it("stores the schema-trimmed modelId for a jury seat", () => {
     const { home, store, alpha } = seed();
     const council = store.getCouncil("pr-jury");
     const updated = store.updateReviewJury({
