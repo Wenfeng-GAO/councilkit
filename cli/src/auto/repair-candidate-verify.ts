@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LedgerFinding } from "@shared/runtime/cli-ledger";
 import { canonicalJson } from "@shared/runtime/digest";
@@ -18,19 +18,6 @@ export const EMPTY_EXTRA_PROBE_MANIFEST = "empty-extra-probes:none";
 export type CandidateSnapshot =
   | { ok: true; cwd: string; head: string; dirtyTree: boolean }
   | { ok: false; reason: string };
-
-export interface OfficialEvidenceRow {
-  evidenceId?: string;
-  command?: unknown;
-  cwd?: unknown;
-  exitCode?: unknown;
-  exit_code?: unknown;
-  candidateSha?: unknown;
-  candidate_sha?: unknown;
-  stdoutHash?: unknown;
-  stdout_hash?: unknown;
-  source?: unknown;
-}
 
 export function hashTestAssetContents(contents: readonly string[]): string {
   return createHash("sha256")
@@ -170,67 +157,6 @@ export function bindCodeTraceAsset(input: {
         role: "independent_adjudicator",
         executionSource: "independent-reviewer-trace",
         locations: [...input.locations],
-      },
-    ],
-  };
-}
-
-export function officialEvidenceMatchesCandidate(
-  row: OfficialEvidenceRow,
-  input: { command: string; cwd: string; snapshotSha: string },
-): boolean {
-  const command = typeof row.command === "string" ? row.command : "";
-  const cwd = typeof row.cwd === "string" ? row.cwd : "";
-  const sha = readSha(row.candidateSha) ?? readSha(row.candidate_sha);
-  const source = typeof row.source === "string" ? row.source : "";
-  if (source === "evidence record" || source === "manual") return false;
-  return (
-    command === input.command &&
-    cwd === input.cwd &&
-    typeof sha === "string" &&
-    sha.toLowerCase() === input.snapshotSha.toLowerCase() &&
-    typeof (row.stdoutHash ?? row.stdout_hash) === "string"
-  );
-}
-
-export function assetFromOfficialEvidence(input: {
-  assertionId: string;
-  command: string;
-  cwd: string;
-  snapshotSha: string;
-  testAssetVersion: string;
-  row: OfficialEvidenceRow;
-  logPath: string;
-}): VerificationAsset | null {
-  const exitCode = Number(input.row.exitCode ?? input.row.exit_code);
-  if (!Number.isInteger(exitCode)) return null;
-  const sha = readSha(input.row.candidateSha) ?? readSha(input.row.candidate_sha);
-  if (!sha) return null;
-  const stdoutHash =
-    typeof (input.row.stdoutHash ?? input.row.stdout_hash) === "string"
-      ? String(input.row.stdoutHash ?? input.row.stdout_hash)
-      : "";
-  return {
-    assertionId: input.assertionId,
-    snapshotSha: sha.toLowerCase(),
-    testAssetVersion: input.testAssetVersion,
-    extraProbesDeclared: false,
-    extraProbeManifestVersion: EMPTY_EXTRA_PROBE_MANIFEST,
-    kind: "command_receipt",
-    receipts: [
-      {
-        command: input.command,
-        cwd: input.cwd,
-        exitCode,
-        logPath: input.logPath,
-        snapshotSha: sha.toLowerCase(),
-        testAssetVersion: input.testAssetVersion,
-        dirtyTree: false,
-        skipped: false,
-        ranZeroTests: false,
-        role: "independent_adjudicator",
-        executionSource: "squadctl-host-run",
-        stdoutHash,
       },
     ],
   };
@@ -416,14 +342,6 @@ export function codeTraceFromReview(
   });
 }
 
-function readSha(value: unknown): string | null {
-  return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value : null;
-}
-
 export function persistVerificationAssets(path: string, assets: VerificationAsset[]): void {
   atomicWriteJson(path, assets);
-}
-
-export function writeCacheMarker(path: string, cacheKey: string): void {
-  writeFileSync(path, `${cacheKey}\n`, { encoding: "utf8", mode: 0o600 });
 }
