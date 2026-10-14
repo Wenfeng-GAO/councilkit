@@ -268,10 +268,14 @@ export function resolveRepairRoles(input: {
     if (roles[seat].mode === "main-session") {
       return { ok: false, reason: `${seat} 不能使用 main-session，否则会伪装成连续 Builder。` };
     }
-    if (roles[seat].runtime !== "cursor" && roles[seat].runtime !== "codex") {
+    if (
+      roles[seat].runtime !== "cursor" &&
+      roles[seat].runtime !== "codex" &&
+      roles[seat].runtime !== "grokb"
+    ) {
       return {
         ok: false,
-        reason: `${seat} 只支持 cursor 或 codex。已拒绝 ${roles[seat].runtime}，不会自动换成其他模型。`,
+        reason: `${seat} 只支持 cursor、codex 或 grokb。已拒绝 ${roles[seat].runtime}，不会自动换成其他模型。`,
       };
     }
   }
@@ -537,10 +541,11 @@ function parseSeatOverride(
       reason: `${seat} 不支持 runtime「${runtimeRaw}」。不会自动换成其他 runtime。`,
     };
   }
-  if (!builder && runtime !== "cursor" && runtime !== "codex") {
+  // Independent squadctl adapter runs use grokb; grok is only a Builder alias.
+  if (!builder && runtime !== "cursor" && runtime !== "codex" && runtime !== "grokb") {
     return {
       ok: false,
-      reason: `${seat} 只支持 cursor 或 codex。已拒绝 ${runtime}，不会自动换成其他模型。`,
+      reason: `${seat} 只支持 cursor、codex 或 grokb。已拒绝 ${runtime}，不会自动换成其他模型。`,
     };
   }
   if (builder && runtime === "codex") return { ok: false, reason: BUILDER_MISMATCH };

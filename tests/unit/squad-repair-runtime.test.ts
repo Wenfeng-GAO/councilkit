@@ -1,7 +1,9 @@
 import {
   CURSOR_REPAIR_MODEL,
+  GROK_REPAIR_MODEL,
   type RepairSeat,
   applyRepairRoleUpdates,
+  buildRepairContract,
   cursorRepairModelPin,
   cursorRepairModelReceiptMatches,
   cursorRepairRoles,
@@ -113,4 +115,53 @@ describe("cursor repair model pin", () => {
     expect(applied.resolved.roles.coder.model).toBe("composer-2.5");
     expect(applied.resolved.roles.reviewer.model).toBe(CURSOR_REPAIR_MODEL);
   });
+
+  it.each(["planner_b", "reviewer", "verifier"] as const)(
+    "allows an independent grokb %s with its existing sandbox policy",
+    (seat) => {
+      const resolved = resolveRepairRoles({
+        orchestratorRuntime: "grokb",
+        roles: { [seat]: { runtime: "grokb" } },
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+      expect(resolved.emitContract).toBe(true);
+      const contract = buildRepairContract({
+        contractId: "grok-independent-test",
+        createdAt: "2026-10-09T00:00:00.000Z",
+        roles: resolved.roles,
+      });
+      expect(contract.roles[seat]).toEqual({
+        runtime: "grokb",
+        model: GROK_REPAIR_MODEL,
+        sandbox: seat === "verifier" ? "workspace-write" : "read-only",
+      });
+      for (const builder of ["orchestrator", "planner_a", "coder"] as const) {
+        expect(contract.roles[builder]).toMatchObject({
+          runtime: "grokb",
+          model: GROK_REPAIR_MODEL,
+          mode: "main-session",
+        });
+      }
+      for (const other of ["planner_b", "reviewer", "verifier"] as const) {
+        if (other !== seat) expect(contract.roles[other].runtime).toBe("cursor");
+      }
+    },
+  );
+
+  it.each(["planner_b", "reviewer", "verifier"] as const)(
+    "rejects unsupported runtimes and unpinned Grok models for %s",
+    (seat) => {
+      for (const runtime of ["grok", "grok_local", "unknown"]) {
+        const resolved = resolveRepairRoles({
+          roles: { [seat]: { runtime, model: GROK_REPAIR_MODEL } },
+        });
+        expect(resolved.ok).toBe(false);
+      }
+      for (const model of ["auto", "default", "configured", "current"]) {
+        const resolved = resolveRepairRoles({ roles: { [seat]: { runtime: "grokb", model } } });
+        expect(resolved.ok).toBe(false);
+      }
+    },
+  );
 });

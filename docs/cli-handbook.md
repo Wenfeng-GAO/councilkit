@@ -397,7 +397,7 @@ councilkit review <pr-url> --against <ck-review-id> --repair-package <file> [--j
 
 ```bash
 councilkit repair roles show [--json]
-councilkit repair roles set --reviewer cursor:<model> | codex:<model> [--json]
+councilkit repair roles set --reviewer cursor:<model> | codex:<model> | grokb:<model> [--json]
 councilkit repair roles reset [--json]
 ```
 

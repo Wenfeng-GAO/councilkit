@@ -83,7 +83,7 @@ async function setRepairRoles(argv: string[], out: OutputSink): Promise<void> {
   }
   if (Object.keys(updates).length === 0) {
     throw errors.usage(
-      "repair roles set 需要至少一个席位，例如 --reviewer codex:gpt-5.6-sol 或 --reviewer cursor:composer-2.5",
+      "repair roles set 需要至少一个席位，例如 --reviewer grokb:grok-4.6 或 --reviewer cursor:composer-2.5",
     );
   }
   mkdirSync(resolveCouncilkitHome(process.env), { recursive: true, mode: 0o700 });
@@ -123,7 +123,7 @@ async function resetRepairRoles(out: OutputSink): Promise<void> {
 function parseSeatSpec(seat: RepairSeat, spec: string): { runtime: string; model: string } {
   const index = spec.indexOf(":");
   if (index <= 0 || index === spec.length - 1) {
-    throw errors.usage(`${seat} 的格式是 runtime:model，例如 cursor:composer-2.5 或 codex:gpt-5.6-sol`);
+    throw errors.usage(`${seat} 的格式是 runtime:model，例如 cursor:composer-2.5 或 grokb:grok-4.6`);
   }
   return { runtime: spec.slice(0, index).trim(), model: spec.slice(index + 1).trim() };
 }
