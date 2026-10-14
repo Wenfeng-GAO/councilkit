@@ -189,6 +189,10 @@ describe("prefixed and structural credential redaction", () => {
       ["sessiontoken=plainLEAK", "sessiontoken=[redacted]"],
       ["myaccesstoken=plainLEAK", "myaccesstoken=[redacted]"],
       ["clientsecret=plainLEAK", "clientsecret=[redacted]"],
+      ["api_key='abc'defLEAK", "api_key=[redacted]"],
+      ['api_key="abc"defLEAK', "api_key=[redacted]"],
+      ["password='x'y'zLEAK", "password=[redacted]"],
+      ["token='keep' tail=visible", "token='[redacted]' tail=visible"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(redactCredentialMaterial(input, "[redacted]"), input).toBe(expected);

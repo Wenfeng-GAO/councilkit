@@ -152,12 +152,26 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
     }
     if (opener === '"' || opener === "'") {
       const close = scanQuotedEnd(input, valueStart);
-      const quoted = close >= 0;
-      const valueEnd = quoted ? close : indexOfLineEnd(input, valueStart);
-      out += input.slice(cursor, valueStart + 1);
-      out += placeholder;
-      if (quoted) out += input[valueEnd];
-      cursor = quoted ? valueEnd + 1 : valueEnd;
+      if (close < 0) {
+        const valueEnd = indexOfLineEnd(input, valueStart);
+        out += input.slice(cursor, valueStart + 1);
+        out += placeholder;
+        cursor = valueEnd;
+        continue;
+      }
+      const afterQuote = close + 1;
+      const wordEnd = scanShellWordEnd(input, afterQuote);
+      if (wordEnd === afterQuote) {
+        // Clean quoted value: keep the surrounding quotes.
+        out += input.slice(cursor, valueStart + 1);
+        out += placeholder;
+        out += input[close];
+        cursor = afterQuote;
+      } else {
+        // Shell concatenation (`'abc'defLEAK`): redact the whole word.
+        out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
+        cursor = wordEnd;
+      }
       continue;
     }
     const valueEnd = scanUnquotedValueEnd(input, valueStart);
@@ -241,6 +255,41 @@ function scanBracketValueEnd(input: string, start: number): number {
     }
   }
   return input.length;
+}
+
+function scanShellWordEnd(input: string, start: number): number {
+  let i = start;
+  while (i < input.length) {
+    const char = input[i];
+    if (char === '"' || char === "'") {
+      const close = scanQuotedEnd(input, i);
+      if (close < 0) return indexOfLineEnd(input, i);
+      i = close + 1;
+      continue;
+    }
+    if (char === ";") {
+      const next = input[i + 1];
+      if (next === undefined || next === " " || next === "\t" || next === "\n" || next === "\r") {
+        return i;
+      }
+      i += 1;
+      continue;
+    }
+    if (
+      char === " " ||
+      char === "\t" ||
+      char === "\n" ||
+      char === "\r" ||
+      char === "," ||
+      char === "&" ||
+      char === "}" ||
+      char === "]"
+    ) {
+      return i;
+    }
+    i += 1;
+  }
+  return i;
 }
 
 function scanUnquotedValueEnd(input: string, start: number): number {
