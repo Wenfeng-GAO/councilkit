@@ -609,10 +609,13 @@ async function driveToTerminal(input: {
         try {
           await host.refreshAuthForStream(deadlineSignal);
         } catch (refreshError) {
-          // The document GET rejects when this signal aborts it. The accepted
-          // execution still has to be cancelled. Any other refresh failure
-          // stays a stream fault.
-          if (deadlineSignal.aborted) return { kind: "aborted" };
+          // The document GET rejects with AbortError when this signal aborts
+          // it. The accepted execution still has to be cancelled. A real
+          // refresh failure that only races the deadline stays a stream fault
+          // (H2), the same rule as the follow catch below.
+          if (deadlineSignal.aborted && isAbortError(refreshError)) {
+            return { kind: "aborted" };
+          }
           throw refreshError;
         }
         if (deadlineSignal.aborted) return { kind: "aborted" };

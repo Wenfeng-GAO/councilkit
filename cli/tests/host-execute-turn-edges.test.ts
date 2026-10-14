@@ -80,7 +80,7 @@ interface Script {
   gets?: GetStep[];
   ack?: "ok" | "expired" | "throw" | "hang" | "abort-error";
   cancel?: "ok" | "throw";
-  refresh?: "ok" | "reject-on-abort" | "resolve-after-abort" | "throw";
+  refresh?: "ok" | "reject-on-abort" | "resolve-after-abort" | "throw" | "throw-after-abort";
   persist?: (evidence: TerminalEvidence) => Promise<void>;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -297,6 +297,10 @@ async function runScript(script: Script): Promise<{ result: TurnResult; trace: T
       trace.events.push("refresh");
       const mode = script.refresh ?? "ok";
       if (mode === "throw") throw new Error("document GET failed");
+      if (mode === "throw-after-abort") {
+        await waitAbort(signal);
+        throw new Error("document GET / -> HTTP 503");
+      }
       if (mode === "reject-on-abort" || mode === "resolve-after-abort") {
         await waitAbort(signal);
         if (mode === "reject-on-abort") throw abortError();
@@ -1108,6 +1112,25 @@ describe("executeTurn stream, reconnect, and cleanup", () => {
       phase: "stream",
       code: "RUNTIME_UNAVAILABLE",
       message: "document GET failed",
+      retryable: false,
+    });
+  });
+
+  it("reports a non-abort auth refresh failure that races the deadline without cancelling", async () => {
+    const { result, trace } = await runScript({
+      timeoutMs: 20,
+      refresh: "throw-after-abort",
+      follows: [{ kind: "throw", error: eventStreamError(401, "event stream HTTP 401") }],
+    });
+    expect(trace.executeCalls).toBe(1);
+    expect(trace.refreshCalls).toBe(1);
+    expect(trace.cancelCalls).toBe(0);
+    expect(trace.ackBodies).toEqual([]);
+    expect(result.verdict).toBe("failed");
+    expect(result.error).toEqual({
+      phase: "stream",
+      code: "RUNTIME_UNAVAILABLE",
+      message: "document GET / -> HTTP 503",
       retryable: false,
     });
   });
