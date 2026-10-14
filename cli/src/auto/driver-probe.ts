@@ -23,6 +23,7 @@ import type { AgentRecord } from "../store/schemas";
 import {
   DRIVER_PROBE_PROMPT,
   buildProbeSpec,
+  detectListeningLocalProxy,
   envHasProxy,
   executableForDriver,
   findExecutable,
@@ -105,20 +106,6 @@ export interface LightweightDeps {
   /** Platform override for tests (`darwin` → expect Clash when no proxy). */
   platform?: NodeJS.Platform;
   now?: () => number;
-}
-
-/** Clash/mihomo mixed-port defaults — keep in sync with driver-commands. */
-const LOCAL_HTTP_PROXY_PORTS = [7897, 7890];
-
-function detectListeningLocalProxy(): number | null {
-  for (const port of LOCAL_HTTP_PROXY_PORTS) {
-    const probe = spawnSync("nc", ["-z", "127.0.0.1", String(port)], {
-      stdio: "ignore",
-      timeout: 400,
-    });
-    if (probe.status === 0) return port;
-  }
-  return null;
 }
 
 const LOCAL_PROXY_WITH_PORT = /^(?:https?|socks5?h?):\/\/(?:127\.0\.0\.1|localhost):/i;

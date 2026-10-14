@@ -338,7 +338,8 @@ export function withLocalHttpProxy(
   };
 }
 
-function detectListeningLocalProxy(): number | null {
+/** First listening Clash/mihomo mixed port, or null. driver-probe uses this same scan. */
+export function detectListeningLocalProxy(): number | null {
   for (const port of LOCAL_HTTP_PROXY_PORTS) {
     const probe = spawnSync("nc", ["-z", "127.0.0.1", String(port)], {
       stdio: "ignore",
