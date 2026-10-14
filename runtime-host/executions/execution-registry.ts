@@ -219,7 +219,10 @@ export function createExecutionRegistry(_deps: { logger: Logger }): ExecutionReg
     follow(executionId, afterSeq, listener) {
       const record = records.get(executionId);
       if (!record) return null;
-      for (const event of record.events) {
+      // Copy first, the same way notify copies its listener set. A listener
+      // that emit()s during replay appends to record.events; walking the live
+      // array would deliver that event again and can overflow the stack.
+      for (const event of record.events.slice()) {
         if (event.seq > afterSeq) listener(event);
       }
       // Tombstoned or terminal executions have no future events.

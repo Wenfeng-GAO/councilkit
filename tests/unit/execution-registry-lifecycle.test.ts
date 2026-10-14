@@ -553,11 +553,7 @@ describe("ExecutionRegistry listeners", () => {
     expect(reg.get("exec-unsub")?.lastSeq).toBe(2);
   });
 
-  it.skip("replay isolates listener emits from the in-progress replay", () => {
-    // BUG: follow() iterates record.events live. A listener that calls emit()
-    // during replay is invoked again for the event it just appended. A listener
-    // that emits on every callback grows that array until the stack overflows.
-    // notify() copies its listener set first; replay does not copy the event list.
+  it("replay isolates listener emits from the in-progress replay", () => {
     const reg = registry();
     reg.begin("exec-reenter", "p-1", "scope-1");
     reg.emit("exec-reenter", { type: "output.delta", text: "first" });
