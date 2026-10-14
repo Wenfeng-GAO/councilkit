@@ -15,6 +15,7 @@ import {
 } from "@shared/runtime/pr-inspect";
 import { parseAntCodePrUrl, parseApplyPrUrl } from "@shared/runtime/pr-url";
 import { repairBranchHintsFromFrozenContext } from "@shared/runtime/repair-auth";
+import { terminateChild } from "@shared/runtime/terminate-child";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 
 const INSPECT_TIMEOUT_MS = 4000;
@@ -195,11 +196,7 @@ function runCommand(
       if (stderr.length > 256 * 1024) stderr = clipUtf16Tail(stderr, 128 * 1024);
     });
     const timeout = setTimeout(() => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // best effort
-      }
+      terminateChild(child);
       finish({ stdout, stderr, exitCode: null });
     }, opts.timeoutMs);
     timeout.unref?.();
