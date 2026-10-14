@@ -226,7 +226,9 @@ describe("prefixed and structural credential redaction", () => {
 
     expect(redactCredentialMaterial("Bearer 'plainLEAK'", "[redacted]")).toBe("Bearer [redacted]");
     expect(redactCredentialMaterial('Bearer "plainLEAK"', "[redacted]")).toBe("Bearer [redacted]");
-    expect(redactCredentialMaterial("token=Bearer 'plainLEAK'", "[redacted]")).toBe("token=[redacted]");
+    expect(redactCredentialMaterial("token=Bearer 'plainLEAK'", "[redacted]")).toBe(
+      "token=[redacted]",
+    );
     expect(redactCredentialMaterial("Bearer $'ansiLEAK'", "[redacted]")).toBe("Bearer [redacted]");
     expectSecretsGone(
       redactDriverDiagnostic("Bearer 'plainLEAK' token=Bearer \"qLEAK\""),
