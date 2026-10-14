@@ -606,7 +606,18 @@ async function driveToTerminal(input: {
         // cancel/observe/ACK cleanup (an ~18s convergence that breaks the shared
         // ≤10s window). Then re-check the abort BEFORE reconnecting so a signal
         // that fired during/right after the refresh converges immediately.
-        await host.refreshAuthForStream(deadlineSignal);
+        try {
+          await host.refreshAuthForStream(deadlineSignal);
+        } catch (refreshError) {
+          // The document GET rejects with AbortError when this signal aborts
+          // it. The accepted execution still has to be cancelled. A real
+          // refresh failure that only races the deadline stays a stream fault
+          // (H2), the same rule as the follow catch below.
+          if (deadlineSignal.aborted && isAbortError(refreshError)) {
+            return { kind: "aborted" };
+          }
+          throw refreshError;
+        }
         if (deadlineSignal.aborted) return { kind: "aborted" };
         const refreshed = await host.rawClient();
         fetchInput = refreshed.eventStreamFetch({ scopeId, executionId, afterSeq: resumeAt });
