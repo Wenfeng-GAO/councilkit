@@ -112,6 +112,11 @@ function errorOf(code: string, message: string, retryable = false): ModelExecuti
 const PRE_DISPATCH_RETRY_MESSAGE = "pre-dispatch failure; retrying once with a new executionId";
 const PRE_DISPATCH_PAUSED_MESSAGE = "pre-dispatch failure; room scheduling paused before retry";
 
+/** One cancel POST before the local terminal write. Same 10s ceiling as the
+ * agent cleanup budget: a live host can finish the POST, and a socket that
+ * accepts and never answers cannot sit in front of failExecution. */
+const ABANDON_CANCEL_BUDGET_MS = 10_000;
+
 export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   const { db, client } = deps;
   const ids = deps.ids ?? { uuid: () => crypto.randomUUID() };
@@ -176,14 +181,19 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
    * The client is about to mark this execution terminal in Dexie. Stop it on
    * the host too. A driver that keeps running leaves the participant busy, so
    * the next turn is rejected until that orphan finishes.
-   * Best-effort. A 404 or a dead host must not block local convergence.
+   * Best-effort. A 404, a rejection, or a cancel that never answers must not
+   * block the local terminal write.
    */
   async function cancelAbandonedExecution(
     scopeId: string,
     executionId: string,
     token: ControllerToken,
   ): Promise<void> {
-    await client.cancelExecution(scopeId, executionId, token).catch(() => undefined);
+    await client
+      .cancelExecution(scopeId, executionId, token, {
+        signal: AbortSignal.timeout(ABANDON_CANCEL_BUDGET_MS),
+      })
+      .catch(() => undefined);
   }
 
   async function interruptRoomLostWithHost(roomId: string, token: ControllerToken): Promise<void> {

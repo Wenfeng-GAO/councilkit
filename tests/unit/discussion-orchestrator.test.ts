@@ -183,6 +183,18 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+function waitForAbort(signal: AbortSignal | null): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+    if (!signal) return;
+    if (signal.aborted) {
+      fail();
+      return;
+    }
+    signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
 function errorResponse(status: number, code: string, message: string): Response {
   return new Response(JSON.stringify({ ok: false, error: { code, message } }), {
     status,
@@ -214,6 +226,8 @@ class FakeHost {
   private eventStreamFetchRejectionsRemaining = 0;
   private eventStreamBodyResetsRemaining = 0;
   private executionStatusFailuresRemaining = 0;
+  /** "reject" answers 503. "hang" never answers until the request AbortSignal fires. */
+  private cancelFault: "ok" | "reject" | "hang" = "ok";
 
   private readonly prewarmFailures = new Set<string>();
   private readonly scopes = new Map<string, FakeScope>();
@@ -253,6 +267,7 @@ class FakeHost {
     this.eventStreamFetchRejectionsRemaining = 0;
     this.eventStreamBodyResetsRemaining = 0;
     this.executionStatusFailuresRemaining = 0;
+    this.cancelFault = "ok";
     this.ackBehavior = "ok";
     this.onCreateScope = null;
   }
@@ -276,6 +291,16 @@ class FakeHost {
 
   failNextExecutionStatuses(count: number): void {
     this.executionStatusFailuresRemaining = count;
+  }
+
+  /** Cancel is attempted, then the host rejects it. The execution stays running. */
+  failNextCancel(): void {
+    this.cancelFault = "reject";
+  }
+
+  /** Cancel is attempted, then the socket never answers. AbortSignal ends the wait. */
+  hangNextCancel(): void {
+    this.cancelFault = "hang";
   }
 
   openStreams(executionId: string): number {
@@ -444,7 +469,7 @@ class FakeHost {
       return this.handleAck(scopeId, executionId, body);
     }
     if (method === "POST" && segments.length === 7 && segments[6] === "cancel") {
-      return this.handleCancel(scopeId, executionId, body);
+      return this.handleCancel(scopeId, executionId, body, init?.signal ?? null);
     }
     return errorResponse(404, "NOT_FOUND", "unknown route");
   };
@@ -787,11 +812,12 @@ class FakeHost {
     return respond({ executionId, ackState: "acknowledged", disposition: request.disposition });
   }
 
-  private handleCancel(
+  private async handleCancel(
     scopeId: string,
     executionId: string,
     body: Record<string, unknown> | null,
-  ): Response {
+    signal: AbortSignal | null,
+  ): Promise<Response> {
     const scopeOrError = this.requireScope(scopeId);
     if (scopeOrError instanceof Response) return scopeOrError;
     const stale = this.fenced(scopeOrError, body);
@@ -801,6 +827,13 @@ class FakeHost {
     if (!execution || execution.scopeId !== scopeId) {
       return errorResponse(404, "EXECUTION_NOT_FOUND", "unknown execution");
     }
+    this.cancelCalls.push({ scopeId, executionId });
+    if (this.cancelFault === "hang") {
+      await waitForAbort(signal);
+    }
+    if (this.cancelFault === "reject") {
+      return errorResponse(503, "UNAVAILABLE", "cancel failed");
+    }
     if (execution.state === "running") {
       this.emit(executionId, {
         type: "interrupted",
@@ -809,7 +842,6 @@ class FakeHost {
         toolState: "none",
       });
     }
-    this.cancelCalls.push({ scopeId, executionId });
     return jsonResponse({ executionId, state: "cancelling" });
   }
 
@@ -1940,6 +1972,52 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.cancelCalls).toEqual([expect.objectContaining({ executionId })]);
     expect(host.executionState(executionId)).toBe("interrupted");
   });
+
+  it("8l. a rejected cancel still marks the lost turn failed locally", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.dropNextExecuteResponses(1);
+    host.failNextCancel();
+
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(round?.pauseReason?.detail).toBe("response lost (simulated)");
+    expect(host.executeCalls).toHaveLength(1);
+    const call = host.executeCalls[0];
+    const executionId = call?.executionId as string;
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("failed");
+    expect(execution?.error?.code).toBe("DISPATCH_FAILED");
+    expect(host.cancelCalls).toEqual([{ scopeId: call?.scopeId, executionId }]);
+    expect(host.executionState(executionId)).toBe("running");
+  });
+
+  it("8m. a cancel that never answers still marks the lost turn failed locally", async () => {
+    // The cancel promise settles only when the helper's deadline aborts it.
+    // Without that deadline this test hits the vitest timeout.
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.dropNextExecuteResponses(1);
+    host.hangNextCancel();
+
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(round?.pauseReason?.detail).toBe("response lost (simulated)");
+    expect(host.executeCalls).toHaveLength(1);
+    const call = host.executeCalls[0];
+    const executionId = call?.executionId as string;
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("failed");
+    expect(execution?.error?.code).toBe("DISPATCH_FAILED");
+    expect(host.cancelCalls).toEqual([{ scopeId: call?.scopeId, executionId }]);
+    expect(host.executionState(executionId)).toBe("running");
+  }, 25_000);
 
   it("9. startup audit classifies prepared / running-404 / running-known / committed", async () => {
     async function seedRoomWithExecution(index: number): Promise<{
