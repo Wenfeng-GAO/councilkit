@@ -14,6 +14,7 @@ import { Buffer } from "node:buffer";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import { parseAntCodePrUrl, parseApplyPrUrl } from "@shared/runtime/pr-url";
+import { AGGREGATE_PROMPT_BUDGET, MAX_SPEC_TEXT_IN_PROMPT } from "./templates/review";
 
 /** Directories this repo already treats as plans / design / acceptance / vibespec. */
 export const SPEC_CONVENTIONAL_PREFIXES = [
@@ -33,14 +34,6 @@ export const SPEC_CONTRACT_BASENAMES = new Set([
   "acceptance.md",
   "contract.md",
 ]);
-
-/**
- * Max UTF-8 bytes kept when binding a contract file. Matches
- * `MAX_SPEC_TEXT_IN_PROMPT` (= AGGREGATE_PROMPT_BUDGET − AGGREGATE_PROMPT_RESERVED_OVERHEAD)
- * so a bound body cannot consume the entire aggregate prompt budget.
- * Larger readable files are truncated (not refused) with a marker.
- */
-export const MAX_SPEC_BYTES = 200 * 1024 - 48 * 1024; // 152 KiB; keep in sync with templates/review.ts
 
 /** Path-like tokens that look like conventional contract sources. */
 const PATH_REF_RE =
@@ -317,14 +310,14 @@ function resolveReadableSpecFile(
     } catch {
       continue;
     }
-    // Hard refuse absurdly large files (cannot be a useful contract); otherwise
-    // truncate to MAX_SPEC_BYTES so aggregate prompts keep reserved overhead.
-    if (Buffer.byteLength(body, "utf8") > 200 * 1024) continue;
+    // Hard refuse files larger than the aggregate prompt budget; otherwise
+    // truncate to MAX_SPEC_TEXT_IN_PROMPT so reserved overhead stays available.
+    if (Buffer.byteLength(body, "utf8") > AGGREGATE_PROMPT_BUDGET) continue;
     const source =
       repoRoot && candidate.startsWith(repoRoot)
         ? (normalizeSpecRef(relative(repoRoot, candidate).split(sep).join("/")) ?? candidate)
         : normalized;
-    return { source, text: truncateSpecBody(body, MAX_SPEC_BYTES) };
+    return { source, text: truncateSpecBody(body, MAX_SPEC_TEXT_IN_PROMPT) };
   }
   return null;
 }

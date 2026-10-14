@@ -10,7 +10,7 @@ import { errors } from "../errors";
 import { atomicWriteJson } from "../store/atomic-write";
 import type { AgentRecord } from "../store/schemas";
 import { driverSelectionSchema } from "../store/schemas";
-import type { ReviewTask } from "./templates/review";
+import { AGGREGATE_PROMPT_BUDGET, type ReviewTask } from "./templates/review";
 
 export const INVOCATION_MANIFEST_FILE = "invocation-manifest.v1.json";
 
@@ -27,10 +27,8 @@ export const invocationManifestSchema = z
         task: z.string().max(8000).optional(),
         focus: z.string().max(8000).optional(),
         specSource: z.string().max(2048).optional(),
-        specText: z
-          .string()
-          .max(200 * 1024)
-          .optional(),
+        // Character ceiling. Same integer as the aggregate byte budget.
+        specText: z.string().max(AGGREGATE_PROMPT_BUDGET).optional(),
         against: z.string().max(160).optional(),
         repairPackageHash: z
           .string()

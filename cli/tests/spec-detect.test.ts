@@ -6,7 +6,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  MAX_SPEC_BYTES,
   SPEC_REFUSAL_MESSAGE,
   autoDetectSpec,
   bindVerifyFromSpec,
@@ -17,6 +16,7 @@ import {
   isConventionalSpecPath,
   resolveSpecContract,
 } from "../src/auto/spec-detect";
+import { AGGREGATE_PROMPT_BUDGET, MAX_SPEC_TEXT_IN_PROMPT } from "../src/auto/templates/review";
 
 describe("conventional path detection", () => {
   it("recognizes docs/plans, design, vibespec, verification, acceptance", () => {
@@ -159,11 +159,11 @@ describe("verify binding from bound spec", () => {
 });
 
 describe("spec body size cap", () => {
-  it("truncates a near-200KiB spec to MAX_SPEC_BYTES with reserved overhead", () => {
+  it("truncates a near-budget spec to the shared prompt cap", () => {
     const root = mkdtempSync(join(tmpdir(), "ck-spec-"));
     const rel = "docs/plans/big-plan.md";
     mkdirSync(join(root, "docs", "plans"), { recursive: true });
-    const body = "AC-99 keep\n" + "x".repeat(200 * 1024 - 80);
+    const body = `AC-99 keep\n${"x".repeat(AGGREGATE_PROMPT_BUDGET - 80)}`;
     writeFileSync(join(root, rel), body, "utf8");
     const detected = resolveSpecContract({
       explicitSpec: rel,
@@ -171,11 +171,10 @@ describe("spec body size cap", () => {
     });
     expect(detected?.text).toBeDefined();
     expect(Buffer.byteLength(detected!.text!, "utf8")).toBeLessThanOrEqual(
-      MAX_SPEC_BYTES + 64, // allow truncation marker
+      MAX_SPEC_TEXT_IN_PROMPT + 64, // allow truncation marker
     );
-    expect(detected!.text).toContain("[truncated at");
+    expect(detected!.text).toContain(`[truncated at ${MAX_SPEC_TEXT_IN_PROMPT} bytes]`);
     expect(detected!.text).toContain("AC-99");
-    expect(MAX_SPEC_BYTES).toBe(200 * 1024 - 48 * 1024);
   });
 });
 
