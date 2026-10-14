@@ -172,6 +172,20 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   const lostHostError = () =>
     errorOf("SAFE_INTERRUPTION", "host restarted or terminal lost before commit");
 
+  /**
+   * The client is about to mark this execution terminal in Dexie. Stop it on
+   * the host too. A driver that keeps running leaves the participant busy, so
+   * the next turn is rejected until that orphan finishes.
+   * Best-effort. A 404 or a dead host must not block local convergence.
+   */
+  async function cancelAbandonedExecution(
+    scopeId: string,
+    executionId: string,
+    token: ControllerToken,
+  ): Promise<void> {
+    await client.cancelExecution(scopeId, executionId, token).catch(() => undefined);
+  }
+
   async function interruptRoomLostWithHost(roomId: string, token: ControllerToken): Promise<void> {
     const unfinished = await db.modelExecutions
       .where("roomId")
@@ -461,8 +475,18 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         let code = "SAFE_INTERRUPTION";
         if (execution.hostInstanceId === hostId && execution.executionScopeId) {
           try {
-            await client.getExecution(execution.executionScopeId, execution.executionId);
+            const status = await client.getExecution(
+              execution.executionScopeId,
+              execution.executionId,
+            );
             code = "INTERRUPTED_UNKNOWN";
+            if (status.state === "running") {
+              await cancelAbandonedExecution(
+                execution.executionScopeId,
+                execution.executionId,
+                token,
+              );
+            }
           } catch (error) {
             if (!(error instanceof RuntimeClientError && error.status === 404)) throw error;
           }
@@ -872,6 +896,9 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       // follow/ACK on the execution's own scope (not a later latestBinding).
       execution.executionScopeId = scopeId;
     } catch (error) {
+      // The POST may have been accepted before the response was lost. Cancel
+      // that id; a 404 means the turn never landed.
+      await cancelAbandonedExecution(scopeId, execution.executionId, token);
       await failExecution(db, {
         executionId: execution.executionId,
         token,
@@ -931,6 +958,9 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         const status = await client.getExecution(scopeId, execution.executionId);
         statusFailures = 0;
         if (streamFailures >= 2) {
+          if (status.state === "running") {
+            await cancelAbandonedExecution(scopeId, execution.executionId, token);
+          }
           await failExecution(db, {
             executionId: execution.executionId,
             token,
@@ -954,6 +984,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         }
         statusFailures += 1;
         if (statusFailures < 2) continue;
+        await cancelAbandonedExecution(scopeId, execution.executionId, token);
         await failExecution(db, {
           executionId: execution.executionId,
           token,
