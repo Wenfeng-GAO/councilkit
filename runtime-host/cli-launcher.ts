@@ -12,6 +12,7 @@ import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
 import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
+import { terminateChild } from "@shared/runtime/terminate-child";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { resolveHostMode } from "./config";
 
@@ -189,6 +190,7 @@ export async function handshakeReview(
   child: ChildProcess,
   input: CliRunLaunchRequest,
   pid: number,
+  handshakeMs = REVIEW_HANDSHAKE_MS,
 ): Promise<{ pid: number }> {
   let exited = child.exitCode !== null;
   let exitCode: number | null = child.exitCode;
@@ -197,7 +199,7 @@ export async function handshakeReview(
     exitCode = code;
   });
   const runDir = join(resolveCliRunsRoot(), input.runId);
-  const deadline = Date.now() + REVIEW_HANDSHAKE_MS;
+  const deadline = Date.now() + handshakeMs;
   while (Date.now() < deadline) {
     if (exited) {
       throw new Error(
@@ -214,7 +216,7 @@ export async function handshakeReview(
     child.unref();
     return { pid };
   }
-  stopDetachedChild(child, pid);
+  stopDetachedChild(child);
   throw Object.assign(
     new Error(`${input.action} handshake timed out waiting for the run directory`),
     {
@@ -223,17 +225,8 @@ export async function handshakeReview(
   );
 }
 
-function stopDetachedChild(child: ChildProcess, pid: number): void {
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // already gone
-  }
-  try {
-    process.kill(pid, "SIGTERM");
-  } catch {
-    // already gone
-  }
+function stopDetachedChild(child: ChildProcess): void {
+  terminateChild(child, { group: true });
   child.unref();
 }
 
