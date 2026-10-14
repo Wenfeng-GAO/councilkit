@@ -898,7 +898,7 @@ describe("executeTurn stream, reconnect, and cleanup", () => {
         { kind: "closed", lastSeq: 2 },
         { kind: "terminal", event: completedEvent(3, "ok") },
       ],
-      gets: [{ kind: "status", state: "completed", lastSeq: 2 }],
+      gets: [{ kind: "status", state: "completed", lastSeq: 3 }],
     });
     expect(trace.followAfter).toEqual([0, 2]);
     expect(trace.executeCalls).toBe(1);
@@ -914,7 +914,7 @@ describe("executeTurn stream, reconnect, and cleanup", () => {
         { kind: "closed", lastSeq: 4 },
       ],
       gets: [
-        { kind: "status", state: "completed", lastSeq: 1 },
+        { kind: "status", state: "completed", lastSeq: 5 },
         { kind: "error", error: new Error("lost") },
       ],
     });
@@ -928,6 +928,37 @@ describe("executeTurn stream, reconnect, and cleanup", () => {
       message: "event stream closed before a terminal arrived and the execution was lost",
       retryable: false,
     });
+  });
+
+  it("stops when a terminal execution is already caught up", async () => {
+    const { result, trace } = await runScript({
+      follows: [
+        { kind: "closed", lastSeq: 4 },
+        { kind: "terminal", event: completedEvent(5, "should-not-run") },
+      ],
+      gets: [{ kind: "status", state: "completed", lastSeq: 4 }],
+    });
+    expect(trace.followAfter).toEqual([0]);
+    expect(trace.executeCalls).toBe(1);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("STREAM_CLOSED");
+  });
+
+  it("makes one empty catch-up when a terminal host is ahead, then stops", async () => {
+    const { result, trace } = await runScript({
+      follows: [
+        { kind: "closed", lastSeq: 0 },
+        { kind: "closed", lastSeq: 0 },
+        { kind: "terminal", event: completedEvent(2, "should-not-run") },
+      ],
+      gets: [
+        { kind: "status", state: "interrupted", lastSeq: 6 },
+        { kind: "status", state: "interrupted", lastSeq: 6 },
+      ],
+    });
+    expect(trace.followAfter).toEqual([0, 0]);
+    expect(result.verdict).toBe("failed");
+    expect(result.error?.code).toBe("STREAM_CLOSED");
   });
 
   it("fails with STREAM_CLOSED when getExecution returns no record", async () => {
