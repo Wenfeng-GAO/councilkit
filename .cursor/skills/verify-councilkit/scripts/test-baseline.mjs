@@ -27,6 +27,7 @@ import {
   productPathsDiffer,
   readBaselineCache,
   resolveMergeBase,
+  vitestDiscoveryProblem,
   vitestReportProblem,
 } from "./baseline-lib.mjs";
 
@@ -125,7 +126,7 @@ function runVitest(cwd, outputFile) {
   });
 }
 
-function writeCache(file, mergeBase, failing, source) {
+function writeCache(file, mergeBase, failing, source, numTotalTests) {
   mkdirSync(dirname(file), { recursive: true });
   const payload = {
     schema: 1,
@@ -134,6 +135,7 @@ function writeCache(file, mergeBase, failing, source) {
     createdAt: new Date().toISOString(),
     source,
     failing,
+    numTotalTests,
   };
   writeExtra(file, payload);
 }
@@ -167,7 +169,7 @@ async function baselineFromWorktree(repo, sha, cacheDir) {
     console.log(`running vitest at merge-base ${sha} in ${work}`);
     const report = await runVitest(work, reportPath);
     const names = failingTestNames(report, work);
-    writeCache(join(cacheDir, "failing-tests.json"), sha, names, "worktree");
+    writeCache(join(cacheDir, "failing-tests.json"), sha, names, "worktree", report.numTotalTests);
     console.log(`baseline worktree failing tests: ${names.length}`);
     return names;
   } finally {
@@ -228,16 +230,35 @@ async function main() {
   );
 
   let baselineNames = null;
+  let baselineTotal = null;
   let cacheState = "miss";
-  if (cached) {
+  // Caches without numTotalTests predate discovery comparison; treat as a miss.
+  if (cached && typeof cached.numTotalTests === "number") {
     baselineNames = cached.failing;
+    baselineTotal = cached.numTotalTests;
     cacheState = "hit";
-    console.log(`baseline cache hit ${cacheFile} (${baselineNames.length} failing)`);
-  } else if (productDiff.length > 0) {
+    console.log(
+      `baseline cache hit ${cacheFile} (${baselineNames.length} failing, ${baselineTotal} total)`,
+    );
+  } else if (cached) {
+    console.log(`baseline cache ${cacheFile} lacks numTotalTests; treating as a miss`);
+  }
+  if (baselineNames == null && productDiff.length > 0) {
     console.log("baseline cache miss; running vitest in a merge-base worktree");
+    const baselineReportPath = join(cacheDir, "vitest.json");
+    // baselineFromWorktree writes the cache including numTotalTests
     baselineNames = await baselineFromWorktree(repo, base.sha, cacheDir);
+    const refreshed = readBaselineCache(cacheFile, base.sha, process.version);
+    baselineTotal = refreshed?.numTotalTests ?? null;
+    if (baselineTotal == null && existsSync(baselineReportPath)) {
+      try {
+        baselineTotal = JSON.parse(readFileSync(baselineReportPath, "utf8")).numTotalTests;
+      } catch {
+        baselineTotal = null;
+      }
+    }
     cacheState = "miss-worktree";
-  } else {
+  } else if (baselineNames == null) {
     console.log("baseline cache miss; the HEAD vitest run is the merge-base result and will be cached");
     cacheState = "miss-same-tree";
   }
@@ -245,12 +266,31 @@ async function main() {
   console.log("running vitest at HEAD");
   const headReport = await runVitest(repo, reportOut);
   const headNames = failingTestNames(headReport, repo);
-  console.log(`HEAD failing tests: ${headNames.length}`);
+  console.log(`HEAD failing tests: ${headNames.length}; total ${headReport.numTotalTests}`);
 
   if (baselineNames == null) {
     baselineNames = headNames;
-    writeCache(cacheFile, base.sha, headNames, "head-same-tree");
+    baselineTotal = headReport.numTotalTests;
+    writeCache(cacheFile, base.sha, headNames, "head-same-tree", headReport.numTotalTests);
     console.log(`wrote baseline cache ${cacheFile}`);
+  }
+
+  const discoveryProblem = vitestDiscoveryProblem(headReport, baselineTotal);
+  if (discoveryProblem) {
+    writeExtra(extraOut, {
+      detail: discoveryProblem,
+      mergeBase: base.sha,
+      mergeBaseRef: base.ref,
+      headFailed: headNames.length,
+      baselineFailed: baselineNames.length,
+      headTotalTests: headReport.numTotalTests,
+      baselineTotalTests: baselineTotal,
+      newFailures: [],
+      baselineCache: cacheFile,
+      baselineCacheState: cacheState,
+    });
+    process.stderr.write(`${discoveryProblem}\n`);
+    process.exit(1);
   }
 
   const compared = compareFailingTests(headNames, baselineNames);
@@ -261,6 +301,8 @@ async function main() {
     mergeBaseRef: base.ref,
     headFailed: compared.headFailed,
     baselineFailed: compared.baselineFailed,
+    headTotalTests: headReport.numTotalTests,
+    baselineTotalTests: baselineTotal,
     newFailures: compared.newFailures,
     resolvedFailures: compared.resolvedFailures,
     baselineCache: cacheFile,

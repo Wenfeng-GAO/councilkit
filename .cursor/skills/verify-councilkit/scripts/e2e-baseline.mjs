@@ -157,7 +157,7 @@ function runPlaywright(cwd, outputFile, suite, portMode) {
         reject(new Error(`playwright JSON report is unreadable (${outputFile}): ${message}`));
         return;
       }
-      const problem = e2eReportProblem(report);
+      const problem = e2eReportProblem(report, code);
       if (problem) {
         reject(new Error(`${problem} (playwright exit ${code ?? "null"})`));
         return;

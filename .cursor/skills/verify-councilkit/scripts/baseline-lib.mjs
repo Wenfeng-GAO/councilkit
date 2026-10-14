@@ -431,7 +431,7 @@ function walkE2eInterrupted(suite) {
 }
 
 /** A partial or empty JSON report cannot be compared. Null means usable. */
-export function e2eReportProblem(report) {
+export function e2eReportProblem(report, exitCode) {
   if (!report || typeof report !== "object") return "playwright JSON report is empty";
   const stats = report.stats;
   const counts = [stats?.expected, stats?.unexpected, stats?.skipped, stats?.flaky];
@@ -442,6 +442,31 @@ export function e2eReportProblem(report) {
     if (walkE2eInterrupted(suite)) {
       return "playwright run was interrupted before the suite finished";
     }
+  }
+  if (exitCode === null) return "playwright was killed before a complete report";
+  const unexpected = stats.unexpected ?? 0;
+  const flaky = stats.flaky ?? 0;
+  if (exitCode !== undefined && exitCode !== 0 && unexpected === 0 && flaky === 0) {
+    return "playwright aborted with an unexplained nonzero exit";
+  }
+  return null;
+}
+
+/**
+ * HEAD must discover at least as many Vitest tests as the merge-base baseline.
+ * A narrowed include that still reports a nonempty suite would otherwise green.
+ * Null means usable. `baselineTotal` null skips the comparison (unknown baseline).
+ */
+export function vitestDiscoveryProblem(report, baselineTotal) {
+  if (!report || typeof report.numTotalTests !== "number") {
+    return "vitest JSON report is incomplete";
+  }
+  if (baselineTotal == null) return null;
+  if (typeof baselineTotal !== "number" || baselineTotal < 0) {
+    return "baseline vitest discovery count is invalid";
+  }
+  if (report.numTotalTests < baselineTotal) {
+    return `vitest discovered ${report.numTotalTests} tests but the baseline discovered ${baselineTotal}`;
   }
   return null;
 }
@@ -812,6 +837,26 @@ function runSelfTest() {
     ],
     "new e2e ids",
   );
+  
+  assertEqual(
+    vitestDiscoveryProblem({ numTotalTests: 10 }, 100),
+    "vitest discovered 10 tests but the baseline discovered 100",
+    "truncated vitest discovery",
+  );
+  assertEqual(vitestDiscoveryProblem({ numTotalTests: 100 }, 100), null, "matching vitest discovery");
+  assertEqual(vitestDiscoveryProblem({ numTotalTests: 120 }, 100), null, "expanded vitest discovery");
+  assertEqual(vitestDiscoveryProblem({ numTotalTests: 10 }, null), null, "unknown baseline discovery skipped");
+  assertEqual(
+    e2eReportProblem({ stats: { expected: 2, unexpected: 0, skipped: 0, flaky: 0 }, suites: [{ specs: [] }] }, 1),
+    "playwright aborted with an unexplained nonzero exit",
+    "unexplained playwright nonzero",
+  );
+  assertEqual(
+    e2eReportProblem({ stats: { expected: 1, unexpected: 1, skipped: 0, flaky: 0 }, suites: [{ specs: [] }] }, 1),
+    null,
+    "playwright nonzero explained by unexpected",
+  );
+
   assertEqual(e2eReportProblem({ stats: { expected: 0, unexpected: 0, skipped: 0, flaky: 0 }, suites: [] }), "playwright JSON report contains no tests", "empty e2e report");
   assertEqual(
     e2eReportProblem({

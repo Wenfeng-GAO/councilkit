@@ -90,6 +90,16 @@ node "$SCRIPT_DIR/summary.mjs" init \
   --dirty-file "$DIRTY_FILE" \
   --external-links-file "$EXTERNAL_FILE"
 
+# Fail closed: a green gate must certify HEAD bytes, not uncommitted edits.
+if [[ -s "$DIRTY_FILE" ]]; then
+  {
+    echo "gate refused: worktree is dirty; commit or stash before certifying HEAD"
+    cat "$DIRTY_FILE"
+  } | tee "$EVIDENCE/logs/dirty.log" >&2
+  node "$SCRIPT_DIR/summary.mjs" finish --dir "$EVIDENCE" --ok false
+  exit 2
+fi
+
 record_step() {
   local extra_args=()
   if [[ -f "$EVIDENCE/logs/${1}.extra.json" ]]; then
@@ -140,17 +150,30 @@ run_step() {
   fi
 }
 
-# Integrity is lockfile content, not mtimes. A stamp at
-# node_modules/.councilkit-lockfile-sha stores the sha256 of pnpm-lock.yaml
-# written after a successful install (or when already matched).
+# Integrity pairs lockfile content with the current modules.yaml fingerprint.
+# A foreign install into a shared node_modules target rewrites modules.yaml and
+# invalidates the stamp even when pnpm-lock.yaml is unchanged.
 LOCKFILE_SHA=""
+MODULES_SHA=""
 if [[ -f "$ROOT/pnpm-lock.yaml" ]]; then
   LOCKFILE_SHA=$(sha256sum "$ROOT/pnpm-lock.yaml" | awk '{print $1}')
 fi
+if [[ -f "$ROOT/node_modules/.modules.yaml" ]]; then
+  MODULES_SHA=$(sha256sum "$ROOT/node_modules/.modules.yaml" | awk '{print $1}')
+fi
 LOCK_STAMP="$ROOT/node_modules/.councilkit-lockfile-sha"
+EXPECTED_STAMP=""
+if [[ -n "$LOCKFILE_SHA" && -n "$MODULES_SHA" ]]; then
+  EXPECTED_STAMP="${LOCKFILE_SHA} ${MODULES_SHA}"
+fi
 write_lock_stamp() {
-  if [[ -n "$LOCKFILE_SHA" && -d "$ROOT/node_modules" ]]; then
-    printf '%s\n' "$LOCKFILE_SHA" >"$LOCK_STAMP"
+  if [[ -n "$EXPECTED_STAMP" && -d "$ROOT/node_modules" ]]; then
+    # Recompute modules sha after install (install may rewrite modules.yaml).
+    if [[ -f "$ROOT/node_modules/.modules.yaml" ]]; then
+      MODULES_SHA=$(sha256sum "$ROOT/node_modules/.modules.yaml" | awk '{print $1}')
+      EXPECTED_STAMP="${LOCKFILE_SHA} ${MODULES_SHA}"
+    fi
+    printf '%s\n' "$EXPECTED_STAMP" >"$LOCK_STAMP"
   fi
 }
 
@@ -158,14 +181,14 @@ need_install=0
 if [[ ! -d "$ROOT/node_modules/.bin" || ! -f "$ROOT/node_modules/.modules.yaml" ]]; then
   need_install=1
 fi
-if [[ -z "$LOCKFILE_SHA" ]]; then
+if [[ -z "$EXPECTED_STAMP" ]]; then
   need_install=1
 else
   stamped=""
   if [[ -f "$LOCK_STAMP" ]]; then
-    stamped=$(tr -d '[:space:]' <"$LOCK_STAMP" || true)
+    stamped=$(tr -s '[:space:]' ' ' <"$LOCK_STAMP" | sed 's/[[:space:]]*$//' || true)
   fi
-  if [[ "$stamped" != "$LOCKFILE_SHA" ]]; then
+  if [[ "$stamped" != "$EXPECTED_STAMP" ]]; then
     need_install=1
   fi
 fi
@@ -185,13 +208,13 @@ if [[ -n "$EXTERNAL_LINKS" ]]; then
     echo "gate failed at install (exit 1). Log: $EVIDENCE/logs/install.log" >&2
     exit 1
   fi
-  record_step install skip 0 "" "skipped pnpm install; lockfile sha matches stamp and the node_modules symlink points outside this worktree ($(printf '%s' "$EXTERNAL_LINKS" | tr '\n' ' '))" "$install_started"
+  record_step install skip 0 "" "skipped pnpm install; lockfile+modules.yaml stamp matches and the node_modules symlink points outside this worktree ($(printf '%s' "$EXTERNAL_LINKS" | tr '\n' ' '))" "$install_started"
 elif [[ "$need_install" -eq 1 ]]; then
   run_step install pnpm install --frozen-lockfile
   write_lock_stamp
 else
   write_lock_stamp
-  record_step install skip 0 "" "node_modules lockfile sha matches pnpm-lock.yaml; pnpm install --frozen-lockfile skipped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  record_step install skip 0 "" "node_modules lockfile+modules.yaml stamp matches; pnpm install --frozen-lockfile skipped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 run_step typecheck pnpm typecheck

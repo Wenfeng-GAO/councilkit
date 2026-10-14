@@ -7,7 +7,7 @@
  * This file never clicks 开始审查 and never calls a model.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -264,6 +264,37 @@ function mtime(path) {
   }
 }
 
+/** Recursive size+mtime snapshot so overwriting agents.json/councils.json is detected. */
+function snapshotUserStore(dir) {
+  if (!existsSync(dir)) return "";
+  const rows = [];
+  const walk = (rel) => {
+    const full = rel ? join(dir, rel) : dir;
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) {
+      let names;
+      try {
+        names = readdirSync(full);
+      } catch {
+        return;
+      }
+      for (const name of names.sort()) {
+        if (name === "." || name === "..") continue;
+        walk(rel ? `${rel}/${name}` : name);
+      }
+      return;
+    }
+    rows.push(`${rel}:${st.size}:${st.mtimeMs}`);
+  };
+  walk("");
+  return rows.join("\n");
+}
+
 async function driveCliInit() {
   const bundle = join(root, "cli/dist/main.mjs");
   try {
@@ -280,7 +311,7 @@ async function driveCliInit() {
   const scratch = join(evidence, "drive", "cli-init", "home");
   mkdirSync(scratch, { recursive: true, mode: 0o700 });
   const userHome = userCouncilkitHome();
-  const before = mtime(userHome);
+  const before = snapshotUserStore(userHome);
   const env = { ...process.env, COUNCILKIT_HOME: scratch };
   const init = await runCommand("pnpm", ["exec", "councilkit", "init", "--json"], env, root);
   writeFileSync(join(outDir, "init.stdout.json"), init.stdout);
@@ -291,7 +322,7 @@ async function driveCliInit() {
       : { exitCode: null, stdout: "", stderr: "" };
   if (list.stdout) writeFileSync(join(outDir, "council-list.stdout.json"), list.stdout);
   writeFileSync(join(outDir, "council-list.stderr.txt"), list.stderr);
-  const after = mtime(userHome);
+  const after = snapshotUserStore(userHome);
   const touchedUserHome = before !== after;
   let parsed = null;
   if (init.exitCode === 0 && init.stdout.trim().length > 0) {
