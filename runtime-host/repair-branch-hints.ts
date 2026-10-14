@@ -3,6 +3,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
+import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairBranchHints,
   type RepairHintSource,
@@ -211,14 +212,6 @@ function runCommand(
       finish({ stdout, stderr, exitCode: code });
     });
   });
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
 
 function emptyHints(): RepairBranchHints {

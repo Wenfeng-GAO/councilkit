@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { jsonParse } from "./json-parse";
 import { isRepairProfileName } from "./repair-lease";
 
 export const REPAIR_CAPABILITIES = ["push-source-branch"] as const;
@@ -178,14 +179,6 @@ function usableFrozenBranch(value: string): string | null {
 function isExpired(expiresAt: string | null, now: string): boolean {
   if (expiresAt === null) return false;
   return Date.parse(expiresAt) <= Date.parse(now);
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
 
 function sha(value: string): string {
