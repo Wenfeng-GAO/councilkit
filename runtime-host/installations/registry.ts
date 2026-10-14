@@ -80,6 +80,11 @@ interface InternalInstallation {
   discoveredPath: string;
   source: "path" | "well-known";
   state: InstallationState;
+  /**
+   * True only after discovery refresh assigns trust. Drift keeps the bit;
+   * `revalidate` cannot set it, so a withheld pin is not promoted later.
+   */
+  trustAssigned: boolean;
   /** Present exactly while a full validation has passed at least once. */
   wrapper: PinnedFile | null;
   claude: PinnedFile | null;
@@ -110,6 +115,7 @@ export function createInstallationRegistry(
   const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
   const detail = (text: string) => sanitizeString(text, 1024);
   const shortId = (value: string) => sanitizeString(value, 128);
+  const trustWithheld = "Validation passes, but trust is (re)assigned only at discovery refresh.";
 
   function bestEffortRealpath(path: string): string | null {
     try {
@@ -188,6 +194,7 @@ export function createInstallationRegistry(
     const unpinned = (state: InstallationState, text: string): InternalInstallation => ({
       ...base,
       state,
+      trustAssigned: false,
       wrapper: null,
       claude: null,
       cfuse: null,
@@ -243,6 +250,7 @@ export function createInstallationRegistry(
       return {
         ...base,
         state: "trusted",
+        trustAssigned: true,
         wrapper: pin(candidate.wrapper.path, wrapperResult.record),
         claude: claudePin,
         cfuse: cfusePin,
@@ -256,6 +264,7 @@ export function createInstallationRegistry(
     return {
       ...base,
       state: "trusted",
+      trustAssigned: true,
       wrapper: pin(candidate.wrapper.path, wrapperResult.record),
       claude: null,
       cfuse: null,
@@ -323,7 +332,7 @@ export function createInstallationRegistry(
         };
       }
     }
-    return { ...existing, state: "trusted", detail: null };
+    return { ...existing, state: "trusted", trustAssigned: true, detail: null };
   }
 
   /** Unpinned re-check: refreshes state but never promotes to trusted. */
@@ -360,10 +369,13 @@ export function createInstallationRegistry(
       cfuseResult,
     );
     if (fresh.state !== "trusted") return fresh;
+    // Keep the validation pins (the DTO shows them) but do not record trust.
+    // A later revalidate must not treat those pins as a promotion.
     return {
       ...fresh,
       state: "discovered",
-      detail: "Validation passes, but trust is (re)assigned only at discovery refresh.",
+      trustAssigned: false,
+      detail: detail(trustWithheld),
     };
   }
 
@@ -472,7 +484,19 @@ export function createInstallationRegistry(
     if (!existing) {
       throw error("INSTALLATION_NOT_FOUND", `Unknown installation "${shortId(installationId)}".`);
     }
-    const next = existing.wrapper ? driftRevalidate(existing) : unpinnedRevalidate(existing);
+    const assessed = existing.wrapper ? driftRevalidate(existing) : unpinnedRevalidate(existing);
+    // driftRevalidate promotes a matching pin. Refresh uses that to assign
+    // trust. revalidate must not: the first call stores the pins while state
+    // stays discovered, and a second call would otherwise promote them.
+    const next =
+      assessed.state === "trusted" && !existing.trustAssigned
+        ? {
+            ...assessed,
+            state: "discovered" as const,
+            trustAssigned: false,
+            detail: detail(trustWithheld),
+          }
+        : assessed;
     records.set(installationId, next);
     logger.info("installations.revalidated", {
       installationId: next.installationId,
