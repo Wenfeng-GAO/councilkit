@@ -425,8 +425,12 @@ describe("U08 window and cache", () => {
 
 describe("U09 redaction", () => {
   it("redacts headers, cookies, api keys, and url query secrets before output", () => {
-    const input =
-      'Authorization: Bearer SECRETTOKEN Cookie: session=abc api_key=sk-ABCDEFGHIJKLMNOP https://example.test?token=LEAK123&x=1';
+    const input = [
+      "Authorization: Bearer SECRETTOKEN",
+      "Cookie: session=abc",
+      "api_key=sk-ABCDEFGHIJKLMNOP",
+      "https://example.test?token=LEAK123&x=1",
+    ].join("\n");
     const out = redactObservationText(input);
     expect(out).not.toContain("SECRETTOKEN");
     expect(out).not.toContain("session=abc");

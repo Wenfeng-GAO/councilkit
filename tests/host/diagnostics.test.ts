@@ -254,17 +254,19 @@ describe("diagnostics route", () => {
     // Verifier payload: one flat string carrying k=v secrets, plus an object
     // context carrying bearer/api_key shapes. Safe vocabulary must survive.
     host.logger.warn("driver.prewarm_failed", {
-      detail: "prompt=private-body token=live-token Cookie=session-value",
+      detail:
+        'prompt=private-body token=live-token Cookie=session-value {"api_key":"live-api-key"}',
     });
     host.logger.error("watchdog.exit", {
       note: "scope.idle_ttl_expired",
-      stderr: 'Authorization: Bearer live-bearer-value {"api_key":"live-api-key"}',
+      stderr: "Authorization: Bearer live-bearer-value; Authorization: Basic live-basic-value",
     });
     const poison = [
       "private-body",
       "live-token",
       "session-value",
       "live-bearer-value",
+      "live-basic-value",
       "live-api-key",
     ];
 
@@ -274,10 +276,10 @@ describe("diagnostics route", () => {
       "driver.prewarm_failed",
       "watchdog.exit",
     ]);
-    expect(recent[0]?.context?.detail).toBe("prompt=[redacted] token=[redacted] Cookie=[redacted]");
-    expect(recent[1]?.context?.stderr).toBe(
-      'Authorization: [redacted] [redacted] {"api_key":"[redacted]"}',
+    expect(recent[0]?.context?.detail).toBe(
+      'prompt=[redacted] token=[redacted] Cookie=[redacted] {"api_key":"[redacted]"}',
     );
+    expect(recent[1]?.context?.stderr).toBe("Authorization: [redacted] Authorization: [redacted]");
     expect(recent[1]?.context?.note).toBe("scope.idle_ttl_expired");
 
     // Route export carries the same redacted records and none of the poison.

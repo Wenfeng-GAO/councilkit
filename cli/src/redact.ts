@@ -8,6 +8,8 @@
  * session cookie pair and the CSRF token value when they appear verbatim.
  */
 
+import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
+
 const COOKIE_PAIR_PREFIX = "councilkit_session=";
 const CSRF_KEY_PATTERN = /x-councilkit-csrf\b/gi;
 
@@ -51,7 +53,8 @@ function redactString(input: string): string {
   if (input.startsWith(COOKIE_PAIR_PREFIX) || input === "councilkit_session") {
     return REDACT_PLACEHOLDER;
   }
-  let out = input.replace(cookiePairPattern(), REDACT_PLACEHOLDER);
+  let out = redactAuthorizationMaterial(input, REDACT_PLACEHOLDER);
+  out = out.replace(cookiePairPattern(), REDACT_PLACEHOLDER);
   out = out.replace(CSRF_KEY_PATTERN, REDACT_PLACEHOLDER);
   if (liveSecrets.size > 0) {
     for (const secret of liveSecrets) {

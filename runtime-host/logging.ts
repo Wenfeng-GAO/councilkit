@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { LIMITS } from "@shared/runtime/contracts";
+import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
 
 /**
  * Structured Host logging and diagnostics.
@@ -21,7 +22,10 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 // Maintenance rule: when a new credential-ish key name shows up in driver
 // stderr or CLI config dumps, add it to SECRET_KEYS; the matched shapes stay
 // the three below (key=value, key: value, "key":"value") plus the HTTP
-// `Bearer <token>` form. Only the VALUE part is replaced with "[redacted]" —
+// `Bearer <token>` form. Authorization and Proxy-Authorization are handled
+// first by redactAuthorizationMaterial, because those values continue past
+// the scheme word (`Basic`, `Digest`) until `;` or a newline. Only the VALUE
+// part is replaced with "[redacted]" —
 // the key name stays for debuggability. Absolute paths are deliberately NOT
 // stripped: same-machine self-diagnosis needs them (Q10 boundary spirit;
 // installations realpath is the precedent). Matching is intentionally
@@ -50,7 +54,7 @@ const SECRET_PATTERNS: readonly { pattern: RegExp; replacement: string }[] = [
 ];
 
 function redactSecrets(input: string): string {
-  let out = input;
+  let out = redactAuthorizationMaterial(input, "[redacted]");
   for (const { pattern, replacement } of SECRET_PATTERNS) {
     out = out.replace(pattern, replacement);
   }
@@ -176,18 +180,26 @@ export function createLogger(
     warn: (event, context) => write("warn", event, context),
     error: (event, context) => write("error", event, context),
     diagnostic(kind, message, context) {
+      const sanitizedMessage = sanitizeString(message);
+      const sanitizedContext = context
+        ? (sanitizeValue(context) as Record<string, unknown>)
+        : undefined;
+      // diagnostics() is exported beside the problems ring. Secret redaction
+      // has to happen on this copy too; write() only redacts the ring entry.
       const entry: DiagnosticEntry = {
         diagnosticId: randomUUID(),
         at: new Date().toISOString(),
         kind: sanitizeString(kind, 64),
-        message: sanitizeString(message),
-        ...(context ? { context: sanitizeValue(context) as Record<string, unknown> } : {}),
+        message: redactSecrets(sanitizedMessage),
+        ...(sanitizedContext
+          ? { context: redactValueSecrets(sanitizedContext) as Record<string, unknown> }
+          : {}),
       };
       ring.push(entry);
       if (ring.length > ringSize) ring.splice(0, ring.length - ringSize);
       write("warn", `diagnostic.${entry.kind}`, {
         diagnosticId: entry.diagnosticId,
-        message: entry.message,
+        message: sanitizedMessage,
       });
       return entry;
     },

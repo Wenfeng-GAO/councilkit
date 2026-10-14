@@ -3,6 +3,7 @@
  * Observation is a read-only projection — never mutates repair budget/gate/journal.
  */
 import { z } from "zod";
+import { redactAuthorizationMaterial } from "./redact-authorization";
 import { clipUtf16CodeUnits } from "./seat-result";
 
 const SHA256_K = new Uint32Array([
@@ -636,7 +637,6 @@ export function clipSummary(value: string): string {
 
 const SECRET_VALUE_KEYS =
   /^(authorization|cookie|csrf|token|password|secret|credential|api[_-]?key|x-api-key)$/i;
-const AUTH_HEADER = /(authorization\s*[:=]\s*)(bearer\s+)?\S+/gi;
 const COOKIE_HEADER = /(cookie\s*[:=]\s*)[^;\n]+/gi;
 const API_KEY = /\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|AIza[0-9A-Za-z_-]{10,})\b/g;
 const ASSIGNED_SECRET = /\b((?:api[_-]?key|token|password|secret)\s*[:=]\s*)\S+/gi;
@@ -644,7 +644,7 @@ const URL_QUERY_SECRET =
   /([?&](?:token|key|api[_-]?key|access_token|auth|password|secret)=)[^&\s"']+/gi;
 
 export function redactObservationText(input: string): string {
-  let out = input.replace(AUTH_HEADER, `$1$2${REPAIR_OBS_REDACT}`);
+  let out = redactAuthorizationMaterial(input, REPAIR_OBS_REDACT);
   out = out.replace(COOKIE_HEADER, `$1${REPAIR_OBS_REDACT}`);
   out = out.replace(API_KEY, REPAIR_OBS_REDACT);
   out = out.replace(ASSIGNED_SECRET, `$1${REPAIR_OBS_REDACT}`);
