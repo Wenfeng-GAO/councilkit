@@ -145,7 +145,9 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
     // credential value that starts with `{` or `[` is the secret itself.
     if ((opener === "{" || opener === "[") && isAuthorizationCredentialKey(key)) continue;
     if (opener === "{" || opener === "[") {
-      const valueEnd = scanBracketValueEnd(input, valueStart);
+      const bracketEnd = scanBracketValueEnd(input, valueStart);
+      // Suffix in the same shell word (`password=[abc]suffixLEAK`).
+      const valueEnd = scanShellWordEnd(input, bracketEnd);
       out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
       cursor = valueEnd;
       continue;

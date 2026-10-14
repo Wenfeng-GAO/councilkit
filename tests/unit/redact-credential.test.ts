@@ -196,6 +196,9 @@ describe("prefixed and structural credential redaction", () => {
       ["api_key=$'plainLEAK'", "api_key=[redacted]"],
       ['api_key=$"plainLEAK"', "api_key=[redacted]"],
       ["password=$'x'yLEAK", "password=[redacted]"],
+      ["password=[abc]suffixLEAK", "password=[redacted]"],
+      ['secret={"x":1}tailLEAK', "secret=[redacted]"],
+      ["password={braceLEAK}tailLEAK", "password=[redacted]"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(redactCredentialMaterial(input, "[redacted]"), input).toBe(expected);
