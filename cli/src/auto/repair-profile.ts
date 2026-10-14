@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { jsonParse } from "@shared/runtime/json-parse";
 import { V2_TRIAL_DEFAULTS } from "@shared/runtime/repair-chain";
 import { isRepairProfileName } from "@shared/runtime/repair-lease";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
@@ -338,14 +339,6 @@ function profilePath(name: string): string {
 
 function writeProfile(profile: RepairProfile): void {
   atomicWriteJson(profilePath(profile.name), profile);
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
 
 function sha(value: string): string {

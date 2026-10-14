@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
+import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairExecution,
   certifyDeadlineEnforced,
@@ -121,12 +122,4 @@ export async function runDeadlineSupervisorLoop(input: {
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

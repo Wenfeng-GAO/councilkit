@@ -9,6 +9,7 @@ import {
 } from "@shared/runtime/cli-run-progress";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
+import { jsonParse } from "@shared/runtime/json-parse";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
@@ -246,12 +247,4 @@ export function appendRepairJournal(runDir: string, record: Record<string, unkno
   const path = join(runDir, REPAIR_JOURNAL_FILE);
   ensureEmptyJournal(runDir);
   writeFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }

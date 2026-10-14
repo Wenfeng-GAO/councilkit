@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { type ExclusiveLock, acquireExclusiveLock } from "@shared/runtime/exclusive-lock";
+import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairBudget,
   type RepairChain,
@@ -137,12 +138,4 @@ export function consumeLockedRetry(
     writeRepairChain({ ...current, budget: consumed.budget, casVersion: current.casVersion + 1 });
     return { ok: true as const, budget: consumed.budget };
   });
-}
-
-function jsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
 }
