@@ -150,6 +150,13 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
       cursor = valueEnd;
       continue;
     }
+    // One shell word: quotes, ANSI-C $'…' / $"…", and concatenations.
+    const bearerEnd = scanBearerTokenEnd(input, valueStart);
+    if (bearerEnd > valueStart) {
+      out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
+      cursor = bearerEnd;
+      continue;
+    }
     if (opener === '"' || opener === "'") {
       const close = scanQuotedEnd(input, valueStart);
       if (close < 0) {
@@ -159,14 +166,13 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
         cursor = valueEnd;
         continue;
       }
-      const afterQuote = close + 1;
-      const wordEnd = scanShellWordEnd(input, afterQuote);
-      if (wordEnd === afterQuote) {
+      const wordEnd = scanShellWordEnd(input, valueStart);
+      if (wordEnd === close + 1) {
         // Clean quoted value: keep the surrounding quotes.
         out += input.slice(cursor, valueStart + 1);
         out += placeholder;
         out += input[close];
-        cursor = afterQuote;
+        cursor = wordEnd;
       } else {
         // Shell concatenation (`'abc'defLEAK`): redact the whole word.
         out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
@@ -174,7 +180,7 @@ function redactAssignments(input: string, placeholder: string, extra: ReadonlySe
       }
       continue;
     }
-    const valueEnd = scanUnquotedValueEnd(input, valueStart);
+    const valueEnd = scanShellWordEnd(input, valueStart);
     out += collapsedAssignment(input, cursor, valueStart, separator, placeholder);
     cursor = valueEnd;
   }
@@ -261,6 +267,13 @@ function scanShellWordEnd(input: string, start: number): number {
   let i = start;
   while (i < input.length) {
     const char = input[i];
+    // Bash ANSI-C / locale quoting: $'…' and $"…"
+    if (char === "$" && (input[i + 1] === "'" || input[i + 1] === '"')) {
+      const close = scanQuotedEnd(input, i + 1);
+      if (close < 0) return indexOfLineEnd(input, i);
+      i = close + 1;
+      continue;
+    }
     if (char === '"' || char === "'") {
       const close = scanQuotedEnd(input, i);
       if (close < 0) return indexOfLineEnd(input, i);
@@ -284,40 +297,6 @@ function scanShellWordEnd(input: string, start: number): number {
       char === "&" ||
       char === "}" ||
       char === "]"
-    ) {
-      return i;
-    }
-    i += 1;
-  }
-  return i;
-}
-
-function scanUnquotedValueEnd(input: string, start: number): number {
-  const bearerEnd = scanBearerTokenEnd(input, start);
-  if (bearerEnd > start) return bearerEnd;
-  let i = start;
-  while (i < input.length) {
-    const char = input[i];
-    // A glued `;` is still the value (`password=foo;bar`). A `;` before
-    // whitespace is a field separator (`cookie=a; b cookie=c`, `key=v; tail`).
-    if (char === ";") {
-      const next = input[i + 1];
-      if (next === undefined || next === " " || next === "\t" || next === "\n" || next === "\r") {
-        return i;
-      }
-      i += 1;
-      continue;
-    }
-    if (
-      char === " " ||
-      char === "\t" ||
-      char === "\n" ||
-      char === "\r" ||
-      char === "," ||
-      char === "&" ||
-      char === "}" ||
-      char === '"' ||
-      char === "'"
     ) {
       return i;
     }
