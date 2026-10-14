@@ -105,7 +105,7 @@ export function redactCredentialMaterial(
 ): string {
   const extra = new Set((options.extraExactKeys ?? []).map((key) => key.toLowerCase()));
   let out = redactAssignments(input, placeholder, extra);
-  out = out.replace(/\b(Bearer[ \t]+)[^\s"'}\]]+/gi, `$1${placeholder}`);
+  out = out.replace(/\b(Bearer\s+)[^\s"'}\]]+/gi, `$1${placeholder}`);
   for (const shape of knownShapes()) out = out.replace(shape, placeholder);
   return out;
 }
@@ -235,7 +235,7 @@ function indexOfLineEnd(input: string, start: number): number {
 function scanBearerTokenEnd(input: string, start: number): number {
   // Comma stays inside the token (`Bearer abc,def`). Quotes and closers do not,
   // so a JSON string around the token keeps its delimiter.
-  const match = /^bearer[ \t]+[^\s"'}\]]+/i.exec(input.slice(start));
+  const match = /^bearer\s+[^\s"'}\]]+/i.exec(input.slice(start));
   if (!match) return -1;
   return start + match[0].length;
 }

@@ -220,6 +220,10 @@ describe("prefixed and structural credential redaction", () => {
       }),
     ).toBe("personaPrompt=keep-me");
 
+    expect(redactCredentialMaterial("unauthorized\nBearer\nplainLEAK", "[redacted]")).toBe(
+      "unauthorized\nBearer\n[redacted]",
+    );
+
     const raw = [
       "token: Bearer PLAINSECRET",
       "password={braceLEAK}",
