@@ -21,7 +21,7 @@ import type {
 } from "@/models/discussion/model-execution";
 import type { RuntimeBinding } from "@/models/discussion/runtime-binding";
 import { computeContextDigest, projectSharedContext } from "@/orchestrator/context-snapshot";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import type { CouncilKitRuntimeDB } from "./runtime-db";
 
 /**
@@ -1373,7 +1373,7 @@ function recordExecutionFailure(
       code: input.error.code === "USER_CANCELLED" ? "user_cancelled" : "execution_failed",
       participantId: execution.participantId,
       executionId: execution.executionId,
-      detail: clipUtf16CodeUnits(input.error.message, 256),
+      detail: clipUtf16(input.error.message, 256),
     };
   }
   return true;

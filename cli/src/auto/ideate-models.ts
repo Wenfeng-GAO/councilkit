@@ -1,5 +1,5 @@
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import type { IdeateModels } from "@shared/runtime/schemas";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import type { AgentRecord } from "../store/schemas";
 
 const PERSONAS = [
@@ -12,7 +12,7 @@ const PERSONAS = [
 export function ideateModelAgents(config: IdeateModels): AgentRecord[] {
   return config.models.map((model, index) => ({
     id: `ideate-model-${index + 1}`,
-    name: clipUtf16CodeUnits(`${model.modelId} · ${index + 1}`, 128),
+    name: clipUtf16(`${model.modelId} · ${index + 1}`, 128),
     modelId: model.modelId,
     driverSelection: model.driverSelection,
     enabled: true,

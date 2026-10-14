@@ -1,4 +1,4 @@
-import { clipLiveSummary, parseAttemptLiveEventLine } from "@shared/runtime/attempt-live-events";
+import { LIVE_SUMMARY_MAX, parseAttemptLiveEventLine } from "@shared/runtime/attempt-live-events";
 import { describe, expect, it } from "vitest";
 
 describe("parseAttemptLiveEventLine", () => {
@@ -83,24 +83,34 @@ describe("parseAttemptLiveEventLine", () => {
   });
 });
 
-describe("clipLiveSummary", () => {
-  it("trims and caps at 240 UTF-16 code units", () => {
-    expect(clipLiveSummary("  hi  ")).toBe("hi");
-    expect(clipLiveSummary("审".repeat(241)).length).toBe(240);
+describe("tool summary clip", () => {
+  function toolSummary(summary: string): string {
+    const parsed = parseAttemptLiveEventLine(
+      JSON.stringify({ seq: 1, at: "t", type: "tool.started", name: "Bash", summary }),
+    );
+    expect(parsed?.type).toBe("tool.started");
+    if (parsed?.type !== "tool.started") return "";
+    return parsed.summary;
+  }
+
+  it("trims and caps at LIVE_SUMMARY_MAX UTF-16 code units", () => {
+    expect(toolSummary("  hi  ")).toBe("hi");
+    expect(toolSummary("审".repeat(LIVE_SUMMARY_MAX + 1)).length).toBe(LIVE_SUMMARY_MAX);
   });
 
-  it("does not split a surrogate pair at the 240-unit boundary", () => {
+  it("does not split a surrogate pair at the summary boundary", () => {
     const emoji = "😀";
     expect(emoji.length).toBe(2);
 
-    const fits = "a".repeat(238) + emoji;
-    expect(fits.length).toBe(240);
-    expect(clipLiveSummary(fits)).toBe(fits);
+    const fits = `${"a".repeat(LIVE_SUMMARY_MAX - emoji.length)}${emoji}`;
+    expect(fits.length).toBe(LIVE_SUMMARY_MAX);
+    expect(toolSummary(fits)).toBe(fits);
 
-    const over = "a".repeat(239) + emoji;
-    expect(over.length).toBe(241);
-    const clipped = clipLiveSummary(over);
-    expect(clipped.length).toBeLessThanOrEqual(240);
-    expect(clipped).toBe("a".repeat(239));
+    const over = `${"a".repeat(LIVE_SUMMARY_MAX - 1)}${emoji}`;
+    expect(over.length).toBe(LIVE_SUMMARY_MAX + 1);
+    const clipped = toolSummary(over);
+    expect(clipped.length).toBeLessThanOrEqual(LIVE_SUMMARY_MAX);
+    expect(clipped).toBe("a".repeat(LIVE_SUMMARY_MAX - 1));
+    expect(clipped.endsWith("\uD83D")).toBe(false);
   });
 });

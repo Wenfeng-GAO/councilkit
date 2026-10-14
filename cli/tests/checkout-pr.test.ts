@@ -398,7 +398,7 @@ describe("trimCmdError UTF-16 boundary", () => {
       stderr: long,
       exitCode: 1,
     });
-    expect(clipped.length).toBeLessThanOrEqual(301); // 300 content + optional …
+    expect(clipped.length).toBeLessThanOrEqual(300);
     expect(clipped.includes("\uD83D")).toBe(false);
     expect(clipped.endsWith("\uD83D")).toBe(false);
     // Keep the ASCII prefix; drop the straddling emoji rather than split it.

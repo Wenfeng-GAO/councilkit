@@ -1,8 +1,8 @@
 import { reportFilename } from "@/components/room/ReportView";
-import { clipLiveSummary } from "@shared/runtime/attempt-live-events";
+import { parseAttemptLiveEventLine } from "@shared/runtime/attempt-live-events";
 import type { LedgerFinding } from "@shared/runtime/cli-ledger";
 import type { DecisionsFile } from "@shared/runtime/review-explainer/contracts";
-import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { describe, expect, it } from "vitest";
 import { separateChangedAssertions } from "../../cli/src/auto/pr-decisions";
 
@@ -23,18 +23,18 @@ function finding(
   };
 }
 
-describe("clipUtf16TailCodeUnits", () => {
+describe("clipUtf16Tail", () => {
   it("leaves a short string unchanged", () => {
-    expect(clipUtf16TailCodeUnits("hello", 8)).toBe("hello");
+    expect(clipUtf16Tail("hello", 8)).toBe("hello");
   });
 
   it("drops a leading lone low surrogate when the cut lands inside an emoji", () => {
-    expect(clipUtf16TailCodeUnits("a😀b", 2)).toBe("b");
-    expect(clipUtf16TailCodeUnits("a😀b", 3)).toBe("😀b");
+    expect(clipUtf16Tail("a😀b", 2)).toBe("b");
+    expect(clipUtf16Tail("a😀b", 3)).toBe("😀b");
   });
 
   it("returns empty for max 0", () => {
-    expect(clipUtf16TailCodeUnits("hello", 0)).toBe("");
+    expect(clipUtf16Tail("hello", 0)).toBe("");
   });
 });
 
@@ -46,10 +46,18 @@ describe("reportFilename", () => {
   });
 });
 
-describe("clipLiveSummary", () => {
+describe("live tool summary", () => {
+  function toolSummary(summary: string): string {
+    const parsed = parseAttemptLiveEventLine(
+      JSON.stringify({ seq: 1, at: "t", type: "tool.started", name: "Bash", summary }),
+    );
+    if (parsed?.type !== "tool.started") throw new Error("expected tool.started");
+    return parsed.summary;
+  }
+
   it("trims and drops a trailing lone high surrogate at the 240-unit cap", () => {
-    expect(clipLiveSummary("  hi  ")).toBe("hi");
-    const clipped = clipLiveSummary(`${"a".repeat(239)}😀`);
+    expect(toolSummary("  hi  ")).toBe("hi");
+    const clipped = toolSummary(`${"a".repeat(239)}😀`);
     expect(hasLoneSurrogate(clipped)).toBe(false);
     expect(clipped).toBe("a".repeat(239));
   });

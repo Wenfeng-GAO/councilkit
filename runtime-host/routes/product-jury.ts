@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { makeError } from "@shared/runtime/errors";
 import { type ReviewJuryResponse, reviewJuryResponseSchema } from "@shared/runtime/review-jury";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { resolveCouncilkitSpawn } from "../cli-launcher";
 import { type HttpError, type Route, httpError } from "../server";
 
@@ -29,6 +29,7 @@ export async function runProductJuryCli(): Promise<ReviewJuryResponse> {
 }
 
 const MISSING_PRODUCT_JURY = "default product-jury is missing; run `councilkit init`";
+const JURY_CLI_MESSAGE_MAX = 512;
 
 function productJuryFailure(error: unknown): HttpError {
   const cliMessage = cliFailureMessage(error);
@@ -41,7 +42,12 @@ function productJuryFailure(error: unknown): HttpError {
   const message = cliMessage ?? "cannot read product-jury";
   return httpError(
     400,
-    makeError("BAD_REQUEST", "discovery", clipMessage(message), { retryable: false }),
+    makeError(
+      "BAD_REQUEST",
+      "discovery",
+      clipUtf16(message.replace(/\s+/g, " ").trim(), JURY_CLI_MESSAGE_MAX, "…"),
+      { retryable: false },
+    ),
   );
 }
 
@@ -60,11 +66,6 @@ function cliFailureMessage(error: unknown): string | null {
   if (typeof message !== "string") return null;
   const trimmed = message.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function clipMessage(message: string): string {
-  const oneLine = message.replace(/\s+/g, " ").trim();
-  return oneLine.length <= 512 ? oneLine : `${clipUtf16CodeUnits(oneLine, 511)}…`;
 }
 
 export function productJuryRoutes(run: typeof runProductJuryCli = runProductJuryCli): Route[] {

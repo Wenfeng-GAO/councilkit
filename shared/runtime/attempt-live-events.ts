@@ -3,8 +3,7 @@
  * Written by the CLI under runs/<runId>/live/<attemptId>.jsonl; the Host only
  * reads them. Bad lines are skipped — never thrown on.
  */
-
-import { clipUtf16CodeUnits } from "./seat-result";
+import { clipUtf16 } from "../text/clip-utf16";
 
 export const LIVE_SUMMARY_MAX = 240;
 
@@ -22,11 +21,6 @@ export type AttemptLiveEvent = AttemptLiveEventPayload & {
   seq: number;
   at: string;
 };
-
-export function clipLiveSummary(value: string): string {
-  const trimmed = value.trim();
-  return clipUtf16CodeUnits(trimmed, LIVE_SUMMARY_MAX);
-}
 
 export function parseAttemptLiveEventLine(line: string): AttemptLiveEvent | null {
   const trimmed = line.trim();
@@ -54,7 +48,7 @@ export function parseAttemptLiveEventLine(line: string): AttemptLiveEvent | null
       at: row.at,
       type,
       name: row.name,
-      summary: clipLiveSummary(row.summary),
+      summary: clipUtf16(row.summary.trim(), LIVE_SUMMARY_MAX),
     };
   }
   if (type === "truncated") {

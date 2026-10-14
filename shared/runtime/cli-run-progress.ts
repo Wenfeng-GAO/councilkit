@@ -3,13 +3,9 @@
  * The Host only reads this; the CLI writes the sidecar so the browser can poll
  * without parsing Attempt output payloads.
  */
+import { clipUtf16 } from "../text/clip-utf16";
 import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
-import {
-  type CliRunAttemptResult,
-  clipSeatSummary,
-  clipUtf16CodeUnits,
-  summarizeSeatOutput,
-} from "./seat-result";
+import { type CliRunAttemptResult, clipSeatSummary, summarizeSeatOutput } from "./seat-result";
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
@@ -459,7 +455,7 @@ function clipActivity(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
-  return clipUtf16CodeUnits(trimmed, LAST_ACTIVITY_MAX);
+  return clipUtf16(trimmed, LAST_ACTIVITY_MAX);
 }
 
 export function parseLiveStateJson(text: string): CliRunLiveState | null {

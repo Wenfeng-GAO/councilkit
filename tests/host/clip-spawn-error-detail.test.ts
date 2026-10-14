@@ -1,29 +1,34 @@
+import { SPAWN_ERROR_DETAIL_MAX } from "@host/process/process-supervisor";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { describe, expect, it } from "vitest";
-import { clipSpawnErrorDetail } from "@host/process/process-supervisor";
 
-describe("clipSpawnErrorDetail", () => {
-  it("does not split a surrogate pair at the 512-unit truncation boundary", () => {
+describe("spawn error detail clip", () => {
+  it("keeps the spawn detail budget at 512 UTF-16 code units", () => {
+    expect(SPAWN_ERROR_DETAIL_MAX).toBe(512);
+  });
+
+  it("does not split a surrogate pair at the detail-limit boundary", () => {
     const emoji = "😀";
     expect(emoji.length).toBe(2);
 
-    // emoji straddles index 512: raw slice(0, 512) leaves a lone high surrogate
-    const long = `${"a".repeat(511)}${emoji}${"x".repeat(20)}`;
-    expect(long.length).toBeGreaterThan(512);
+    // emoji straddles the limit: raw slice leaves a lone high surrogate
+    const long = `${"a".repeat(SPAWN_ERROR_DETAIL_MAX - 1)}${emoji}${"x".repeat(20)}`;
+    expect(long.length).toBeGreaterThan(SPAWN_ERROR_DETAIL_MAX);
 
-    const rawSlice = long.slice(0, 512);
+    const rawSlice = long.slice(0, SPAWN_ERROR_DETAIL_MAX);
     expect(rawSlice.endsWith("\uD83D")).toBe(true);
-    expect(rawSlice.length).toBe(512);
+    expect(rawSlice.length).toBe(SPAWN_ERROR_DETAIL_MAX);
 
-    const clipped = clipSpawnErrorDetail(long);
-    expect(clipped.length).toBeLessThanOrEqual(512);
+    const clipped = clipUtf16(long, SPAWN_ERROR_DETAIL_MAX);
+    expect(clipped.length).toBeLessThanOrEqual(SPAWN_ERROR_DETAIL_MAX);
     expect(clipped.endsWith("\uD83D")).toBe(false);
     // Keep the ASCII prefix intact; drop the straddling emoji rather than split it.
-    expect(clipped).toBe("a".repeat(511));
+    expect(clipped).toBe("a".repeat(SPAWN_ERROR_DETAIL_MAX - 1));
   });
 
   it("passes through short messages unchanged", () => {
-    expect(clipSpawnErrorDetail("short")).toBe("short");
-    expect(clipSpawnErrorDetail("driver cwd must not be a symlink")).toBe(
+    expect(clipUtf16("short", SPAWN_ERROR_DETAIL_MAX)).toBe("short");
+    expect(clipUtf16("driver cwd must not be a symlink", SPAWN_ERROR_DETAIL_MAX)).toBe(
       "driver cwd must not be a symlink",
     );
   });

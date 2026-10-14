@@ -12,7 +12,7 @@ import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
 import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
-import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { resolveHostMode } from "./config";
 
 /** PATH plus vendor homes so Host-spawned review/fix can resolve kimi/grok. */
@@ -249,7 +249,7 @@ function isRealDir(path: string): boolean {
 function logTail(path: string): string {
   try {
     const text = readFileSync(path, "utf8").trimEnd();
-    return clipUtf16TailCodeUnits(text, LOG_TAIL_MAX);
+    return clipUtf16Tail(text, LOG_TAIL_MAX);
   } catch {
     return "";
   }

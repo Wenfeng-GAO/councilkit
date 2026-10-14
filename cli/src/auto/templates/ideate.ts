@@ -3,7 +3,7 @@
  * structured error instead of throwing past completed artifacts.
  */
 import { markdownLines } from "@shared/runtime/aggregator-verdict";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 
 export const IDEATE_PROMPT_BUDGET = 128 * 1024;
 export const IDEATE_INPUT_BUDGET = 16 * 1024;
@@ -205,7 +205,7 @@ export function extractSuccessfulProposal(
   const body = output.replace(/\r\n/g, "\n").trim();
   if (body.length === 0) return null;
   const firstParagraph = body.split(/\n\s*\n/)[0]?.trim() ?? body;
-  const summary = clipUtf16CodeUnits(firstParagraph.split("\n").slice(0, 8).join("\n"), 600);
+  const summary = clipUtf16(firstParagraph.split("\n").slice(0, 8).join("\n"), 600);
   if (summary.trim().length === 0) return null;
   return { proposalRef, summary, body };
 }

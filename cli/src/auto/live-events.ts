@@ -9,9 +9,10 @@ import {
   type AttemptLiveEvent,
   type AttemptLiveEventPayload,
   CLI_RUN_ATTEMPT_ID_RE,
-  clipLiveSummary,
+  LIVE_SUMMARY_MAX,
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { stripProxyPrefix } from "./driver-commands";
 
 export type RawLiveEvent = Exclude<AttemptLiveEventPayload, { type: "truncated" }>;
@@ -484,5 +485,5 @@ function formatSummary(raw: unknown): string {
   if (typeof raw !== "string") return "";
   const { text } = stripProxyPrefix(raw.trimStart());
   const folded = text.replace(/\s+/g, " ").trim();
-  return clipLiveSummary(folded);
+  return clipUtf16(folded, LIVE_SUMMARY_MAX);
 }

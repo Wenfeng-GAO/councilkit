@@ -17,7 +17,7 @@ import {
   type CliRunProgressPhase,
 } from "@shared/runtime/cli-run-progress";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
 import {
   type AttemptSpec,
@@ -67,6 +67,7 @@ const RUN_ID_PATTERN = /^ck-review-[0-9a-fA-F-]+$/;
 const PROBE_TIMEOUT_MS = 90_000;
 const DEFAULT_PLANNER_NAME = "review-adversarial";
 const DEFAULT_MAX_PLAN_ROUNDS = 2;
+const PLAN_EXCERPT_MAX = 6000;
 
 export class FixExit {
   constructor(readonly exitCode: number) {}
@@ -788,11 +789,6 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   }
 }
 
-/** Clip follow-up review plan excerpts on a UTF-16 code-unit boundary (max 6000). */
-export function clipPlanExcerpt(text: string): string {
-  return clipUtf16CodeUnits(text.trim(), 6000);
-}
-
 async function startFollowUpReview(input: {
   pr: string;
   sourceRunId: string;
@@ -807,7 +803,7 @@ async function startFollowUpReview(input: {
   let created: string | null = null;
   let planExcerpt = "";
   try {
-    planExcerpt = clipPlanExcerpt(readFileSync(input.planPath, "utf8"));
+    planExcerpt = clipUtf16(readFileSync(input.planPath, "utf8").trim(), PLAN_EXCERPT_MAX);
   } catch {
     planExcerpt = "";
   }

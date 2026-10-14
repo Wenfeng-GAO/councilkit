@@ -7,7 +7,7 @@ import type {
   ParticipantSpec,
   ResolveProfileResponse,
 } from "@shared/runtime/schemas";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import type { ParticipantDriver } from "../drivers/types";
 import {
   InstallationError,
@@ -137,7 +137,7 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
           code === "INSTALLATION_CHANGED" || code === "INSTALLATION_NOT_FOUND"
             ? "invalid_binding"
             : "runtime_unavailable",
-        detail: clipUtf16CodeUnits(error.message, MAX_DETAIL),
+        detail: clipUtf16(error.message, MAX_DETAIL),
       },
       binding: null,
     };
@@ -201,7 +201,7 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
         readiness: {
           state: "runtime_unavailable",
           detail:
-            error instanceof Error ? clipUtf16CodeUnits(error.message, MAX_DETAIL) : "probe failed",
+            error instanceof Error ? clipUtf16(error.message, MAX_DETAIL) : "probe failed",
         },
         binding: null,
       };
@@ -228,7 +228,7 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
           state: runtimeCode === "MODEL_UNAVAILABLE" ? "model_unavailable" : "runtime_unavailable",
           detail:
             error instanceof Error
-              ? clipUtf16CodeUnits(error.message, MAX_DETAIL)
+              ? clipUtf16(error.message, MAX_DETAIL)
               : "prewarm failed",
         },
         binding: null,

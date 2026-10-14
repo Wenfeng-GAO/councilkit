@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
-import { clipUtf16TailCodeUnits } from "@shared/runtime/seat-result";
 import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime";
+import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { withDeadline } from "./ndjson";
@@ -573,7 +573,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
             });
             spawned.stdout.on("data", (chunk: Buffer) => {
               const next = turn.stdout + chunk.toString("utf8");
-              turn.stdout = clipUtf16TailCodeUnits(next, STDOUT_CAP);
+              turn.stdout = next.length > STDOUT_CAP ? clipUtf16Tail(next, STDOUT_CAP) : next;
               if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
             });
             spawned.stdout.on("end", () => {

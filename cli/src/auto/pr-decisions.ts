@@ -3,7 +3,7 @@ import type { FindingsFile, LedgerFinding } from "@shared/runtime/cli-ledger";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { DecisionItem, DecisionsFile } from "@shared/runtime/review-explainer/contracts";
 import { decisionForFinding, loadPrDecisions } from "@shared/runtime/review-explainer/pr-decisions";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 
 export { loadPrDecisions };
 
@@ -78,6 +78,6 @@ export function separateChangedAssertions(
     const old = prior.find((item) => item.id === row.id);
     if (!old || matchDecisionIdentity(decisions, old, row) !== false) return row;
     const suffix = createHash("sha256").update(row.text).digest("hex").slice(0, 12);
-    return { ...row, id: `${clipUtf16CodeUnits(row.id, 140)}-new-${suffix}`, status: "open" };
+    return { ...row, id: `${clipUtf16(row.id, 140)}-new-${suffix}`, status: "open" };
   });
 }

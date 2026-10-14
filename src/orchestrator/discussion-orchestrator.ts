@@ -62,7 +62,7 @@ import {
 import type { RuntimeEvent } from "@shared/runtime/events";
 import { type ExecutionProfileDto, executionProfileSchema } from "@shared/runtime/schemas";
 import type { SnapshotItem } from "@shared/runtime/schemas";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 
 /**
  * Persistent Discussion Orchestrator (U5): replaces the in-page runRound()
@@ -652,7 +652,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         reason: {
           code: "prewarm_failed",
           detail:
-            error instanceof Error ? clipUtf16CodeUnits(error.message, 256) : "prewarm failed",
+            error instanceof Error ? clipUtf16(error.message, 256) : "prewarm failed",
         },
       });
       notify(roomId);
@@ -813,7 +813,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         token,
         error: errorOf(
           "DISPATCH_FAILED",
-          error instanceof Error ? clipUtf16CodeUnits(error.message, 256) : "execute failed",
+          error instanceof Error ? clipUtf16(error.message, 256) : "execute failed",
         ),
         kind: "failed",
       });

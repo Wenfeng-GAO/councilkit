@@ -9,7 +9,7 @@ import {
   severityLabel,
 } from "@/lib/finding-list";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 
 export interface FindingChecklistOptions {
   /** Current filter selection; defaults to "pending" when omitted. */
@@ -114,7 +114,7 @@ function extractActionableSuggestion(problem: FindingListProblem): string | null
   const suggestion = suggestionMatch[1].trim();
   // Keep it short: limit to ~200 chars for a one-line trigger
   if (suggestion.length > 200) {
-    return clipUtf16CodeUnits(suggestion, 197) + "...";
+    return clipUtf16(suggestion, 200, "...");
   }
   return suggestion;
 }

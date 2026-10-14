@@ -26,7 +26,6 @@ import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-h
 import { CLI_RUN_STATUS_FILE, type CliRunProgressPhase } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { makeError } from "@shared/runtime/errors";
-import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
@@ -78,6 +77,7 @@ import {
   cliRunStartReviewResponseSchema,
   cliRunsListResponseSchema,
 } from "@shared/runtime/schemas";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import { type CliRunLauncher, defaultCliRunLauncher, isPidAlive } from "../cli-launcher";
 import { resolveRepairBranchHints } from "../repair-branch-hints";
 import { type HostServices, HttpError, type Route, httpError } from "../server";
@@ -1066,23 +1066,24 @@ function isHandshakeTimeout(error: unknown): boolean {
   );
 }
 
-
-/** Clip cli-run spawn/handshake error details on a UTF-16 code-unit boundary (max 1024). */
-export function clipCliSpawnErrorDetail(message: string): string {
-  return clipUtf16CodeUnits(message, 1024);
-}
+/** CLI-run spawn and handshake error details, in UTF-16 code units. */
+export const CLI_SPAWN_ERROR_DETAIL_MAX = 1024;
 
 function mapRepairSpawnError(error: unknown): never {
   const message = error instanceof Error ? error.message : "failed to spawn councilkit";
   if (isHandshakeTimeout(error)) {
     throw httpError(
       500,
-      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipCliSpawnErrorDetail(message), { retryable: true }),
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipUtf16(message, CLI_SPAWN_ERROR_DETAIL_MAX), {
+        retryable: true,
+      }),
     );
   }
   throw httpError(
     500,
-    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipCliSpawnErrorDetail(message), { retryable: false }),
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipUtf16(message, CLI_SPAWN_ERROR_DETAIL_MAX), {
+      retryable: false,
+    }),
   );
 }
 
@@ -1149,7 +1150,9 @@ function mapIdeateSpawnError(error: unknown): never {
   if (code === "HANDSHAKE_TIMEOUT" || message.includes("HANDSHAKE_TIMEOUT")) {
     throw httpError(
       500,
-      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipCliSpawnErrorDetail(message), { retryable: true }),
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipUtf16(message, CLI_SPAWN_ERROR_DETAIL_MAX), {
+        retryable: true,
+      }),
     );
   }
   if (message.includes("product-jury")) {
@@ -1167,7 +1170,9 @@ function mapIdeateSpawnError(error: unknown): never {
   }
   throw httpError(
     500,
-    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipCliSpawnErrorDetail(message), { retryable: false }),
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipUtf16(message, CLI_SPAWN_ERROR_DETAIL_MAX), {
+      retryable: false,
+    }),
   );
 }
 
@@ -1180,7 +1185,9 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
   if (code === "HANDSHAKE_TIMEOUT" || message.includes("HANDSHAKE_TIMEOUT")) {
     throw httpError(
       500,
-      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipCliSpawnErrorDetail(message), { retryable: true }),
+      makeError("HANDSHAKE_TIMEOUT", "dispatch", clipUtf16(message, CLI_SPAWN_ERROR_DETAIL_MAX), {
+        retryable: true,
+      }),
     );
   }
   if (/no local clone/i.test(message)) {
@@ -1205,7 +1212,9 @@ function mapReviewSpawnError(error: unknown, pr: string): never {
   }
   throw httpError(
     500,
-    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipCliSpawnErrorDetail(message), { retryable: false }),
+    makeError("DRIVER_SPAWN_FAILED", "dispatch", clipUtf16(message, CLI_SPAWN_ERROR_DETAIL_MAX), {
+      retryable: false,
+    }),
   );
 }
 
