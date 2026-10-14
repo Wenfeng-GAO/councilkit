@@ -1,5 +1,6 @@
 import type { DiscussionMode } from "@/models/discussion/entities";
 import type { ResultKind } from "@/models/discussion/model-execution";
+import { REPORT_SECTION_HEADINGS as reportSectionHeadingList } from "@shared/runtime/report-sections";
 
 /**
  * Discussion instruction templates (S2, ADR-0010): the THREE discussion modes
@@ -50,23 +51,10 @@ const SUMMARY_TEMPLATES: Record<DiscussionMode, string> = {
     "最后一行单独输出「收敛建议：是」或「收敛建议：否」（是=已可收敛进入决策，否=还需继续讨论）。",
 };
 
-/** Report instruction headers for the nine required Markdown sections
- * (product.md §5.5): Background / Discussion goal / Participating agents /
- * Discussion summary / Key consensus / Remaining disagreements / Recommendation
- * / Risks and objections / Next actions. A model MUST produce every section as
- * a level-2 Markdown heading (## …) so ReportView can render them. The mode
- * prefix only rotates each section's flavor, never the section set. */
-const REPORT_SECTION_HEADINGS = [
-  "## Background（背景）",
-  "## Discussion goal（讨论目标）",
-  "## Participating agents（参与角色）",
-  "## Discussion summary（讨论摘要）",
-  "## Key consensus（关键共识）",
-  "## Remaining disagreements（未决分歧）",
-  "## Recommendation（推荐）",
-  "## Risks and objections（风险与异议）",
-  "## Next actions（下一步行动）",
-].join("\n");
+/** The nine required Markdown section headings (product.md §5.5), joined for
+ * the report templates. Shared with the CLI Reporter. The mode prefix only
+ * rotates each section's flavor, never the section set. */
+const REPORT_SECTION_HEADINGS = reportSectionHeadingList.join("\n");
 
 const REPORT_TEMPLATES: Record<DiscussionMode, string> = {
   brainstorm: `请基于以上全部讨论生成决策报告：汇总候选方案与推荐方向，给出推荐理由与下一步。报告必须严格包含以下九段（每段以 Markdown 二级标题起头）：\n${REPORT_SECTION_HEADINGS}\n只输出报告正文。`,
