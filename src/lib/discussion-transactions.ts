@@ -1283,22 +1283,30 @@ export async function discardExecution(
 /** No-ACK terminal (crash / protocol failure / interrupt without an ACKable
  * terminal): never becomes committed or discarded. `pause: false` records
  * the terminal without pausing the Round — the Orchestrator's retry-once
- * path uses it before dispatching the replacement execution. */
+ * path uses it before dispatching the replacement execution.
+ *
+ * `error` may be a function. It runs inside this transaction, after the room
+ * row is locked, so the stored sentence can match `runState` at the commit
+ * instead of a read from before the write. Returns that room. */
 export async function failExecution(
   db: CouncilKitRuntimeDB,
   input: {
     executionId: string;
     token: ControllerToken;
-    error: ModelExecutionError;
+    error: ModelExecutionError | ((room: DiscussionRoom) => ModelExecutionError);
     kind: "failed" | "interrupted";
     pause?: boolean;
   },
-): Promise<void> {
-  await db.transaction(
+): Promise<DiscussionRoom> {
+  return db.transaction(
     "rw",
     [db.modelExecutions, db.rounds, db.rooms, db.participants, db.runtimeBindings],
     async () => {
-      const { execution, round } = await loadCommitContext(db, input.executionId, input.token);
+      const { execution, round, room } = await loadCommitContext(
+        db,
+        input.executionId,
+        input.token,
+      );
       if (execution.state === "committed" || execution.state === "discarded") {
         throw new TransactionError(
           "IDEMPOTENCY_CONFLICT",
@@ -1306,11 +1314,17 @@ export async function failExecution(
         );
       }
       if (execution.state === "failed" || execution.state === "interrupted") {
-        return; // idempotent: the terminal is already persisted
+        return room; // idempotent: the terminal is already persisted
       }
-      const roundChanged = recordExecutionFailure(execution, round, input);
+      const error = typeof input.error === "function" ? input.error(room) : input.error;
+      const roundChanged = recordExecutionFailure(execution, round, {
+        error,
+        kind: input.kind,
+        pause: input.pause,
+      });
       await db.modelExecutions.put(execution);
       if (roundChanged) await db.rounds.put(round);
+      return room;
     },
   );
 }

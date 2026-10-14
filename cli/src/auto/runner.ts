@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { retryBlockedAfterGap } from "@shared/runtime/retry-stop";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { redact } from "../redact";
 import {
@@ -283,9 +284,10 @@ export async function runAttempts(
     // must never infer an in-flight retry from duration/exit-code heuristics
     // (AC-08: an auth failure exits in 3s and is NOT retried, yet looks
     // identical to a transient blip without this mark). The stamp reflects the
-    // decision at finish time; the spawn below re-checks the signal so an
-    // abort fired BY the callback still suppresses the retry (in that race the
-    // run dies immediately and readers gate on runActive anyway).
+    // decision at finish time. The rebuild await re-reads the signal, and
+    // runOne refuses an already-aborted signal, so an abort fired by the
+    // callback or during the rebuild does not start the retry (readers gate
+    // on runActive when the stamp says willRetry but no second record lands).
     const willRetry = shouldRetry(first, internal.signal);
     const firstResult: AttemptResult = {
       ...first,
@@ -301,7 +303,12 @@ export async function runAttempts(
       // (reviewer finding). The command layer owns the workspace lifecycle, so
       // it injects the fs-safe delete-then-recreate path here; a throw propagates
       // through the worker's try/catch and kills the pool like any run failure.
-      await opts.rebuildWorkspaceBeforeRetry?.(spec);
+      // Abort during that rebuild must not start the second process.
+      const blocked = await retryBlockedAfterGap(
+        () => opts.rebuildWorkspaceBeforeRetry?.(spec),
+        () => internal.signal.aborted,
+      );
+      if (blocked) return firstResult;
       const second = await runOne(spec, subOpts);
       const secondResult: AttemptResult = { ...second, attemptNumber: 2, retryOf: 1 };
       opts.onAttemptFinish?.(secondResult);
@@ -347,6 +354,27 @@ export async function runAttempts(
     }
   }
   return { results: results as AttemptResult[], aborted };
+}
+
+/** A spawn that never started because the run was already aborted. */
+function abortedAttempt(spec: AttemptSpec, durationMs: number): AttemptResult {
+  return {
+    attemptId: spec.attemptId,
+    agentId: spec.agentId,
+    agentName: spec.agentName,
+    driverId: spec.driverId,
+    modelId: spec.modelId,
+    status: "failure",
+    output: "",
+    exitCode: "killed",
+    durationMs,
+    workspace: spec.cwd,
+    failure: {
+      code: "ABORTED",
+      message: "aborted by cancellation signal",
+      retryable: false,
+    },
+  };
 }
 
 /** Transient-EXIT retry predicate (plan §"瞬态重试"): retry ONCE only when the
@@ -450,6 +478,9 @@ async function runOneSpawn(
   timers: RunnerTimers,
   started: number,
 ): Promise<AttemptResult> {
+  if (opts.signal.aborted) {
+    return abortedAttempt(spec, Math.max(0, timers.now() - started));
+  }
   const spawnFn = opts.spawnImpl ?? defaultSpawn;
   let lastActivity: string | null = null;
 

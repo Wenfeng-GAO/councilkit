@@ -1194,4 +1194,89 @@ describe("claude-stream-json driver CK-ROT-001 cancel during respawn", () => {
     // The latched cancel flag is cleaned up by execute().finally.
     expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
   });
+
+  it("close during safe-retry respawn is user_cancelled, not a spawn failure", async () => {
+    const participantId = "p-1";
+    const firstEvents = new EventEmitter();
+    const firstStdin: string[] = [];
+    const firstProcess = makeHandshakingProcess(participantId, firstEvents, firstStdin);
+    const secondEvents = new EventEmitter();
+    const secondStdin: string[] = [];
+    const secondProcess = makeHandshakingProcess(participantId, secondEvents, secondStdin);
+
+    let spawnImplCalls = 0;
+    let releaseRespawn: () => void = () => {};
+    const spawnImpl = (): Promise<DriverProcess> => {
+      spawnImplCalls += 1;
+      if (spawnImplCalls === 1) return Promise.resolve(firstProcess);
+      return new Promise<DriverProcess>((resolveSpawn) => {
+        releaseRespawn = () => resolveSpawn(secondProcess);
+      });
+    };
+    const { driver } = await buildSeamDriver(firstProcess, () => {}, spawnImpl);
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+    firstEvents.emit("exit", { code: null, signal: "SIGKILL" });
+    await waitFor(() => driver.sessionEpoch === 1, 5000);
+
+    const run = executeCollecting(driver, execInput("exec-close", "Close during respawn."));
+    await waitFor(() => spawnImplCalls === 2, 5000);
+    const closing = driver.close();
+    releaseRespawn();
+    await closing;
+    await run.done;
+
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("interrupted");
+    if (terminal.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+    expect(terminal.dispatchState).toBe("not_dispatched");
+    expect(secondStdin.some((line) => line.includes('"type":"user"'))).toBe(false);
+    expect(run.events.some((event) => event.type === "failed")).toBe(false);
+  });
+
+  it("cancel during a failing safe-retry respawn is user_cancelled, not DRIVER_SPAWN_FAILED", async () => {
+    const participantId = "p-1";
+    const firstEvents = new EventEmitter();
+    const firstStdin: string[] = [];
+    const firstProcess = makeHandshakingProcess(participantId, firstEvents, firstStdin);
+
+    let spawnImplCalls = 0;
+    let rejectRespawn: (error: Error) => void = () => {};
+    const spawnImpl = (): Promise<DriverProcess> => {
+      spawnImplCalls += 1;
+      if (spawnImplCalls === 1) return Promise.resolve(firstProcess);
+      return new Promise<DriverProcess>((_resolveSpawn, rejectSpawn) => {
+        rejectRespawn = rejectSpawn;
+      });
+    };
+    const { driver } = await buildSeamDriver(firstProcess, () => {}, spawnImpl);
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+    firstEvents.emit("exit", { code: null, signal: "SIGKILL" });
+    await waitFor(() => driver.sessionEpoch === 1, 5000);
+
+    const run = executeCollecting(driver, execInput("exec-cancel-fail", "Cancel during respawn."));
+    await waitFor(() => spawnImplCalls === 2, 5000);
+    await driver.cancel("exec-cancel-fail");
+    rejectRespawn(new Error("respawn spawn failed"));
+    await run.done;
+
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("interrupted");
+    if (terminal.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("user_cancelled");
+    expect(terminal.dispatchState).toBe("not_dispatched");
+    expect(
+      run.events.some(
+        (event) => event.type === "failed" && event.error.code === "DRIVER_SPAWN_FAILED",
+      ),
+    ).toBe(false);
+  });
 });

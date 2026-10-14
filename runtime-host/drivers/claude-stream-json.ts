@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { makeError } from "@shared/runtime/errors";
+import { retryBlockedAfterGap } from "@shared/runtime/retry-stop";
 import type { ClaudeRoute } from "@shared/runtime/schemas";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString, sanitizeValue } from "../logging";
@@ -914,20 +915,25 @@ export function createClaudeStreamJsonDriver(
         // provably never happened (tools are verified empty, so a pre-dispatch
         // retry has no side effects).
         let attempt = 0;
+        const stopLatched = (): boolean =>
+          cancellingExecutions.has(input.executionId) || isClosingOrClosed();
+        const emitStoppedBeforeRetry = (): void => {
+          emit({
+            type: "interrupted",
+            reason: "user_cancelled",
+            dispatchState: "not_dispatched",
+            toolState: "none",
+          });
+        };
         try {
           for (;;) {
             attempt += 1;
-            // CK-ROT-001: a cancel accepted during the respawn window (activeTurn
-            // was null, cancel latched cancellingExecutions) must abort before
-            // attempt 2 dispatches a user frame. Emits interrupted(user_cancelled)
-            // with not_dispatched (no frame was ever written for this execution).
-            if (attempt > 1 && cancellingExecutions.has(input.executionId)) {
-              emit({
-                type: "interrupted",
-                reason: "user_cancelled",
-                dispatchState: "not_dispatched",
-                toolState: "none",
-              });
+            // CK-ROT-001: a cancel or close accepted during the respawn window
+            // (activeTurn was null) must abort before attempt 2 dispatches a
+            // user frame. Close does not latch cancellingExecutions; the driver
+            // state does. Emits interrupted(user_cancelled) with not_dispatched.
+            if (attempt > 1 && stopLatched()) {
+              emitStoppedBeforeRetry();
               return;
             }
             let failedRetryable = false;
@@ -946,28 +952,38 @@ export function createClaudeStreamJsonDriver(
             await runTurn(input, emitWrapper, attempt === 1);
             if (!failedRetryable || attempt >= 2) return;
             logger.warn("claude.retry_once", { participantId, executionId: input.executionId });
-            if (!process) {
-              try {
-                await respawn("safe_retry");
-              } catch {
-                emit({
-                  type: "failed",
-                  error: makeError(
-                    "DRIVER_SPAWN_FAILED",
-                    "dispatch",
-                    "respawn failed during safe retry",
-                    {
-                      driverId: "claude-stream-json",
-                      executionId: input.executionId,
-                      participantId,
-                    },
-                  ),
-                  dispatchState: "not_dispatched",
-                  toolState: "none",
-                  retryable: false,
-                } as DriverEvent);
-                return;
+            let spawnFailed = false;
+            const blocked = await retryBlockedAfterGap(async () => {
+              if (!process) {
+                try {
+                  await respawn("safe_retry");
+                } catch {
+                  spawnFailed = true;
+                }
               }
+            }, stopLatched);
+            if (blocked) {
+              emitStoppedBeforeRetry();
+              return;
+            }
+            if (spawnFailed) {
+              emit({
+                type: "failed",
+                error: makeError(
+                  "DRIVER_SPAWN_FAILED",
+                  "dispatch",
+                  "respawn failed during safe retry",
+                  {
+                    driverId: "claude-stream-json",
+                    executionId: input.executionId,
+                    participantId,
+                  },
+                ),
+                dispatchState: "not_dispatched",
+                toolState: "none",
+                retryable: false,
+              } as DriverEvent);
+              return;
             }
           }
         } finally {

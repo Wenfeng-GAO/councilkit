@@ -2221,9 +2221,7 @@ describe("discussion orchestrator (U5)", () => {
       createdAt: decoyCreatedAt,
       updatedAt: decoyCreatedAt,
     });
-    const latest = (
-      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
-    )
+    const latest = (await db.runtimeBindings.where("roomId").equals(room.id).toArray())
       .filter((binding) => binding.state !== "closed")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     expect(latest?.id).toBe("binding-decoy-closing");
@@ -2285,9 +2283,7 @@ describe("discussion orchestrator (U5)", () => {
       createdAt: decoyCreatedAt,
       updatedAt: decoyCreatedAt,
     });
-    const latest = (
-      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
-    )
+    const latest = (await db.runtimeBindings.where("roomId").equals(room.id).toArray())
       .filter((binding) => binding.state !== "closed")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     expect(latest?.id).toBe("binding-decoy-ack");
@@ -2367,9 +2363,7 @@ describe("discussion orchestrator (U5)", () => {
       createdAt: decoyCreatedAt,
       updatedAt: decoyCreatedAt,
     });
-    const latest = (
-      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
-    )
+    const latest = (await db.runtimeBindings.where("roomId").equals(room.id).toArray())
       .filter((binding) => binding.state !== "closed")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     expect(latest?.id).toBe("binding-decoy-dispatch");
@@ -2384,9 +2378,7 @@ describe("discussion orchestrator (U5)", () => {
     ).toBe(true);
     expect(host.executeCalls.some((call) => call.scopeId === "scope-decoy-dispatch")).toBe(false);
     const executions = await db.modelExecutions.where("roomId").equals(room.id).toArray();
-    expect(executions.every((execution) => execution.executionScopeId === ownerScopeId)).toBe(
-      true,
-    );
+    expect(executions.every((execution) => execution.executionScopeId === ownerScopeId)).toBe(true);
     expect(executions.every((execution) => execution.state === "committed")).toBe(true);
   });
 
@@ -2482,9 +2474,7 @@ describe("discussion orchestrator (U5)", () => {
       createdAt: decoyCreatedAt,
       updatedAt: decoyCreatedAt,
     });
-    const latest = (
-      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
-    )
+    const latest = (await db.runtimeBindings.where("roomId").equals(room.id).toArray())
       .filter((binding) => binding.state !== "closed")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     expect(latest?.id).toBe("binding-decoy-control");
@@ -2668,6 +2658,273 @@ describe("discussion orchestrator (U5)", () => {
     expect(round?.pauseReason?.code).toBe("execution_failed");
     // focus + message(original) + message(retry) = 3 p1 dispatches; no fourth.
     expect(host.executeCalls.filter((call) => call.participantId === p1.id)).toHaveLength(3);
+  });
+
+  it("pause during an auto-retry gap does not dispatch the replacement execution", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client: new RuntimeClient({ baseUrl: "http://fake-host", csrfToken: "csrf-token" }),
+      display: {
+        onPreview: async (_roomId, event) => {
+          if (
+            event.type === "failed" &&
+            event.retryable === true &&
+            event.dispatchState === "not_dispatched"
+          ) {
+            await orchestrator.pauseRoom(room.id);
+          }
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(
+      p1.id,
+      { kind: "complete" },
+      { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
+      { kind: "complete" },
+    );
+    const round = await orchestrator.startRound(room.id);
+    expect((await db.rooms.get(room.id))?.runState).toBe("paused");
+    expect(round?.phase).toBe("running");
+    // focus + the failed message. The replacement execution must not start.
+    expect(host.executeCalls.map((call) => call.participantId)).toEqual([p1.id, p1.id]);
+    const messages = (await db.modelExecutions.where("roomId").equals(room.id).toArray()).filter(
+      (execution) => execution.resultKind === "message",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.state).toBe("failed");
+    expect(messages[0]?.retryOfExecutionId).toBeNull();
+    expect(messages[0]?.error?.message).toBe(
+      "pre-dispatch failure; room scheduling paused before retry",
+    );
+  });
+
+  it("pause after the anchor begin commits does not dispatch and leaves the round running", async () => {
+    const { room, p1, p2 } = await seedBase();
+    let pausing = false;
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client: new RuntimeClient({ baseUrl: "http://fake-host", csrfToken: "csrf-token" }),
+      display: {
+        onRoundChanged: async () => {
+          if (pausing) return;
+          const prepared = await db.modelExecutions
+            .where("roomId")
+            .equals(room.id)
+            .filter((execution) => execution.state === "prepared")
+            .first();
+          if (!prepared) return;
+          pausing = true;
+          await orchestrator.pauseRoom(room.id);
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const round = await orchestrator.startRound(room.id);
+    expect((await db.rooms.get(room.id))?.runState).toBe("paused");
+    expect(round?.phase).toBe("running");
+    expect(round?.activeExecutionId).toBeNull();
+    expect(host.executeCalls).toHaveLength(0);
+    const executions = await db.modelExecutions.where("roomId").equals(room.id).toArray();
+    expect(executions).toHaveLength(1);
+    expect(executions[0]?.resultKind).toBe("focus");
+    expect(executions[0]?.state).toBe("interrupted");
+    expect(executions[0]?.error?.code).toBe("USER_CANCELLED");
+  });
+
+  it("a pause during the auto-retry record does not claim a retry that will not run", async () => {
+    const { room, p1, p2 } = await seedBase();
+    let pausing = false;
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client: new RuntimeClient({ baseUrl: "http://fake-host", csrfToken: "csrf-token" }),
+      display: {
+        onRoundChanged: async () => {
+          if (pausing) return;
+          const claiming = await db.modelExecutions
+            .where("roomId")
+            .equals(room.id)
+            .filter(
+              (execution) =>
+                execution.error?.message ===
+                "pre-dispatch failure; retrying once with a new executionId",
+            )
+            .first();
+          if (!claiming) return;
+          pausing = true;
+          await orchestrator.pauseRoom(room.id);
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(
+      p1.id,
+      { kind: "complete" },
+      { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
+      { kind: "complete" },
+    );
+    const round = await orchestrator.startRound(room.id);
+    expect((await db.rooms.get(room.id))?.runState).toBe("paused");
+    expect(round?.phase).toBe("running");
+    expect(host.executeCalls.map((call) => call.participantId)).toEqual([p1.id, p1.id]);
+    const messages = (await db.modelExecutions.where("roomId").equals(room.id).toArray()).filter(
+      (execution) => execution.resultKind === "message",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.state).toBe("failed");
+    expect(messages[0]?.error?.message).toBe(
+      "pre-dispatch failure; room scheduling paused before retry",
+    );
+  });
+
+  it("concludeRoom while scheduling is paused still writes the report", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+    expect((await db.rooms.get(room.id))?.status).toBe("open");
+    await orchestrator.pauseRoom(room.id);
+    expect((await db.rooms.get(room.id))?.runState).toBe("paused");
+
+    await orchestrator.concludeRoom(room.id);
+
+    const stored = await db.rooms.get(room.id);
+    expect(stored?.status).toBe("concluded");
+    expect(stored?.runState).toBe("idle");
+    expect(await db.reports.where("roomId").equals(room.id).count()).toBe(1);
+    const reportExecutions = (
+      await db.modelExecutions.where("roomId").equals(room.id).toArray()
+    ).filter((execution) => execution.resultKind === "report");
+    expect(reportExecutions).toHaveLength(1);
+    expect(reportExecutions[0]?.state).toBe("committed");
+  });
+
+  it("pause after beginReportExecution still concludes and keeps the aborted round aborted", async () => {
+    const { room, p1, p2 } = await seedBase();
+    let pausing = false;
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client: new RuntimeClient({ baseUrl: "http://fake-host", csrfToken: "csrf-token" }),
+      display: {
+        onRoundChanged: async () => {
+          if (pausing) return;
+          const preparedReport = await db.modelExecutions
+            .where("roomId")
+            .equals(room.id)
+            .filter(
+              (execution) => execution.resultKind === "report" && execution.state === "prepared",
+            )
+            .first();
+          if (!preparedReport) return;
+          pausing = true;
+          await orchestrator.pauseRoom(room.id);
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const completed = await orchestrator.startRound(room.id);
+    expect(completed?.phase).toBe("completed");
+    const binding = await db.runtimeBindings
+      .where("roomId")
+      .equals(room.id)
+      .filter((candidate) => candidate.state === "active")
+      .first();
+    const token = {
+      controllerId: binding?.controllerId as string,
+      leaseEpoch: binding?.leaseEpoch as number,
+    };
+    const openRound = await createRound(db, {
+      roomId: room.id,
+      token,
+      participantOrder: [p1.id, p2.id],
+    });
+    await transitionRound(db, {
+      roomId: room.id,
+      roundId: openRound.id,
+      token,
+      to: "prewarming",
+    });
+    await transitionRound(db, {
+      roomId: room.id,
+      roundId: openRound.id,
+      token,
+      to: "running",
+    });
+
+    await orchestrator.concludeRoom(room.id);
+
+    expect((await db.rounds.get(openRound.id))?.phase).toBe("aborted");
+    expect((await db.rounds.get(completed?.id ?? ""))?.phase).toBe("completed");
+    const stored = await db.rooms.get(room.id);
+    expect(stored?.status).toBe("concluded");
+    expect(stored?.activeRoundId).toBeNull();
+    expect(await db.reports.where("roomId").equals(room.id).count()).toBe(1);
+    const reportExecutions = (
+      await db.modelExecutions.where("roomId").equals(room.id).toArray()
+    ).filter((execution) => execution.resultKind === "report");
+    expect(reportExecutions).toHaveLength(1);
+    expect(reportExecutions[0]?.state).toBe("committed");
+  });
+
+  it("a scheduling pause after the summary commits blocks the automatic report", async () => {
+    const { room, p1, p2 } = await seedBase();
+    await db.rooms.update(room.id, { maxRounds: 1 });
+    let pausing = false;
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client: new RuntimeClient({ baseUrl: "http://fake-host", csrfToken: "csrf-token" }),
+      display: {
+        onRoundChanged: async () => {
+          if (pausing) return;
+          const completed = await db.rounds
+            .where("roomId")
+            .equals(room.id)
+            .filter((round) => round.phase === "completed")
+            .count();
+          if (completed === 0) return;
+          const reports = await db.modelExecutions
+            .where("roomId")
+            .equals(room.id)
+            .filter((execution) => execution.resultKind === "report")
+            .count();
+          if (reports > 0) return;
+          pausing = true;
+          await orchestrator.pauseRoom(room.id);
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    const round = await orchestrator.startRound(room.id);
+    expect(round?.phase).toBe("completed");
+    expect((await db.rooms.get(room.id))?.runState).toBe("paused");
+    expect((await db.rooms.get(room.id))?.status).toBe("open");
+    expect(
+      (await db.modelExecutions.where("roomId").equals(room.id).toArray()).filter(
+        (execution) => execution.resultKind === "report",
+      ),
+    ).toHaveLength(0);
+    expect(await db.reports.where("roomId").equals(room.id).count()).toBe(0);
+
+    await orchestrator.concludeRoom(room.id);
+    expect((await db.rooms.get(room.id))?.status).toBe("concluded");
+    expect(await db.reports.where("roomId").equals(room.id).count()).toBe(1);
   });
 
   it("16. sendUserMessage appends to the active round and bumps the Room revision", async () => {
