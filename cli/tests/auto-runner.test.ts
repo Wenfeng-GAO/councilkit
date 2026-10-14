@@ -619,6 +619,41 @@ describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", ()
     expect(results[0].retryOf).toBeUndefined();
   });
 
+  it("does NOT spawn the retry when abort fires during workspace rebuild", async () => {
+    const ac = new AbortController();
+    const { spawn, calls } = exitFailSpawn();
+    const { results, aborted } = await runAttempts([spec("0")], {
+      spawnImpl: spawn,
+      signal: ac.signal,
+      timers: stepClock([0, 5_000]),
+      rebuildWorkspaceBeforeRetry: () => {
+        ac.abort();
+      },
+    });
+    expect(aborted).toBe(true);
+    expect(calls()).toBe(1);
+    expect(results[0]?.attemptNumber).toBe(1);
+    expect(results[0]?.retryOf).toBeUndefined();
+    expect(results[0]?.failure?.code).toBe("EXIT");
+  });
+
+  it("spawnOnce does not spawn when the signal is already aborted", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    let calls = 0;
+    const result = await spawnOnce(spec("already-aborted"), {
+      signal: ac.signal,
+      spawnImpl: async () => {
+        calls += 1;
+        return { stdout: "x", exitCode: 0, timedOut: false, aborted: false };
+      },
+    });
+    expect(calls).toBe(0);
+    expect(result.status).toBe("failure");
+    expect(result.failure?.code).toBe("ABORTED");
+    expect(result.failure?.retryable).toBe(false);
+  });
+
   it("rebuilds the workspace before the retry spawn (no leftover .last-message.md)", async () => {
     // Reviewer finding: the retry reused the first try's dirty cwd, so a codex
     // leftover `.last-message.md` could be read as the second try's deliverable

@@ -2670,6 +2670,49 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.executeCalls.filter((call) => call.participantId === p1.id)).toHaveLength(3);
   });
 
+  it("pause during an auto-retry gap does not dispatch the replacement execution", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const orchestrator = createDiscussionOrchestrator({
+      db,
+      client: new RuntimeClient({ baseUrl: "http://fake-host", csrfToken: "csrf-token" }),
+      display: {
+        onPreview: async (_roomId, event) => {
+          if (
+            event.type === "failed" &&
+            event.retryable === true &&
+            event.dispatchState === "not_dispatched"
+          ) {
+            await orchestrator.pauseRoom(room.id);
+          }
+        },
+      },
+      ids: {
+        uuid: () => `uuid-${String(++uuidCounter).padStart(4, "0")}`,
+      },
+    });
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(
+      p1.id,
+      { kind: "complete" },
+      { kind: "fail", retryable: true, dispatchState: "not_dispatched" },
+      { kind: "complete" },
+    );
+    const round = await orchestrator.startRound(room.id);
+    expect((await db.rooms.get(room.id))?.runState).toBe("paused");
+    expect(round?.phase).toBe("running");
+    // focus + the failed message. The replacement execution must not start.
+    expect(host.executeCalls.map((call) => call.participantId)).toEqual([p1.id, p1.id]);
+    const messages = (await db.modelExecutions.where("roomId").equals(room.id).toArray()).filter(
+      (execution) => execution.resultKind === "message",
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.state).toBe("failed");
+    expect(messages[0]?.retryOfExecutionId).toBeNull();
+    expect(messages[0]?.error?.message).toBe(
+      "pre-dispatch failure; room scheduling paused before retry",
+    );
+  });
+
   it("16. sendUserMessage appends to the active round and bumps the Room revision", async () => {
     const { room, p1, p2 } = await seedBase();
     const { orchestrator } = makeOrchestrator();
