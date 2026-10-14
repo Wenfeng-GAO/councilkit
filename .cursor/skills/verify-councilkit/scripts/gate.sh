@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-merge gate for an unattended CouncilKit hunt.
-# Order, fail-fast: install (only if needed), typecheck, lint, test, build,
-# then Playwright when the diff touches src or UI.
+# Order, fail-fast: install (only if needed), typecheck, baseline-relative
+# lint, baseline-relative test, build, then Playwright when the diff touches
+# src or UI.
 set -euo pipefail
 
 SCRIPT_SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -16,7 +17,7 @@ for arg in "$@"; do
     --force-e2e) FORCE_E2E=1 ;;
     -h|--help)
       echo "usage: gate.sh [--force-e2e]"
-      echo "Auto-merge only when this command exits 0 and CI verify is green for the same SHA and no unresolved Codex P1 remains."
+      echo "Merge only when this command exits 0, the PR body Verify section shows CI green for this SHA, and no unresolved Codex P1 remains on the latest commit. Otherwise leave the PR open and report."
       exit 0
       ;;
     *)
@@ -57,6 +58,7 @@ fi
 
 DIRTY_FILE="$EVIDENCE/dirty-paths.txt"
 EXTERNAL_FILE="$EVIDENCE/external-node-modules.txt"
+mkdir -p "$EVIDENCE/logs"
 external_node_modules_links >"$EXTERNAL_FILE" || true
 git status --porcelain >"$DIRTY_FILE.raw" || true
 : >"$DIRTY_FILE"
@@ -77,7 +79,6 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   esac
   printf '%s\n' "$line" >>"$DIRTY_FILE"
 done <"$DIRTY_FILE.raw"
-mkdir -p "$EVIDENCE/logs"
 node "$SCRIPT_DIR/summary.mjs" init \
   --dir "$EVIDENCE" \
   --sha "$SHA" \
@@ -89,6 +90,10 @@ node "$SCRIPT_DIR/summary.mjs" init \
   --external-links-file "$EXTERNAL_FILE"
 
 record_step() {
+  local extra_args=()
+  if [[ -f "$EVIDENCE/logs/${1}.extra.json" ]]; then
+    extra_args+=(--extra-file "$EVIDENCE/logs/${1}.extra.json")
+  fi
   node "$SCRIPT_DIR/summary.mjs" step \
     --dir "$EVIDENCE" \
     --name "$1" \
@@ -96,7 +101,8 @@ record_step() {
     --exit "$3" \
     --log "$4" \
     --detail "$5" \
-    --started "$6"
+    --started "$6" \
+    "${extra_args[@]}"
 }
 
 finish() {
@@ -126,6 +132,9 @@ run_step() {
   if [[ "$code" -ne 0 ]]; then
     finish false
     echo "gate failed at ${name} (exit ${code}). Log: ${log}" >&2
+    if [[ -f "$EVIDENCE/logs/${name}.extra.json" ]]; then
+      node --input-type=commonjs -e 'const fs=require("fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (data.detail) console.error(data.detail);' "$EVIDENCE/logs/${name}.extra.json" >&2 || true
+    fi
     exit "$code"
   fi
 }
@@ -161,8 +170,8 @@ else
 fi
 
 run_step typecheck pnpm typecheck
-run_step lint pnpm lint
-run_step test bash -c 'echo "canonical 43127 listeners (recorded, not signaled):"; node "'"$SCRIPT_DIR"'/proc.mjs" listeners --port 43127 || true; exec pnpm test'
+run_step lint node "$SCRIPT_DIR/lint-baseline.mjs" --extra-out "$EVIDENCE/logs/lint.extra.json"
+run_step test node "$SCRIPT_DIR/test-baseline.mjs" --extra-out "$EVIDENCE/logs/test.extra.json" --report-out "$EVIDENCE/logs/vitest.json"
 run_step build pnpm build
 
 port_busy() {
@@ -308,4 +317,4 @@ run_e2e() {
 run_e2e
 finish true
 echo "gate passed sha=$SHA evidence=$EVIDENCE"
-echo "Auto-merge only when this gate exits 0 and CI verify is green for the same SHA and no unresolved Codex P1 remains."
+echo "Merge only when this gate exits 0, the PR body Verify section shows CI green for this SHA, and no unresolved Codex P1 remains on the latest commit. Otherwise leave the PR open and report."

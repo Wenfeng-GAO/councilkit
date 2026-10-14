@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const MERGE_RULE =
-  "Auto-merge only when this gate exits 0 and CI verify is green for the same SHA and no unresolved Codex P1 remains.";
+  "Merge only when gate.sh exits 0, the PR body Verify section shows CI green for this SHA, and no unresolved Codex P1 remains on the latest commit. Otherwise leave the PR open and report.";
 
 function args(argv) {
   const out = { _: [] };
@@ -102,15 +102,41 @@ if (command === "init") {
     process.stderr.write("summary.json is missing; run init first\n");
     process.exit(2);
   }
+  let extra = {};
+  if (parsed["extra-file"]) {
+    try {
+      extra = JSON.parse(readFileSync(parsed["extra-file"], "utf8"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`summary.mjs: ignoring unreadable extra file: ${message}\n`);
+      extra = {};
+    }
+  }
   const step = {
     name: parsed.name,
     status: parsed.status,
     exitCode: Number(parsed.exit ?? 0),
     log: parsed.log ?? null,
-    detail: parsed.detail ?? "",
+    detail: extra.detail || parsed.detail || "",
     startedAt: parsed.started ?? null,
     finishedAt: new Date().toISOString(),
   };
+  const reserved = new Set([
+    "detail",
+    "name",
+    "status",
+    "exitCode",
+    "log",
+    "startedAt",
+    "finishedAt",
+    "ok",
+    "steps",
+    "schema",
+  ]);
+  for (const [key, value] of Object.entries(extra)) {
+    if (reserved.has(key)) continue;
+    step[key] = value;
+  }
   const index = data.steps.findIndex((item) => item.name === step.name);
   if (index === -1) data.steps.push(step);
   else data.steps[index] = step;
