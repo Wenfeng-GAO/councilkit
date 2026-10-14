@@ -6,7 +6,7 @@
  * appends are append-only in practice but always durable via tmp+fsync+rename).
  */
 import { readFileSync } from "node:fs";
-import { reviewModelsSchema } from "@shared/runtime/schemas";
+import { ideateIntegritySchema, reviewModelsSchema } from "@shared/runtime/schemas";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteFile } from "../store/atomic-write";
@@ -224,30 +224,8 @@ export const reviewTranscriptRecordSchema = z.discriminatedUnion("kind", [
 ]);
 export type ReviewTranscriptRecord = z.infer<typeof reviewTranscriptRecordSchema>;
 
-export const ideateIntegritySchema = z
-  .object({
-    plannedProposals: z.number().int().nonnegative(),
-    successfulProposals: z.number().int().nonnegative(),
-    plannedDebates: z.number().int().nonnegative(),
-    successfulDebates: z.number().int().nonnegative(),
-    configuredModels: z.number().int().nonnegative(),
-    successfulModels: z.number().int().nonnegative(),
-    incomplete: z.boolean(),
-    degradedReasons: z.array(z.string()),
-    contextTruncated: z.boolean(),
-    failedSeats: z.array(
-      z
-        .object({
-          stage: z.enum(["proposal", "debate", "aggregate"]),
-          attemptId: z.string().min(1),
-          agentName: z.string().min(1),
-          code: z.string().min(1),
-          message: z.string(),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
+/** Host run index parses this same schema from the ideate transcript. */
+export { ideateIntegritySchema };
 export type IdeateIntegrity = z.infer<typeof ideateIntegritySchema>;
 
 export const ideateAttemptMetaSchema = z
