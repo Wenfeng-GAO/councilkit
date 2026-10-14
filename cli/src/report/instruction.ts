@@ -5,28 +5,15 @@
  * exactly nine level-2 sections, and explicit references to the participating
  * agents and their points.
  *
- * Sync-point: the nine section headings are copied verbatim from
- * `src/orchestrator/discussion-instructions.ts` `REPORT_SECTION_HEADINGS`
- * (product.md §5.5). If the source section set changes, mirror it here and
- * update the nine-section unit test. The wire instruction kind is `summary`
+ * The nine headings are `REPORT_SECTION_HEADINGS` in
+ * `@shared/runtime/report-sections` (product.md §5.5), the same list the
+ * browser report instruction embeds. The wire instruction kind is `summary`
  * (same persist→ACK lineage as a browser summary); the CLI names it "report".
  */
+import { REPORT_SECTION_HEADINGS } from "@shared/runtime/report-sections";
 import type { CouncilSnapshot } from "../run/types";
 
-/** The nine required Markdown level-2 section headings, in order. Copied from
- * `src/orchestrator/discussion-instructions.ts` REPORT_SECTION_HEADINGS
- * (sync-point). A unit test asserts this array has exactly nine entries. */
-export const REPORT_SECTION_HEADINGS = [
-  "## Background（背景）",
-  "## Discussion goal（讨论目标）",
-  "## Participating agents（参与角色）",
-  "## Discussion summary（讨论摘要）",
-  "## Key consensus（关键共识）",
-  "## Remaining disagreements（未决分歧）",
-  "## Recommendation（推荐）",
-  "## Risks and objections（风险与异议）",
-  "## Next actions（下一步行动）",
-] as const;
+export { REPORT_SECTION_HEADINGS };
 
 /** Build the Reporter instruction text. Always lists the nine required section
  * headings and names every participating agent so the model can reference them. */
