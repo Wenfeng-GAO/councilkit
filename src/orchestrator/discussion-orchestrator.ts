@@ -83,7 +83,7 @@ export type ControlState =
 export interface OrchestratorDisplay {
   onControlState?(roomId: string, state: ControlState): void;
   onPreview?(roomId: string, event: RuntimeEvent): void;
-  onRoundChanged?(roomId: string): void;
+  onRoundChanged?(roomId: string): void | Promise<void>;
 }
 
 export interface LockHandle {
@@ -109,6 +109,9 @@ function errorOf(code: string, message: string, retryable = false): ModelExecuti
   return { code, phase: "stream", message, retryable };
 }
 
+const PRE_DISPATCH_RETRY_MESSAGE = "pre-dispatch failure; retrying once with a new executionId";
+const PRE_DISPATCH_PAUSED_MESSAGE = "pre-dispatch failure; room scheduling paused before retry";
+
 export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   const { db, client } = deps;
   const ids = deps.ids ?? { uuid: () => crypto.randomUUID() };
@@ -128,8 +131,20 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     return cachedHostInstanceId;
   }
 
-  function notify(roomId: string): void {
-    display.onRoundChanged?.(roomId);
+  function notify(roomId: string): void | Promise<void> {
+    return display.onRoundChanged?.(roomId);
+  }
+
+  /** The failure row claimed a retry, then a pause landed before that retry
+   * was dispatched. Rewrite the sentence so it matches the skip. */
+  async function dropUnstartedRetryClaim(executionId: string): Promise<void> {
+    await db.transaction("rw", db.modelExecutions, async () => {
+      const stored = await db.modelExecutions.get(executionId);
+      if (!stored?.error || stored.error.message !== PRE_DISPATCH_RETRY_MESSAGE) return;
+      stored.error = { ...stored.error, message: PRE_DISPATCH_PAUSED_MESSAGE };
+      stored.updatedAt = new Date().toISOString();
+      await db.modelExecutions.put(stored);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -652,8 +667,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         token,
         reason: {
           code: "prewarm_failed",
-          detail:
-            error instanceof Error ? clipUtf16(error.message, 256) : "prewarm failed",
+          detail: error instanceof Error ? clipUtf16(error.message, 256) : "prewarm failed",
         },
       });
       notify(roomId);
@@ -710,17 +724,23 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
    * round left `running` (paused/aborted) and the loop must stop, OR when the
    * room is concluding (a report dispatch ends the room). resultKind is
    * generalized to the four ResultKinds (S2); begin dispatches via the
-   * matching begin* function. The wire instruction.kind stays message/summary. */
+   * matching begin* function. The wire instruction.kind stays message/summary.
+   *
+   * `explicit-conclude` is the 总结并结束 path. That button stays enabled
+   * while scheduling is paused. `beginReportExecution` is the write that
+   * clears the gate when an unfinalized round is still active. */
   async function dispatchTurn(
     room: DiscussionRoom,
     round: DiscussionRound,
     participantId: string,
     resultKind: ResultKind,
     retryOfExecutionId: string | null = null,
+    scheduling: "honor-pause" | "explicit-conclude" = "honor-pause",
   ): Promise<boolean> {
-    // A paused room dispatches no new execution. Callers used to check the
-    // gate, then await, then call here. Re-read at the gate itself.
-    if (await schedulingPaused(room.id)) return false;
+    // A paused room dispatches no loop turn. Callers used to check the gate,
+    // then await, then call here. Re-read at the gate itself. Explicit
+    // conclude is the exception above.
+    if (scheduling !== "explicit-conclude" && (await schedulingPaused(room.id))) return false;
     const token = await currentToken(room.id);
     const participant = await db.participants.get(participantId);
     if (!participant) throw new Error(`unknown participant ${participantId}`);
@@ -776,7 +796,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       text: instructionText(room.mode, resultKind, room.targetOutput),
     } as const;
     const snapshot = buildContextSnapshot({ room, participant, instruction, items });
-    if (await schedulingPaused(room.id)) return false;
+    if (scheduling !== "explicit-conclude" && (await schedulingPaused(room.id))) return false;
     const execution = createModelExecution({
       executionId: ids.uuid(),
       roomId: room.id,
@@ -793,6 +813,10 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     // Persist the anchor BEFORE any Host call: retries reconnect, never
     // re-dispatch. Three-way begin dispatch (S2): focus and report have
     // dedicated entry points; message/summary share beginExecution.
+    // Snapshot the active round first. beginReportExecution aborts it inside
+    // the same transaction that inserts the report, so a later pause read
+    // cannot undo that abort by failing only the report row.
+    const activeRoundBeforeBegin = (await db.rooms.get(room.id))?.activeRoundId ?? null;
     const pausedDuringBegin = await retryBlockedAfterGap(
       async () => {
         if (resultKind === "focus") {
@@ -802,20 +826,32 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         } else {
           await beginExecution(db, { execution, token });
         }
-        notify(room.id);
+        await notify(room.id);
       },
       () => schedulingPaused(room.id),
     );
     if (pausedDuringBegin) {
-      await failExecution(db, {
-        executionId: execution.executionId,
-        token,
-        error: errorOf("USER_CANCELLED", "room scheduling paused before dispatch"),
-        kind: "interrupted",
-        pause: false,
-      });
-      notify(room.id);
-      return false;
+      const abortedUnfinalizedRound =
+        resultKind === "report" &&
+        activeRoundBeforeBegin !== null &&
+        (await db.rounds.get(activeRoundBeforeBegin))?.phase === "aborted";
+      // Message and focus begins only reserve activeExecutionId. pause:false
+      // gives that slot back and leaves the round phase. A report whose begin
+      // already aborted the round, or an explicit conclude, must still run:
+      // failing the report would leave the room open with the round gone.
+      const keepReport =
+        resultKind === "report" && (scheduling === "explicit-conclude" || abortedUnfinalizedRound);
+      if (!keepReport) {
+        await failExecution(db, {
+          executionId: execution.executionId,
+          token,
+          error: errorOf("USER_CANCELLED", "room scheduling paused before dispatch"),
+          kind: "interrupted",
+          pause: false,
+        });
+        await notify(room.id);
+        return false;
+      }
     }
 
     try {
@@ -952,7 +988,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         executionId,
         event,
       );
-      notify(room.id);
+      await notify(room.id);
       if (result.kind === "discarded") return false;
       // report/focus are never driven by the message/summary loop continuation
       // logic below. A report commit ends the room; focus just lets the loop
@@ -993,28 +1029,32 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       (event.type === "failed" ? event.retryable : true) &&
       execution.retryOfExecutionId === null;
     if (retryable) {
-      // The failure row is written inside the gap. A pause that latches before
-      // or during that write must not be described as a retry that will run.
-      let pausedBeforeRecord = false;
+      // The sentence is chosen from runState inside the failure transaction.
+      // A pause that commits after that transaction still skips the
+      // replacement; the sentence is rewritten to match.
+      let pausedAtRecord = false;
       const blocked = await retryBlockedAfterGap(
         async () => {
-          pausedBeforeRecord = await schedulingPaused(room.id);
-          await failExecution(db, {
+          const recordedRoom = await failExecution(db, {
             executionId,
             token,
-            error: errorOf(
-              event.type === "failed" ? event.error.code : "INTERRUPTED",
-              pausedBeforeRecord
-                ? "pre-dispatch failure; room scheduling paused before retry"
-                : "pre-dispatch failure; retrying once with a new executionId",
-              true,
-            ),
+            error: (recordedRoom) =>
+              errorOf(
+                event.type === "failed" ? event.error.code : "INTERRUPTED",
+                !recordedRoom || recordedRoom.runState === "paused"
+                  ? PRE_DISPATCH_PAUSED_MESSAGE
+                  : PRE_DISPATCH_RETRY_MESSAGE,
+                true,
+              ),
             kind: event.type === "failed" ? "failed" : "interrupted",
             pause: false,
           });
+          pausedAtRecord = !recordedRoom || recordedRoom.runState === "paused";
+          await notify(room.id);
         },
         () => schedulingPaused(room.id),
       );
+      if (blocked && !pausedAtRecord) await dropUnstartedRetryClaim(executionId);
       if (blocked) return false;
       // The retry phase depends on resultKind: report retries from "completed"
       // (the round is already done); summary retries from "summarizing";
@@ -1198,10 +1238,11 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
    * retryOfExecutionId. Unlimited for the user — the auto once-per-chain rule
    * lives in handleTerminal and is untouched; the failed execution is never
    * re-dispatched (a new executionId is created, the old one stays terminal).
-   * The room scheduling gate must be open: dispatchTurn never consults
-   * room.runState, so this intent rejects a paused Room here. The facilitator
-   * is NOT guarded (a manual retry ≠ a silent substitution; the auto path also
-   * retries the facilitator summary). */
+   * The room scheduling gate must be open. dispatchTurn re-reads runState
+   * and refuses a paused room; this intent rejects first so the caller gets
+   * an error instead of a silent stop. The facilitator is NOT guarded (a
+   * manual retry ≠ a silent substitution; the auto path also retries the
+   * facilitator summary). */
   async function retryFailedParticipant(roomId: string): Promise<void> {
     const token = await currentToken(roomId);
     const room = await db.rooms.get(roomId);
@@ -1481,7 +1522,14 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     // stale digest (the atomic abort in beginReportExecution settles the room
     // inside its own transaction, but the dispatch snapshot is built here).
     const freshRoom = (await db.rooms.get(roomId)) as DiscussionRoom;
-    await dispatchTurn(freshRoom, anchor, freshRoom.facilitatorParticipantId, "report");
+    await dispatchTurn(
+      freshRoom,
+      anchor,
+      freshRoom.facilitatorParticipantId,
+      "report",
+      null,
+      "explicit-conclude",
+    );
     notify(roomId);
   }
 
