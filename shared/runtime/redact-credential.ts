@@ -42,12 +42,15 @@ const COMPACT_CREDENTIAL_PAIRS = new Set(
 );
 
 function knownShapes(): RegExp[] {
+  // No leading \b: underscore and alnum are word chars, so prefix_sk-… /
+  // x_ghp_… never matched. Old SK_TOKEN / driver shapes had no leading
+  // boundary; matching the literal shape anywhere restores that coverage.
   return [
-    /\bsk-[A-Za-z0-9_-]{8,}/g,
-    /\bghp_[A-Za-z0-9]+/g,
-    /\bgho_[A-Za-z0-9]+/g,
-    /\bgithub_pat_[A-Za-z0-9_]+/g,
-    /\bAIza[0-9A-Za-z_-]{10,}/g,
+    /sk-[A-Za-z0-9_-]{8,}/g,
+    /ghp_[A-Za-z0-9]+/g,
+    /gho_[A-Za-z0-9]+/g,
+    /github_pat_[A-Za-z0-9_]+/g,
+    /AIza[0-9A-Za-z_-]{10,}/g,
     /BEGIN [A-Z ]+PRIVATE KEY[\s\S]*?END [A-Z ]+PRIVATE KEY/gi,
   ];
 }
@@ -105,7 +108,7 @@ export function redactCredentialMaterial(
 ): string {
   const extra = new Set((options.extraExactKeys ?? []).map((key) => key.toLowerCase()));
   let out = redactAssignments(input, placeholder, extra);
-  out = out.replace(/\b(Bearer\s+)[^\s"'}\]]+/gi, `$1${placeholder}`);
+  out = out.replace(/(Bearer\s+)[^\s"'}\]]+/gi, `$1${placeholder}`);
   for (const shape of knownShapes()) out = out.replace(shape, placeholder);
   return out;
 }

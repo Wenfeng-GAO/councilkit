@@ -224,6 +224,33 @@ describe("prefixed and structural credential redaction", () => {
       "unauthorized\nBearer\n[redacted]",
     );
 
+    // Known shapes must match after `_` / alnum prefixes (old SK_TOKEN had no \b).
+    const prefixedShapes = [
+      "prefix_sk-abcdefghijk",
+      "x_ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "y_gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "z_github_pat_ABCDEFGHIJKLMNOP_QRST",
+      "w_AIzaSyA-abcdefghij",
+      "prefix_Bearer\nplainBEARERLEAK",
+    ].join(" ");
+    const shapeLeaks = [
+      "sk-abcdefghijk",
+      "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "github_pat_ABCDEFGHIJKLMNOP_QRST",
+      "AIzaSyA-abcdefghij",
+      "plainBEARERLEAK",
+    ];
+    expectSecretsGone(
+      redactCredentialMaterial(prefixedShapes, "[redacted]"),
+      prefixedShapes,
+      shapeLeaks,
+    );
+    expectSecretsGone(redactDriverDiagnostic(prefixedShapes), prefixedShapes, shapeLeaks);
+    expectSecretsGone(redactObservationText(prefixedShapes), prefixedShapes, shapeLeaks);
+    expectSecretsGone(sanitizePublishMessage(prefixedShapes), prefixedShapes, shapeLeaks);
+    expectSecretsGone(String(redact(prefixedShapes)), prefixedShapes, shapeLeaks);
+
     const raw = [
       "token: Bearer PLAINSECRET",
       "password={braceLEAK}",
