@@ -44,6 +44,7 @@ import type {
   RuntimeEvent,
   Usage,
 } from "@shared/runtime/events";
+import { decideFollowAfterClose } from "@shared/runtime/follow-reconnect";
 import type { ContextSnapshot, ControllerRequest } from "@shared/runtime/schemas";
 import { CliError, EXIT } from "../errors";
 
@@ -584,6 +585,7 @@ async function driveToTerminal(input: {
 }): Promise<TerminalOutcome> {
   const { client, host, scopeId, executionId, follow, deadlineSignal, onEvent } = input;
   let resumeAt = 0;
+  let catchUpSpent = false;
   for (;;) {
     let fetchInput = client.eventStreamFetch({ scopeId, executionId, afterSeq: resumeAt });
     const options: FollowEventsOptions = {
@@ -635,31 +637,24 @@ async function driveToTerminal(input: {
     }
     if (outcome.kind === "terminal") return { kind: "terminal", event: outcome.event };
     if (outcome.kind === "aborted") return { kind: "aborted" };
+    const progressed = outcome.lastSeq > resumeAt;
     resumeAt = outcome.lastSeq;
-    const after = await afterStreamClosed(client, scopeId, executionId, deadlineSignal, resumeAt);
-    if (after !== null) return after;
-    // else still running / terminal not yet replayed → re-follow from resumeAt.
+    let state: Awaited<ReturnType<RuntimeClient["getExecution"]>> | null = null;
+    try {
+      state = await client.getExecution(scopeId, executionId, { signal: deadlineSignal });
+    } catch {
+      state = null;
+    }
+    if (deadlineSignal.aborted) return { kind: "aborted" };
+    const decision = decideFollowAfterClose({
+      snapshot: state ? { state: state.state, lastSeq: state.lastSeq ?? -1 } : null,
+      consumedSeq: resumeAt,
+      progressed,
+      catchUpSpent,
+    });
+    if (decision.action === "stop") return { kind: "closed", afterSeq: resumeAt };
+    catchUpSpent = decision.catchUpSpent;
   }
-}
-
-async function afterStreamClosed(
-  client: RuntimeClient,
-  scopeId: string,
-  executionId: string,
-  deadlineSignal: AbortSignal,
-  resumeAt: number,
-): Promise<TerminalOutcome | null> {
-  let state: Awaited<ReturnType<RuntimeClient["getExecution"]>> | null = null;
-  try {
-    state = await client.getExecution(scopeId, executionId, { signal: deadlineSignal });
-  } catch {
-    state = null;
-  }
-  if (deadlineSignal.aborted) return { kind: "aborted" };
-  if (!state) return { kind: "closed", afterSeq: resumeAt };
-  // Still running or terminal not yet replayed → caller re-follows. Returning null
-  // signals "continue the reconnect loop from resumeAt".
-  return null;
 }
 
 // ---------------------------------------------------------------------------

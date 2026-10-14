@@ -167,6 +167,38 @@ describe("agent-real-call edges", () => {
     expect(host.counts.execute).toBe(1);
   });
 
+  it("stops when a terminal record is caught up instead of following again", async () => {
+    let passes = 0;
+    const host = scripted({
+      follow: async () => {
+        passes += 1;
+        return { kind: "closed", lastSeq: 4 };
+      },
+      getExecution: async () => ({ state: "completed", lastSeq: 4 }),
+    });
+    const result = await run(host);
+    expect(passes).toBe(1);
+    expect(result).toMatchObject({
+      verdict: "failed",
+      error: { code: "STREAM_CLOSED", retryable: false },
+    });
+  });
+
+  it("makes one empty catch-up when a terminal host is ahead, then stops", async () => {
+    let passes = 0;
+    const host = scripted({
+      follow: async () => {
+        passes += 1;
+        return { kind: "closed", lastSeq: 0 };
+      },
+      getExecution: async () => ({ state: "failed", lastSeq: 3 }),
+    });
+    const result = await run(host);
+    expect(passes).toBe(2);
+    expect(result.error?.code).toBe("STREAM_CLOSED");
+    expect(result.verdict).toBe("failed");
+  });
+
   it("reconnects once when the record is still running and then completes", async () => {
     const host = scripted({
       follow: async (opts, pass) => {

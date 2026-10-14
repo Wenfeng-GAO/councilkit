@@ -60,6 +60,7 @@ import {
   followExecutionEvents,
 } from "@/runtime/event-stream";
 import type { RuntimeEvent } from "@shared/runtime/events";
+import { decideFollowAfterClose } from "@shared/runtime/follow-reconnect";
 import { retryBlockedAfterGap } from "@shared/runtime/retry-stop";
 import { type ExecutionProfileDto, executionProfileSchema } from "@shared/runtime/schemas";
 import type { SnapshotItem } from "@shared/runtime/schemas";
@@ -940,6 +941,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     let resumeAt = afterSeq;
     let streamFailures = 0;
     let statusFailures = 0;
+    let catchUpSpent = false;
     for (;;) {
       let outcome: FollowOutcome;
       try {
@@ -962,6 +964,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       if (outcome.kind === "terminal") {
         return handleTerminal(room, round, execution.executionId, outcome.event, token);
       }
+      const progressed = outcome.lastSeq > resumeAt;
       resumeAt = outcome.lastSeq;
       // Connection ended without a terminal: check the Host's record.
       try {
@@ -980,7 +983,29 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
           notify(room.id);
           return false;
         }
-        if (status.state === "running") continue; // keep following from afterSeq
+        const decision = decideFollowAfterClose({
+          snapshot: { state: status.state, lastSeq: status.lastSeq },
+          consumedSeq: resumeAt,
+          progressed,
+          catchUpSpent,
+        });
+        if (decision.action === "reconnect") {
+          catchUpSpent = decision.catchUpSpent;
+          continue;
+        }
+        // Terminal, and another follow cannot deliver the event (caught up,
+        // or the buffer was released). Stop instead of polling forever.
+        await failExecution(db, {
+          executionId: execution.executionId,
+          token,
+          error: errorOf(
+            "INTERRUPTED_UNKNOWN",
+            "event stream ended after the host reached a terminal state",
+          ),
+          kind: "interrupted",
+        });
+        notify(room.id);
+        return false;
       } catch (error) {
         if (error instanceof RuntimeClientError && error.status === 404) {
           await failExecution(db, {

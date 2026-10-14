@@ -405,6 +405,51 @@ class FakeHost {
     });
   }
 
+  /**
+   * Close open streams, then buffer a completed terminal for the next follower.
+   * Models a disconnect that raced the terminal write: status is already
+   * terminal, but replay can still deliver the event.
+   */
+  stashTerminal(executionId: string, output: string): void {
+    const execution = this.executions.get(executionId);
+    if (!execution) throw new Error(`fake host: unknown execution ${executionId}`);
+    this.dropStreams(executionId);
+    execution.autoClose = true;
+    this.emit(executionId, {
+      type: "completed",
+      output,
+      requestedModel: execution.requestedModel,
+      effectiveModel: execution.requestedModel,
+      modelVerdict: "match",
+      toolState: "none",
+      dispatchState: "accepted",
+      usage: null,
+    });
+  }
+
+  /**
+   * Close open streams and drop the buffer while leaving status terminal and
+   * lastSeq ahead of any cursor. Matches an ACK tombstone: nothing left to replay.
+   */
+  sealLostTerminal(executionId: string): void {
+    const execution = this.executions.get(executionId);
+    if (!execution) throw new Error(`fake host: unknown execution ${executionId}`);
+    this.dropStreams(executionId);
+    execution.events = [];
+    execution.terminal = null;
+    execution.state = "completed";
+    execution.lastSeq = Math.max(execution.lastSeq, 1) + 3;
+    execution.autoClose = true;
+    execution.tombstone = true;
+  }
+
+  /** Bound a status-polling storm so a non-converging follower cannot hang the suite. */
+  private statusCheckLimit: number | null = null;
+
+  limitStatusChecks(count: number): void {
+    this.statusCheckLimit = count;
+  }
+
   /** Cleanly end every open stream without a terminal (connection dropped). */
   dropStreams(executionId: string): void {
     const execution = this.executions.get(executionId);
@@ -677,6 +722,9 @@ class FakeHost {
 
   private handleExecutionStatus(scopeId: string, executionId: string): Response {
     this.getExecutionCalls.push(executionId);
+    if (this.statusCheckLimit !== null && this.getExecutionCalls.length > this.statusCheckLimit) {
+      return errorResponse(503, "HOST_UNAVAILABLE", "status check limit");
+    }
     if (this.executionStatusFailuresRemaining > 0) {
       this.executionStatusFailuresRemaining -= 1;
       return errorResponse(503, "HOST_UNAVAILABLE", "execution status unavailable");
@@ -1647,6 +1695,56 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.ackCalls).toEqual([
       expect.objectContaining({ disposition: "discarded", result: "acknowledged" }),
     ]);
+  });
+
+  it("8b2. replays a terminal that landed after the stream dropped", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    const executionId = host.executeCalls[0]?.executionId as string;
+    await vi.waitFor(() => {
+      expect(host.openStreams(executionId)).toBe(1);
+    });
+    host.stashTerminal(executionId, "replayed output");
+    const round = await roundPromise;
+    expect(round?.phase).toBe("completed");
+    const bodies = await db.messages.where("roomId").equals(room.id).toArray();
+    expect(bodies.some((message) => message.content === "replayed output")).toBe(true);
+    expect(host.executeCalls.filter((call) => call.executionId === executionId)).toHaveLength(1);
+  });
+
+  it("8b3. stops when the host is terminal and the buffer can no longer replay", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    host.limitStatusChecks(40);
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    const executionId = host.executeCalls[0]?.executionId as string;
+    await vi.waitFor(() => {
+      expect(host.openStreams(executionId)).toBe(1);
+    });
+    host.sealLostTerminal(executionId);
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    expect(round?.pauseReason?.code).toBe("execution_failed");
+    expect(round?.pauseReason?.detail).toBe(
+      "event stream ended after the host reached a terminal state",
+    );
+    expect(host.getExecutionCalls.length).toBeLessThan(8);
+    expect(host.cancelCalls).toEqual([]);
+    expect(host.executeCalls).toHaveLength(1);
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("INTERRUPTED_UNKNOWN");
   });
 
   it("8b. reconnects the event stream with afterSeq after a mid-execution disconnect", async () => {

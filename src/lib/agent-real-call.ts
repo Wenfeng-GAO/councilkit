@@ -25,6 +25,7 @@ import type {
   RuntimeEvent,
   Usage,
 } from "@shared/runtime/events";
+import { decideFollowAfterClose } from "@shared/runtime/follow-reconnect";
 import type { ContextSnapshot, ExecutionProfileDto, SnapshotItem } from "@shared/runtime/schemas";
 
 // ---------------------------------------------------------------------------
@@ -918,6 +919,7 @@ async function driveToTerminal(input: {
 }): Promise<TerminalOutcome> {
   const { client, scopeId, executionId, follow, deadlineSignal, onEvent } = input;
   let resumeAt = 0;
+  let catchUpSpent = false;
   for (;;) {
     const fetchInput = client.eventStreamFetch({ scopeId, executionId, afterSeq: resumeAt });
     const options: FollowEventsOptions = {
@@ -943,7 +945,11 @@ async function driveToTerminal(input: {
     }
     if (outcome.kind === "terminal") return { kind: "terminal", event: outcome.event };
     if (outcome.kind === "aborted") return { kind: "aborted" };
-    // closed without terminal: re-read the Host record to decide resume vs terminal.
+    // closed without terminal: re-read the Host record. Reconnect only when
+    // another follow can still deliver an event. A terminal record that is
+    // already caught up, or whose buffer was released, must stop — execute
+    // is never re-dispatched.
+    const progressed = outcome.lastSeq > resumeAt;
     resumeAt = outcome.lastSeq;
     let state: Awaited<ReturnType<RuntimeClient["getExecution"]>> | null = null;
     try {
@@ -952,10 +958,14 @@ async function driveToTerminal(input: {
       state = null;
     }
     if (deadlineSignal.aborted) return { kind: "aborted" };
-    if (!state) return { kind: "closed", afterSeq: resumeAt };
-    // Both "still running" and "Host terminal not yet replayed" cases re-follow
-    // from afterSeq on the next iteration (execute is NEVER re-dispatched —
-    // reconnect only) until a terminal arrives.
+    const decision = decideFollowAfterClose({
+      snapshot: state ? { state: state.state, lastSeq: state.lastSeq } : null,
+      consumedSeq: resumeAt,
+      progressed,
+      catchUpSpent,
+    });
+    if (decision.action === "stop") return { kind: "closed", afterSeq: resumeAt };
+    catchUpSpent = decision.catchUpSpent;
   }
 }
 

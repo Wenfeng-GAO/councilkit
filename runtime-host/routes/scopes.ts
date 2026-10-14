@@ -1,6 +1,7 @@
 import { type ACK_STATES, QUOTAS } from "@shared/runtime/contracts";
 import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { makeError } from "@shared/runtime/errors";
+import { isTerminalEvent } from "@shared/runtime/events";
 import {
   ackRequestSchema,
   ackResponseSchema,
@@ -133,31 +134,48 @@ export function scopeRoutes(services: HostServices): Route[] {
         });
         res.write(": councilkit-event-stream\n\n");
 
+        // A terminal or tombstoned execution never emits again. End the body
+        // after replay, including when replay wrote nothing (cursor caught up,
+        // or ACK released the buffer). Leaving the socket open pins followers
+        // that missed the terminal; the discussion driver has no deadline.
         let closed = false;
+        let unsubscribe: (() => void) | null = null;
         const heartbeat = setInterval(() => {
           if (!closed) res.write(": hb\n\n");
         }, 15_000);
         heartbeat.unref?.();
-
-        const unsubscribe =
-          owned && owned.scopeId === params.scopeId
-            ? executions.follow(executionId, afterSeq, (event) => {
-                if (closed) return;
-                res.write(`event: runtime\ndata: ${JSON.stringify(event)}\n\n`);
-              })
-            : null;
-        if (!unsubscribe) {
+        const endStream = () => {
+          if (closed) return;
+          closed = true;
           clearInterval(heartbeat);
-          res.write(`event: error\ndata: ${JSON.stringify({ code: "EXECUTION_NOT_FOUND" })}\n\n`);
+          unsubscribe?.();
           res.end();
+        };
+
+        if (!owned || owned.scopeId !== params.scopeId) {
+          res.write(`event: error\ndata: ${JSON.stringify({ code: "EXECUTION_NOT_FOUND" })}\n\n`);
+          endStream();
+          return;
+        }
+
+        unsubscribe = executions.follow(executionId, afterSeq, (event) => {
+          if (closed) return;
+          res.write(`event: runtime\ndata: ${JSON.stringify(event)}\n\n`);
+          if (isTerminalEvent(event)) endStream();
+        });
+        if (!unsubscribe) {
+          res.write(`event: error\ndata: ${JSON.stringify({ code: "EXECUTION_NOT_FOUND" })}\n\n`);
+          endStream();
+          return;
+        }
+        const finished = executions.get(executionId);
+        if (closed || finished?.tombstone || finished?.terminal) {
+          endStream();
           return;
         }
 
         req.on("close", () => {
-          closed = true;
-          clearInterval(heartbeat);
-          unsubscribe();
-          res.end();
+          endStream();
         });
       },
     },
