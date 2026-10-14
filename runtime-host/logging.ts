@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LIMITS } from "@shared/runtime/contracts";
-import {
-  isAuthorizationCredentialKey,
-  redactAuthorizationMaterial,
-} from "@shared/runtime/redact-authorization";
+import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
+import { isCredentialKey, redactCredentialMaterial } from "@shared/runtime/redact-credential";
 
 /**
  * Structured Host logging and diagnostics.
@@ -13,7 +11,7 @@ import {
  * that reaches a log line or diagnostic entry is sanitized (control chars
  * stripped, length capped) before writing; entries kept in the problems ring
  * (exported by the diagnostics route) additionally get secret-shape redaction
- * (see SECRET_PATTERNS).
+ * (see redactSecrets).
  */
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally strips C0/DEL control characters from untrusted diagnostics
@@ -22,46 +20,25 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 // ---------------------------------------------------------------------------
 // Secret-shape redaction for the problems ring (F1).
 //
-// Maintenance rule: when a new credential-ish key name shows up in driver
-// stderr or CLI config dumps, add it to SECRET_KEYS; the matched shapes stay
-// the three below (key=value, key: value, "key":"value") plus the HTTP
-// `Bearer <token>` form. Authorization and Proxy-Authorization are handled
-// first by redactAuthorizationMaterial, because those values continue past
-// the scheme word (`Basic`, `Digest`, AWS `SignedHeaders`) until an unquoted
-// field separator. Only the VALUE part is replaced with "[redacted]" —
-// the key name stays for debuggability. Absolute paths are deliberately NOT
-// stripped: same-machine self-diagnosis needs them (Q10 boundary spirit;
-// installations realpath is the precedent). Matching is intentionally
-// shape-based and over-redacts prose like `prompt: ...` — the safe direction
-// for an exported diagnostics bundle.
+// Authorization and Proxy-Authorization are handled first by
+// redactAuthorizationMaterial, because those values continue past the scheme
+// word until an unquoted field separator. Prefixed names (`GITHUB_TOKEN`,
+// `OPENAI_API_KEY`, `AWS_SECRET_ACCESS_KEY`) and structural secret keys are
+// handled by redactCredentialMaterial: a `\b` matcher never sees the `_`.
+// Only the value is replaced. Absolute paths are deliberately NOT stripped.
+// Matching over-redacts prose like `prompt: ...` — the safe direction for an
+// exported diagnostics bundle. `personaPrompt` is not that key.
 // ---------------------------------------------------------------------------
-const SECRET_KEYS =
-  "(?:api[-_]?key|authorization|bearer|cookie|csrf|password|prompt|secret|session|token)";
-
-const SECRET_PATTERNS: readonly { pattern: RegExp; replacement: string }[] = [
-  {
-    // "key":"value" / 'key': 'value' — quoted form, value may contain spaces
-    pattern: new RegExp(`\\b(${SECRET_KEYS})\\b(\\s*["']?\\s*[:=]\\s*)(["'])[^"']*\\3`, "gi"),
-    replacement: "$1$2$3[redacted]$3",
-  },
-  {
-    // HTTP Authorization header form: Bearer <token>
-    pattern: /\b(Bearer[ \t]+)[A-Za-z0-9._~+/=-]+/gi,
-    replacement: "$1[redacted]",
-  },
-  {
-    // key=value / key: value — unquoted value up to whitespace/quote/comma/&/}
-    pattern: new RegExp(`\\b(${SECRET_KEYS})\\b(\\s*["']?\\s*[:=]\\s*["']?)[^\\s"',}&]+`, "gi"),
-    replacement: "$1$2[redacted]",
-  },
-];
 
 function redactSecrets(input: string): string {
-  let out = redactAuthorizationMaterial(input, "[redacted]");
-  for (const { pattern, replacement } of SECRET_PATTERNS) {
-    out = out.replace(pattern, replacement);
-  }
-  return out;
+  const authorized = redactAuthorizationMaterial(input, "[redacted]");
+  return redactCredentialMaterial(authorized, "[redacted]", { extraExactKeys: ["prompt"] });
+}
+
+function isExportedSecretKey(key: string): boolean {
+  // Exact `prompt`, or hyphen/underscore suffix (`system-prompt`). Not
+  // `personaPrompt` (letter before Prompt — no separator).
+  return isCredentialKey(key) || /(^|[_-])prompt$/i.test(key);
 }
 
 function redactValueSecrets(value: unknown): unknown {
@@ -70,9 +47,11 @@ function redactValueSecrets(value: unknown): unknown {
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      // The string walker never sees this key. Bearer/Digest/AWS values would
-      // otherwise be pattern-matched alone and keep the credential.
-      out[key] = isAuthorizationCredentialKey(key) ? "[redacted]" : redactValueSecrets(item);
+      // The string walker never sees this key. A prefixed or structural
+      // credential (`password`, `apiKey`, `GITHUB_TOKEN`) would otherwise keep
+      // its value. `prompt` is the diagnostics ban on prompt text, not a
+      // credential suffix, so `personaPrompt` stays.
+      out[key] = isExportedSecretKey(key) ? "[redacted]" : redactValueSecrets(item);
     }
     return out;
   }

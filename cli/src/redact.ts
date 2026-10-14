@@ -8,10 +8,8 @@
  * session cookie pair and the CSRF token value when they appear verbatim.
  */
 
-import {
-  isAuthorizationCredentialKey,
-  redactAuthorizationMaterial,
-} from "@shared/runtime/redact-authorization";
+import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
+import { isCredentialKey, redactCredentialMaterial } from "@shared/runtime/redact-credential";
 
 const COOKIE_PAIR_PREFIX = "councilkit_session=";
 const CSRF_KEY_PATTERN = /x-councilkit-csrf\b/gi;
@@ -48,9 +46,9 @@ export function clearSecrets(): void {
  * access token / Authorization). The value is replaced wholesale rather than
  * pattern-matched, because the string walker never sees the key. */
 function isSecretValueKey(key: string): boolean {
+  if (isCredentialKey(key)) return true;
   const lower = key.toLowerCase();
-  if (lower === "cookie" || lower === "csrf" || lower === "token") return true;
-  if (isAuthorizationCredentialKey(key)) return true;
+  // `csrfToken` / `setCookie` and any key that merely ends in `token`.
   return /cookie|csrf/.test(lower) || /token$/.test(lower);
 }
 
@@ -58,7 +56,10 @@ function redactString(input: string): string {
   if (input.startsWith(COOKIE_PAIR_PREFIX) || input === "councilkit_session") {
     return REDACT_PLACEHOLDER;
   }
-  let out = redactAuthorizationMaterial(input, REDACT_PLACEHOLDER);
+  let out = redactCredentialMaterial(
+    redactAuthorizationMaterial(input, REDACT_PLACEHOLDER),
+    REDACT_PLACEHOLDER,
+  );
   out = out.replace(cookiePairPattern(), REDACT_PLACEHOLDER);
   out = out.replace(CSRF_KEY_PATTERN, REDACT_PLACEHOLDER);
   if (liveSecrets.size > 0) {
