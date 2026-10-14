@@ -37,6 +37,55 @@ function sink(): OutputSink & { last: () => unknown } {
 }
 
 describe("repair roles", () => {
+  it("persists independent Grok seats without changing Builder bindings or frozen task contracts", async () => {
+    const home = homeDir();
+    const configPath = join(home, "squad-bridge.json");
+    const builder = { runtime: "grokb", model: "grok-4.6" };
+    const original = {
+      executable: "/tmp/squadctl",
+      orchestratorRuntime: "grokb",
+      roles: { orchestrator: builder, planner_a: builder, coder: builder },
+    };
+    writeFileSync(configPath, `${JSON.stringify(original)}\n`);
+    const frozenPath = join(home, "squad-tasks", "existing", "runtime-contract.json");
+    mkdirSync(join(home, "squad-tasks", "existing"), { recursive: true });
+    const frozen = '{"roles":{"reviewer":{"runtime":"cursor","model":"composer-2.5"}}}\n';
+    writeFileSync(frozenPath, frozen);
+    const out = sink();
+    await runRepair(
+      [
+        "roles",
+        "set",
+        "--planner-b",
+        "grokb:grok-4.6",
+        "--reviewer",
+        "grokb:grok-4.6",
+        "--verifier",
+        "grokb:grok-4.6",
+      ],
+      out,
+    );
+    const written = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(written).toEqual({
+      ...original,
+      roles: { ...original.roles, planner_b: builder, reviewer: builder, verifier: builder },
+    });
+    await runRepair(["roles", "show"], out);
+    expect(out.last()).toMatchObject({
+      roles: {
+        planner_b: { ...builder, sandbox: "read-only" },
+        reviewer: { ...builder, sandbox: "read-only" },
+        verifier: { ...builder, sandbox: "workspace-write" },
+      },
+    });
+    const beforeReject = readFileSync(configPath, "utf8");
+    await expect(runRepair(["roles", "set", "--reviewer", "grok:grok-4.6"], out)).rejects.toThrow(
+      /grokb/,
+    );
+    expect(readFileSync(configPath, "utf8")).toBe(beforeReject);
+    expect(readFileSync(frozenPath, "utf8")).toBe(frozen);
+  });
+
   it("sets one seat, leaves the chain budget file alone, and reset clears only roles", async () => {
     const home = homeDir();
     const budget = join(home, "repair-budget.json");

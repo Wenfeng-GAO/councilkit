@@ -7,12 +7,13 @@ pnpm exec councilkit repair roles show
 pnpm exec councilkit repair roles set --reviewer codex:gpt-5.6-sol
 pnpm exec councilkit repair roles set --reviewer cursor:composer-2.5
 pnpm exec councilkit repair roles set --verifier cursor:grok-4.7-xhigh
+pnpm exec councilkit repair roles set --planner-b grokb:grok-4.6 --reviewer grokb:grok-4.6 --verifier grokb:grok-4.6
 pnpm exec councilkit repair roles reset
 ```
 
 `set --orchestrator cursor:<model>` 会把 `planner_a` 和 `coder` 写成同一个 runtime/model。这三席续接同一次 native session。把 Builder 配成另一个模型会被拒绝：那需要 fresh session，当前控制器不做独立 Builder，避免把另一次会话说成连续 Builder。
 
-`planner_b`、`reviewer`、`verifier` 可以单独换成 Cursor 的其他明确模型，或 Codex 的明确模型。`auto` / `default` / `configured` 会被拒绝，也不会自动改用别的付费模型。
+`planner_b`、`reviewer`、`verifier` 可以单独换成 Cursor、Codex 或 Grok Build 的明确模型。Grok Build 使用 `grokb:grok-4.6`；独立席不接受 `grok` 别名，因为下游 `squadctl` 的独立适配器名是 `grokb`。三席各自使用独立 native session；`planner_b` 和 `reviewer` 保持 `read-only`，`verifier` 保持 `workspace-write`。`auto` / `default` / `configured` / `current` 会被拒绝，也不会自动改用别的付费模型。
 
 ## 单独替换 Reviewer
 
