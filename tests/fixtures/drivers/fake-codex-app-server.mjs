@@ -21,11 +21,18 @@
  *   crashAfterTurnStart  bool    exit(3) on turn/start WITHOUT responding
  *                                (dispatch state stays "unknown" upstream)
  *   hang                 bool    deltas but no item/completed + turn/completed
+ *   commandActivity      bool    emit item/started commandExecution before deltas
  *   silentInterrupt      bool    answer turn/interrupt but never emit
  *                                turn/completed, so the client's grace window
  *                                stays open
+ *   graceFrame           string  with silentInterrupt, emit this notification
+ *                                30ms after the interrupt ack, inside the
+ *                                client's grace window. "error" sends
+ *                                error{willRetry:false}; "compacted" sends
+ *                                thread/compacted. No turn/completed follows.
  *   unknownNotifications bool    interleave unknown notifications before deltas
  *   compacted            bool    emit thread/compacted after the first delta
+ *   terminalError        bool    emit error{willRetry:false} after the first delta
  *   deltaDelayMs         number  delay between deltas   (default 8)
  *   statsPath            string  stats file prefix; stats land at `<statsPath>.<pid>`
  *
@@ -38,7 +45,8 @@
  * - turn/start -> {turn:{id}} then, in order: item/agentMessage/delta xN,
  *   item/completed (authoritative text), thread/tokenUsage/updated (per-turn
  *   `last` usage + modelContextWindow 258400), turn/completed completed
- * - turn/interrupt -> {} then turn/completed interrupted (unless silentInterrupt)
+ * - turn/interrupt -> {} then turn/completed interrupted (unless silentInterrupt;
+ *   silentInterrupt + graceFrame emits that frame instead and stays silent)
  * - approval server requests carry their own id and are answered by the client
  *
  * On stdin EOF the fixture exits 0.
@@ -53,9 +61,12 @@ const DEFAULTS = {
   reroute: false,
   crashAfterTurnStart: false,
   hang: false,
+  commandActivity: false,
   silentInterrupt: false,
+  graceFrame: null,
   unknownNotifications: false,
   compacted: false,
+  terminalError: false,
   deltaDelayMs: 8,
   statsPath: null,
 };
@@ -152,6 +163,9 @@ function finishTurnSuccess(config) {
 
 function scheduleDeltas(config) {
   const chunks = chunkText(config.reply);
+  if (config.commandActivity) {
+    notify("item/started", { item: { type: "commandExecution" } });
+  }
   const step = (index) => {
     if (!currentTurn) return;
     if (index < chunks.length) {
@@ -174,6 +188,18 @@ function scheduleCompactedTurn(config) {
   turn?.timers.push(
     setTimeout(() => {
       notify("thread/compacted", {});
+      currentTurn = null;
+    }, config.deltaDelayMs),
+  );
+}
+
+function scheduleTerminalError(config) {
+  const chunks = chunkText(config.reply);
+  notify("item/agentMessage/delta", { delta: chunks[0] });
+  const turn = currentTurn;
+  turn?.timers.push(
+    setTimeout(() => {
+      notify("error", { error: { willRetry: false } });
       currentTurn = null;
     }, config.deltaDelayMs),
   );
@@ -265,6 +291,10 @@ function handleRequest(frame, config) {
         scheduleCompactedTurn(config);
         return;
       }
+      if (config.terminalError) {
+        scheduleTerminalError(config);
+        return;
+      }
       if (config.approval) {
         pendingApprovalResume = () => scheduleDeltas(readConfig());
         send({
@@ -292,6 +322,15 @@ function handleRequest(frame, config) {
         if (!config.silentInterrupt) {
           setTimeout(() => {
             notify("turn/completed", { turn: { id: turn.id, status: "interrupted" } });
+          }, 30);
+        } else if (config.graceFrame === "error" || config.graceFrame === "compacted") {
+          // Lands inside the client's interrupt grace. No turn/completed, so
+          // the grace window stays open and this frame is the one that can
+          // steal the cancel.
+          const method = config.graceFrame === "error" ? "error" : "thread/compacted";
+          const params = config.graceFrame === "error" ? { error: { willRetry: false } } : {};
+          setTimeout(() => {
+            notify(method, params);
           }, 30);
         }
       }

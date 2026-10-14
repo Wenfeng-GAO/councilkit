@@ -355,8 +355,10 @@ export function createCodexAppServerDriver(
         case "thread/compacted": {
           // The runtime compacted its own history: the Session no longer
           // holds the full applied context. Force needs_rebase upstream.
+          // A latched cancel owns the terminal: this frame often arrives
+          // inside the interrupt grace, and NEEDS_REBASE would pause the round.
           diagnostic("compacted", "app-server compacted thread context");
-          if (turn) {
+          if (turn && deadlineMaySettle(turn, activeTurn === turn)) {
             failTurn(
               turn,
               makeError("NEEDS_REBASE", "stream", "Runtime compacted the session context.", {
@@ -374,7 +376,11 @@ export function createCodexAppServerDriver(
           const willRetry =
             (params.error as Record<string, unknown> | undefined)?.willRetry === true;
           diagnostic("turn_error", `server error notification willRetry=${willRetry}`);
-          if (turn && !willRetry) {
+          // willRetry=true: Codex is retrying internally; the Orchestrator
+          // must not start its own concurrent retry — keep waiting.
+          // A latched cancel also owns the terminal. DRIVER_CRASH here would
+          // pause the round instead of discarding the stop.
+          if (turn && !willRetry && deadlineMaySettle(turn, activeTurn === turn)) {
             failTurn(
               turn,
               makeError("DRIVER_CRASH", "stream", "server reported a terminal error", {
@@ -384,8 +390,6 @@ export function createCodexAppServerDriver(
               }),
             );
           }
-          // willRetry=true: Codex is retrying internally; the Orchestrator
-          // must not start its own concurrent retry — keep waiting.
           return;
         }
         default:
@@ -403,7 +407,9 @@ export function createCodexAppServerDriver(
           pending.delete(String(id));
           const errorValue = message.error;
           if (errorValue) {
-            entry.reject(new Error(sanitizeString(clipCodexRpcErrorDetail(JSON.stringify(errorValue)))));
+            entry.reject(
+              new Error(sanitizeString(clipCodexRpcErrorDetail(JSON.stringify(errorValue)))),
+            );
           } else {
             entry.resolve(message.result);
           }
@@ -452,20 +458,10 @@ export function createCodexAppServerDriver(
         }
         // Ephemeral thread is gone. If any tool activity was seen, the tool
         // state can no longer be proven — surface unknown per the plan.
-        const crashedTurn = {
-          ...turn,
-          toolState: turn.sawToolActivity ? ("unknown" as const) : turn.toolState,
-        };
-        // The copy is what emitTerminal sees. Latch the original too so a
-        // queued turn/idle/dispatch callback cannot emit a second terminal.
-        turn.settled = true;
-        clearTurnTimers(turn);
-        emitTerminal(crashedTurn, {
-          type: "interrupted",
-          reason: "driver_crash",
-          dispatchState: turn.dispatchState,
-          toolState: crashedTurn.toolState,
-        });
+        // Settle the live turn. emitTerminal clears activeTurn only when its
+        // argument is that object; a shallow copy left the seat busy.
+        if (turn.sawToolActivity) turn.toolState = "unknown";
+        interruptTurn(turn, "driver_crash");
       }
     }
 

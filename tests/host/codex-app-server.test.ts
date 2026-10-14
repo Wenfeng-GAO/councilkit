@@ -383,6 +383,77 @@ describe("codex-app-server driver protocol", () => {
     if (terminal?.type !== "interrupted") throw new Error("unreachable");
     expect(terminal.reason).toBe("user_cancelled");
   });
+
+  it("fails DRIVER_CRASH when the server sends a terminal error", async () => {
+    const rig = await createRig({ config: { terminalError: true } });
+    const run = executeCollecting(rig.driver, execInput("exec-1", "Blow up."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("DRIVER_CRASH");
+    expect(terminal.error.message).toBe("server reported a terminal error");
+    expect(terminal.dispatchState).toBe("accepted");
+  });
+
+  it.each(["error", "compacted"] as const)(
+    "CK-RS-002: cancel wins when the %s notification arrives during the interrupt grace",
+    async (graceFrame) => {
+      // silentInterrupt keeps turn/completed from closing the grace window.
+      // graceFrame is the notification that used to settle the turn anyway.
+      const rig = await createRig({
+        config: { hang: true, silentInterrupt: true, graceFrame },
+        timeouts: {
+          turnMs: 30_000,
+          interruptGraceMs: 500,
+          streamIdleMs: 30_000,
+          dispatchAckMs: 30_000,
+        },
+      });
+      const run = executeCollecting(rig.driver, execInput("exec-1", "Cancel me."));
+      await waitFor(() => run.events.some((event) => event.type === "output.delta"), 5000);
+      await rig.driver.cancel("exec-1");
+      await run.done;
+      const terminals = run.events.filter(
+        (event) =>
+          event.type === "completed" || event.type === "failed" || event.type === "interrupted",
+      );
+      expect(terminals).toHaveLength(1);
+      const terminal = terminals[0];
+      expect(terminal?.type).toBe("interrupted");
+      if (terminal?.type !== "interrupted") throw new Error("unreachable");
+      expect(terminal.reason).toBe("user_cancelled");
+    },
+  );
+
+  it("a non-cancel process exit frees the seat and reports unknown tool state", async () => {
+    const rig = await createRig({
+      config: { hang: true, commandActivity: true },
+      timeouts: { turnMs: 30_000, streamIdleMs: 30_000, dispatchAckMs: 30_000 },
+    });
+    const run = executeCollecting(rig.driver, execInput("exec-1", "Die."));
+    await waitFor(() => run.events.some((event) => event.type === "activity"), 5000);
+    const pid = aggregateStats().pids[0];
+    expect(typeof pid).toBe("number");
+    process.kill(pid as number, "SIGKILL");
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("interrupted");
+    if (terminal.type !== "interrupted") throw new Error("unreachable");
+    expect(terminal.reason).toBe("driver_crash");
+    expect(terminal.toolState).toBe("unknown");
+
+    // The seat must be free. A leaked activeTurn throws PARTICIPANT_BUSY
+    // before this retryable not-ready terminal can be emitted.
+    const run2 = executeCollecting(rig.driver, execInput("exec-2", "Seat free?"));
+    await run2.done;
+    const terminal2 = terminalOf(run2.events);
+    expect(terminal2.type).toBe("failed");
+    if (terminal2.type !== "failed") throw new Error("unreachable");
+    expect(terminal2.error.code).toBe("DRIVER_CRASH");
+    expect(terminal2.dispatchState).toBe("not_dispatched");
+    expect(terminal2.retryable).toBe(true);
+  });
 });
 
 /**
