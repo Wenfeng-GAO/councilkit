@@ -171,11 +171,17 @@ while [[ "$attempt" -le 5 ]]; do
     exit 0
   fi
   cleanup_attempt
-  if grep -q "UNSUPPORTED_NODE" "$LOG"; then
+  # Only the current attempt section; earlier PORT_IN_USE lines must not poison retries.
+  attempt_section=$(awk -v a="$attempt" -v p="$PORT" -v m="$MODE" '
+    index($0, "----- launch attempt " a " port " p " mode " m " -----") == 1 { keep=1; buf=""; }
+    keep { buf = buf $0 ORS }
+    END { printf "%s", buf }
+  ' "$LOG")
+  if printf '%s' "$attempt_section" | grep -q "UNSUPPORTED_NODE"; then
     echo "Runtime Host requires Node.js 22.x. Resolved node is $(command -v node) ($(node -v))." >&2
     exit 1
   fi
-  if grep -q "PORT_IN_USE" "$LOG"; then
+  if printf '%s' "$attempt_section" | grep -q "PORT_IN_USE"; then
     attempt=$((attempt + 1))
     continue
   fi

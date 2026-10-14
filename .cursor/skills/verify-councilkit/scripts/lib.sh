@@ -79,12 +79,51 @@ resolve_node22() {
   return 1
 }
 
+# Comma-separated PIDs for the recorded verification supervisor tree, if state
+# still names that host. Empty when there is no matching recorded host.
+recorded_verify_host_pids() {
+  if [[ ! -f "${STATE:-}" ]]; then
+    return 0
+  fi
+  node --input-type=module - "$STATE" "$SCRIPT_DIR/proc.mjs" <<'NODE'
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const statePath = process.argv[2];
+const procUrl = pathToFileURL(process.argv[3]).href;
+const { descendants, isVerificationProcess, readProc } = await import(procUrl);
+let state;
+try {
+  state = JSON.parse(readFileSync(statePath, "utf8"));
+} catch {
+  process.exit(0);
+}
+if (!state || state.status === "stopped" || !state.supervisorPid || !state.cwd) process.exit(0);
+const supervisor = readProc(state.supervisorPid);
+if (!supervisor || !isVerificationProcess(supervisor, state.cwd)) process.exit(0);
+if (
+  state.supervisorStarttime != null &&
+  supervisor.starttime !== state.supervisorStarttime
+) {
+  process.exit(0);
+}
+process.stdout.write(descendants(state.supervisorPid).join(","));
+NODE
+}
+
 refuse_shared_if_held() {
   if [[ -z "${SHARED_REAL:-}" || "$ROOT_REAL" != "$SHARED_REAL" ]]; then
     return 0
   fi
+  local exclude=""
+  if [[ "${1:-}" == "--except-verify-host" ]]; then
+    exclude=$(recorded_verify_host_pids || true)
+  fi
   local holders
-  holders=$(node "$SCRIPT_DIR/proc.mjs" holders --root "$ROOT_REAL")
+  if [[ -n "$exclude" ]]; then
+    holders=$(node "$SCRIPT_DIR/proc.mjs" holders --root "$ROOT_REAL" --exclude "$exclude")
+  else
+    holders=$(node "$SCRIPT_DIR/proc.mjs" holders --root "$ROOT_REAL")
+  fi
   if [[ -n "$holders" ]]; then
     echo "REFUSE: $ROOT_REAL is the shared CouncilKit checkout and another process holds it." >&2
     echo "This run will not install, build, test, or bind a Host there, and it will not signal those processes." >&2

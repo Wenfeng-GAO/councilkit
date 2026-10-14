@@ -140,12 +140,34 @@ run_step() {
   fi
 }
 
+# Integrity is lockfile content, not mtimes. A stamp at
+# node_modules/.councilkit-lockfile-sha stores the sha256 of pnpm-lock.yaml
+# written after a successful install (or when already matched).
+LOCKFILE_SHA=""
+if [[ -f "$ROOT/pnpm-lock.yaml" ]]; then
+  LOCKFILE_SHA=$(sha256sum "$ROOT/pnpm-lock.yaml" | awk '{print $1}')
+fi
+LOCK_STAMP="$ROOT/node_modules/.councilkit-lockfile-sha"
+write_lock_stamp() {
+  if [[ -n "$LOCKFILE_SHA" && -d "$ROOT/node_modules" ]]; then
+    printf '%s\n' "$LOCKFILE_SHA" >"$LOCK_STAMP"
+  fi
+}
+
 need_install=0
 if [[ ! -d "$ROOT/node_modules/.bin" || ! -f "$ROOT/node_modules/.modules.yaml" ]]; then
   need_install=1
 fi
-if [[ -f "$ROOT/pnpm-lock.yaml" && -f "$ROOT/node_modules/.modules.yaml" && "$ROOT/pnpm-lock.yaml" -nt "$ROOT/node_modules/.modules.yaml" ]]; then
+if [[ -z "$LOCKFILE_SHA" ]]; then
   need_install=1
+else
+  stamped=""
+  if [[ -f "$LOCK_STAMP" ]]; then
+    stamped=$(tr -d '[:space:]' <"$LOCK_STAMP" || true)
+  fi
+  if [[ "$stamped" != "$LOCKFILE_SHA" ]]; then
+    need_install=1
+  fi
 fi
 
 EXTERNAL_LINKS="$(cat "$EXTERNAL_FILE" 2>/dev/null || true)"
@@ -163,11 +185,13 @@ if [[ -n "$EXTERNAL_LINKS" ]]; then
     echo "gate failed at install (exit 1). Log: $EVIDENCE/logs/install.log" >&2
     exit 1
   fi
-  record_step install skip 0 "" "skipped pnpm install; dependencies are already present and the node_modules symlink points outside this worktree ($(printf '%s' "$EXTERNAL_LINKS" | tr '\n' ' '))" "$install_started"
+  record_step install skip 0 "" "skipped pnpm install; lockfile sha matches stamp and the node_modules symlink points outside this worktree ($(printf '%s' "$EXTERNAL_LINKS" | tr '\n' ' '))" "$install_started"
 elif [[ "$need_install" -eq 1 ]]; then
   run_step install pnpm install --frozen-lockfile
+  write_lock_stamp
 else
-  record_step install skip 0 "" "node_modules matches pnpm-lock.yaml; pnpm install --frozen-lockfile skipped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_lock_stamp
+  record_step install skip 0 "" "node_modules lockfile sha matches pnpm-lock.yaml; pnpm install --frozen-lockfile skipped" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 run_step typecheck pnpm typecheck
@@ -226,15 +250,15 @@ pick_e2e() {
     kinds=$((kinds + 1))
     choose_fixed_e2e "playwright.review-explainer.config.ts" 43839
   fi
-  if printf '%s\n' "$only" | grep -qE '^tests/e2e/repair-observability/'; then
+  if printf '%s\n' "$only" | grep -qE '^(tests/e2e/repair-observability/|playwright\.repair-observability\.config\.ts$)'; then
     kinds=$((kinds + 1))
     choose_fixed_e2e "playwright.repair-observability.config.ts" 43837
   fi
-  if printf '%s\n' "$only" | grep -qx 'tests/e2e/repair-panel-ui.spec.ts'; then
+  if printf '%s\n' "$only" | grep -qE '^(tests/e2e/repair-panel-ui\.spec\.ts$|playwright\.repair-ui\.config\.ts$)'; then
     kinds=$((kinds + 1))
     choose_fixed_e2e "playwright.repair-ui.config.ts" 4188
   fi
-  if printf '%s\n' "$only" | grep -qx 'tests/e2e/finding-ledger-layout.spec.ts'; then
+  if printf '%s\n' "$only" | grep -qE '^(tests/e2e/finding-ledger-layout\.spec\.ts$|playwright\.preview\.config\.ts$)'; then
     kinds=$((kinds + 1))
     choose_fixed_e2e "playwright.preview.config.ts" 4179
   fi

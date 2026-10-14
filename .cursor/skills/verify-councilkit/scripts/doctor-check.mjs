@@ -66,9 +66,28 @@ try {
 } catch {
   logText = "";
 }
-const loggedStart = logText.includes('"event":"host.started"');
-const nodeRefused = logText.includes("UNSUPPORTED_NODE");
-const portInUse = logText.includes("PORT_IN_USE");
+/** Prefer the section for this port/mode attempt; else the last attempt marker. */
+function attemptLogSlice(text, port, mode) {
+  const marker = "----- launch attempt ";
+  let matched = -1;
+  let last = -1;
+  let search = 0;
+  while (search < text.length) {
+    const next = text.indexOf(marker, search);
+    if (next < 0) break;
+    last = next;
+    const lineEnd = text.indexOf("\n", next);
+    const line = lineEnd < 0 ? text.slice(next) : text.slice(next, lineEnd);
+    if (line.includes(`port ${port} `) && line.includes(`mode ${mode} `)) matched = next;
+    search = next + marker.length;
+  }
+  const idx = matched >= 0 ? matched : last;
+  return idx >= 0 ? text.slice(idx) : text;
+}
+const attemptLog = attemptLogSlice(logText, state.port, state.mode);
+const loggedStart = attemptLog.includes('"event":"host.started"');
+const nodeRefused = attemptLog.includes("UNSUPPORTED_NODE");
+const portInUse = attemptLog.includes("PORT_IN_USE");
 if (nodeRefused) fail("Runtime Host refused this Node. Node.js 22.x is required.", {}, 1);
 if (portInUse) fail(`port ${state.port} is already in use`, { port: state.port }, 1);
 
