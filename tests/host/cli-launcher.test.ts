@@ -80,10 +80,27 @@ describe("launchArgs", () => {
       "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
       "--debate-rounds",
       "1",
-      "--background",
-      "solo builder, two weeks",
+      "--background=solo builder, two weeks",
       "--",
       "--not-a-flag idea",
+    ]);
+  });
+  it("attaches a dash-leading background as one argv token", () => {
+    expect(
+      launchArgs({
+        action: "ideate",
+        runId: "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+        logPath: "/tmp/x.log",
+        idea: "ship it",
+        background: "--help",
+      }),
+    ).toEqual([
+      "ideate",
+      "--run-id",
+      "ck-ideate-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      "--background=--help",
+      "--",
+      "ship it",
     ]);
   });
   it("passes --run-id so the Host handshake can pin the run directory", () => {

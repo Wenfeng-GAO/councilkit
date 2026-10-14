@@ -159,7 +159,8 @@ export function launchArgs(input: CliRunLaunchRequest): string[] {
     const args = ["ideate", "--run-id", input.runId];
     if (input.debateRounds !== undefined) args.push("--debate-rounds", String(input.debateRounds));
     if (input.background !== undefined && input.background.length > 0) {
-      args.push("--background", input.background);
+      // One token. A separate value that starts with "-" is ambiguous to parseArgs.
+      args.push(`--background=${input.background}`);
     }
     if (input.ideateModels) args.push("--models", JSON.stringify(input.ideateModels));
     args.push("--", idea);
