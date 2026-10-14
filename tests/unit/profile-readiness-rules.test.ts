@@ -1,5 +1,4 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriverCapabilityState, InstallationState } from "@shared/runtime/contracts";
 import type { ExecutionProfileDto, InstallationDto } from "@shared/runtime/schemas";
@@ -17,9 +16,9 @@ import {
 } from "../../runtime-host/profiles/readiness";
 
 /**
- * Static profile readiness is a pure lookup. Trusted fixtures cannot live in
- * os.tmpdir() because /tmp is group/other-writable and the installation trust
- * policy rejects that path chain. Discovered fixtures use os.tmpdir() on purpose.
+ * Static profile readiness is a pure lookup. Trusted fixtures live under
+ * test-results/ because os.tmpdir() is group/other-writable on Linux and
+ * user-private on macOS. Discovered fixtures chmod an ancestor explicitly.
  */
 
 const PRIVATE_PARENT = join(process.cwd(), "test-results", "profile-unit");
@@ -189,10 +188,13 @@ describe("assessProfileStatic", () => {
     });
   });
 
-  it("reports a codex binary under os.tmpdir() as runtime_unavailable", async () => {
-    const root = await mkdtemp(join(tmpdir(), "councilkit-profile-readiness-"));
-    roots.push(root);
+  it("reports a codex binary under a world-writable ancestor as runtime_unavailable", async () => {
+    const root = await privateDir("world-ancestor-");
     await writeExecutable(root, "codex", 0o755);
+    // writeExecutable resets the directory to 0755. Make the ancestor
+    // group/other-writable explicitly: os.tmpdir() is user-private on macOS,
+    // so a temp path is trusted there and this case would pass validation.
+    await chmod(root, 0o777);
     const registry = registryFor(root);
     const dto = onlyInstallation(registry);
     expect(dto.state).toBe("discovered");
