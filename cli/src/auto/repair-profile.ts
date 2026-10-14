@@ -1,104 +1,27 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { jsonParse } from "@shared/runtime/json-parse";
+import {
+  REPAIR_CAPABILITIES,
+  type RepairCapability,
+  type RepairGrantRecord as RepairGrant,
+  type RepairProfileRecord as RepairProfile,
+  grantIntegrityHash,
+  profileIntegrityHash,
+  protocolIntegrityHash,
+  repairGrantRecordSchema,
+  repairProfileRecordSchema,
+} from "@shared/runtime/repair-auth";
 import { V2_TRIAL_DEFAULTS } from "@shared/runtime/repair-chain";
 import { isRepairProfileName } from "@shared/runtime/repair-lease";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
-import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteJson, readFileText } from "../store/atomic-write";
 import { ensureHome, resolvePaths } from "../store/paths";
 
-export const REPAIR_CAPABILITIES = ["push-source-branch"] as const;
-export type RepairCapability = (typeof REPAIR_CAPABILITIES)[number];
-
-const capabilitySchema = z.enum(REPAIR_CAPABILITIES);
-
-const repairProfileSchema = z
-  .object({
-    version: z.literal(1),
-    name: z.string().min(1).max(64),
-    prUrl: z.string().min(1).max(500),
-    repo: z.string().min(1).max(400),
-    sourceBranch: z.string().min(1).max(200),
-    base: z.string().min(1).max(200),
-    capabilities: z.array(capabilitySchema).min(1).max(8),
-    integrityHash: z.string().regex(/^[a-f0-9]{64}$/),
-    expiresAt: z.string().min(1).max(40).nullable(),
-    revokedAt: z.string().min(1).max(40).nullable(),
-    createdAt: z.string().min(1).max(40),
-    protocolVersion: z.enum(["v1", "v2"]).optional(),
-    isolationMode: z.enum(["strong", "collaborative"]).optional(),
-    sourceFixMax: z.number().int().positive().max(10).optional(),
-    deadlineMs: z.number().int().positive().optional(),
-    diagnoseMs: z.number().int().positive().optional(),
-    expectedGatePolicyHash: z
-      .string()
-      .regex(/^[a-f0-9]{64}$/)
-      .optional(),
-    protocolHash: z
-      .string()
-      .regex(/^[a-f0-9]{64}$/)
-      .optional(),
-  })
-  .strict();
-export type RepairProfile = z.infer<typeof repairProfileSchema>;
-
-const repairGrantSchema = z
-  .object({
-    grantId: z.string().min(1).max(80),
-    grantHash: z.string().regex(/^[a-f0-9]{64}$/),
-    profileName: z.string().min(1).max(64),
-    profileHash: z.string().regex(/^[a-f0-9]{64}$/),
-    capabilities: z.array(capabilitySchema).min(1).max(8),
-    prUrl: z.string().min(1).max(500),
-    repo: z.string().min(1).max(400),
-    sourceBranch: z.string().min(1).max(200),
-    base: z.string().min(1).max(200),
-    issuedAt: z.string().min(1).max(40),
-    expiresAt: z.string().min(1).max(40).nullable(),
-  })
-  .strict();
-export type RepairGrant = z.infer<typeof repairGrantSchema>;
-
-export function profileIntegrityHash(input: {
-  prUrl: string;
-  repo: string;
-  sourceBranch: string;
-  base: string;
-  capabilities: readonly string[];
-}): string {
-  return sha(
-    JSON.stringify({
-      prUrl: input.prUrl,
-      repo: input.repo.toLowerCase(),
-      sourceBranch: input.sourceBranch,
-      base: input.base,
-      capabilities: [...input.capabilities].sort(),
-    }),
-  );
-}
-
-export function protocolIntegrityHash(input: {
-  protocolVersion?: "v1" | "v2";
-  isolationMode?: "strong" | "collaborative";
-  sourceFixMax?: number;
-  deadlineMs?: number;
-  diagnoseMs?: number;
-  expectedGatePolicyHash?: string;
-}): string {
-  return sha(
-    JSON.stringify({
-      protocolVersion: input.protocolVersion ?? "v2",
-      isolationMode: input.isolationMode,
-      sourceFixMax: input.sourceFixMax ?? null,
-      deadlineMs: input.deadlineMs ?? null,
-      diagnoseMs: input.diagnoseMs ?? null,
-      expectedGatePolicyHash: input.expectedGatePolicyHash ?? null,
-    }),
-  );
-}
+export { REPAIR_CAPABILITIES, profileIntegrityHash, protocolIntegrityHash };
+export type { RepairCapability, RepairGrant, RepairProfile };
 
 export function saveRepairProfile(input: {
   name: string;
@@ -154,7 +77,7 @@ export function loadRepairProfile(name: string): RepairProfile {
   const path = profilePath(assertProfileName(name));
   const text = readFileText(path);
   if (text === null) throw errors.usage(`repair profile "${name}" not found`);
-  const parsed = repairProfileSchema.safeParse(jsonParse(text));
+  const parsed = repairProfileRecordSchema.safeParse(jsonParse(text));
   if (!parsed.success) throw errors.usage(`repair profile "${name}" is invalid`);
   const expected = profileIntegrityHash(parsed.data);
   if (parsed.data.integrityHash !== expected) {
@@ -210,7 +133,7 @@ export function revokeRepairProfile(name: string, now = new Date().toISOString()
 export function readRepairGrantFile(runDir: string): RepairGrant | null {
   const text = readFileText(join(runDir, "repair-grant.json"));
   if (text === null) return null;
-  const parsed = repairGrantSchema.safeParse(jsonParse(text));
+  const parsed = repairGrantRecordSchema.safeParse(jsonParse(text));
   return parsed.success ? parsed.data : null;
 }
 
@@ -272,7 +195,7 @@ export function verifyRepairGrant(
   profile: RepairProfile,
   opts: { now: string },
 ): { ok: boolean; reason?: string } {
-  const parsed = repairGrantSchema.safeParse(grant);
+  const parsed = repairGrantRecordSchema.safeParse(grant);
   if (!parsed.success) return { ok: false, reason: "invalid grant" };
   if (parsed.data.grantHash !== grantIntegrityHash(parsed.data)) {
     return { ok: false, reason: "grant hash mismatch" };
@@ -293,20 +216,6 @@ export function verifyRepairGrant(
     return { ok: false, reason: "grant identity mismatch" };
   }
   return { ok: true };
-}
-
-function grantIntegrityHash(grant: Omit<RepairGrant, "grantHash"> & { grantHash: string }): string {
-  return sha(
-    JSON.stringify({
-      grantId: grant.grantId,
-      profileHash: grant.profileHash,
-      capabilities: [...grant.capabilities].sort(),
-      prUrl: grant.prUrl,
-      repo: grant.repo,
-      sourceBranch: grant.sourceBranch,
-      base: grant.base,
-    }),
-  );
 }
 
 function assertProfileUsable(profile: RepairProfile, now: string): void {
@@ -339,8 +248,4 @@ function profilePath(name: string): string {
 
 function writeProfile(profile: RepairProfile): void {
   atomicWriteJson(profilePath(profile.name), profile);
-}
-
-function sha(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
