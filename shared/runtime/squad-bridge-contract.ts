@@ -3,6 +3,7 @@ import { z } from "zod";
 import { clipUtf16 } from "../text/clip-utf16";
 import { FULL_COMMIT_SHA } from "./cli-ledger";
 import { redactAuthorizationMaterial } from "./redact-authorization";
+import { redactCredentialMaterial } from "./redact-credential";
 
 export const SQUAD_BRIDGE_CONTRACT_VERSION = "squad-bridge.v1";
 
@@ -34,13 +35,7 @@ export const PUBLISH_DIAGNOSTIC_STAGES = [
 ] as const;
 export type PublishDiagnosticStage = (typeof PUBLISH_DIAGNOSTIC_STAGES)[number];
 
-const CREDENTIAL_ASSIGNMENT =
-  /\b(authorization|token|password|secret|credential|api[_-]?key|GH_TOKEN|GITHUB_TOKEN|GIT_ASKPASS|ANTCODE_TOKEN)\s*(?:=\s*|:\s+)(?:Bearer\s+)?\S+/gi;
-const JSON_CREDENTIAL_FIELD =
-  /("(?:authorization|token|password|secret|credential|api[_-]?key)"\s*:\s*")(?:\\.|[^"\\])*(")/gi;
 const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^/@\s:]+:[^/@\s]+@/gi;
-const CREDENTIAL_LIKE =
-  /ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|BEGIN [A-Z ]+PRIVATE KEY[\s\S]*?END [A-Z ]+PRIVATE KEY/gi;
 
 export const squadJournalRefsSchema = z
   .object({
@@ -167,11 +162,11 @@ export function sanitizePublishMessage(
   text: string,
   limit: number = PUBLISH_DIAGNOSTIC_LIMIT,
 ): string {
-  const redacted = redactAuthorizationMaterial(text, "[redacted]")
+  const redacted = redactCredentialMaterial(
+    redactAuthorizationMaterial(text, "[redacted]"),
+    "[redacted]",
+  )
     .replace(URL_USERINFO, "$1[redacted]@")
-    .replace(JSON_CREDENTIAL_FIELD, "$1[redacted]$2")
-    .replace(CREDENTIAL_ASSIGNMENT, "$1=[redacted]")
-    .replace(CREDENTIAL_LIKE, "[redacted]")
     .replace(/\s+/g, " ")
     .trim();
   if (redacted.length <= limit) return redacted;

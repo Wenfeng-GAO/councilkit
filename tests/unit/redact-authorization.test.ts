@@ -64,10 +64,10 @@ describe("authorization header redaction", () => {
     expectCredentialGone(JSON.stringify(logger.recentProblems()));
     expectCredentialGone(JSON.stringify(logger.diagnostics()));
     expect(logger.diagnostics()[0]?.message).toBe(
-      "Authorization: [redacted] Authorization: [redacted] tail=visible",
+      "Authorization: [redacted]; Authorization: [redacted]; tail=visible",
     );
     expect(logger.recentProblems()[0]?.context).toEqual({
-      stderr: "Authorization: [redacted] Authorization: [redacted] tail=visible",
+      stderr: "Authorization: [redacted]; Authorization: [redacted]; tail=visible",
       authorization: "[redacted]",
     });
     // Local stderr stays sanitized but unredacted. Only exported rings drop secrets.

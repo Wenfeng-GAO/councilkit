@@ -1,4 +1,5 @@
 import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
+import { redactCredentialMaterial } from "@shared/runtime/redact-credential";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 
 /**
@@ -44,25 +45,12 @@ function numberIsHttpStatus(before: string, after: string): boolean {
   return true;
 }
 
-const SK_TOKEN = /sk-[A-Za-z0-9_-]{8,}/g;
-const COOKIE_HEADER = /Cookie:\s*[^\r\n]+/gi;
-const CSRF_ASSIGN = /csrf=[^\s;,&]+/gi;
-const CSRF_HEADER = /(?:X-)?CSRF-Token:\s*[^\s;,&]+/gi;
-const BEARER = /Bearer\s+[^\s]+/gi;
-const SESSION_ASSIGN = /session=[^\s;,&]+/gi;
-const SECRET_ASSIGN =
-  /(?:api[_-]?key|secret[_-]?key|access[_-]?token|session[_-]?token)\s*[:=]\s*[^\s;,&]+/gi;
-
 /** Redact provider diagnostics before any failure/transcript/report persistence. */
 export function redactDriverDiagnostic(text: string): string {
-  const redacted = redactAuthorizationMaterial(text, "[redacted]")
-    .replace(COOKIE_HEADER, "Cookie: [redacted]")
-    .replace(CSRF_HEADER, "CSRF-Token: [redacted]")
-    .replace(CSRF_ASSIGN, "csrf=[redacted]")
-    .replace(BEARER, "Bearer [redacted]")
-    .replace(SESSION_ASSIGN, "session=[redacted]")
-    .replace(SECRET_ASSIGN, "[redacted]")
-    .replace(SK_TOKEN, "[redacted]");
+  const redacted = redactCredentialMaterial(
+    redactAuthorizationMaterial(text, "[redacted]"),
+    "[redacted]",
+  );
   return clipUtf16(redacted, 400);
 }
 

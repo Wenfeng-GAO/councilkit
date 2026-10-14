@@ -4,7 +4,8 @@
  */
 import { z } from "zod";
 import { clipUtf16 } from "../text/clip-utf16";
-import { isAuthorizationCredentialKey, redactAuthorizationMaterial } from "./redact-authorization";
+import { redactAuthorizationMaterial } from "./redact-authorization";
+import { isCredentialKey, redactCredentialMaterial } from "./redact-credential";
 
 const SHA256_K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -635,18 +636,12 @@ function summaryWithUnfinishedNote(summary: string): string {
   return `${clipUtf16(summary, REPAIR_OBS_SUMMARY_MAX - note.length)}${note}`;
 }
 
-const SECRET_VALUE_KEYS = /^(cookie|csrf|token|password|secret|credential|api[_-]?key|x-api-key)$/i;
-const COOKIE_HEADER = /(cookie\s*[:=]\s*)[^;\n]+/gi;
-const API_KEY = /\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|AIza[0-9A-Za-z_-]{10,})\b/g;
-const ASSIGNED_SECRET = /\b((?:api[_-]?key|token|password|secret)\s*[:=]\s*)\S+/gi;
 const URL_QUERY_SECRET =
   /([?&](?:token|key|api[_-]?key|access_token|auth|password|secret)=)[^&\s"']+/gi;
 
 export function redactObservationText(input: string): string {
   let out = redactAuthorizationMaterial(input, REPAIR_OBS_REDACT);
-  out = out.replace(COOKIE_HEADER, `$1${REPAIR_OBS_REDACT}`);
-  out = out.replace(API_KEY, REPAIR_OBS_REDACT);
-  out = out.replace(ASSIGNED_SECRET, `$1${REPAIR_OBS_REDACT}`);
+  out = redactCredentialMaterial(out, REPAIR_OBS_REDACT);
   out = out.replace(URL_QUERY_SECRET, `$1${REPAIR_OBS_REDACT}`);
   return out;
 }
@@ -658,7 +653,7 @@ export function redactObservationValue(value: unknown): unknown {
     const row = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(row)) {
-      if (isAuthorizationCredentialKey(key) || SECRET_VALUE_KEYS.test(key)) {
+      if (isCredentialKey(key)) {
         out[key] = REPAIR_OBS_REDACT;
       } else {
         out[key] = redactObservationValue(row[key]);

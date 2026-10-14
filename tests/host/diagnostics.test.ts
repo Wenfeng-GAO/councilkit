@@ -279,7 +279,7 @@ describe("diagnostics route", () => {
     expect(recent[0]?.context?.detail).toBe(
       'prompt=[redacted] token=[redacted] Cookie=[redacted] {"api_key":"[redacted]"}',
     );
-    expect(recent[1]?.context?.stderr).toBe("Authorization: [redacted] Authorization: [redacted]");
+    expect(recent[1]?.context?.stderr).toBe("Authorization: [redacted]; Authorization: [redacted]");
     expect(recent[1]?.context?.note).toBe("scope.idle_ttl_expired");
 
     // Route export carries the same redacted records and none of the poison.
@@ -307,10 +307,12 @@ describe("diagnostics route", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: DiagnosticsResponse };
     const entry = body.data.logs.diagnostics.find((row) => row.kind === "watchdog-stderr");
-    expect(entry?.message).toBe("Authorization: [redacted] Authorization: [redacted] tail=visible");
+    expect(entry?.message).toBe(
+      "Authorization: [redacted]; Authorization: [redacted]; tail=visible",
+    );
     const recent = body.data.logs.recent.find((row) => row.event === "diagnostic.watchdog-stderr");
     expect(recent?.context?.message).toBe(
-      "Authorization: [redacted] Authorization: [redacted] tail=visible",
+      "Authorization: [redacted]; Authorization: [redacted]; tail=visible",
     );
     const exported = JSON.stringify(body.data.logs);
     expect(exported).not.toContain("DIGESTSECRET");
