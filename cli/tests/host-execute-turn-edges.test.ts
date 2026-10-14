@@ -80,7 +80,7 @@ interface Script {
   gets?: GetStep[];
   ack?: "ok" | "expired" | "throw" | "hang" | "abort-error";
   cancel?: "ok" | "throw";
-  refresh?: "ok" | "reject-on-abort" | "resolve-after-abort";
+  refresh?: "ok" | "reject-on-abort" | "resolve-after-abort" | "throw";
   persist?: (evidence: TerminalEvidence) => Promise<void>;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -296,6 +296,7 @@ async function runScript(script: Script): Promise<{ result: TurnResult; trace: T
       trace.refreshAborted.push(signal?.aborted === true);
       trace.events.push("refresh");
       const mode = script.refresh ?? "ok";
+      if (mode === "throw") throw new Error("document GET failed");
       if (mode === "reject-on-abort" || mode === "resolve-after-abort") {
         await waitAbort(signal);
         if (mode === "reject-on-abort") throw abortError();
@@ -1093,14 +1094,25 @@ describe("executeTurn stream, reconnect, and cleanup", () => {
     }
   });
 
-  it.skip("cancels an accepted execution when the SSE 401 cold-rebuild aborts", async () => {
-    // BUG: refreshAuthForStream rejects when the caller aborts the SSE 401
-    // cold-rebuild. driveToTerminal awaits that rejection outside the follow
-    // try, so the error hits runInternal's outer catch and returns cancelled
-    // with cancelCalls === 0. The H3 comment says the aborted auth GET must
-    // still enter cancel → observe → discarded ACK. HostClient's production
-    // refresh rejects on abort (AuthClient aborts the document fetch), so an
-    // accepted execution is left running.
+  it("reports a non-abort auth refresh failure without cancelling", async () => {
+    const { result, trace } = await runScript({
+      refresh: "throw",
+      follows: [{ kind: "throw", error: eventStreamError(401, "event stream HTTP 401") }],
+    });
+    expect(trace.executeCalls).toBe(1);
+    expect(trace.refreshCalls).toBe(1);
+    expect(trace.cancelCalls).toBe(0);
+    expect(trace.ackBodies).toEqual([]);
+    expect(result.verdict).toBe("failed");
+    expect(result.error).toEqual({
+      phase: "stream",
+      code: "RUNTIME_UNAVAILABLE",
+      message: "document GET failed",
+      retryable: false,
+    });
+  });
+
+  it("cancels an accepted execution when the SSE 401 cold-rebuild aborts", async () => {
     const external = new AbortController();
     const timer = setTimeout(() => external.abort("SIGINT"), 20);
     try {
