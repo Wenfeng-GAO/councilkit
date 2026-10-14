@@ -116,6 +116,47 @@ export function readFileText(filePath: string): string | null {
   }
 }
 
+export type DurableJson<T> =
+  | { status: "missing" }
+  | { status: "invalid" }
+  | { status: "ok"; value: T };
+
+/**
+ * `accept` returns null to reject. A present file that is not JSON, or that
+ * `accept` rejects, is `invalid`. That is not the same as a missing file.
+ * Create-if-absent writers must not replace `invalid` bytes with a fresh default.
+ */
+export function parseDurableJsonText<T>(
+  text: string,
+  accept: (value: unknown) => T | null,
+): { status: "invalid" } | { status: "ok"; value: T } {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { status: "invalid" };
+  }
+  const accepted = accept(value);
+  if (accepted === null) return { status: "invalid" };
+  return { status: "ok", value: accepted };
+}
+
+export function readDurableJson<T>(
+  filePath: string,
+  accept: (value: unknown) => T | null,
+): DurableJson<T> {
+  const text = readFileText(filePath);
+  if (text === null) return { status: "missing" };
+  return parseDurableJsonText(text, accept);
+}
+
+export function requireDurableJson<T>(read: DurableJson<T>, label: string): T | null {
+  if (read.status === "invalid") {
+    throw errors.io(`${label} is present but invalid; refusing to reset it`);
+  }
+  return read.status === "ok" ? read.value : null;
+}
+
 function isENOENT(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   // Node sets `code === "ENOENT"` on fs stat/read ENOENT.

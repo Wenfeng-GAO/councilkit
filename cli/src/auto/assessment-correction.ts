@@ -13,7 +13,8 @@ import {
   extractAssessmentBlocks,
 } from "@shared/runtime/reviewer-assessment";
 import { z } from "zod";
-import { atomicWriteJson } from "../store/atomic-write";
+import { errors } from "../errors";
+import { atomicWriteJson, parseDurableJsonText } from "../store/atomic-write";
 
 export const ASSESSMENT_CORRECTIONS_FILE = "assessment-corrections.v1.json";
 
@@ -296,16 +297,22 @@ export function writeAssessmentCorrections(runDir: string, file: AssessmentCorre
 
 export function loadAssessmentCorrections(runDir: string): AssessmentCorrectionsFile | null {
   const path = join(runDir, ASSESSMENT_CORRECTIONS_FILE);
+  let text: string;
   try {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink()) return null;
-    const parsed = assessmentCorrectionsFileSchema.safeParse(
-      JSON.parse(readFileSync(path, "utf8")),
-    );
-    return parsed.success ? parsed.data : null;
+    text = readFileSync(path, "utf8");
   } catch {
     return null;
   }
+  const parsed = parseDurableJsonText(text, (value) => {
+    const result = assessmentCorrectionsFileSchema.safeParse(value);
+    return result.success ? result.data : null;
+  });
+  if (parsed.status === "invalid") {
+    throw errors.io(`${ASSESSMENT_CORRECTIONS_FILE} is present but invalid; refusing to reset it`);
+  }
+  return parsed.value;
 }
 
 export function formatCorrectableIds(

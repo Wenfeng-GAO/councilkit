@@ -9,14 +9,19 @@ import {
 } from "@shared/runtime/cli-run-progress";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
-import { jsonParse } from "@shared/runtime/json-parse";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { z } from "zod";
 import { errors } from "../errors";
-import { atomicWriteFile, atomicWriteJson, readFileText } from "../store/atomic-write";
+import {
+  atomicWriteFile,
+  atomicWriteJson,
+  readDurableJson,
+  readFileText,
+  requireDurableJson,
+} from "../store/atomic-write";
 import { ensureRunDir, resolvePaths } from "../store/paths";
 
 export const REPAIR_STATE_FILE = "repair.json";
@@ -171,10 +176,13 @@ export function bootstrapRepairRun(input: {
 }
 
 export function readRepairState(runDir: string): RepairState | null {
-  const text = readFileText(join(runDir, REPAIR_STATE_FILE));
-  if (text === null) return null;
-  const parsed = repairStateSchema.safeParse(clipStoredRepairFields(jsonParse(text)));
-  return parsed.success ? parsed.data : null;
+  return requireDurableJson(
+    readDurableJson(join(runDir, REPAIR_STATE_FILE), (value) => {
+      const parsed = repairStateSchema.safeParse(clipStoredRepairFields(value));
+      return parsed.success ? parsed.data : null;
+    }),
+    "repair.json",
+  );
 }
 
 export function writeRepairState(runDir: string, state: RepairState): void {
