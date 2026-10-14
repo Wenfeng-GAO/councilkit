@@ -16,6 +16,7 @@ import { RunExit } from "./commands/run";
  * in human mode.
  */
 import { CliError, EXIT, errors } from "./errors";
+import { partitionGlobalArgs } from "./global-args";
 import { createOutput, renderErrorHuman } from "./output";
 import { redact } from "./redact";
 
@@ -86,28 +87,7 @@ The CLI and the browser do not share data (separate stores).
 `;
 
 function main(argv: string[]): void {
-  const args = argv.slice(2);
-
-  // Extract global flags (--json/--help/--version) from anywhere; the remainder
-  // is [command, ...commandArgs].
-  let json = false;
-  let help = false;
-  let version = false;
-  const rest: string[] = [];
-  let command: string | undefined;
-  for (const arg of args) {
-    if (arg === "--json") {
-      json = true;
-    } else if (arg === "--help" || arg === "-h") {
-      help = true;
-    } else if (arg === "--version") {
-      version = true;
-    } else if (command === undefined && !arg.startsWith("-")) {
-      command = arg;
-    } else {
-      rest.push(arg);
-    }
-  }
+  const { json, help, version, command, rest } = partitionGlobalArgs(argv.slice(2));
 
   if (help) {
     process.stdout.write(HELP);
