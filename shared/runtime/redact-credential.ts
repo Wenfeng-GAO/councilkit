@@ -111,7 +111,14 @@ export function redactCredentialMaterial(
 }
 
 function keyIsSecret(key: string, extra: ReadonlySet<string>): boolean {
-  return extra.has(key.toLowerCase()) || isCredentialKey(key);
+  if (isCredentialKey(key)) return true;
+  const lower = key.toLowerCase();
+  for (const item of extra) {
+    if (lower === item) return true;
+    // Logger ban on prompt text: system-prompt / user_prompt, not personaPrompt.
+    if (lower.endsWith(`-${item}`) || lower.endsWith(`_${item}`)) return true;
+  }
+  return false;
 }
 
 function isCookieName(key: string): boolean {
@@ -269,6 +276,11 @@ function scanShellWordEnd(input: string, start: number): number {
   let i = start;
   while (i < input.length) {
     const char = input[i];
+    // Escaped char stays in the word (`TOKEN=abc\ def`).
+    if (char === "\\") {
+      i += i + 1 < input.length ? 2 : 1;
+      continue;
+    }
     // Bash ANSI-C / locale quoting: $'…' and $"…"
     if (char === "$" && (input[i + 1] === "'" || input[i + 1] === '"')) {
       const close = scanQuotedEnd(input, i + 1);

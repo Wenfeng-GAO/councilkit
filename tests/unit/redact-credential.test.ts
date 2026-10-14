@@ -199,10 +199,26 @@ describe("prefixed and structural credential redaction", () => {
       ["password=[abc]suffixLEAK", "password=[redacted]"],
       ['secret={"x":1}tailLEAK', "secret=[redacted]"],
       ["password={braceLEAK}tailLEAK", "password=[redacted]"],
+      ["GITHUB_TOKEN=abc\\ defLEAK", "GITHUB_TOKEN=[redacted]"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(redactCredentialMaterial(input, "[redacted]"), input).toBe(expected);
     }
+    expect(
+      redactCredentialMaterial("system-prompt=private-body", "[redacted]", {
+        extraExactKeys: ["prompt"],
+      }),
+    ).toBe("system-prompt=[redacted]");
+    expect(
+      redactCredentialMaterial("user_prompt: private-body", "[redacted]", {
+        extraExactKeys: ["prompt"],
+      }),
+    ).toBe("user_prompt: [redacted]");
+    expect(
+      redactCredentialMaterial("personaPrompt=keep-me", "[redacted]", {
+        extraExactKeys: ["prompt"],
+      }),
+    ).toBe("personaPrompt=keep-me");
 
     const raw = [
       "token: Bearer PLAINSECRET",

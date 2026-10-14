@@ -36,7 +36,9 @@ function redactSecrets(input: string): string {
 }
 
 function isExportedSecretKey(key: string): boolean {
-  return isCredentialKey(key) || /^prompt$/i.test(key);
+  // Exact `prompt`, or hyphen/underscore suffix (`system-prompt`). Not
+  // `personaPrompt` (letter before Prompt — no separator).
+  return isCredentialKey(key) || /(^|[_-])prompt$/i.test(key);
 }
 
 function redactValueSecrets(value: unknown): unknown {
