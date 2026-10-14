@@ -1,5 +1,4 @@
 import { chmod, mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriverId } from "@shared/runtime/contracts";
 import type {
@@ -228,9 +227,11 @@ describe("resolveStatic", () => {
   });
 
   it("reports every non-trusted real installation state without a handshake", async () => {
-    const discoveredRoot = await mkdtemp(join(tmpdir(), "councilkit-profile-resolver-"));
-    roots.push(discoveredRoot);
+    const discoveredRoot = await privateDir("discovered-");
     await writeExecutable(discoveredRoot, "codex", "#!/bin/sh\nexit 0\n");
+    // writeExecutable resets the directory to 0755. chmod the ancestor after
+    // that so the path is untrusted on macOS, where os.tmpdir() is user-private.
+    await chmod(discoveredRoot, 0o777);
     const discovered = registryFor(discoveredRoot);
     const discoveredDto = byDriver(discovered, "codex-app-server");
     expect(discoveredDto.state).toBe("discovered");
