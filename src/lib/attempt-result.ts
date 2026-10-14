@@ -1,4 +1,4 @@
-import { readOkData } from "@/runtime/client";
+import { readOkData } from "@/runtime/host-envelope";
 import {
   type CliRunAttemptResultResponse,
   cliRunAttemptResultResponseSchema,
@@ -6,7 +6,7 @@ import {
 
 /**
  * Durable per-attempt result. This route stays off RuntimeClient.
- * The JSON envelope is readOkData, same as the other session reads.
+ * The JSON envelope is readOkData from the host envelope module.
  */
 
 export class AttemptResultError extends Error {

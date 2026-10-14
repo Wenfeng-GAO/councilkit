@@ -5,7 +5,7 @@ import {
   reviewJuryUpdateSchema,
 } from "@shared/runtime/review-jury";
 import { readCsrfToken } from "./bootstrap";
-import { readOkData } from "./client";
+import { readOkData } from "./host-envelope";
 
 /** Separate CLI configuration surface; leaves the discussion RuntimeClient unchanged. */
 export async function readOrSaveReviewJury(config?: ReviewJuryUpdate) {

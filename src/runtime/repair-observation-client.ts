@@ -6,7 +6,8 @@ import {
   repairEventDetailSchema,
   repairObservationSchema,
 } from "@shared/runtime/repair-observation";
-import { RuntimeClientError, readOkData } from "./client";
+import { RuntimeClientError } from "./client";
+import { readOkData } from "./host-envelope";
 
 async function sessionGetJson<T>(
   path: string,

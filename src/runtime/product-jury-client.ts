@@ -1,5 +1,5 @@
 import { reviewJuryResponseSchema } from "@shared/runtime/review-jury";
-import { readOkData } from "./client";
+import { readOkData } from "./host-envelope";
 
 /** Read-only product-jury surface. Does not save or edit the stored council. */
 export async function readProductJury() {
