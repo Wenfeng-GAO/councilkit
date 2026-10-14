@@ -184,6 +184,11 @@ describe("prefixed and structural credential redaction", () => {
         '{"authorization":{"authority_ref":"KEEPME"}}',
       ],
       ["https://example.test?token=queryLEAK&x=1", "https://example.test?token=[redacted]&x=1"],
+      ["secretkey=plainLEAK", "secretkey=[redacted]"],
+      ["accesstoken=plainLEAK", "accesstoken=[redacted]"],
+      ["sessiontoken=plainLEAK", "sessiontoken=[redacted]"],
+      ["myaccesstoken=plainLEAK", "myaccesstoken=[redacted]"],
+      ["clientsecret=plainLEAK", "clientsecret=[redacted]"],
     ] as const;
     for (const [input, expected] of cases) {
       expect(redactCredentialMaterial(input, "[redacted]"), input).toBe(expected);

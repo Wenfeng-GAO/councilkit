@@ -36,6 +36,11 @@ const CREDENTIAL_PAIRS = new Set([
   "session_token",
 ]);
 
+/** All-lowercase glued forms that splitIdentifier keeps as one segment. */
+const COMPACT_CREDENTIAL_PAIRS = new Set(
+  [...CREDENTIAL_PAIRS].map((pair) => pair.replaceAll("_", "")),
+);
+
 function knownShapes(): RegExp[] {
   return [
     /\bsk-[A-Za-z0-9_-]{8,}/g,
@@ -62,6 +67,12 @@ export function isCredentialKey(key: string): boolean {
     if (CREDENTIAL_SEGMENTS.has(current)) return true;
     const next = lower[i + 1] ?? "";
     if (next.length > 0 && CREDENTIAL_PAIRS.has(pairName(current, next))) return true;
+  }
+  // secretkey / accesstoken / sessiontoken: one lowercase segment, no separator.
+  const compact = lower.join("");
+  if (COMPACT_CREDENTIAL_PAIRS.has(compact)) return true;
+  for (const pair of COMPACT_CREDENTIAL_PAIRS) {
+    if (compact.length > pair.length && compact.endsWith(pair)) return true;
   }
   return false;
 }
