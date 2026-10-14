@@ -180,7 +180,7 @@ describe("spec size vs aggregate budget", () => {
   });
 
   it("a formerly near-200KiB spec is truncated so Attempt outputs are kept", () => {
-    const formerNearMax = "S".repeat(200 * 1024 - 64);
+    const formerNearMax = "S".repeat(AGGREGATE_PROMPT_BUDGET - 64);
     const attemptMarker = "KEPT_AFTER_SPEC_TRUNCATION";
     const prompt = buildAggregatePrompt({
       aggregatorName: "R",
