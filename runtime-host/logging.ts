@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { LIMITS } from "@shared/runtime/contracts";
-import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
+import {
+  isAuthorizationCredentialKey,
+  redactAuthorizationMaterial,
+} from "@shared/runtime/redact-authorization";
 
 /**
  * Structured Host logging and diagnostics.
@@ -24,8 +27,8 @@ const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
 // the three below (key=value, key: value, "key":"value") plus the HTTP
 // `Bearer <token>` form. Authorization and Proxy-Authorization are handled
 // first by redactAuthorizationMaterial, because those values continue past
-// the scheme word (`Basic`, `Digest`) until `;` or a newline. Only the VALUE
-// part is replaced with "[redacted]" —
+// the scheme word (`Basic`, `Digest`, AWS `SignedHeaders`) until an unquoted
+// field separator. Only the VALUE part is replaced with "[redacted]" —
 // the key name stays for debuggability. Absolute paths are deliberately NOT
 // stripped: same-machine self-diagnosis needs them (Q10 boundary spirit;
 // installations realpath is the precedent). Matching is intentionally
@@ -67,7 +70,9 @@ function redactValueSecrets(value: unknown): unknown {
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = redactValueSecrets(item);
+      // The string walker never sees this key. Bearer/Digest/AWS values would
+      // otherwise be pattern-matched alone and keep the credential.
+      out[key] = isAuthorizationCredentialKey(key) ? "[redacted]" : redactValueSecrets(item);
     }
     return out;
   }

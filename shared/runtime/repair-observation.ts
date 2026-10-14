@@ -3,7 +3,7 @@
  * Observation is a read-only projection — never mutates repair budget/gate/journal.
  */
 import { z } from "zod";
-import { redactAuthorizationMaterial } from "./redact-authorization";
+import { isAuthorizationCredentialKey, redactAuthorizationMaterial } from "./redact-authorization";
 import { clipUtf16CodeUnits } from "./seat-result";
 
 const SHA256_K = new Uint32Array([
@@ -635,8 +635,7 @@ export function clipSummary(value: string): string {
   return clipUtf16CodeUnits(value, REPAIR_OBS_SUMMARY_MAX);
 }
 
-const SECRET_VALUE_KEYS =
-  /^(authorization|cookie|csrf|token|password|secret|credential|api[_-]?key|x-api-key)$/i;
+const SECRET_VALUE_KEYS = /^(cookie|csrf|token|password|secret|credential|api[_-]?key|x-api-key)$/i;
 const COOKIE_HEADER = /(cookie\s*[:=]\s*)[^;\n]+/gi;
 const API_KEY = /\b(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]+|gho_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|AIza[0-9A-Za-z_-]{10,})\b/g;
 const ASSIGNED_SECRET = /\b((?:api[_-]?key|token|password|secret)\s*[:=]\s*)\S+/gi;
@@ -659,7 +658,7 @@ export function redactObservationValue(value: unknown): unknown {
     const row = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(row)) {
-      if (SECRET_VALUE_KEYS.test(key)) {
+      if (isAuthorizationCredentialKey(key) || SECRET_VALUE_KEYS.test(key)) {
         out[key] = REPAIR_OBS_REDACT;
       } else {
         out[key] = redactObservationValue(row[key]);

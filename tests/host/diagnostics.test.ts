@@ -288,12 +288,36 @@ describe("diagnostics route", () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: DiagnosticsResponse };
-    const exported = JSON.stringify(body.data.logs.recent);
+    const exported = JSON.stringify(body.data.logs);
     for (const secret of poison) {
       expect(exported).not.toContain(secret);
     }
     expect(exported).toContain("[redacted]");
     expect(exported).toContain("scope.idle_ttl_expired");
+  });
+
+  it("redacts semicolon-bearing Authorization values on the exported diagnostics ring", async () => {
+    host = await boot();
+    const message =
+      'Authorization: Digest username="ada", realm="ex;ample", response="DIGESTSECRET"; Authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024; tail=visible';
+    host.logger.diagnostic("watchdog-stderr", message);
+    const res = await fetch(`${host.baseUrl}/api/v1/diagnostics`, {
+      headers: authedHeaders(host),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: DiagnosticsResponse };
+    const entry = body.data.logs.diagnostics.find((row) => row.kind === "watchdog-stderr");
+    expect(entry?.message).toBe("Authorization: [redacted] Authorization: [redacted] tail=visible");
+    const recent = body.data.logs.recent.find((row) => row.event === "diagnostic.watchdog-stderr");
+    expect(recent?.context?.message).toBe(
+      "Authorization: [redacted] Authorization: [redacted] tail=visible",
+    );
+    const exported = JSON.stringify(body.data.logs);
+    expect(exported).not.toContain("DIGESTSECRET");
+    expect(exported).not.toContain(
+      "fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024",
+    );
+    expect(exported).toContain("tail=visible");
   });
 });
 

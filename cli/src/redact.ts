@@ -8,7 +8,10 @@
  * session cookie pair and the CSRF token value when they appear verbatim.
  */
 
-import { redactAuthorizationMaterial } from "@shared/runtime/redact-authorization";
+import {
+  isAuthorizationCredentialKey,
+  redactAuthorizationMaterial,
+} from "@shared/runtime/redact-authorization";
 
 const COOKIE_PAIR_PREFIX = "councilkit_session=";
 const CSRF_KEY_PATTERN = /x-councilkit-csrf\b/gi;
@@ -42,10 +45,12 @@ export function clearSecrets(): void {
 }
 
 /** A structural key whose entire value is a secret (cookie pair / CSRF token /
- * access token). The value is replaced wholesale rather than pattern-matched. */
+ * access token / Authorization). The value is replaced wholesale rather than
+ * pattern-matched, because the string walker never sees the key. */
 function isSecretValueKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (lower === "cookie" || lower === "csrf" || lower === "token") return true;
+  if (isAuthorizationCredentialKey(key)) return true;
   return /cookie|csrf/.test(lower) || /token$/.test(lower);
 }
 
