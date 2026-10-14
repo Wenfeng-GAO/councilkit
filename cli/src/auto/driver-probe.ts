@@ -18,6 +18,7 @@
  * `ensureWarmGrokHome` / `spawnEnvForDriver({ warmGrokHome: true })`.
  */
 import { spawnSync } from "node:child_process";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import type { AgentRecord } from "../store/schemas";
 import {
   DRIVER_PROBE_PROMPT,
@@ -55,14 +56,12 @@ export function probeCacheKey(agent: Pick<AgentRecord, "driverSelection" | "mode
   return JSON.stringify([agent.driverSelection, agent.modelId]);
 }
 
-/** Read TTL from env. Bare numbers outside 60–120 are accepted when explicitly set
- * (escape hatch); unset / invalid → 90s default. */
+/** Read TTL from env. A canonical integer is accepted even outside 60 to 120
+ * seconds (escape hatch). Unset or any other spelling keeps the 90s default. */
 export function probeCacheTtlMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.COUNCILKIT_PROBE_CACHE_TTL_MS;
   if (raw === undefined || raw.trim() === "") return DEFAULT_PROBE_CACHE_TTL_MS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_PROBE_CACHE_TTL_MS;
-  return Math.floor(n);
+  return parseCanonicalInt(raw.trim()) ?? DEFAULT_PROBE_CACHE_TTL_MS;
 }
 
 export function clearProbeCache(): void {
@@ -124,6 +123,33 @@ function detectListeningLocalProxy(): number | null {
   return null;
 }
 
+const LOCAL_PROXY_WITH_PORT = /^(?:https?|socks5?h?):\/\/(?:127\.0\.0\.1|localhost):/i;
+
+/**
+ * Port a local proxy URL actually uses.
+ * `"broken"` when the URL names 127.0.0.1 or localhost but the port is not a
+ * TCP port. `"skip"` for every other value.
+ *
+ * `http://127.0.0.1:1.9` is not port 1. A `(\d+)` capture would probe port 1
+ * and, if that port is open, treat the broken URL as healthy.
+ */
+function localProxyPort(raw: string): number | "broken" | "skip" {
+  const trimmed = raw.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return LOCAL_PROXY_WITH_PORT.test(trimmed) ? "broken" : "skip";
+  }
+  if (parsed.username !== "" || parsed.password !== "") return "skip";
+  const host = parsed.hostname;
+  if (host !== "127.0.0.1" && host !== "localhost") return "skip";
+  if (parsed.port === "") return "skip";
+  const port = parseCanonicalInt(parsed.port);
+  if (port === null || port < 1 || port > 65535) return "broken";
+  return port;
+}
+
 /** True when env points at 127.0.0.1/localhost:port that is not accepting connections. */
 export function localProxyConfigBroken(
   env: NodeJS.ProcessEnv,
@@ -139,9 +165,9 @@ export function localProxyConfigBroken(
   ] as const) {
     const raw = env[key];
     if (!raw) continue;
-    const m = /^(?:https?|socks5?h?):\/\/(?:127\.0\.0\.1|localhost):(\d+)/i.exec(raw.trim());
-    if (!m) continue;
-    const want = Number(m[1]);
+    const want = localProxyPort(raw);
+    if (want === "skip") continue;
+    if (want === "broken") return true;
     const listening = detectPort();
     if (listening === want) return false;
     // Direct nc for the configured port (detectPort only checks the known list).

@@ -1,4 +1,5 @@
 import { type ACK_STATES, QUOTAS } from "@shared/runtime/contracts";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { makeError } from "@shared/runtime/errors";
 import {
   ackRequestSchema,
@@ -119,8 +120,8 @@ export function scopeRoutes(services: HostServices): Route[] {
         const executionId = params.executionId as string;
         const owned = executions.get(executionId);
         const afterSeqRaw = query.get("afterSeq");
-        const afterSeq = afterSeqRaw ? Number.parseInt(afterSeqRaw, 10) : 0;
-        if (!Number.isFinite(afterSeq) || afterSeq < 0) {
+        const afterSeq = !afterSeqRaw ? 0 : parseCanonicalInt(afterSeqRaw);
+        if (afterSeq === null) {
           throw httpError(400, makeError("BAD_REQUEST", "stream", "Invalid afterSeq."));
         }
 

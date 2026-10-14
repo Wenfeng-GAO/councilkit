@@ -30,7 +30,7 @@ describe("resolveHostPort", () => {
   });
 
   it("rejects non-integer strings instead of parsing a prefix", () => {
-    for (const raw of ["123abc", " 123", "45907 ", "+45907", "0x1f", "45907.5"]) {
+    for (const raw of ["123abc", " 123", "45907 ", "+45907", "0x1f", "45907.5", "01"]) {
       expect(() => resolveHostPort({ COUNCILKIT_E2E: "1", COUNCILKIT_PORT: raw })).toThrow(
         /valid TCP port/,
       );

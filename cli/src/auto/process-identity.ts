@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 
 export interface ProcessFingerprint {
   pid: number;
@@ -43,7 +44,12 @@ export function listGroupPids(pgid: number): number[] {
   if (!Number.isInteger(pgid) || pgid <= 0) return [];
   const listed = spawnSync("pgrep", ["-g", String(pgid)], { encoding: "utf8", timeout: 2_000 });
   if (listed.status === 0 && listed.stdout.trim().length > 0) {
-    return uniquePids(listed.stdout.split(/\s+/).map((row) => Number.parseInt(row, 10)));
+    return uniquePids(
+      listed.stdout
+        .split(/\s+/)
+        .map((row) => parseCanonicalPositiveInt(row))
+        .filter((pid): pid is number => pid !== null),
+    );
   }
   const ps = spawnSync("ps", ["-ax", "-o", "pid=,pgid="], { encoding: "utf8", timeout: 2_000 });
   if (ps.status !== 0) return [];
@@ -51,9 +57,9 @@ export function listGroupPids(pgid: number): number[] {
   for (const line of ps.stdout.split("\n")) {
     const parts = line.trim().split(/\s+/);
     if (parts.length < 2) continue;
-    const pid = Number.parseInt(parts[0] ?? "", 10);
-    const group = Number.parseInt(parts[1] ?? "", 10);
-    if (pid > 0 && group === pgid) found.push(pid);
+    const pid = parseCanonicalPositiveInt(parts[0] ?? "");
+    const group = parseCanonicalPositiveInt(parts[1] ?? "");
+    if (pid !== null && group === pgid) found.push(pid);
   }
   return uniquePids(found);
 }
@@ -128,8 +134,7 @@ function readPgid(pid: number): number | null {
     timeout: 2_000,
   });
   if (result.status !== 0) return null;
-  const value = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isInteger(value) && value > 0 ? value : null;
+  return parseCanonicalPositiveInt(result.stdout.trim());
 }
 
 function readStartKey(pid: number): string | null {

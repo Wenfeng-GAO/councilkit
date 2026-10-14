@@ -1,4 +1,5 @@
 import { readCliRun } from "@shared/runtime/cli-runs-index";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { FindingDecision } from "@shared/runtime/review-explainer/contracts";
 import { loadPrDecisions, upsertPrDecision } from "@shared/runtime/review-explainer/pr-decisions";
@@ -130,8 +131,13 @@ async function runFindingDecision(argv: string[], out: OutputSink): Promise<void
     throw errors.usage("decide requires a supported PR review");
   try {
     const stored = loadPrDecisions(prUrl);
-    const revision = values.revision === undefined ? stored.revision : Number(values.revision);
-    if (!Number.isSafeInteger(revision) || revision < 0)
+    const revision =
+      values.revision === undefined
+        ? stored.revision
+        : typeof values.revision === "string"
+          ? parseCanonicalInt(values.revision)
+          : null;
+    if (revision === null || !Number.isSafeInteger(revision) || revision < 0)
       throw errors.usage("--revision must be a nonnegative integer");
     const updated = upsertPrDecision({
       prUrl,

@@ -143,6 +143,32 @@ describe("cli review command — argument matrix", () => {
     await expectUsage(["--agents", "[]", "--pr", "x", "--task", "y", "--no-require-spec"], "mutually exclusive");
   });
 
+  it("rejects a concurrency flag past the safe integer range", async () => {
+    const store = new Store();
+    const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    await expectUsage(
+      [
+        "--agents",
+        `["A"]`,
+        "--aggregator",
+        "A",
+        "--task",
+        "look at the parser",
+        "--no-require-spec",
+        "--concurrency",
+        "9007199254740993",
+      ],
+      "must be a positive integer",
+    );
+  });
+
   it("rejects --timeout above the 32-bit setTimeout ceiling", async () => {
     const store = new Store();
     const ds = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };

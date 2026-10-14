@@ -25,6 +25,7 @@ import {
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import { CLI_RUN_STATUS_FILE, type CliRunProgressPhase } from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
+import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { makeError } from "@shared/runtime/errors";
 import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
@@ -1278,9 +1279,8 @@ function writeStartingStatus(runDir: string, action: "fix" | "re-review"): void 
 
 function readPid(path: string): number | null {
   try {
-    const raw = readFileSync(path, "utf8").trim().split("\n")[0];
-    const pid = Number(raw);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    const raw = readFileSync(path, "utf8").trim().split("\n")[0] ?? "";
+    return parseCanonicalPositiveInt(raw.trim());
   } catch {
     return null;
   }
@@ -1288,13 +1288,14 @@ function readPid(path: string): number | null {
 
 function parseAfterSeq(raw: string | null): number {
   if (raw === null || raw.length === 0) return 0;
-  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+  const n = parseCanonicalInt(raw);
+  if (n === null) {
     throw httpError(
       400,
       makeError("BAD_REQUEST", "discovery", "Invalid afterSeq.", { retryable: false }),
     );
   }
-  return Number.parseInt(raw, 10);
+  return n;
 }
 
 function readRunTranscript(

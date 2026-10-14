@@ -45,6 +45,7 @@ import {
   reconcileRunningStatus,
 } from "./cli-run-progress";
 import { CANONICAL_ORIGIN } from "./contracts";
+import { parseCanonicalPositiveInt } from "./decimal-int";
 import {
   FINDING_GROUPS_FILE,
   type FindingGroupsFile,
@@ -385,8 +386,7 @@ function readPipelinePid(dir: string): number | null {
   const stat = safeLstat(path);
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
   const raw = readCapped(path, 32).text.trim();
-  const pid = Number.parseInt(raw, 10);
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
+  return parseCanonicalPositiveInt(raw);
 }
 
 function readFindingsText(path: string): string | null {

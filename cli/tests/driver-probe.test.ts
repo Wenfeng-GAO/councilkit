@@ -84,6 +84,12 @@ describe("driver-probe cache + lightweight", () => {
     expect(probeCacheTtlMs({ COUNCILKIT_PROBE_CACHE_TTL_MS: "nope" })).toBe(
       DEFAULT_PROBE_CACHE_TTL_MS,
     );
+    expect(probeCacheTtlMs({ COUNCILKIT_PROBE_CACHE_TTL_MS: "1.9" })).toBe(
+      DEFAULT_PROBE_CACHE_TTL_MS,
+    );
+    expect(probeCacheTtlMs({ COUNCILKIT_PROBE_CACHE_TTL_MS: "1e5" })).toBe(
+      DEFAULT_PROBE_CACHE_TTL_MS,
+    );
   });
 
   it("cache hit reuses last SUCCESS within TTL without calling LLM", async () => {
@@ -420,6 +426,21 @@ describe("driver-probe cache + lightweight", () => {
     expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:7897" }, () => 7897)).toBe(
       false,
     );
+  });
+
+  it("does not treat a prefix of a local proxy port as that port", () => {
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:1.9" }, () => 1)).toBe(true);
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:7890extra" }, () => 7890)).toBe(
+      true,
+    );
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "socks5://127.0.0.1:1.9" }, () => 1)).toBe(true);
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:7890/x" }, () => 7890)).toBe(
+      false,
+    );
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://127.0.0.1:07890" }, () => 7890)).toBe(
+      false,
+    );
+    expect(localProxyConfigBroken({ HTTPS_PROXY: "http://example.com:1.9" }, () => 1)).toBe(false);
   });
 
   it("warm GROK_HOME reuses one credentials-only dir across probe spawns", () => {

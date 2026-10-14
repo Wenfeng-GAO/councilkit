@@ -160,6 +160,7 @@ import { Store } from "../store/store";
 import {
   DEFAULT_CODEX_TIMEOUT_MS,
   parseFlags,
+  parseIntFlag,
   parseJsonFlag,
   parseTimeoutMs,
   timeoutForDriver,
@@ -566,7 +567,7 @@ export async function runReview(
 
   const concurrencyRaw = values.concurrency as string | undefined;
   const concurrency =
-    concurrencyRaw !== undefined ? parsePositiveInt(concurrencyRaw, "concurrency") : undefined;
+    concurrencyRaw !== undefined ? parseIntFlag(concurrencyRaw, "concurrency") : undefined;
 
   // --- resume: load the prior run + validate immutable inputs (P2-2) -------
   let priorRecords: ReviewTranscriptRecord[] = [];
@@ -2574,13 +2575,6 @@ async function ensureSpecContractBound(input: {
 
 function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
-}
-
-function parsePositiveInt(raw: string, fieldName: string): number {
-  if (!/^[1-9][0-9]*$/.test(raw)) {
-    throw errors.usage(`--${fieldName} must be a positive integer, got "${raw}"`);
-  }
-  return Number(raw);
 }
 
 /** Numeric suffix of an attemptId ("attempt-3" → 3); unknown ids sort last. */

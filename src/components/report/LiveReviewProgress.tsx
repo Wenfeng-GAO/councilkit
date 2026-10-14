@@ -2,6 +2,7 @@ import { displayLastActivity } from "@/lib/live-transcript";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import { reviewSeatIdentity, reviewSeatTabLabel, reviewSeatTitle } from "@/lib/seat-label";
 import { squadRoleName } from "@/lib/squad-workspace";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useEffect, useState } from "react";
 
@@ -241,7 +242,7 @@ function groupIdeateSeats(seats: AttemptRow[]): Array<{ title: string; seats: At
   const rounds = new Map<number, AttemptRow[]>();
   for (const row of debates) {
     const match = /^debate-r(\d+)-/.exec(row.attemptId);
-    const round = match ? Number.parseInt(match[1] ?? "1", 10) : 1;
+    const round = match?.[1] ? (parseCanonicalInt(match[1]) ?? 1) : 1;
     const list = rounds.get(round) ?? [];
     list.push(row);
     rounds.set(round, list);

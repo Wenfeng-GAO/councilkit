@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { API_BASE, LIMITS } from "@shared/runtime/contracts";
+import { decimalIntExceeds } from "@shared/runtime/decimal-int";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
 import type { z } from "zod";
 import type { HostConfig } from "./config";
@@ -143,8 +144,12 @@ export function assertJsonDepth(value: unknown, maxDepth = LIMITS.jsonMaxDepth):
 }
 
 async function readJsonBody(req: IncomingMessage, limit = LIMITS.httpBodyBytes): Promise<unknown> {
-  const declared = Number.parseInt(req.headers["content-length"] ?? "", 10);
-  if (Number.isFinite(declared) && declared > limit) {
+  const header = req.headers["content-length"];
+  // Digit text, not Number(). `9999999999999999999` and `0000004194305` are
+  // above 4 MiB, and Node will not end the request until that many bytes
+  // arrive. Skipping this check waits forever on a short body. A body with
+  // no usable length still stops in the loop below.
+  if (typeof header === "string" && decimalIntExceeds(header, limit)) {
     throw httpError(
       413,
       makeError("PAYLOAD_TOO_LARGE", "security", "Request body exceeds the 4 MiB limit."),
@@ -416,6 +421,9 @@ export function createRuntimeServer(options: RuntimeServerOptions): RuntimeServe
       sendJson(res, 200, { ok: true, data });
     } catch (error) {
       if (error instanceof HttpError) {
+        // A client that declared more bytes than it sent will not read this
+        // response until the connection closes.
+        if (error.status === 413) res.setHeader("Connection", "close");
         sendRuntimeError(res, error.status, error.runtimeError);
         return;
       }
