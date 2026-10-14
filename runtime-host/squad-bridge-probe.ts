@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
+import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import type { SquadBridgeProbe } from "@shared/runtime/squad-bridge-discovery";
 import { resolveCouncilkitSpawn } from "./cli-launcher";
 
@@ -43,7 +44,7 @@ function spawnCliProbe(env: NodeJS.ProcessEnv): SquadBridgeProbe | null {
     timeout: 12_000,
     shell: false,
   });
-  const parsed = parseJson(result.stdout ?? "");
+  const parsed = jsonParseEmbedded(result.stdout ?? "");
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const row = parsed as Partial<SquadBridgeProbe>;
   if (typeof row.available !== "boolean") return null;
@@ -89,24 +90,5 @@ function writeDiagnosis(env: NodeJS.ProcessEnv, probe: SquadBridgeProbe): void {
     });
   } catch {
     // cache is optional
-  }
-}
-
-function parseJson(text: string): unknown {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
   }
 }

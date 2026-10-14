@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
+import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
@@ -102,21 +103,7 @@ export function parseGrokModelsText(text: string): { catalog: string[]; canonica
 }
 
 export function parseGrokJsonResult(stdout: string): GrokJsonResult | null {
-  const trimmed = stdout.trim();
-  if (trimmed.length === 0) return null;
-  let obj: unknown;
-  try {
-    obj = JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start < 0 || end <= start) return null;
-    try {
-      obj = JSON.parse(trimmed.slice(start, end + 1));
-    } catch {
-      return null;
-    }
-  }
+  const obj = jsonParseEmbedded(stdout);
   if (obj === null || typeof obj !== "object") return null;
   const rec = obj as Record<string, unknown>;
   const text = typeof rec.text === "string" ? rec.text : "";

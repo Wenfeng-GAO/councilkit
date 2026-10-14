@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import type { SquadBridgeProbe } from "@shared/runtime/squad-bridge-discovery";
 import { discoverSquadBridge } from "@shared/runtime/squad-bridge-discovery";
 import { parseHistoryCapabilities } from "@shared/runtime/squad-history-bridge";
@@ -54,7 +55,7 @@ export function probeAndVerifySquadBridge(env: NodeJS.ProcessEnv = process.env):
     ["history", "capabilities", "--json"],
     env,
   );
-  const history = parseHistoryJson(historyRaw.stdout);
+  const history = jsonParseEmbedded(historyRaw.stdout);
   const historyCaps = historyRaw.exitCode === 0 ? parseHistoryCapabilities(history) : null;
   return {
     ...discovered,
@@ -68,25 +69,6 @@ export function probeAndVerifySquadBridge(env: NodeJS.ProcessEnv = process.env):
       ? null
       : "squadctl 可用，但未提供 squad-history-bridge.v1；跨 outer-cycle 修复需要升级 hengzhuo-engineering-squad。",
   };
-}
-
-function parseHistoryJson(text: string): unknown {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(trimmed.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
 }
 
 function spawnBounded(
