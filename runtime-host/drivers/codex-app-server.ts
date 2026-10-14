@@ -6,6 +6,7 @@ import { clipUtf16CodeUnits } from "@shared/runtime/seat-result";
 import { sanitizeString } from "../logging";
 import type { DriverProcess } from "../process/process-supervisor";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
+import { deadlineMaySettle } from "./turn-deadline";
 import type {
   DriverDeps,
   DriverEvent,
@@ -61,8 +62,10 @@ interface ActiveTurn {
   effectiveModel: string | null;
   rerouteReason: string | null;
   lastUsage: { inputTokens?: number | null; outputTokens?: number | null } | null;
+  settled: boolean;
   idleTimer?: NodeJS.Timeout;
   turnTimer?: NodeJS.Timeout;
+  dispatchTimer?: NodeJS.Timeout;
   resolve(): void;
 }
 
@@ -158,9 +161,15 @@ export function createCodexAppServerDriver(
     function clearTurnTimers(turn: ActiveTurn) {
       if (turn.idleTimer) clearTimeout(turn.idleTimer);
       if (turn.turnTimer) clearTimeout(turn.turnTimer);
+      if (turn.dispatchTimer) clearTimeout(turn.dispatchTimer);
+      turn.idleTimer = undefined;
+      turn.turnTimer = undefined;
+      turn.dispatchTimer = undefined;
     }
 
     function emitTerminal(turn: ActiveTurn, event: DriverEvent) {
+      if (turn.settled) return;
+      turn.settled = true;
       clearTurnTimers(turn);
       if (activeTurn === turn) activeTurn = null;
       turn.emit(event);
@@ -191,8 +200,10 @@ export function createCodexAppServerDriver(
     }
 
     function armIdleTimer(turn: ActiveTurn) {
+      if (turn.cancelling || turn.settled) return;
       if (turn.idleTimer) clearTimeout(turn.idleTimer);
       turn.idleTimer = setTimeout(() => {
+        if (!deadlineMaySettle(turn, activeTurn === turn)) return;
         failTurn(
           turn,
           makeError("STREAM_IDLE_TIMEOUT", "stream", "No protocol frames within the idle limit.", {
@@ -344,8 +355,10 @@ export function createCodexAppServerDriver(
         case "thread/compacted": {
           // The runtime compacted its own history: the Session no longer
           // holds the full applied context. Force needs_rebase upstream.
+          // A latched cancel owns the terminal: this frame often arrives
+          // inside the interrupt grace, and NEEDS_REBASE would pause the round.
           diagnostic("compacted", "app-server compacted thread context");
-          if (turn) {
+          if (turn && deadlineMaySettle(turn, activeTurn === turn)) {
             failTurn(
               turn,
               makeError("NEEDS_REBASE", "stream", "Runtime compacted the session context.", {
@@ -363,7 +376,11 @@ export function createCodexAppServerDriver(
           const willRetry =
             (params.error as Record<string, unknown> | undefined)?.willRetry === true;
           diagnostic("turn_error", `server error notification willRetry=${willRetry}`);
-          if (turn && !willRetry) {
+          // willRetry=true: Codex is retrying internally; the Orchestrator
+          // must not start its own concurrent retry — keep waiting.
+          // A latched cancel also owns the terminal. DRIVER_CRASH here would
+          // pause the round instead of discarding the stop.
+          if (turn && !willRetry && deadlineMaySettle(turn, activeTurn === turn)) {
             failTurn(
               turn,
               makeError("DRIVER_CRASH", "stream", "server reported a terminal error", {
@@ -373,8 +390,6 @@ export function createCodexAppServerDriver(
               }),
             );
           }
-          // willRetry=true: Codex is retrying internally; the Orchestrator
-          // must not start its own concurrent retry — keep waiting.
           return;
         }
         default:
@@ -392,7 +407,9 @@ export function createCodexAppServerDriver(
           pending.delete(String(id));
           const errorValue = message.error;
           if (errorValue) {
-            entry.reject(new Error(sanitizeString(clipCodexRpcErrorDetail(JSON.stringify(errorValue)))));
+            entry.reject(
+              new Error(sanitizeString(clipCodexRpcErrorDetail(JSON.stringify(errorValue)))),
+            );
           } else {
             entry.resolve(message.result);
           }
@@ -435,18 +452,16 @@ export function createCodexAppServerDriver(
       );
       const turn = activeTurn;
       if (turn) {
+        if (turn.cancelling) {
+          interruptTurn(turn, "user_cancelled");
+          return;
+        }
         // Ephemeral thread is gone. If any tool activity was seen, the tool
         // state can no longer be proven — surface unknown per the plan.
-        const crashedTurn = {
-          ...turn,
-          toolState: turn.sawToolActivity ? ("unknown" as const) : turn.toolState,
-        };
-        emitTerminal(crashedTurn, {
-          type: "interrupted",
-          reason: "driver_crash",
-          dispatchState: turn.dispatchState,
-          toolState: crashedTurn.toolState,
-        });
+        // Settle the live turn. emitTerminal clears activeTurn only when its
+        // argument is that object; a shallow copy left the seat busy.
+        if (turn.sawToolActivity) turn.toolState = "unknown";
+        interruptTurn(turn, "driver_crash");
       }
     }
 
@@ -522,6 +537,7 @@ export function createCodexAppServerDriver(
         },
         onLimitExceeded() {
           const turn = activeTurn;
+          if (turn?.cancelling) return;
           if (turn) {
             failTurn(
               turn,
@@ -746,6 +762,7 @@ export function createCodexAppServerDriver(
             toolState: "none",
             sawToolActivity: false,
             cancelling: false,
+            settled: false,
             agentText: "",
             effectiveModel: null,
             rerouteReason: null,
@@ -755,6 +772,7 @@ export function createCodexAppServerDriver(
           activeTurn = turn;
           armIdleTimer(turn);
           turn.turnTimer = setTimeout(() => {
+            if (!deadlineMaySettle(turn, activeTurn === turn)) return;
             interruptTurn(turn, "timeout");
             void respawn("turn_timeout");
           }, timeouts.turnMs);
@@ -778,6 +796,7 @@ export function createCodexAppServerDriver(
               turn.dispatchState = "accepted";
             },
             reject: (error) => {
+              if (!deadlineMaySettle(turn, activeTurn === turn)) return;
               failTurn(
                 turn,
                 makeError("DRIVER_CRASH", "dispatch", sanitizeString(error.message), {
@@ -793,35 +812,37 @@ export function createCodexAppServerDriver(
             (error) => {
               if (error) {
                 pending.delete(id);
-                failTurn(
-                  turn,
-                  makeError("DRIVER_CRASH", "dispatch", `stdin write failed: ${error.message}`, {
-                    driverId: "codex-app-server",
-                    executionId: turn.executionId,
-                    participantId,
-                  }),
-                );
+                if (deadlineMaySettle(turn, activeTurn === turn)) {
+                  failTurn(
+                    turn,
+                    makeError("DRIVER_CRASH", "dispatch", `stdin write failed: ${error.message}`, {
+                      driverId: "codex-app-server",
+                      executionId: turn.executionId,
+                      participantId,
+                    }),
+                  );
+                }
                 return;
               }
               if (turn.dispatchState === "not_dispatched") {
                 turn.dispatchState = "unknown";
               }
-              setTimeout(() => {
-                if (activeTurn === turn && turn.dispatchState === "unknown") {
-                  failTurn(
-                    turn,
-                    makeError(
-                      "DISPATCH_TIMEOUT",
-                      "dispatch",
-                      "turn/start was not acknowledged in time.",
-                      {
-                        driverId: "codex-app-server",
-                        executionId: turn.executionId,
-                        participantId,
-                      },
-                    ),
-                  );
-                }
+              turn.dispatchTimer = setTimeout(() => {
+                if (!deadlineMaySettle(turn, activeTurn === turn)) return;
+                if (turn.dispatchState !== "unknown") return;
+                failTurn(
+                  turn,
+                  makeError(
+                    "DISPATCH_TIMEOUT",
+                    "dispatch",
+                    "turn/start was not acknowledged in time.",
+                    {
+                      driverId: "codex-app-server",
+                      executionId: turn.executionId,
+                      participantId,
+                    },
+                  ),
+                );
               }, timeouts.dispatchAckMs);
             },
           );
@@ -832,6 +853,7 @@ export function createCodexAppServerDriver(
         const turn = activeTurn;
         if (!turn || turn.executionId !== executionId) return;
         turn.cancelling = true;
+        clearTurnTimers(turn);
         if (turn.turnId && threadId) {
           try {
             await sendRequest("turn/interrupt", { threadId, turnId: turn.turnId });
@@ -855,6 +877,7 @@ export function createCodexAppServerDriver(
         const turn = activeTurn;
         if (turn) {
           turn.cancelling = true;
+          clearTurnTimers(turn);
           if (turn.turnId && threadId) {
             sendRequest("turn/interrupt", { threadId, turnId: turn.turnId }).catch(() => undefined);
           }
