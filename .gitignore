@@ -27,3 +27,6 @@ test-results/
 # GSD planning artifacts (local-only)
 .planning/
 .gstack/
+
+# verify-councilkit evidence and per-merge-base test baselines
+artifacts/verify/
