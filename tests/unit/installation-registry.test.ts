@@ -558,11 +558,7 @@ describe("installation registry", () => {
     );
   });
 
-  it.skip("does not promote an untrusted installation when revalidate is called twice", async () => {
-    // BUG: the first revalidate of a repaired executable stores wrapper pins
-    // while returning state "discovered" and the detail "trust is (re)assigned
-    // only at discovery refresh". The next revalidate sees those pins, takes
-    // the drift path, and promotes the installation to trusted without refresh.
+  it("does not promote an untrusted installation when revalidate is called twice", async () => {
     const root = await privateDir("double-revalidate-");
     const bin = join(root, "bin");
     const path = await writeExecutable(bin, "codex", "v1", 0o644);
