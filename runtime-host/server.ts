@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { API_BASE, LIMITS } from "@shared/runtime/contracts";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
 import type { z } from "zod";
 import type { HostConfig } from "./config";
@@ -143,8 +144,9 @@ export function assertJsonDepth(value: unknown, maxDepth = LIMITS.jsonMaxDepth):
 }
 
 async function readJsonBody(req: IncomingMessage, limit = LIMITS.httpBodyBytes): Promise<unknown> {
-  const declared = Number.parseInt(req.headers["content-length"] ?? "", 10);
-  if (Number.isFinite(declared) && declared > limit) {
+  const header = req.headers["content-length"];
+  const declared = typeof header === "string" ? parseCanonicalInt(header) : null;
+  if (declared !== null && declared > limit) {
     throw httpError(
       413,
       makeError("PAYLOAD_TOO_LARGE", "security", "Request body exceeds the 4 MiB limit."),

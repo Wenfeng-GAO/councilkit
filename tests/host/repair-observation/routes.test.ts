@@ -794,6 +794,68 @@ describe("host repair observation routes (no listen)", () => {
     expect(JSON.stringify(data)).not.toContain("SIBLING_SENTINEL");
   });
 
+  it("does not select a round from the numeric prefix of a junk round query", async () => {
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const data = (await route.handler(ctx({ round: "1abc" }))) as RepairObservation;
+    expect(data.round).toBe(2);
+    expect(data.currentRound).toBe(2);
+    expect(data.task.phase).toBe("active");
+  });
+
+  it("does not shrink the page to the numeric prefix of a junk limit", async () => {
+    const lines = ["a", "b", "c"].map((id) =>
+      JSON.stringify({
+        type: "tool.started",
+        callId: id,
+        name: "shell",
+        summary: id,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      }),
+    );
+    writeFileSync(join(home, "squad-tasks", "task-1", "orchestrator.log"), `${lines.join("\n")}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    if (!route) throw new Error("missing observation route");
+    const data = (await route.handler(
+      ctx({ round: "current", limit: "2abc" }),
+    )) as RepairObservation;
+    expect(data.upserts.map((row) => row.summary)).toEqual(["a", "b", "c"]);
+    expect(data.hasMore).toBe(false);
+  });
+
+  it("does not seek a detail body from the numeric prefix of a junk cursor", async () => {
+    const taskDir = join(home, "squad-tasks", "task-1");
+    const line = (callId: string, output: string) =>
+      JSON.stringify({
+        type: "tool.completed",
+        callId,
+        name: "shell",
+        summary: callId,
+        output,
+        role: "coder",
+        at: "2026-09-22T06:00:01Z",
+      });
+    const first = line("c0", `ONLY_FIRST_${"f".repeat(130)}`);
+    const second = line("c1", `ONLY_SECOND_${"s".repeat(130)}`);
+    writeFileSync(join(taskDir, "orchestrator.log"), `${first}\n${second}\n`);
+    const routes = repairObservationRoutes({ now: () => new Date("2026-09-22T06:00:05Z") });
+    const list = routes.find((r) => r.pattern.endsWith("/repair/observation"));
+    const detail = routes.find((r) => r.pattern.endsWith("/repair/events/:eventId"));
+    if (!list || !detail) throw new Error("missing observation routes");
+    const page = (await list.handler(ctx({ round: "current" }))) as RepairObservation;
+    const later = page.upserts.find((row) => row.summary === "c1");
+    if (!later) throw new Error("missing event");
+    expect(later.eventId).toMatch(/^evt_/);
+    const body = (await detail.handler(
+      ctx({ cursor: "5abc" }, { runId: RUN_ID, eventId: later.eventId }),
+    )) as { availability: string; body: string };
+    expect(body.availability).toBe("available");
+    expect(body.body).toBe(second);
+  });
+
   it("rejects invalid repair run ids", async () => {
     const routes = repairObservationRoutes();
     const route = routes.find((r) => r.pattern.endsWith("/repair/observation"));

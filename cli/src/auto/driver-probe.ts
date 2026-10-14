@@ -18,6 +18,7 @@
  * `ensureWarmGrokHome` / `spawnEnvForDriver({ warmGrokHome: true })`.
  */
 import { spawnSync } from "node:child_process";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import type { AgentRecord } from "../store/schemas";
 import {
   DRIVER_PROBE_PROMPT,
@@ -55,14 +56,12 @@ export function probeCacheKey(agent: Pick<AgentRecord, "driverSelection" | "mode
   return JSON.stringify([agent.driverSelection, agent.modelId]);
 }
 
-/** Read TTL from env. Bare numbers outside 60–120 are accepted when explicitly set
- * (escape hatch); unset / invalid → 90s default. */
+/** Read TTL from env. A canonical integer is accepted even outside 60 to 120
+ * seconds (escape hatch). Unset or any other spelling keeps the 90s default. */
 export function probeCacheTtlMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.COUNCILKIT_PROBE_CACHE_TTL_MS;
   if (raw === undefined || raw.trim() === "") return DEFAULT_PROBE_CACHE_TTL_MS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_PROBE_CACHE_TTL_MS;
-  return Math.floor(n);
+  return parseCanonicalInt(raw.trim()) ?? DEFAULT_PROBE_CACHE_TTL_MS;
 }
 
 export function clearProbeCache(): void {

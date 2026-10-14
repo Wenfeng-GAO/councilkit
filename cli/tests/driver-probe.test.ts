@@ -84,6 +84,12 @@ describe("driver-probe cache + lightweight", () => {
     expect(probeCacheTtlMs({ COUNCILKIT_PROBE_CACHE_TTL_MS: "nope" })).toBe(
       DEFAULT_PROBE_CACHE_TTL_MS,
     );
+    expect(probeCacheTtlMs({ COUNCILKIT_PROBE_CACHE_TTL_MS: "1.9" })).toBe(
+      DEFAULT_PROBE_CACHE_TTL_MS,
+    );
+    expect(probeCacheTtlMs({ COUNCILKIT_PROBE_CACHE_TTL_MS: "1e5" })).toBe(
+      DEFAULT_PROBE_CACHE_TTL_MS,
+    );
   });
 
   it("cache hit reuses last SUCCESS within TTL without calling LLM", async () => {

@@ -42,6 +42,7 @@ import {
 } from "@/orchestrator/discussion-orchestrator";
 import { RuntimeClient } from "@/runtime/client";
 import { CREDENTIAL_MODE, type DispatchState, type ToolState } from "@shared/runtime/contracts";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import type { RuntimeError } from "@shared/runtime/errors";
 import {
   type CompletedEvent,
@@ -672,8 +673,8 @@ class FakeHost {
     if (scope instanceof Response) return scope;
     const execution = this.executions.get(executionId);
     if (!execution) return errorResponse(404, "EXECUTION_NOT_FOUND", "unknown execution");
-    const afterSeq = afterSeqRaw ? Number.parseInt(afterSeqRaw, 10) : 0;
-    if (!Number.isFinite(afterSeq) || afterSeq < 0) {
+    const afterSeq = !afterSeqRaw ? 0 : parseCanonicalInt(afterSeqRaw);
+    if (afterSeq === null) {
       return errorResponse(400, "BAD_REQUEST", "invalid afterSeq");
     }
     let entry: StreamEntry | null = null;

@@ -389,11 +389,13 @@ describe("cli-runs route", () => {
   it("rejects a non-integer afterSeq with 400", async () => {
     seed();
     host = await boot();
-    const res = await fetch(
-      `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/live?afterSeq=-1`,
-      { headers: authedHeaders(host) },
-    );
-    expect(res.status).toBe(400);
+    for (const raw of ["-1", "1abc", "1.9", "9007199254740993", "9".repeat(400)]) {
+      const res = await fetch(
+        `${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/attempts/attempt-0/live?afterSeq=${raw}`,
+        { headers: authedHeaders(host) },
+      );
+      expect(res.status, raw).toBe(400);
+    }
   });
 
   it("marks done when the run is no longer running", async () => {
@@ -708,6 +710,40 @@ describe("cli-runs route", () => {
     expect(body.error.code).toBe("EXECUTION_CONFLICT");
     expect(body.error.message).toContain("already running");
     expect(readFileSync(join(dir, "pipeline.pid"), "utf8")).toBe("1\n");
+  });
+
+  it("POST /actions does not treat a non-canonical pipeline.pid as pid 1", async () => {
+    seed();
+    const dir = join(home, "runs", RUN_ID);
+    const transcript = readFileSync(join(dir, "transcript.jsonl"), "utf8");
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${transcript}${JSON.stringify({
+        kind: "review.finished",
+        version: 1,
+        status: "completed",
+        endedAt: "2026-08-01T01:00:00.000Z",
+        incomplete: false,
+      })}\n`,
+    );
+    writeFileSync(join(dir, "pipeline.pid"), "0x1\n");
+    host = await createTestHost({
+      routesFactory: (services) => {
+        services.cliRunLauncher = {
+          start: () => ({ pid: 12604 }),
+        };
+        return cliRunsRoutes(services);
+      },
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${RUN_ID}/actions`, {
+      method: "POST",
+      headers: authedHeaders(host),
+      body: JSON.stringify({ action: "fix" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: true; data: { started: boolean } };
+    expect(body.data.started).toBe(true);
+    expect(readFileSync(join(dir, "pipeline.pid"), "utf8").trim()).toBe("12604");
   });
 });
 

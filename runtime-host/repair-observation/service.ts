@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
+import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import {
   REPAIR_OBS_DETAIL_CHUNK,
   REPAIR_OBS_PAGE_LIMIT,
@@ -44,7 +45,8 @@ export type ObservationServiceOptions = {
 
 function detailByteOffset(op: { detailRef: string | null }): number {
   const fromRef = /^detail:(\d+)$/.exec(op.detailRef ?? "");
-  return fromRef?.[1] ? Number.parseInt(fromRef[1], 10) : 0;
+  if (!fromRef?.[1]) return 0;
+  return parseCanonicalInt(fromRef[1]) ?? 0;
 }
 
 function pinUnreadSource(path: string): { generation: string; offset: 0 } | null {
@@ -87,16 +89,14 @@ function encodeEarlierCursor(
 
 function clampLimit(raw: string | null): number {
   if (raw === null || raw.length === 0) return REPAIR_OBS_PAGE_LIMIT;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n <= 0) return REPAIR_OBS_PAGE_LIMIT;
+  const n = parseCanonicalPositiveInt(raw);
+  if (n === null) return REPAIR_OBS_PAGE_LIMIT;
   return Math.min(n, REPAIR_OBS_PAGE_LIMIT);
 }
 
 function parseRound(raw: string | null): number | "current" {
   if (raw === null || raw === "" || raw === "current") return "current";
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isInteger(n) || n <= 0) return "current";
-  return n;
+  return parseCanonicalPositiveInt(raw) ?? "current";
 }
 
 function tryWriteCache(env: NodeJS.ProcessEnv, key: string, value: unknown): void {
@@ -579,7 +579,7 @@ export function createRepairObservationService(options: ObservationServiceOption
     let truncated = false;
     let nextCursor: string | null = null;
     if (source && op.detailRef) {
-      const cursorOffset = Number.parseInt(input.cursorRaw ?? "0", 10) || 0;
+      const cursorOffset = parseCanonicalInt(input.cursorRaw ?? "0") ?? 0;
       const byteOffset = detailByteOffset(op);
       const chunk = readDetailChunk({
         path: source.path,

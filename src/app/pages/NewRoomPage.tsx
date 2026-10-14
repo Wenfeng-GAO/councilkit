@@ -14,6 +14,7 @@ import { initializeRoomDigest } from "@/orchestrator/context-snapshot";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { useAgents, useExecutionProfiles } from "@/stores/runtime-queries";
 import type { ProfileReadinessState } from "@shared/runtime/contracts";
+import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -36,8 +37,9 @@ interface GateProps {
  * validation contract is unit-testable in isolation (the page only renders it).
  * Contract:
  * - empty/whitespace → `null`  (no limit)
- * - a valid positive integer → that number
- * - anything else (`"2.5"`, `"3abc"`, `"0"`, `"-1"`) → `undefined` (illegal)
+ * - a canonical positive safe integer → that number
+ * - anything else (`"2.5"`, `"3abc"`, `"0"`, `"-1"`, `"01"`, a value past
+ *   `Number.MAX_SAFE_INTEGER`) → `undefined` (illegal)
  *
  * The page's submit handler reads the three states as: null = unlimited,
  * undefined = render the "需为正整数" error and block, number = use it.
@@ -45,12 +47,7 @@ interface GateProps {
 export function parseMaxRoundsInput(text: string): number | null | undefined {
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
-  // Strict validation: reject silent truncation like "2.5"→2 or "3abc"→3 by
-  // requiring an all-digit string before converting.
-  if (!/^\d+$/.test(trimmed)) return undefined;
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed <= 0) return undefined;
-  return parsed;
+  return parseCanonicalPositiveInt(trimmed) ?? undefined;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { type RuntimeEvent, isTerminalEvent, runtimeEventSchema } from "@shared/runtime/events";
 
 /**
@@ -40,9 +41,8 @@ export class EventStreamError extends Error {
 function requestedAfterSeq(url: string): number {
   const query = url.split("?")[1]?.split("#")[0] ?? "";
   const raw = new URLSearchParams(query).get("afterSeq");
-  if (raw === null || !/^(0|[1-9][0-9]*)$/.test(raw)) return 0;
-  const seq = Number(raw);
-  return Number.isSafeInteger(seq) ? seq : 0;
+  if (raw === null) return 0;
+  return parseCanonicalInt(raw) ?? 0;
 }
 
 /**

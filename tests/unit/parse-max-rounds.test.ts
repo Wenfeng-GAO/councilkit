@@ -39,4 +39,10 @@ describe("parseMaxRoundsInput", () => {
   it('"-1" → undefined（负数：数字符正则已排除符号）', () => {
     expect(parseMaxRoundsInput("-1")).toBeUndefined();
   });
+
+  it("rejects an integer past Number.MAX_SAFE_INTEGER instead of rounding it", () => {
+    expect(parseMaxRoundsInput("9007199254740991")).toBe(9_007_199_254_740_991);
+    expect(parseMaxRoundsInput("9007199254740993")).toBeUndefined();
+    expect(parseMaxRoundsInput("01")).toBeUndefined();
+  });
 });

@@ -8,6 +8,7 @@ import {
   type CliRunProgressPhase,
 } from "@shared/runtime/cli-run-progress";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
+import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
@@ -202,8 +203,7 @@ export function writeRepairPid(runDir: string, pid: number): void {
 export function readRepairPid(runDir: string): number | null {
   const text = readFileText(join(runDir, CLI_RUN_PIPELINE_PID_FILE));
   if (text === null) return null;
-  const pid = Number.parseInt(text.trim(), 10);
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
+  return parseCanonicalPositiveInt(text.trim());
 }
 
 export function writeRepairLive(

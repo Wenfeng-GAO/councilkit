@@ -5,6 +5,7 @@
  * positionals are rejected as usage errors (exit 2).
  */
 import { parseArgs } from "node:util";
+import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import type { z } from "zod";
 import { errors } from "../errors";
 import { zodFailureMessage } from "../output";
@@ -112,11 +113,8 @@ export function parseTimeoutMs(
  * of rounds than requested. */
 export function parseIntFlag(raw: string | undefined, fieldName: string): number {
   if (raw === undefined) throw errors.usage(`--${fieldName} is required (a positive integer)`);
-  if (!/^[1-9][0-9]*$/.test(raw)) {
-    throw errors.usage(`--${fieldName} must be a positive integer, got "${raw}"`);
-  }
-  const n = Number(raw);
-  if (!Number.isSafeInteger(n) || n <= 0) {
+  const n = parseCanonicalPositiveInt(raw);
+  if (n === null) {
     throw errors.usage(`--${fieldName} must be a positive integer, got "${raw}"`);
   }
   return n;
@@ -125,11 +123,8 @@ export function parseIntFlag(raw: string | undefined, fieldName: string): number
 /** Non-negative integer, including 0 (used by `--debate-rounds`). */
 export function parseNonNegativeIntFlag(raw: string | undefined, fieldName: string): number {
   if (raw === undefined) throw errors.usage(`--${fieldName} is required (a non-negative integer)`);
-  if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
-    throw errors.usage(`--${fieldName} must be a non-negative integer, got "${raw}"`);
-  }
-  const n = Number(raw);
-  if (!Number.isSafeInteger(n) || n < 0) {
+  const n = parseCanonicalInt(raw);
+  if (n === null) {
     throw errors.usage(`--${fieldName} must be a non-negative integer, got "${raw}"`);
   }
   return n;

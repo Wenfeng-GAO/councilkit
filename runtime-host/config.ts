@@ -4,6 +4,7 @@ import {
   CANONICAL_PORT,
   SUPPORTED_NODE_MAJOR,
 } from "@shared/runtime/contracts";
+import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
 import { DEFAULT_IDLE_SCOPE_TTL_MS } from "./scopes/scope-manager";
 
@@ -61,11 +62,8 @@ export function resolveHostPort(env: NodeJS.ProcessEnv = process.env): number {
       `COUNCILKIT_PORT override is only allowed for E2E hosts (COUNCILKIT_E2E=1); the canonical Host port stays ${CANONICAL_PORT}`,
     );
   }
-  if (!/^[0-9]+$/.test(raw)) {
-    throw new Error(`COUNCILKIT_PORT must be a valid TCP port, got "${raw}"`);
-  }
-  const port = Number(raw);
-  if (port < 1 || port > 65535) {
+  const port = parseCanonicalInt(raw);
+  if (port === null || port < 1 || port > 65535) {
     throw new Error(`COUNCILKIT_PORT must be a valid TCP port, got "${raw}"`);
   }
   return port;
