@@ -47,7 +47,9 @@ export function useRuntimeRoom(roomId: string | undefined, tick = 0) {
     placeholderData: keepPreviousData,
     queryKey: roomId ? [...runtimeKeys.room(roomId), tick] : ["rt", "room", "none"],
     enabled: !!roomId,
-    queryFn: () => runtimeDb.rooms.get(roomId as string),
+    // Dexie returns undefined when the row is missing. TanStack Query v5
+    // rejects undefined data and retries, so RoomPage stays on 加载中…
+    queryFn: async () => (await runtimeDb.rooms.get(roomId as string)) ?? null,
   });
 }
 
@@ -86,11 +88,11 @@ export function useRoundSummary(roundId: string | undefined, tick = 0) {
     placeholderData: keepPreviousData,
     queryKey: roundId ? [...runtimeKeys.summary(roundId), tick] : ["rt", "summary", "none"],
     enabled: !!roundId,
-    queryFn: () =>
-      runtimeDb.summaries
+    queryFn: async () =>
+      (await runtimeDb.summaries
         .where("roundId")
         .equals(roundId as string)
-        .first(),
+        .first()) ?? null,
   });
 }
 
@@ -122,7 +124,7 @@ export function useRoundExecutions(roundId: string | undefined, tick = 0) {
   });
 }
 
-/** The Room's committed decision report (S2, one per room). Undefined while no
+/** The Room's committed decision report (S2, one per room). Null while no
  * report has landed yet; the read never triggers execution — the Orchestrator
  * commits the report and bumps the invalidation tick. */
 export function useRoomReport(roomId: string | undefined, tick = 0) {
@@ -130,11 +132,11 @@ export function useRoomReport(roomId: string | undefined, tick = 0) {
     placeholderData: keepPreviousData,
     queryKey: roomId ? [...runtimeKeys.report(roomId), tick] : ["rt", "report", "none"],
     enabled: !!roomId,
-    queryFn: () =>
-      runtimeDb.reports
+    queryFn: async () =>
+      (await runtimeDb.reports
         .where("roomId")
         .equals(roomId as string)
-        .first(),
+        .first()) ?? null,
     // F3 cross-room guard runs in `select` so it also applies to the
     // keepPreviousData placeholder. Without it, navigating room A → room B
     // keeps serving A's report to B's ReportView (paired with B's topic for
@@ -182,10 +184,12 @@ export function useRoomRecoveryFacts(roomId: string | undefined, tick = 0) {
  * Exported so the cross-room invariant is unit-testable without standing up a
  * QueryClient + fake-indexeddb hook harness (the parseMaxRoundsInput precedent). */
 export function guardRoomScopedReport(
-  report: DecisionReport | undefined,
+  report: DecisionReport | null | undefined,
   roomId: string | undefined,
-): DecisionReport | undefined {
-  if (!report) return undefined;
+): DecisionReport | null | undefined {
+  // Preserve null (no row) versus undefined (not passed). A cross-room
+  // mismatch still becomes undefined so the previous room's body is not shown.
+  if (!report) return report;
   if (roomId === undefined || report.roomId !== roomId) return undefined;
   return report;
 }

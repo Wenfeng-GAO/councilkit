@@ -531,14 +531,7 @@ describe("runtime query hooks", () => {
     expect(mounted.read().bindings.data).toEqual([]);
   });
 
-  it.skip("resolves a missing room as success with no row", async () => {
-    // BUG: useRuntimeRoom returns Dexie's undefined for an unknown id. TanStack
-    // Query v5 rejects that ("Query data cannot be undefined... Affected query
-    // key: ["rt","room","room-missing",0]") and the query status becomes
-    // "error". src/main.tsx uses the default QueryClient retry of 3, so
-    // RoomPage keeps showing "加载中…" through the backoff instead of
-    // "未找到房间". A missing room should be status "success", data undefined,
-    // and error null.
+  it("resolves a missing room as success with no row", async () => {
     const mounted = renderHook(
       () => useRuntimeRoom("room-missing"),
       new QueryClient({
@@ -550,19 +543,11 @@ describe("runtime query hooks", () => {
     unmount = mounted.unmount;
     await waitFor(() => mounted.read().isSuccess || mounted.read().isError, "missing room");
     expect(mounted.read().status).toBe("success");
-    expect(mounted.read().data).toBeUndefined();
+    expect(mounted.read().data).toBeNull();
     expect(mounted.read().error).toBeNull();
   });
 
-  it.skip("resolves a round with no summary as success with no row", async () => {
-    // BUG: useRoundSummary's queryFn is summaries.where(roundId).first(), which
-    // is undefined until a summary is committed. TanStack Query v5 rejects that
-    // ("Query data cannot be undefined... Affected query key:
-    // ["rt","summary","round-b",0]") and status becomes "error". In-progress
-    // rounds have no summary; DiscussionStream reads summary?.content and expects
-    // a successful empty result. The default QueryClient retry of 3 in
-    // src/main.tsx repeats the failure on every tick. The hook should be status
-    // "success", data undefined, and error null.
+  it("resolves a round with no summary as success with no row", async () => {
     await runtimeDb.rounds.add(round1);
     const mounted = renderHook(
       () => useRoundSummary("round-b"),
@@ -575,19 +560,11 @@ describe("runtime query hooks", () => {
     unmount = mounted.unmount;
     await waitFor(() => mounted.read().isSuccess || mounted.read().isError, "missing summary");
     expect(mounted.read().status).toBe("success");
-    expect(mounted.read().data).toBeUndefined();
+    expect(mounted.read().data).toBeNull();
     expect(mounted.read().error).toBeNull();
   });
 
-  it.skip("resolves a room with no report as success with no row", async () => {
-    // BUG: useRoomReport documents that the report is undefined until one is
-    // committed, but queryFn returns reports.where(roomId).first(), which is
-    // undefined when no row exists. TanStack Query v5 rejects that ("Query data
-    // cannot be undefined... Affected query key: ["rt","report","room-1",0]")
-    // and status becomes "error". The default QueryClient retry of 3 in
-    // src/main.tsx repeats this on every invalidation tick, including the
-    // observer poll. The hook should be status "success", data undefined, and
-    // error null.
+  it("resolves a room with no report as success with no row", async () => {
     await runtimeDb.rooms.add(roomMid);
     const mounted = renderHook(
       () => useRoomReport("room-1"),
@@ -600,7 +577,7 @@ describe("runtime query hooks", () => {
     unmount = mounted.unmount;
     await waitFor(() => mounted.read().isSuccess || mounted.read().isError, "missing report");
     expect(mounted.read().status).toBe("success");
-    expect(mounted.read().data).toBeUndefined();
+    expect(mounted.read().data).toBeNull();
     expect(mounted.read().error).toBeNull();
   });
 });
