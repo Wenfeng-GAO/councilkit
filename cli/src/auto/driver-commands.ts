@@ -111,9 +111,6 @@ export function executableForDriver(driverId: string): string | undefined {
   return EXECUTABLE_BY_DRIVER[driverId];
 }
 
-/** Cursor account default. Omit `--model` so cursor-agent picks it. */
-export const CURSOR_DEFAULT_MODEL = "auto";
-
 export function isCursorDefaultModel(modelId: string): boolean {
   const id = modelId.trim().toLowerCase();
   return id === "auto" || id === "default" || id === "configured";

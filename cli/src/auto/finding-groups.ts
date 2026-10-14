@@ -26,10 +26,6 @@ export function hashFindingsBytes(bytes: string): string {
   return createHash("sha256").update(bytes, "utf8").digest("hex");
 }
 
-export function findingsFileBytes(file: FindingsFile): string {
-  return `${JSON.stringify(file)}\n`;
-}
-
 export function buildFindingGroups(input: {
   runId: string;
   sha: string;

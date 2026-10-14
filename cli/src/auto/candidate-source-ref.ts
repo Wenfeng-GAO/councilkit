@@ -59,12 +59,6 @@ export function privateCandidateRef(taskId: string, candidateSha: string): strin
   return ref;
 }
 
-export function isPrivateCandidateRef(ref: string): boolean {
-  return (
-    ref.startsWith(PRIVATE_REF_PREFIX) && /^refs\/heads\/(?!\/)[A-Za-z0-9._/\-]{1,200}$/.test(ref)
-  );
-}
-
 export async function pinPrivateCandidateRef(input: {
   repo: string;
   taskId: string;

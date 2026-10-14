@@ -1,5 +1,3 @@
-import type { LedgerFinding } from "./cli-ledger";
-
 export type FailureClass =
   | "source_fix_failed"
   | "coverage_gap"
@@ -60,19 +58,6 @@ export function recordRootCauseFailure(
         }
       : item,
   );
-}
-
-export function stillOpenRootCauses(
-  findings: LedgerFinding[],
-  rootCauseOf: (id: string) => string,
-): string[] {
-  const open = new Set<string>();
-  for (const row of findings) {
-    if (row.status === "accepted") continue;
-    if (row.verification?.outcome === "verified_closed") continue;
-    open.add(rootCauseOf(row.id));
-  }
-  return [...open];
 }
 
 export function recoveryActionFor(reasonCode: string): string {

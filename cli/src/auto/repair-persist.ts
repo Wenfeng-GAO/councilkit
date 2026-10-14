@@ -248,21 +248,6 @@ export function appendRepairJournal(runDir: string, record: Record<string, unkno
   writeFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
 }
 
-export function readRepairJournal(runDir: string): Array<Record<string, unknown>> {
-  const text = readFileText(join(runDir, REPAIR_JOURNAL_FILE));
-  if (text === null || text.trim().length === 0) return [];
-  const rows: Array<Record<string, unknown>> = [];
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    const parsed = jsonParse(trimmed);
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      rows.push(parsed as Record<string, unknown>);
-    }
-  }
-  return rows;
-}
-
 function jsonParse(text: string): unknown {
   try {
     return JSON.parse(text);

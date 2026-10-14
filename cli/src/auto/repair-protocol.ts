@@ -16,10 +16,6 @@ import {
 } from "@shared/runtime/repair-identity";
 import type { CheckedOutPr } from "./checkout-pr";
 
-export function frozenPolicyOrUnknown(value: string | null | undefined): string | "unknown" {
-  return value && /^[a-f0-9]{64}$/.test(value) ? value : "unknown";
-}
-
 export function identityFromRemote(input: {
   candidateSha: string;
   publishedSha?: string | null;

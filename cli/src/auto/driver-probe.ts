@@ -34,8 +34,6 @@ import type { DriverProbeRecord } from "./transcript";
 
 /** Default success-cache TTL (middle of the 60–120s product range). */
 export const DEFAULT_PROBE_CACHE_TTL_MS = 90_000;
-export const MIN_PROBE_CACHE_TTL_MS = 60_000;
-export const MAX_PROBE_CACHE_TTL_MS = 120_000;
 
 export type ProbePath = "cache" | "lightweight" | "llm";
 

@@ -6,7 +6,7 @@ import {
   gateAcceptanceView,
 } from "./repair-adjudication";
 import { type VerificationAsset, evaluateVerificationAsset } from "./repair-contract";
-import { type RepairIdentityFacts, identityUnknownReasons, isKnown } from "./repair-identity";
+import { type RepairIdentityFacts, isKnown } from "./repair-identity";
 import { expectedGatePolicyHash, policyHashMatches } from "./repair-policy";
 
 export const REPAIR_PROGRESS_PHASES = [
@@ -327,8 +327,4 @@ export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
     reasons,
     stage,
   };
-}
-
-export function identityAssemblyNotes(facts: RepairIdentityFacts): string[] {
-  return identityUnknownReasons(facts);
 }

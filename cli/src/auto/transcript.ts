@@ -326,47 +326,6 @@ export const ideateTranscriptRecordSchema = z.discriminatedUnion("kind", [
 ]);
 export type IdeateTranscriptRecord = z.infer<typeof ideateTranscriptRecordSchema>;
 
-export function readIdeateTranscript(path: string): IdeateTranscriptRecord[] {
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return [];
-    throw errors.io(`failed to read ideate transcript: ${ioName(cause)}`, {
-      cause: ioName(cause),
-    });
-  }
-  const records: IdeateTranscriptRecord[] = [];
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim().length === 0) continue;
-    const lineNo = i + 1;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      throw errors.io(`ideate transcript is corrupt: line ${lineNo} is not valid JSON`, {
-        line: lineNo,
-      });
-    }
-    const result = ideateTranscriptRecordSchema.safeParse(parsed);
-    if (result.success) {
-      records.push(result.data);
-      continue;
-    }
-    const firstIssue = result.error.issues[0];
-    const summary =
-      firstIssue === undefined
-        ? "schema mismatch"
-        : `${firstIssue.code}${firstIssue.path.length > 0 ? ` @${firstIssue.path.join(".")}` : ""}`;
-    throw errors.io(`ideate transcript is corrupt: line ${lineNo}: ${summary}`, {
-      line: lineNo,
-    });
-  }
-  return records;
-}
-
 export function writeIdeateTranscript(path: string, records: IdeateTranscriptRecord[]): void {
   const lines = records.map((r) => JSON.stringify(r)).join("\n");
   try {

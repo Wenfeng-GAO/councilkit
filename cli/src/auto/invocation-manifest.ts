@@ -331,17 +331,6 @@ export function readInvocationManifest(
   return result.data;
 }
 
-export function requireInvocationManifest(
-  runDir: string,
-  expectedRunId?: string,
-): InvocationManifest {
-  const manifest = readInvocationManifest(runDir, expectedRunId);
-  if (manifest === null) {
-    throw errors.io("invocation manifest is missing");
-  }
-  return manifest;
-}
-
 export function matchExecutionRevision(
   revision: ExecutionRevision | null,
   runId: string,
@@ -482,18 +471,4 @@ export function fingerprintsFromSpecs(
     }
   }
   return tools;
-}
-
-export function taskFromManifest(manifest: InvocationManifest): ReviewTask {
-  return {
-    pr: manifest.task.pr,
-    task: manifest.task.task,
-    focus: manifest.task.focus,
-    specSource: manifest.task.specSource,
-    specText: manifest.task.specText,
-    against: manifest.task.against,
-    repairPackageHash: manifest.task.repairPackageHash,
-    councilTopic: manifest.task.councilTopic,
-    requireSpec: manifest.requireSpec !== false,
-  };
 }

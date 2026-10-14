@@ -129,16 +129,6 @@ export function CopyIcon({ className }: WorkbenchIconProps) {
   );
 }
 
-export function EllipsisIcon({ className }: WorkbenchIconProps) {
-  return (
-    <IconBase className={className}>
-      <circle cx="12" cy="12" r="1" />
-      <circle cx="19" cy="12" r="1" />
-      <circle cx="5" cy="12" r="1" />
-    </IconBase>
-  );
-}
-
 export function ExternalLinkIcon({ className }: WorkbenchIconProps) {
   return (
     <IconBase className={className}>
@@ -206,14 +196,6 @@ export function LightbulbIcon({ className }: WorkbenchIconProps) {
       <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
       <path d="M9 18h6" />
       <path d="M10 22h4" />
-    </IconBase>
-  );
-}
-
-export function LoaderCircleIcon({ className }: WorkbenchIconProps) {
-  return (
-    <IconBase className={className}>
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
     </IconBase>
   );
 }
@@ -297,15 +279,6 @@ export function WrenchIcon({ className }: WorkbenchIconProps) {
   return (
     <IconBase className={className}>
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" />
-    </IconBase>
-  );
-}
-
-export function XIcon({ className }: WorkbenchIconProps) {
-  return (
-    <IconBase className={className}>
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
     </IconBase>
   );
 }
