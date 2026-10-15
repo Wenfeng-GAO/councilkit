@@ -196,6 +196,27 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   let followUpRunId: string | null = null;
   let summary = "";
 
+  const releaseCommandResources = (): void => {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    const key = leaseKey;
+    if (!key) return;
+    try {
+      releaseWriterLease({
+        repo: key.repo,
+        sourceBranch: key.sourceBranch,
+        holderRunId: runId,
+      });
+    } catch {
+      // A live extra writer pid throws before unlink. Leave leaseKey set so
+      // the outer finally can retry. Clearing it here would skip that retry.
+      return;
+    }
+    // A return means this grant is gone. Drop the key before stdout drains so
+    // a later holder of the same run id is not unlinked by the outer finally.
+    leaseKey = null;
+  };
+
   const persist = (
     status: CliRunLiveState["status"],
     phase: CliRunPipelinePhase,
@@ -241,19 +262,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
     failure: FixOutcome["failure"];
     extra?: Partial<FixOutcome>;
   }): Promise<never> => {
-    process.removeListener("SIGINT", onSignal);
-    process.removeListener("SIGTERM", onSignal);
-    if (leaseKey) {
-      try {
-        releaseWriterLease({
-          repo: leaseKey.repo,
-          sourceBranch: leaseKey.sourceBranch,
-          holderRunId: runId,
-        });
-      } catch {
-        // keep the lease if extra writer pids are still alive
-      }
-    }
+    releaseCommandResources();
     const outcome: FixOutcome = {
       status: partial.status,
       exitCode: partial.exitCode,
@@ -786,6 +795,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
       exitCode: EXIT.runFailed,
       failure: { phase: "fix", code: "FIX_FAILED", message },
     });
+  } finally {
+    releaseCommandResources();
   }
 }
 
