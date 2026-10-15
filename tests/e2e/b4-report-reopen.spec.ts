@@ -18,6 +18,7 @@ import {
   resetDriverState,
   resumeDrivers,
   roomExecutions,
+  setDiscussDemoRun,
   setDriverBehavior,
   startRound,
 } from "./helpers";
@@ -316,12 +317,15 @@ test.describe("B4 #339 Host restarted or disconnected mid-report", () => {
 });
 
 test.describe("B4 discussion demo report page", () => {
+  // Seeds its own demo discussion run and removes it again, so the default
+  // /reports fixtures and counts other specs assert stay unchanged.
+  test.afterEach(async () => {
+    await setDiscussDemoRun(page, false);
+  });
+
   test("slow-gen discussion report: discussion banner, zh-only marker", async () => {
-    test.skip(
-      process.env.COUNCILKIT_E2E_DISCUSS_DEMO !== "1",
-      "needs the opt-in slow-gen discussion fixture (COUNCILKIT_E2E_DISCUSS_DEMO=1)",
-    );
-    await page.goto("/reports/ck-run-00000000-0000-4000-8000-0000000000e3");
+    const runId = await setDiscussDemoRun(page, true);
+    await page.goto(`/reports/${runId}`);
     const banner = page.locator(".ck-demo-banner");
     await expect(banner).toBeVisible({ timeout: 15_000 });
     await expect(banner.getByText("◆ 示例数据")).toBeVisible();
@@ -334,5 +338,10 @@ test.describe("B4 discussion demo report page", () => {
     await expect(page.getByText("示例数据：慢生成测试，非真实模型输出。").first()).toBeVisible();
     await expect(page.getByText(/SAMPLE DATA|COUNCILKIT_SLOW_GEN/)).toHaveCount(0);
     await shot(page, "discuss-01-report-banner");
+    // Isolation: once removed, the run is gone from the list other specs count.
+    await setDiscussDemoRun(page, false);
+    const list = await page.request.get("/api/v1/cli-runs");
+    expect(list.ok()).toBeTruthy();
+    expect(await list.text()).not.toContain(runId);
   });
 });

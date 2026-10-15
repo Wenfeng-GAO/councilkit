@@ -29,12 +29,14 @@
  *   POST /api/v1/__test__/forget-executions — B4: forget every execution and
  *                                        drop the event streams (what the page
  *                                        sees when the Host restarts).
+ *   POST /api/v1/__test__/discuss-demo-run — B4: {present} seeds or removes
+ *                                        the demo discussion run (banner case).
  *   POST /api/v1/__test__/resume       — release all held fake drivers
  *                                        (pauseAfterEvents holds).
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,56 +168,6 @@ if (process.env.COUNCILKIT_E2E === "1") {
       ],
     }),
   );
-  // B4: opt-in slow-gen discussion run (report page banner screenshots), so
-  // the default /reports fixtures and their counts stay unchanged. The
-  // report.md comes from the real CLI renderer + the real slow-gen body.
-  if (process.env.COUNCILKIT_E2E_DISCUSS_DEMO === "1") {
-    const runDir = join(home, "runs", E2E_DISCUSS_DEMO_RUN_ID);
-    mkdirSync(runDir, { recursive: true });
-    const council = {
-      id: "c-slow",
-      name: "slow-gen",
-      topic: "慢生成测试：要不要把支付服务拆出来",
-      background: "",
-      targetOutput: "决策报告",
-      rounds: 1,
-      reporterAgentId: "a",
-      agentIds: ["a"],
-    };
-    writeFileSync(
-      join(runDir, "transcript.jsonl"),
-      `${[
-        {
-          kind: "run.started",
-          runId: E2E_DISCUSS_DEMO_RUN_ID,
-          startedAt: "2026-10-16T05:00:00.000Z",
-          council,
-        },
-        {
-          kind: "run.finished",
-          status: "completed",
-          endedAt: "2026-10-16T05:02:30.000Z",
-          incomplete: false,
-        },
-      ]
-        .map((row) => JSON.stringify(row))
-        .join("\n")}\n`,
-    );
-    writeFileSync(join(runDir, "demo.json"), JSON.stringify({ demo: true }));
-    writeFileSync(
-      join(runDir, "report.md"),
-      renderSuccessReport({
-        runId: E2E_DISCUSS_DEMO_RUN_ID,
-        startedAt: "2026-10-16T05:00:00.000Z",
-        endedAt: "2026-10-16T05:02:30.000Z",
-        council,
-        reporterName: "A",
-        participantNames: ["A"],
-        reporterOutput: slowGenDemoReport(5),
-        demo: true,
-      }),
-    );
-  }
   writeFileSync(
     join(home, "councils.json"),
     `${JSON.stringify({
@@ -685,6 +637,72 @@ const fakeInstallationRegistry: InstallationRegistry = {
 // Test-only control routes
 // ---------------------------------------------------------------------------
 
+/** B4: a slow-gen (demo) discussion run for the report-page banner e2e case.
+ * Seeded on demand through POST /__test__/discuss-demo-run and removed again
+ * (also by /__test__/reset), so the default /reports fixtures and their
+ * counts stay unchanged for every other spec. The report.md comes from the
+ * real CLI renderer around the real slow-gen body. */
+function discussDemoRunDir(): string {
+  const home = process.env.COUNCILKIT_HOME;
+  if (home === undefined || home.length === 0) {
+    throw new Error("COUNCILKIT_HOME missing in e2e host");
+  }
+  return join(home, "runs", E2E_DISCUSS_DEMO_RUN_ID);
+}
+
+function removeDiscussDemoRun(): void {
+  if (process.env.COUNCILKIT_E2E !== "1") return;
+  rmSync(discussDemoRunDir(), { recursive: true, force: true });
+}
+
+function seedDiscussDemoRun(): void {
+  const runDir = discussDemoRunDir();
+  mkdirSync(runDir, { recursive: true });
+  const council = {
+    id: "c-slow",
+    name: "slow-gen",
+    topic: "慢生成测试：要不要把支付服务拆出来",
+    background: "",
+    targetOutput: "决策报告",
+    rounds: 1,
+    reporterAgentId: "a",
+    agentIds: ["a"],
+  };
+  writeFileSync(
+    join(runDir, "transcript.jsonl"),
+    `${[
+      {
+        kind: "run.started",
+        runId: E2E_DISCUSS_DEMO_RUN_ID,
+        startedAt: "2026-10-16T05:00:00.000Z",
+        council,
+      },
+      {
+        kind: "run.finished",
+        status: "completed",
+        endedAt: "2026-10-16T05:02:30.000Z",
+        incomplete: false,
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n")}\n`,
+  );
+  writeFileSync(join(runDir, "demo.json"), JSON.stringify({ demo: true }));
+  writeFileSync(
+    join(runDir, "report.md"),
+    renderSuccessReport({
+      runId: E2E_DISCUSS_DEMO_RUN_ID,
+      startedAt: "2026-10-16T05:00:00.000Z",
+      endedAt: "2026-10-16T05:02:30.000Z",
+      council,
+      reporterName: "A",
+      participantNames: ["A"],
+      reporterOutput: slowGenDemoReport(5),
+      demo: true,
+    }),
+  );
+}
+
 const TEST_BASE = "/api/v1/__test__";
 
 /** Open SSE event responses, registered by the wrapped events route below. */
@@ -750,7 +768,10 @@ function testRoutes(
       method: "POST",
       pattern: `${TEST_BASE}/reset`,
       auth: "session",
-      handler: () => doReset(),
+      handler: () => {
+        removeDiscussDemoRun();
+        return doReset();
+      },
     },
     {
       method: "POST",
@@ -819,6 +840,20 @@ function testRoutes(
       handler: () => {
         executions.reset();
         return { dropped: dropOpenEventStreams() };
+      },
+    },
+    {
+      // B4: seed ({present:true}) or remove ({present:false}) the demo
+      // discussion run under the e2e CLI home.
+      method: "POST",
+      pattern: `${TEST_BASE}/discuss-demo-run`,
+      auth: "session",
+      bodySchema: z.object({ present: z.boolean() }),
+      handler: ({ body }) => {
+        const { present } = body as { present: boolean };
+        if (present) seedDiscussDemoRun();
+        else removeDiscussDemoRun();
+        return { runId: E2E_DISCUSS_DEMO_RUN_ID, present };
       },
     },
     {

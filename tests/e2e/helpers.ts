@@ -165,6 +165,13 @@ export async function forgetHostExecutions(page: Page): Promise<number> {
   return dropped;
 }
 
+/** B4: seed (true) or remove (false) the demo discussion run under the e2e
+ * CLI home. Isolated: the spec that seeds it removes it again. */
+export async function setDiscussDemoRun(page: Page, present: boolean): Promise<string> {
+  const { runId } = await controlPost<{ runId: string }>(page, "/discuss-demo-run", { present });
+  return runId;
+}
+
 /** Release all held fake drivers (pauseAfterEvents holds). */
 export async function resumeDrivers(page: Page): Promise<void> {
   await controlPost(page, "/resume");
