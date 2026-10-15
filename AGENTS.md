@@ -1,6 +1,6 @@
 # AGENTS.md — CouncilKit for coding agents
 
-CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。CLI 与浏览器数据不互通（独立本地存储）。
+CouncilKit 是本地优先的多 Agent 决策产品。**CLI（`councilkit`）** 让你在浏览器关闭时，通过本地 Runtime Host（`http://127.0.0.1:43127`）完成「查看模型 → 建 Agent/Council → 发起多轮讨论 → 拿 Markdown 报告」全流程。浏览器的「报告」「产品创意」页直接读 CLI 的运行记录（`~/.config/councilkit/runs/`）；CLI 的 Agent/Council 配置与浏览器的 Room/Profile/Agent（浏览器 IndexedDB）互不同步。
 
 术语只用 **Driver Selection / Council / Reporter / Run / Autonomous Run / Attempt / Aggregator / Task Template**（不使用浏览器的 Room/Facilitator）。例外：**Autonomous Run**（如 `review` / `ideate` / `apply` / `fix` / `repair` 命令）不经 Runtime Host 跑 agent，直接 spawn agent 子进程。`review`/`apply`/`fix`/`repair` 是全能力路径；`ideate` 是受限只读讨论，不修改用户项目。
 
@@ -122,7 +122,7 @@ pnpm exec councilkit run --agents '["<A-id>","<B-id>"]' --topic "..." \
 - **Council 人数**（含 Reporter）≤ 8（Host `maxParticipantsPerScope`）
 - **`agents.json`/`councils.json`** 严格 schema + `version`，无凭据字段；损坏文件给可诊断错误（不回显原文）
 - **凭据**（cookie/CSRF）只存进程内存，Host 重启自动重取一次；不落盘、不出现在任何输出
-- **CLI 只保证与同 checkout Host 互通**；与浏览器数据不互通
+- **CLI 只保证与同 checkout Host 互通**；CLI 的 Agent/Council 与浏览器的 Room/Profile/Agent 互不同步，浏览器报告页读 CLI 的 runs/
 - 讨论命令 `run` 无 `--resume`；`review --resume` 可重跑失败席并复用成功席
 - `findings decide` 把账本项标为打算修复/不修复；缺席复审不会变成 accept
 - live smoke 与 Host 共用 43127、独占串行；端口被占只 `lsof` 记录，不 kill 非自身进程

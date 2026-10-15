@@ -36,7 +36,7 @@
 | 文档 | 内容 | 何时阅读 |
 |---|---|---|
 | [Runtime Host 设计](runtime-host-design.md) | 本地模型执行边界的详细设计 | 理解 Host 架构时 |
-| [技术设计](technical-design.md) | 系统架构概览 | 理解整体架构时 |
+| [技术设计（历史）](technical-design.md) | 2026-06 原始 SwiftUI 方案（已否决） | 追溯决策背景时 |
 | [产品文档](product.md) | 产品定位与功能概述 | 理解产品定位时 |
 
 ### 决策记录
@@ -138,7 +138,7 @@ ADR 记录关键架构决策与历史背景。按时间倒序：
 ### 场景：我想理解 CouncilKit 架构
 
 1. [CONTEXT.md](../CONTEXT.md) — 术语定义
-2. [技术设计](technical-design.md) — 架构概览
+2. [Runtime Host 设计](runtime-host-design.md) — 架构概览（[技术设计](technical-design.md) 为历史文档）
 3. [Runtime Host 设计](runtime-host-design.md) — Host 详细设计
 4. [ADR 0004](adr/0004-separate-discussion-orchestration-from-model-execution.md) — 编排与执行分离
 5. [ADR 0013](adr/0013-cli-as-orchestrator-with-separate-data-world.md) — CLI 独立编排

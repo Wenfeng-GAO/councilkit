@@ -37,11 +37,11 @@ CLI 上下文中 Council 显式指定、负责在固定轮次结束后做一次�
 _Avoid_: Facilitator、summarizer
 
 **Run**:
-CLI 执行一个 **Council** 产生的一场讨论实例：有序消息记录（transcript）与最终报告，由 CLI 持久化在本地存储。Run 与浏览器的 Room 实例语义对应，但数据不互通。与 **Autonomous Run** 并列；需要强调区分时可称 Discussion Run。
+CLI 执行一个 **Council** 产生的一场讨论实例：有序消息记录（transcript）与最终报告，由 CLI 持久化在本地存储。Run 与浏览器的 Room 实例语义对应，但两者不同步：Room 在浏览器 IndexedDB，Run 在 CLI 的 runs/（浏览器报告页可读 runs/）。与 **Autonomous Run** 并列；需要强调区分时可称 Discussion Run。
 _Avoid_: Room、session、execution
 
 **Autonomous Run**:
-CLI 直接并行发起的一组全能力 Agent 执行实例：同一 **Task Template** 与同一输入，N 个 **Attempt** 各自独立完成后由 **Aggregator** 对比汇总。它不经过 Runtime Host，不使用 Execution Scope / Context Snapshot / Discussion Orchestrator；与 Run（Discussion Run）共享 runs/ 落盘样式与退出码体系，但数据不互通。子进程以用户本人权限运行、继承正常用户环境，信任级等同用户亲手执行该 CLI（2026-07-29 用户决策：安全不作为约束，全部权限可接受）。
+CLI 直接并行发起的一组全能力 Agent 执行实例：同一 **Task Template** 与同一输入，N 个 **Attempt** 各自独立完成后由 **Aggregator** 对比汇总。它不经过 Runtime Host，不使用 Execution Scope / Context Snapshot / Discussion Orchestrator；与 Run（Discussion Run）共享 runs/ 落盘样式与退出码体系；它不进入浏览器的 Room 数据，但浏览器的「报告」「产品创意」页直接读它在 runs/ 下的记录。子进程以用户本人权限运行、继承正常用户环境，信任级等同用户亲手执行该 CLI（2026-07-29 用户决策：安全不作为约束，全部权限可接受）。
 _Avoid_: Discussion、Council、Execution Scope、Context Snapshot
 
 **Attempt**:

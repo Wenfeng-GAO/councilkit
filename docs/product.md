@@ -1,309 +1,58 @@
-# Product Document: CouncilKit MVP
+# CouncilKit 产品说明（当前）
 
-## 1. One-Sentence Positioning
+> 与 [README](../README.md)、[CONTEXT.md](../CONTEXT.md) 保持一致；术语以 CONTEXT.md 为准。2026-06 的 MVP 原始规划已移到 [docs/history/2026-06-product-mvp-plan.md](history/2026-06-product-mvp-plan.md)（历史文档）。
 
-Build a local-first macOS app that lets users place multiple local agents into the same room, run facilitated and round-based brainstorm, planning, or review sessions around one topic, and generate a readable Markdown decision report at the end.
+## 一句话定位
 
-The MVP is not "multi-agent chat". It is organized multi-agent collaborative decision-making.
+本地优先的多 Agent 决策工具：让几位 AI（你本机已登录的 coding agent CLI）一起审 PR、修 PR、讨论产品创意或做决策，最后给出一份可读的 Markdown 报告。
 
-## 2. Target Users
+## 目标用户
 
-### 2.1 Independent Developers / Founders
+已经在用 coding agent 的开发者 / 独立开发者，主要场景是：
+- 用多个 agent 并行审查自己的 PR，汇总成一份报告，再按报告修复和复审；
+- 对一个产品创意做多视角讨论（只读，不改项目）；
+- 在浏览器里组织一场有主持人、多轮、能收敛成决策报告的讨论。
 
-People who need multiple AI perspectives on product direction, technical architecture, or MVP scope, but do not want to manually copy context between different chat windows.
+## 形态与平台
 
-### 2.2 Product Managers / Project Owners
+- **形态**：浏览器 Web UI + 本机前台运行的 **Runtime Host**（`http://127.0.0.1:43127`），另有 `councilkit` CLI。没有原生桌面 app。
+- **平台**：macOS 支持；Linux 可用（预览）；Windows 请用 WSL2。
+- **模型从哪来**：只调用你本机已安装并登录的 CLI。当前五个内置 Driver：`claude-stream-json`（经内部 `cld`，可选）、`codex-app-server`、`kimi-stream-json`、`grok-stream-json`、`cursor-stream-json`。
+- **凭据**：认证统一为 `installation-managed`，CLI 自己管登录；CouncilKit 从不读取或保存 API Key。
 
-People who want to run quick multi-perspective reviews where agents examine a problem from user, engineering, business, risk, and interaction angles, then converge into an execution recommendation.
+## 两条主线
 
-### 2.3 Heavy AI Users
+### 1. CLI：审查 / 修复 / 创意（Autonomous Run，浏览器可关）
 
-People who already have reusable agents and want to keep them as local assets that can be reused across different discussion rooms.
+- `councilkit review <pr-url>`：N 个全能力 agent 独立审查 → Aggregator 汇总成报告；默认按仓库里的规格合同审查，没有合同时可加 `--no-require-spec`。
+- `councilkit fix` / `apply` / `repair`：按报告生成修复、应用、复审。
+- `councilkit ideate "<创意>"`：受限只读的产品创意讨论。
+- `councilkit demo`：不需要任何账号的示例报告。
+- 运行记录落在 `~/.config/councilkit/runs/`（`COUNCILKIT_HOME` 可改）。浏览器的「报告」「产品创意」页直接读这里。
 
-## 3. Product Principles
+### 2. 浏览器：多 Agent 讨论（Room）
 
-1. Local-first: agents, rooms, messages, and reports are stored locally by default.
-2. Organized: each discussion must have a topic, background, target output, facilitator, rounds, and ending conditions.
-3. Replayable: all messages are stored structurally, not only as raw chat text.
-4. Interruptible: users can pause, add context, redirect, or conclude early.
-5. Converge before expanding: V1 avoids real-time collaboration, cloud sync, plugin marketplaces, and complex permissions.
+- 导航：首页 / 新建讨论 / 产品创意 / 报告 / 设置。Execution Profile 和 Agent 在「设置」里管理。
+- 新建讨论：选 Agent、确认发言顺序、显式指定主持人（Facilitator）、模式（头脑风暴 / 规划 / 评审）、可选最大轮次。
+- 每轮：主持人给焦点 → Agent 依次发言 → 主持人写本轮总结；收敛投票或达到最大轮次后自动生成九段结构化**决策报告**，可复制 / 下载。
+- 可暂停、追加发言、提前「总结并结束」；单个 Agent 失败可重试或跳过（主持人不可跳过）。
+- Room、Execution Profile、Agent、轮次与决策报告存在浏览器 IndexedDB，只属于这个浏览器配置。
 
-## 4. Core Use Cases
+## 数据边界（准确说法）
 
-### 4.1 Brainstorm: Diverge and Cluster Directions
+| 数据 | 存放 | 谁能看到 |
+|---|---|---|
+| CLI 运行记录（审查 / 修复 / 创意 / 示例） | `~/.config/councilkit/runs/` | CLI + 浏览器「报告」「产品创意」页 |
+| CLI 的 Agent / Council 配置 | `~/.config/councilkit/` | 只有 CLI |
+| Room / Execution Profile / Agent / 讨论报告 | 浏览器 IndexedDB | 只有这个浏览器配置 |
 
-The user enters an open prompt, for example: "What should the MVP for a multi-agent discussion room include?"
+## 原则
 
-Flow:
+1. 本地优先：数据默认只在本机。
+2. 有组织：讨论有主题、主持人、轮次和结束条件。
+3. 可追溯：消息、执行和报告都结构化保存。
+4. 不碰密钥：只借用本机 CLI 的登录。
 
-1. The facilitator proposes the first-round focus.
-2. Agents propose ideas from different perspectives.
-3. The facilitator clusters, deduplicates, and names directions.
-4. A second round expands the most promising directions.
-5. The final report outputs actionable direction options and priority recommendations.
+## 暂不做
 
-### 4.2 Planning: Turn a Goal into an Execution Plan
-
-The user enters a goal, for example: "Design the development plan for a macOS app."
-
-Flow:
-
-1. The facilitator clarifies constraints and target output.
-2. Agents contribute from product, engineering, risk, interaction, and testing perspectives.
-3. The facilitator organizes dependencies, milestones, and risks.
-4. The final report outputs an execution plan, milestones, and next tasks.
-
-### 4.3 Review: Evaluate a Plan or Design
-
-The user provides a PRD, architecture design, code summary, or article outline.
-
-Flow:
-
-1. The facilitator defines review dimensions.
-2. Agents review independently without directly calling each other.
-3. The facilitator summarizes critical issues, open questions, and improvement suggestions.
-4. The final report outputs a risk list, revisions, and a recommendation on whether to proceed.
-
-## 5. MVP Scope
-
-### 5.1 Agent Management
-
-Required:
-
-- Create agents.
-- Edit agent name, description, system prompt, model provider, and model name.
-- Delete agents.
-- Enable or disable agents.
-- Duplicate agents.
-- Import and export agent JSON.
-- Test whether a single agent can be called successfully.
-
-Not in V1:
-
-- Agent marketplace.
-- Agent plugin system.
-- Long-term agent memory.
-- Complex tool permissions.
-- Shared team agents.
-
-### 5.2 Providers and Settings
-
-Required:
-
-- Configure OpenAI-compatible endpoints.
-- Configure Anthropic.
-- Configure local or custom endpoints.
-- Save default provider and model.
-- Store API keys in the system Keychain, not in the business database.
-
-Not in V1:
-
-- Detailed cost analytics.
-- Automatic provider routing.
-- Multi-account team administration.
-
-### 5.3 Room Management
-
-Required:
-
-- Create rooms.
-- Delete rooms.
-- Edit room title, topic, background, and target output.
-- Add or remove agents from a room.
-- Assign one facilitator agent.
-- Select discussion mode: brainstorm, planning, or review.
-- Set max rounds.
-- View room discussion history.
-- Persist rooms and messages after app restart.
-
-Not in V1:
-
-- Real-time multi-user collaboration.
-- Cloud sync.
-- Room template marketplace.
-- Agent private chat.
-
-### 5.4 Discussion Flow
-
-Required:
-
-- User starts a discussion.
-- Facilitator agent generates the first-round focus.
-- Discussion agents speak in order.
-- Facilitator summarizes consensus, disagreement, risks, and next-round questions after each round.
-- User can interrupt to redirect, add background, or conclude early.
-- The app generates a final report when max rounds are reached, the facilitator recommends convergence, or the user manually concludes.
-
-Key rules:
-
-- Only the facilitator schedules discussion flow.
-- Discussion agents do not directly call each other.
-- Each round has an explicit round number.
-- Each message records speaker, role, round, timestamp, and metadata.
-- If a discussion agent fails, it can be marked skipped and the room can continue. If the facilitator fails, the room should pause for user action.
-
-### 5.5 Final Report
-
-Required Markdown report sections:
-
-- Background.
-- Discussion goal.
-- Participating agents.
-- Discussion summary.
-- Key consensus.
-- Remaining disagreements.
-- Recommendation.
-- Risks and objections.
-- Next actions.
-
-Not in V1:
-
-- PDF export.
-- Report version management.
-- Public share links.
-
-These can be V1.1 features.
-
-## 6. Information Architecture
-
-Primary navigation:
-
-1. Rooms: discussion room list and detail.
-2. Agents: local agent management.
-3. Settings: provider keys, default model, and data location.
-
-Room detail layout:
-
-- Left: room list.
-- Top: room title, mode, status, and actions.
-- Center: discussion timeline.
-- Right: participants, current round, facilitator summary, and report entry.
-
-Agents page:
-
-- Agent list.
-- Agent editor.
-- System prompt editor.
-- Provider and model selector.
-- Test call button.
-- JSON import/export actions.
-
-Settings page:
-
-- Provider configuration.
-- API key management.
-- Default model.
-- Data storage location.
-
-## 7. Core Objects and States
-
-### 7.1 Room States
-
-- `draft`: created but not started.
-- `running`: discussion is active.
-- `paused`: user paused the room or action is required.
-- `concluding`: final report is being generated.
-- `concluded`: final report has been generated.
-- `failed`: a critical step failed and needs user handling.
-
-### 7.2 Agent Run States
-
-- `pending`
-- `running`
-- `completed`
-- `failed`
-- `skipped`
-- `cancelled`
-
-### 7.3 Message Types
-
-- `user_instruction`: user interruption or added context.
-- `facilitator_focus`: facilitator proposes the current round focus.
-- `agent_response`: discussion agent response.
-- `facilitator_summary`: facilitator round summary.
-- `report`: final report.
-- `error`: error record.
-
-## 8. Key User Journeys
-
-### 8.1 First Use
-
-1. User opens the app.
-2. User configures a provider key in Settings.
-3. User creates two or three agents.
-4. User tests agent calls.
-5. User creates the first room.
-6. User selects facilitator and discussion agents.
-7. User starts the discussion.
-
-### 8.2 Full Discussion
-
-1. User enters topic, background, and target output.
-2. Facilitator generates the first-round focus.
-3. Agents speak in order.
-4. Facilitator summarizes the round.
-5. User adds an extra constraint.
-6. Facilitator incorporates the new constraint into the next round.
-7. Second round continues.
-8. User ends the discussion, or facilitator recommends ending.
-9. App generates a Markdown report.
-
-### 8.3 Failure Recovery
-
-1. One agent call fails.
-2. Timeline shows the failure reason.
-3. User can retry the agent, skip the agent, or pause the room.
-4. If the app restarts, the room restores to the latest persisted state.
-
-## 9. Acceptance Criteria
-
-V1 is complete when a user can:
-
-1. Create two or three local agents.
-2. Configure at least one usable provider.
-3. Create a room with topic and background.
-4. Assign one facilitator agent and multiple discussion agents.
-5. Start the discussion and complete at least two full rounds.
-6. Add a user interruption that is incorporated into the next round.
-7. End the discussion and generate a Markdown decision report.
-8. Restart the app and still see historical rooms and messages.
-9. See an error when an agent fails and choose retry or skip.
-
-## 10. Non-Goals
-
-V1 does not include:
-
-- Slack or Discord-style real-time chat.
-- Multica platform sync.
-- Scheduled automations.
-- Complex organization permissions.
-- Private chat between agents.
-- Web app.
-- Mobile app.
-- Agent marketplace.
-- PDF export.
-
-## 11. Future Versions
-
-### V1.1
-
-- PDF export.
-- Room templates.
-- Report version management.
-- More providers.
-- Better retry and cancellation UX.
-
-### V1.2
-
-- Discussion process visualization.
-- Key disagreement tracking.
-- Agent response quality scoring.
-- Reusable facilitator strategies.
-
-### V2
-
-- Multica sync.
-- Team collaboration.
-- Cloud rooms.
-- Agent marketplace.
-- Automated discussion workflows.
+多端同步、团队协作、云端房间、Agent 市场（见 [roadmap](roadmap.md)）。
