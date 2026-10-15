@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
+import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { makeError } from "@shared/runtime/errors";
 import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
@@ -81,11 +82,6 @@ export interface CursorJsonResult {
   effectiveModel: string | null;
 }
 
-export function isCursorDefaultModel(modelId: string): boolean {
-  const id = modelId.trim().toLowerCase();
-  return id === "auto" || id === "default" || id === "configured";
-}
-
 export function parseCursorModelsText(text: string): {
   catalog: string[];
   canonical: string | null;
@@ -141,7 +137,7 @@ export function cursorModelVerdict(
   requested: string,
   effective: string | null,
 ): "match" | "mismatch" | "unknown" {
-  if (isCursorDefaultModel(requested)) return "match";
+  if (isDefaultModelAlias(requested)) return "match";
   if (effective === null || effective.length === 0) return "unknown";
   if (effective === requested) return "match";
   if (requested === "grok-4.7-xhigh" && repairModelReceiptMatches(requested, effective)) {
@@ -247,7 +243,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
     }
 
     function modelAllowed(modelId: string): boolean {
-      if (isCursorDefaultModel(modelId)) return true;
+      if (isDefaultModelAlias(modelId)) return true;
       return catalog.includes(modelId);
     }
 
@@ -260,7 +256,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
     } {
       if (
         requested !== "__catalog__" &&
-        (isCursorDefaultModel(requested) || catalog.includes(requested))
+        (isDefaultModelAlias(requested) || catalog.includes(requested))
       ) {
         return { canonicalModelId: requested, modelAliases: [] };
       }
@@ -463,7 +459,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
 
         const argv: string[] = ["--print", "--output-format", "json", "--mode", "ask", "--trust"];
         if (!input.coldStart && sessionId) argv.push("--resume", sessionId);
-        if (!isCursorDefaultModel(input.modelId)) argv.push("--model", input.modelId);
+        if (!isDefaultModelAlias(input.modelId)) argv.push("--model", input.modelId);
         argv.push("--workspace", cwd);
 
         const stderrRing = createBoundedRing(LIMITS.stderrRingBytes);

@@ -1,6 +1,6 @@
 import { CLAUDE_ROUTE_LABELS } from "@/components/settings/view-model";
 import { Select } from "@/components/ui/Select";
-import { isAutomaticCursorModel, unavailableCursorSeats } from "@/lib/jury-model-validation";
+import { unavailableCursorSeats } from "@/lib/jury-model-validation";
 import {
   DRIVER_SELECT_OPTIONS,
   driverLabel,
@@ -11,6 +11,7 @@ import { getAppRuntime } from "@/runtime/bootstrap";
 import { RuntimeClientError } from "@/runtime/client";
 import { readOrSaveReviewJury } from "@/runtime/review-jury-client";
 import type { DriverId } from "@shared/runtime/contracts";
+import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import {
   type ReviewJuryResponse,
   type ReviewJurySeat,
@@ -61,7 +62,7 @@ export function DefaultReviewJury({
       (query.data?.seats ?? []).some(
         (seat) =>
           seat.driverSelection.driverId === "cursor-stream-json" &&
-          !isAutomaticCursorModel(seat.modelId),
+          !isDefaultModelAlias(seat.modelId),
       ),
     retry: false,
   });
@@ -77,8 +78,7 @@ export function DefaultReviewJury({
   const seats = draft?.seats ?? data?.seats ?? [];
   const hasPinnedCursor = seats.some(
     (seat) =>
-      seat.driverSelection.driverId === "cursor-stream-json" &&
-      !isAutomaticCursorModel(seat.modelId),
+      seat.driverSelection.driverId === "cursor-stream-json" && !isDefaultModelAlias(seat.modelId),
   );
   const cursorInstallation = installations.data?.installations.find(
     (item) => item.driverId === "cursor-stream-json" && item.state === "trusted",

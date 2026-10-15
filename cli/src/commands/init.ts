@@ -3,6 +3,7 @@
  * homes `~/.kimi-code/bin` / `~/.grok/bin`) and write the default PR-jury
  * roster into the CLI store. Does not talk to the Runtime Host.
  */
+import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { findExecutable } from "../auto/driver-commands";
 import { errors } from "../errors";
 import {
@@ -126,7 +127,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     if (existing !== null) {
       const modelId =
         spec.modelId ??
-        (isPlaceholderModel(existing.modelId) && discovered ? discovered : existing.modelId);
+        (isExactDefaultModelAlias(existing.modelId) && discovered ? discovered : existing.modelId);
       const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
       const sameModel = existing.modelId === modelId;
       if (!sameDriver || !sameModel) {
@@ -183,10 +184,6 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
   };
   await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
-}
-
-function isPlaceholderModel(modelId: string): boolean {
-  return modelId === "default" || modelId === "auto" || modelId === "configured";
 }
 
 function recreateDefaults(store: Store): void {

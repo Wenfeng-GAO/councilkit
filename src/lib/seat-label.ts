@@ -1,5 +1,6 @@
 import { IDEATE_ROLE_LABELS } from "@/lib/ideate-roster";
 import type { DriverId } from "@shared/runtime/contracts";
+import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 
 /** Persona seats keep a fixed role title. Extra seats follow the bound model. */
 
@@ -36,14 +37,7 @@ export function isPersonaSeat(agentName: string): boolean {
 
 export function isGenericModelId(modelId: string): boolean {
   const id = modelId.trim().toLowerCase();
-  return (
-    id.length === 0 ||
-    id === "auto" ||
-    id === "default" ||
-    id === "configured" ||
-    id === "-" ||
-    id === "current"
-  );
+  return id.length === 0 || id === "-" || id === "current" || isDefaultModelAlias(id);
 }
 
 export function driverLabel(driverId: string): string {
