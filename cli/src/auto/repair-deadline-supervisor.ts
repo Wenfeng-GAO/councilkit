@@ -1,7 +1,19 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import {
+  constants,
+  closeSync,
+  fchmodSync,
+  fsyncSync,
+  linkSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
-import { appendPrivateFile } from "@shared/runtime/durable-write";
+import { appendPrivateFile, mkdirPrivate, readPrivateText } from "@shared/runtime/durable-write";
 import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairExecution,
@@ -25,10 +37,25 @@ export function readExecutionRecord(path: string): RepairExecution | null {
   return parsed.success ? parsed.data : null;
 }
 
+// The repair process and the detached supervisor both replace this file.
+// The callback runs under the record lock, after the terminal check and before the rename.
+let commitGate: (() => void) | null = null;
+
+export function setExecutionRecordCommitGate(gate: (() => void) | null): void {
+  commitGate = gate;
+}
+
+// The terminal check and the rename share one lock so the first terminal record stays.
 export function writeExecutionRecord(path: string, execution: RepairExecution): void {
-  const existing = readExecutionRecord(path);
-  if (existing !== null && isTerminalRepairExecution(existing.state)) return;
-  atomicWriteJson(path, execution);
+  const release = acquireRecordLock(`${path}.lock`);
+  try {
+    const existing = readExecutionRecord(path);
+    if (existing !== null && isTerminalRepairExecution(existing.state)) return;
+    commitGate?.();
+    atomicWriteJson(path, execution);
+  } finally {
+    release();
+  }
 }
 
 export function superviseDeadlineOnce(input: {
@@ -123,4 +150,112 @@ export async function runDeadlineSupervisorLoop(input: {
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const RECORD_LOCK_WAIT_MS = 5_000;
+const lockPause = new Int32Array(new SharedArrayBuffer(4));
+
+function acquireRecordLock(lockPath: string): () => void {
+  mkdirPrivate(dirname(lockPath));
+  const token = `${process.pid} ${randomBytes(8).toString("hex")}\n`;
+  const deadline = Date.now() + RECORD_LOCK_WAIT_MS;
+  for (;;) {
+    if (tryCreateRecordLock(lockPath, token)) return () => releaseRecordLock(lockPath, token);
+    reclaimDeadRecordLock(lockPath);
+    if (Date.now() >= deadline) {
+      if (tryCreateRecordLock(lockPath, token)) return () => releaseRecordLock(lockPath, token);
+      throw errors.io(`execution record lock busy: ${lockPath}`);
+    }
+    Atomics.wait(lockPause, 0, 0, 5);
+  }
+}
+
+function tryCreateRecordLock(lockPath: string, token: string): boolean {
+  const tmp = `${lockPath}.${randomBytes(6).toString("hex")}.tmp`;
+  const fd = openSync(
+    tmp,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
+  let linked = false;
+  try {
+    writeSync(fd, token);
+    fchmodSync(fd, 0o600);
+    fsyncSync(fd);
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {
+      // The tmp name is unique. A close failure must not hide the write error.
+    }
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Same as close. The next attempt uses a new tmp name.
+    }
+    throw error;
+  }
+  try {
+    closeSync(fd);
+  } catch {
+    // The bytes are already fsynced. Publishing the name is the remaining step.
+  }
+  try {
+    linkSync(tmp, lockPath);
+    linked = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // The unique tmp is unreferenced once this attempt ends.
+      }
+      throw error;
+    }
+  }
+  try {
+    unlinkSync(tmp);
+  } catch {
+    // The lock name already points at the inode when link succeeded.
+  }
+  return linked;
+}
+
+function releaseRecordLock(lockPath: string, token: string): void {
+  if (readLockText(lockPath) !== token) return;
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    // A dead holder is reclaimed by the next writer.
+  }
+}
+
+function reclaimDeadRecordLock(lockPath: string): void {
+  const text = readLockText(lockPath);
+  if (text === null || holderAlive(text)) return;
+  const grave = `${lockPath}.${randomBytes(4).toString("hex")}.stale`;
+  try {
+    renameSync(lockPath, grave);
+  } catch {
+    return;
+  }
+  try {
+    unlinkSync(grave);
+  } catch {
+    // The lock path is free even when the grave file remains.
+  }
+}
+
+function holderAlive(text: string): boolean {
+  const space = text.indexOf(" ");
+  const pid = Number(space === -1 ? text : text.slice(0, space));
+  return Number.isInteger(pid) && pid > 0 && isPidAlive(pid);
+}
+
+function readLockText(lockPath: string): string | null {
+  try {
+    return readPrivateText(lockPath);
+  } catch {
+    return null;
+  }
 }
