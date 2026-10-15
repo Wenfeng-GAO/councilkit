@@ -153,6 +153,40 @@ describe("councilkit ideate", () => {
     rmSync(poisoned, { recursive: true, force: true });
   });
 
+  it("CK-1 ideate error hint matches what init actually does", async () => {
+    const onlyKimi = mkdtempSync(join(tmpdir(), "ck-ideate-only-kimi-"));
+    writeFileSync(join(onlyKimi, "kimi"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(onlyKimi, "kimi"), 0o755);
+    const prevPath = process.env.PATH;
+    process.env.PATH = onlyKimi;
+    try {
+      await runIdeate(["a one-line idea"], makeSink());
+      throw new Error("expected usage");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      const err = error as CliError;
+      expect(err.exitCode).toBe(2);
+      expect(err.message).toContain("product-jury");
+      expect(err.message).not.toContain("creates product-jury");
+      expect(err.message).toContain("kimi");
+      expect(err.message).toContain("councilkit init");
+    } finally {
+      process.env.PATH = prevPath;
+      rmSync(onlyKimi, { recursive: true, force: true });
+    }
+
+    try {
+      await runIdeate(["a one-line idea"], makeSink());
+      throw new Error("expected usage with grok+kimi");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      const err = error as CliError;
+      expect(err.message).toContain("product-jury");
+      expect(err.message).not.toContain("creates product-jury");
+      expect(err.message).toContain("councilkit init");
+    }
+  });
+
   function seedRoster(): { product: string; engineering: string } {
     const store = new Store();
     const product = store.createAgent({

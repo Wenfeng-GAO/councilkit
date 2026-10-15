@@ -71,7 +71,9 @@ export function renderErrorHuman(err: {
   exitCode?: number;
   message: string;
   detail?: Record<string, unknown> | undefined;
+  plain?: boolean;
 }): string {
+  if (err.plain === true) return redact(err.message) as string;
   const code = err.exitCode ?? 1;
   let line = `error[${code}]: ${err.message}`;
   if (err.detail && Object.keys(err.detail).length > 0) {

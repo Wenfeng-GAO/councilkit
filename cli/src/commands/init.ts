@@ -5,11 +5,10 @@
  */
 import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { findExecutable } from "../auto/driver-commands";
-import { errors } from "../errors";
+import { CliError, EXIT } from "../errors";
 import {
   DEFAULT_AGENT_SPECS,
   type DefaultAgentSpec,
-  NEXT_REVIEW_HINT,
   PR_JURY_BACKGROUND,
   PR_JURY_COUNCIL_NAME,
   PR_JURY_ROUNDS,
@@ -20,13 +19,14 @@ import {
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
   type IdeateAgentSpec,
-  NEXT_IDEATE_HINT,
   PRODUCT_JURY_BACKGROUND,
   PRODUCT_JURY_COUNCIL_NAME,
   PRODUCT_JURY_ROUNDS,
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
 } from "../init/ideate-defaults";
+import { noAiCliMessage, publicMissingDrivers } from "../init/no-ai-cli";
+import { ideateClisOnPath, initNextHints } from "../init/product-jury-hint";
 import type { OutputSink } from "../output";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
 import { Store } from "../store/store";
@@ -63,10 +63,15 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   if (available.length === 0) {
-    throw errors.usage(
-      "no review drivers found on PATH (need at least one of: cld, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
-      { missingDrivers },
-    );
+    // CLI-10: the human sentence and `detail.missingDrivers` name the same public
+    // tools (no internal `cld`); the code stays on the --json envelope only.
+    const publicMissing = publicMissingDrivers(missingDrivers);
+    throw new CliError({
+      code: EXIT.usage,
+      message: noAiCliMessage(publicMissing, env),
+      detail: { missingDrivers: publicMissing },
+      plain: true,
+    });
   }
 
   if (force) recreateDefaults(store);
@@ -121,6 +126,8 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   }
 
   const ideateRoster: AgentRecord[] = [];
+  let createdProductCouncil: CouncilRecord | null = null;
+  let reusedProductCouncil: CouncilRecord | null = null;
   for (const spec of ideateAvailable) {
     const discovered = spec.modelId ?? discoverCodexModel(env);
     const existing = findByName(store, spec.name);
@@ -161,9 +168,13 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
     const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
     if (existingProduct !== null) {
-      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id);
+      reusedProductCouncil = store.syncCouncilRoster(
+        existingProduct.id,
+        ideateRoster,
+        productReporter.id,
+      );
     } else {
-      store.createCouncil({
+      createdProductCouncil = store.createCouncil({
         name: PRODUCT_JURY_COUNCIL_NAME,
         topic: PRODUCT_JURY_TOPIC,
         background: PRODUCT_JURY_BACKGROUND,
@@ -178,10 +189,24 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const outcome: InitOutcome = {
     createdAgents: createdAgents.map(briefAgent),
     reusedAgents: reusedAgents.map(briefAgent),
-    createdCouncil: createdCouncil === null ? null : briefCouncil(createdCouncil, store),
-    reusedCouncil: reusedCouncil === null ? null : briefCouncil(reusedCouncil, store),
+    createdCouncil:
+      createdCouncil !== null
+        ? briefCouncil(createdCouncil, store)
+        : createdProductCouncil !== null
+          ? briefCouncil(createdProductCouncil, store)
+          : null,
+    reusedCouncil:
+      reusedCouncil !== null
+        ? briefCouncil(reusedCouncil, store)
+        : reusedProductCouncil !== null
+          ? briefCouncil(reusedProductCouncil, store)
+          : null,
     missingDrivers,
-    next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
+    next: initNextHints({
+      hasPrJury: findCouncilByName(store, PR_JURY_COUNCIL_NAME) !== null,
+      hasProductJury: findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME) !== null,
+      ideateFound: ideateClisOnPath(env),
+    }),
   };
   await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
 }
