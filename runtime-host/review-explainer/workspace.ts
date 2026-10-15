@@ -1,8 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
+import {
+  ISOLATED_SOURCE_DIR,
+  resolveCliRunsRoot,
+  resolveCouncilkitHome,
+} from "@shared/runtime/cli-home";
 import { type LedgerFinding, parseFindingsFile } from "@shared/runtime/cli-ledger";
 import { isCliRunId, readCliRun } from "@shared/runtime/cli-runs-index";
 import { citedRangeEnd, resolveFindingAnchor } from "@shared/runtime/review-explainer/anchors";
@@ -108,6 +112,11 @@ export function readFrozenReview(runId: string): FrozenReview {
       throw new ExplainerError("Corrupt frozen identity");
     }
   }
+  // #273 SAFE-05: PR reviews fetch into the run's own bare clone, not the
+  // user's .git, so the frozen head/merge-base objects live there. It reads the
+  // user's objects through alternates, so it can answer for both sides.
+  const isolated = join(dir, ISOLATED_SOURCE_DIR);
+  if (existsSync(join(isolated, "HEAD"))) repo = isolated;
   if (
     ![identity.headSha, identity.baseSha, identity.mergeBaseSha].every(
       (sha) => typeof sha === "string" && SHA.test(sha),

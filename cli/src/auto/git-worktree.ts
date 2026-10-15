@@ -6,6 +6,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { ISOLATED_SOURCE_DIR } from "@shared/runtime/cli-home";
 import { errors } from "../errors";
 import { type TrustedRoot, assertWithinRoot, revalidateTrustedRoot } from "../fs-safe";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
@@ -74,6 +76,62 @@ export async function fetchRefExclusive(opts: {
     );
   }
   return sha;
+}
+
+/**
+ * SAFE-05 for PR reviews (#273 part 2): a per-run bare `--shared` clone of the
+ * user's repo under the run dir. PR-mode fetches (head + target) land here, so
+ * a review never writes objects or refs into the user's `.git/`. The clone
+ * reads the user's objects through alternates (no copy), and its `origin`
+ * points at the user's real origin URL so `git fetch origin …` still works.
+ * Idempotent: a resume reuses the existing source.
+ */
+export async function prepareIsolatedSource(opts: {
+  repo: string;
+  runDir: string;
+  runCommand?: RunCommand;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const runCommand = opts.runCommand ?? defaultRunCommand;
+  const env = opts.env ?? process.env;
+  const dest = join(opts.runDir, ISOLATED_SOURCE_DIR);
+  if (existsSync(join(dest, "HEAD"))) return dest;
+  const url = await runCommand({
+    executable: "git",
+    argv: ["config", "--get", "remote.origin.url"],
+    cwd: opts.repo,
+    env,
+  });
+  // No origin (pinned/local-only runs): the clone's own origin stays the user
+  // repo path; fetching from it only reads the user's repo.
+  const originUrl = url.exitCode === 0 ? url.stdout.trim() : "";
+  const repoArg = gitPositional(opts.repo);
+  const destArg = gitPositional(dest);
+  if (repoArg === null || destArg === null) {
+    throw errors.io("refusing an unusable repo or run path");
+  }
+  const cloned = await runCommand({
+    executable: "git",
+    argv: ["clone", "--bare", "--shared", "--quiet", "--", repoArg, destArg],
+    cwd: opts.runDir,
+    env,
+  });
+  if (cloned.exitCode !== 0 || cloned.error !== undefined) {
+    throw errors.io(
+      `git clone --bare --shared failed: ${(cloned.stderr || cloned.error || "exit").trim()}`,
+    );
+  }
+  if (originUrl === "") return dest;
+  const setUrl = await runCommand({
+    executable: "git",
+    argv: ["remote", "set-url", "origin", originUrl],
+    cwd: dest,
+    env,
+  });
+  if (setUrl.exitCode !== 0) {
+    throw errors.io("could not point the isolated source at the repo's origin");
+  }
+  return dest;
 }
 
 export async function resolveLocalPrSha(opts: {

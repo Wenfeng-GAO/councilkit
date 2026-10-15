@@ -85,7 +85,10 @@ export function reviewComparison(runId: string, mode: ReviewComparisonMode): Rev
     const stat = lstatSync(frozen.repo);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("invalid repository");
     cwd = realpathSync(frozen.repo);
-    if (realpathSync(git(["rev-parse", "--show-toplevel"]).trim()) !== cwd)
+    // #273: PR runs keep their frozen objects in the run's bare source.git,
+    // which has no worktree; only a non-bare repo must still be its own top.
+    const bare = git(["rev-parse", "--is-bare-repository"]).trim() === "true";
+    if (!bare && realpathSync(git(["rev-parse", "--show-toplevel"]).trim()) !== cwd)
       throw new Error("repository moved");
     objects = realpathSync(resolve(cwd, git(["rev-parse", "--git-path", "objects"]).trim()));
     if (!lstatSync(objects).isDirectory()) throw new Error("missing object store");
