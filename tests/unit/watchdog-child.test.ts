@@ -652,7 +652,7 @@ setInterval(() => {}, 1e9);
     const script = join(tempRoot, "print-env.mjs");
     await writeFile(
       script,
-      `#!${process.execPath}\nprocess.stdout.write("ARGV " + JSON.stringify(process.argv.slice(1)) + "\\n");\nprocess.stdout.write("ENV " + JSON.stringify(process.env) + "\\n");\nprocess.exit(0);\n`,
+      `#!${process.execPath}\nprocess.stdout.write("ARGV " + JSON.stringify(process.argv.slice(1)) + "\\n");\nconst { __CF_USER_TEXT_ENCODING: _osInjected, ...env } = process.env;\nprocess.stdout.write("ENV " + JSON.stringify(env) + "\\n");\nprocess.exit(0);\n`,
     );
     await chmod(script, 0o755);
     const empty = await loadWatchdog();
