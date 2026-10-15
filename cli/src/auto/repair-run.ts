@@ -26,6 +26,7 @@ import {
 import {
   canStartWriter,
   createExecutionIntent,
+  isTerminalRepairExecution,
   markExecutionStarted,
 } from "@shared/runtime/repair-execution";
 import {
@@ -576,6 +577,17 @@ export async function executeRepairLoop(input: {
     if (cycle?.phase === "reviewed" || cycle?.phase === "published") {
       taskId = cycle.squadTaskId ?? taskId;
     } else if (taskId) {
+      const terminalResume = readExecutionRecord(
+        executionRecordPath(input.runDir, executionIdFor(input.runId, cycleN)),
+      );
+      if (terminalResume !== null && isTerminalRepairExecution(terminalResume.state)) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "deadline",
+          message: `refusing to resume a ${terminalResume.state} execution`,
+          outerUsed: state.outerUsed,
+        });
+      }
       writeRepairLive(input.runDir, { status: "running", phase: "repair-squad-repair" });
       input.out.progress(`repair outer ${cycleN}/${state.outerMax}`);
       let snapshot: ReturnType<SquadBridge["status"]>;
@@ -746,6 +758,17 @@ export async function executeRepairLoop(input: {
         cycleN,
         history,
       });
+      const terminalStart = readExecutionRecord(
+        executionRecordPath(input.runDir, executionIdFor(input.runId, cycleN)),
+      );
+      if (terminalStart !== null && isTerminalRepairExecution(terminalStart.state)) {
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: "deadline",
+          message: `refusing to start a ${terminalStart.state} execution`,
+          outerUsed: state.outerUsed,
+        });
+      }
       const started = bridge.start({
         requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
         packageFields: {},
@@ -1967,6 +1990,7 @@ function bindExecutionPids(
   if (!allowed.ok && allowed.reason === "unknown_writer") {
     throw errors.runFailed("refusing a new writer while a previous writer is unknown");
   }
+  if (!allowed.ok && allowed.reason === "already_terminal") return;
   writeExecutionRecord(
     path,
     markExecutionStarted(existing, pids.length > 0 ? pids : existing.pids, nowMs),
