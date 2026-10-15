@@ -118,6 +118,10 @@ export async function runSyntheticReview(input: {
         "--aggregator",
         input.agents.reporter,
         ...(input.against ? ["--against", input.against] : []),
+        // The synthetic repo carries no spec contract. Since #178 `review`
+        // defaults to --require-spec and refuses with SPEC_REQUIRED (exit 2);
+        // this suite exercises explainer decisions, not the spec gate.
+        "--no-require-spec",
         ...(input.extraArgs ?? []),
       ],
       sink,

@@ -119,7 +119,8 @@ describe("review finding title format", () => {
       expect(prompt).toContain("关键条件 + 实际后果");
       expect(prompt).toContain("后续正文缩进两个空格");
       expect(prompt).toContain("原 Finding ID：`<原 ID>`");
-      expect(prompt).toContain("不要截取正文开头");
+      // #178 replaced "不要截取正文开头" with the explicit opener ban below.
+      expect(prompt).toContain("不要以文件路径、函数名、Finding ID 或“本次新增”开头");
       expect(prompt).toContain("approve | changes-requested | comment");
       if (stage === "attempt") expect(prompt).toContain("```councilkit-findings");
     },

@@ -100,6 +100,18 @@ describe("cli fix command", () => {
   let bin: string;
   const oldHome = process.env.COUNCILKIT_HOME;
   const oldPath = process.env.PATH;
+  const oldForceLlm = process.env.COUNCILKIT_PROBE_FORCE_LLM;
+
+  /**
+   * The probe tests below inject failures/timing into the LLM probe spawn.
+   * Since the lightweight preflight (CLI present => success, plus a TTL
+   * success cache) landed, a fake CLI on PATH short-circuits before the LLM
+   * probe on Linux, and grok escalates only on darwin. Force the LLM path so
+   * the tests exercise what they assert on every OS (CI-02).
+   */
+  function forceLlmProbe(): void {
+    process.env.COUNCILKIT_PROBE_FORCE_LLM = "1";
+  }
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ck-fix-"));
@@ -118,6 +130,9 @@ describe("cli fix command", () => {
     else process.env.COUNCILKIT_HOME = oldHome;
     if (oldPath === undefined) process.env.PATH = undefined;
     else process.env.PATH = oldPath;
+    if (oldForceLlm === undefined)
+      Reflect.deleteProperty(process.env, "COUNCILKIT_PROBE_FORCE_LLM");
+    else process.env.COUNCILKIT_PROBE_FORCE_LLM = oldForceLlm;
     rmSync(home, { recursive: true, force: true });
   });
 
@@ -266,6 +281,7 @@ describe("cli fix command", () => {
   });
 
   it("continues plan jury when a non-planner seat probe fails", async () => {
+    forceLlmProbe();
     seedRoster();
     seedReview();
     const fake = fakeSpawn();
@@ -294,6 +310,7 @@ describe("cli fix command", () => {
   });
 
   it("keeps a second grok probe home after the first probe finishes", async () => {
+    forceLlmProbe();
     const store = new Store();
     const adversarial = store.createAgent({
       name: "review-adversarial",
