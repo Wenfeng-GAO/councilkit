@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # CI-01 / CI-02: lint (0 errors), typecheck, build and unit tests on both OSes.
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test:unit
+
+  # CI-03: macOS, brand-new HOME, no agent CLI, no tokens: install from scratch
+  # and walk the demo path (scripts/ci-smoke.sh).
+  demo-path-clean-home:
+    name: demo path (macos-latest, clean HOME)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fresh HOME
+        run: |
+          FRESH="$RUNNER_TEMP/fresh-home"
+          mkdir -p "$FRESH"
+          echo "HOME=$FRESH" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=" >> "$GITHUB_ENV"
+          echo "COUNCILKIT_HOME=" >> "$GITHUB_ENV"
+      - name: Install and build in fresh HOME
+        run: |
+          echo "HOME=$HOME"
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Demo path smoke
+        run: bash scripts/ci-smoke.sh
