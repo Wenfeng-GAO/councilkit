@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  # CI-01 / CI-02: lint (0 errors), typecheck, build and unit tests on both OSes.
+  # CI-01 / CI-02: lint (0 errors), typecheck, build, unit, host and integration tests on both OSes.
   check:
     name: check (${{ matrix.os }})
     strategy:
@@ -35,6 +35,20 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test:unit
+      # #317: tests/host (runtime host, drivers, process watchdog) spawn child
+      # processes and write temp homes; give them a private 0700 TMPDIR.
+      - name: Host tests
+        run: |
+          export TMPDIR="$RUNNER_TEMP/ck-host-tmp"
+          mkdir -p "$TMPDIR" && chmod 700 "$TMPDIR"
+          pnpm test:host
+      # #317 sweep: tests/integration (runtime host + discussion runtime) was
+      # also outside CI.
+      - name: Integration tests
+        run: |
+          export TMPDIR="$RUNNER_TEMP/ck-host-tmp"
+          mkdir -p "$TMPDIR" && chmod 700 "$TMPDIR"
+          pnpm test:integration
 
   # CI-03: macOS, brand-new HOME, no agent CLI, no tokens: install from scratch
   # and walk the demo path (scripts/ci-smoke.sh).
