@@ -44,6 +44,12 @@ import {
   type DiagnosedAssessment,
   buildAssessmentDiagnostics,
 } from "@shared/runtime/reviewer-assessment";
+import {
+  FILE_LINE_CITATION_SOURCE,
+  type FileLineCitation,
+  normalizeSourcePath,
+  parseFileLineCitations,
+} from "@shared/runtime/source-locus";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
 import { atomicWriteJson, parseDurableJsonText, requireDurableJson } from "../store/atomic-write";
@@ -688,9 +694,7 @@ function projectLandingClaims(
 
 const FINDING_STATUS_ORDER: FindingStatus[] = ["open", "regress", "closed", "accepted"];
 
-function classifySection(
-  title: string,
-): { source: FindingSource; outOfSpec: boolean } | null {
+function classifySection(title: string): { source: FindingSource; outOfSpec: boolean } | null {
   const key = title.trim().toLowerCase();
   if (OUT_OF_SPEC_TITLES.has(key)) return { source: "unique", outOfSpec: true };
   if (CONSENSUS_TITLES.has(key)) return { source: "consensus", outOfSpec: false };
@@ -769,17 +773,8 @@ function uniqueId(base: string, used: Set<string>): string {
   return `${base}-${n}`;
 }
 
-interface FindingLocus {
-  path: string;
-  start: number;
-  end: number;
-}
+type FindingLocus = FileLineCitation;
 
-const LOCUS_FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
-const LOCUS_CITATION_RE = new RegExp(
-  String.raw`((?:[\w.-]+\/)*${LOCUS_FILE_EXT}):(\d+)(?:-(\d+))?`,
-  "g",
-);
 const LOCUS_NARRATIVE_LINE = /^\s*(?:触发与后果|证据|建议|验证|结论)\s*[:：]/;
 
 /**
@@ -830,9 +825,7 @@ function collapseSameLocusFindings(earlier: LedgerFinding, later: LedgerFinding)
     text,
     files: [...new Set([...earlier.files, ...later.files])].slice(0, 32),
     source:
-      earlier.source === "consensus" || later.source === "consensus"
-        ? "consensus"
-        : earlier.source,
+      earlier.source === "consensus" || later.source === "consensus" ? "consensus" : earlier.source,
     reviewer: earlier.reviewer ?? later.reviewer,
     ...(contractClass !== undefined ? { contractClass } : {}),
     ...(invariantId !== undefined ? { invariantId } : {}),
@@ -915,7 +908,7 @@ const ROOT_CAUSE_LATIN_STOP = new Set([
 
 function rootCauseProbeText(row: Pick<LedgerFinding, "title" | "text">): string {
   return declaredLocusText(row)
-    .replace(new RegExp(LOCUS_CITATION_RE.source, "g"), " ")
+    .replace(new RegExp(FILE_LINE_CITATION_SOURCE, "g"), " ")
     .replace(
       /(?:^|\n)\s*(?:位置|不变量|不变式|invariant|acceptance|验收|反例|counter(?:\s*-?\s*example)?|复现)\s*[:：]\s*/gi,
       "\n",
@@ -968,17 +961,9 @@ function rootCauseTextCompatible(left: LedgerFinding, right: LedgerFinding): boo
   return tokenOverlap(tokens(probeLeft), tokens(probeRight)) >= 0.34;
 }
 
-function primaryFindingLocus(
-  row: Pick<LedgerFinding, "title" | "text" | "files">,
-): FindingLocus | null {
-  const cited = parseLocusCitations(declaredLocusText(row));
-  if (cited[0]) return cited[0];
-  const head = `${firstLine(row.title)}\n${firstLine(row.text)}`;
-  const line = firstLocusLineNumber(head);
-  if (line === null) return null;
-  const file = row.files.find((path) => path.includes("."));
-  if (!file) return null;
-  return { path: file, start: line, end: line };
+function primaryFindingLocus(row: Pick<LedgerFinding, "title" | "text">): FindingLocus | null {
+  // Only a file:line citation is a locus. `上限:3` and `12:30` are not lines.
+  return parseFileLineCitations(declaredLocusText(row))[0] ?? null;
 }
 
 function declaredLocusText(row: Pick<LedgerFinding, "title" | "text">): string {
@@ -990,38 +975,6 @@ function declaredLocusText(row: Pick<LedgerFinding, "title" | "text">): string {
   return kept.join("\n");
 }
 
-function parseLocusCitations(text: string): FindingLocus[] {
-  const out: FindingLocus[] = [];
-  const seen = new Set<string>();
-  const re = new RegExp(LOCUS_CITATION_RE.source, "g");
-  let match = re.exec(text);
-  while (match) {
-    const path = match[1];
-    const start = Number(match[2]);
-    const end = match[3] ? Number(match[3]) : start;
-    if (path && Number.isFinite(start)) {
-      const key = `${normalizeLocusPath(path)}:${start}-${end}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        out.push({ path, start, end });
-      }
-    }
-    match = re.exec(text);
-  }
-  return out;
-}
-
-function firstLocusLineNumber(text: string): number | null {
-  const match = /:(\d+)(?:-\d+)?/.exec(text);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? value : null;
-}
-
-function normalizeLocusPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").toLowerCase();
-}
-
 function lociEqual(left: FindingLocus, right: FindingLocus | null): boolean {
   if (!right) return false;
   if (left.start !== right.start || left.end !== right.end) return false;
@@ -1029,8 +982,8 @@ function lociEqual(left: FindingLocus, right: FindingLocus | null): boolean {
 }
 
 function locusPathsCompatible(left: string, right: string): boolean {
-  const a = normalizeLocusPath(left);
-  const b = normalizeLocusPath(right);
+  const a = normalizeSourcePath(left);
+  const b = normalizeSourcePath(right);
   if (a.length === 0 || b.length === 0) return false;
   if (a === b) return true;
   return a.endsWith(`/${b}`) || b.endsWith(`/${a}`);

@@ -353,6 +353,55 @@ describe("paraphrased findings that cite the same location", () => {
     expect(projectFindingList([mutex, auth]).displayCount).toBe(2);
   });
 
+  it("does not treat a threshold or a clock as the cited line", () => {
+    const sameDefect = `触发与后果：${COPIED_CONSEQUENCE}`;
+    const early = finding({
+      id: "early-return",
+      severity: "major",
+      title: "超时阈值:30 提前返回丢弃已接受的工作",
+      files: ["pkg/runtime/retry.go"],
+      text: [
+        "超时阈值:30 提前返回丢弃已接受的工作",
+        "位置：`pkg/runtime/retry.go`",
+        sameDefect,
+      ].join("\n"),
+    });
+    const skip = finding({
+      id: "skip-check",
+      severity: "major",
+      title: "超时阈值:30 跳过校验写入未授权请求",
+      files: ["pkg/runtime/retry.go"],
+      text: ["超时阈值:30 跳过校验写入未授权请求", "位置：`pkg/runtime/retry.go`", sameDefect].join(
+        "\n",
+      ),
+    });
+    const unlocked = finding({
+      id: "unlocked",
+      severity: "major",
+      title: "在 12:30 窗口未持锁",
+      files: ["pkg/runtime/retry.go"],
+      text: ["在 12:30 窗口未持锁", "位置：`pkg/runtime/retry.go`", sameDefect].join("\n"),
+    });
+    const duplicate = finding({
+      id: "duplicate-batch",
+      severity: "major",
+      title: "在 12:30 窗口重复提交",
+      files: ["pkg/runtime/retry.go"],
+      text: ["在 12:30 窗口重复提交", "位置：`pkg/runtime/retry.go`", sameDefect].join("\n"),
+    });
+    expect(isProvenDuplicate(early, skip)).toBe(false);
+    expect(isProvenDuplicate(unlocked, duplicate)).toBe(false);
+    const projection = projectFindingList([early, skip, unlocked, duplicate]);
+    expect(projection.displayCount).toBe(4);
+    expect(projection.blockingCount).toBe(4);
+    expect(projection.problems.map((row) => row.location).sort()).toEqual([
+      "retry.go",
+      "retry.go",
+      "retry.go",
+      "retry.go",
+    ]);
+  });
+
   it("does not merge a copied 触发与后果 when only the 证据 line cites the same file", () => {
     const evidence =
       "证据：临时测试 `pkg/runtime/manager/session_recovery_contract_test.go:30-42`。";

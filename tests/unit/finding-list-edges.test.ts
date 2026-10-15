@@ -35,7 +35,7 @@ describe("finding list edges", () => {
       key: "line-only",
       origin: "singleton",
       basis: null,
-      location: "handler.go:42",
+      location: "handler.go",
       severity: "minor",
       statusLabel: "待处理",
       blocking: false,

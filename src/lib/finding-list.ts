@@ -24,16 +24,22 @@ import {
   type FindingGroupsFile,
   validateFindingGroups,
 } from "@shared/runtime/finding-groups";
+import {
+  FILE_LINE_CITATION_SOURCE,
+  type FileLineCitation,
+  SOURCE_FILE_EXT,
+  normalizeSourcePath,
+  parseFileLineCitations,
+} from "@shared/runtime/source-locus";
 
-const FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
-const LOCATION_PATTERN = String.raw`((?:[\w.-]+\/)*${FILE_EXT}):(\d+)(?:-(\d+))?`;
+const FILE_EXT = SOURCE_FILE_EXT;
 const NARRATIVE_LINE = /^\s*(?:触发与后果|证据|建议|验证|结论)\s*[:：]/;
 const CONSEQUENCE_LINE = /^\s*触发与后果\s*[:：]\s*(.+)$/m;
 /** Shorter than this, a shared 触发与后果 is boilerplate, not a copied defect. */
 const MIN_CONSEQUENCE_HAN = 24;
 
 function locationRe(): RegExp {
-  return new RegExp(LOCATION_PATTERN, "g");
+  return new RegExp(FILE_LINE_CITATION_SOURCE, "g");
 }
 
 export const FINDING_LIST_FILTERS = ["blocking", "pending", "resolved", "all"] as const;
@@ -96,11 +102,7 @@ export type LedgerComparison =
 /** Visible row title limit; full text stays on members. */
 export const FINDING_TITLE_DISPLAY_LIMIT = 80;
 
-interface CitedLocation {
-  path: string;
-  start: number;
-  end: number;
-}
+type CitedLocation = FileLineCitation;
 
 export function usableFindingGroups(
   groups: FindingGroupsFile | null | undefined,
@@ -523,7 +525,8 @@ function substantiveClauses(source: string, findingId?: string): string[] {
 function problemLocation(members: readonly LedgerFinding[]): string | null {
   for (const row of members) {
     const location =
-      primaryLocations(row)[0] ?? parseLocations(row.verification?.locations?.join(" ") ?? "")[0];
+      primaryLocations(row)[0] ??
+      parseFileLineCitations(row.verification?.locations?.join(" ") ?? "")[0];
     if (location) {
       const lines =
         location.start === location.end ? `${location.start}` : `${location.start}-${location.end}`;
@@ -535,14 +538,8 @@ function problemLocation(members: readonly LedgerFinding[]): string | null {
 }
 
 function primaryLocations(row: LedgerFinding): CitedLocation[] {
-  const found = parseLocations(declaredCitationText(row));
-  if (found.length > 0) return found;
-  const head = `${firstLine(row.title)}\n${firstLine(row.text)}`;
-  const line = firstLineNumber(head);
-  if (line === null) return [];
-  return row.files
-    .filter((file) => file.includes("."))
-    .map((path) => ({ path, start: line, end: line }));
+  // Only a file:line citation counts. `上限:3` and `12:30` are not lines.
+  return parseFileLineCitations(declaredCitationText(row));
 }
 
 function declaredCitationText(row: LedgerFinding): string {
@@ -564,27 +561,6 @@ function hanLength(text: string): number {
   return Array.from(text).filter((char) => /\p{Script=Han}/u.test(char)).length;
 }
 
-function parseLocations(text: string): CitedLocation[] {
-  const out: CitedLocation[] = [];
-  const seen = new Set<string>();
-  const re = locationRe();
-  let match = re.exec(text);
-  while (match) {
-    const path = match[1];
-    const start = Number(match[2]);
-    const end = match[3] ? Number(match[3]) : start;
-    if (path && Number.isFinite(start)) {
-      const key = `${normalizePath(path)}:${start}-${end}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        out.push({ path, start, end });
-      }
-    }
-    match = re.exec(text);
-  }
-  return out;
-}
-
 function locationsMatch(left: readonly CitedLocation[], right: readonly CitedLocation[]): boolean {
   for (const a of left) {
     for (const b of right) {
@@ -595,15 +571,11 @@ function locationsMatch(left: readonly CitedLocation[], right: readonly CitedLoc
 }
 
 function pathsCompatible(left: string, right: string): boolean {
-  const a = normalizePath(left);
-  const b = normalizePath(right);
+  const a = normalizeSourcePath(left);
+  const b = normalizeSourcePath(right);
   if (a.length === 0 || b.length === 0) return false;
   if (a === b) return true;
   return a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/").toLowerCase();
 }
 
 function residualEvidence(leftTitle: string, rightTitle: string): boolean {
@@ -726,13 +698,6 @@ function stripLocations(title: string): string {
 
 function firstLine(text: string): string {
   return text.split("\n")[0]?.trim() ?? "";
-}
-
-function firstLineNumber(text: string): number | null {
-  const match = /:(\d+)(?:-\d+)?/.exec(text);
-  if (!match) return null;
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? value : null;
 }
 
 function inferredBasis(members: readonly LedgerFinding[]): string {

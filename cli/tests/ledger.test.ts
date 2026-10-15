@@ -304,8 +304,11 @@ describe("ledger locus dedupe", () => {
       runId: "ck-review-a26f1281-cb0f-45f2-8a4e-b03fca0d958c",
       extractedAt: "2026-10-12T00:00:00.000Z",
     });
-    const flights = file.findings.filter((row) =>
-      row.title.includes("重试") || row.text.includes("flightsWG") || row.text.includes("runtime"),
+    const flights = file.findings.filter(
+      (row) =>
+        row.title.includes("重试") ||
+        row.text.includes("flightsWG") ||
+        row.text.includes("runtime"),
     );
     expect(flights).toHaveLength(1);
     expect(flights[0]?.title).toContain("已接受重试在等待运行时未登记");
@@ -341,13 +344,100 @@ describe("ledger locus dedupe", () => {
       extractedAt: "2026-10-12T00:00:00.000Z",
     });
     expect(file.findings).toHaveLength(3);
-    expect(file.findings.map((row) => row.severity).sort()).toEqual([
-      "critical",
-      "major",
-      "minor",
-    ]);
+    expect(file.findings.map((row) => row.severity).sort()).toEqual(["critical", "major", "minor"]);
     expect(file.findings.find((row) => row.severity === "major")?.title).toContain("DenyAll");
     expect(file.findings.find((row) => row.severity === "critical")?.title).toContain("启动竞态");
+  });
+
+  it("does not invent a shared line from a threshold or a clock", () => {
+    const file = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] 超时阈值:30 提前返回丢弃已接受的工作",
+        "  retryLoop 直接 return",
+        "  位置：`pkg/runtime/retry.go`",
+        "",
+        "- [major] 超时阈值:30 跳过校验写入未授权请求",
+        "  retryLoop 跳过授权",
+        "  位置：`pkg/runtime/retry.go`",
+        "",
+        "- [major] 在 12:30 窗口未持锁",
+        "  retryLoop 未持锁",
+        "  位置：`pkg/runtime/retry.go`",
+        "",
+        "- [major] 在 12:30 窗口重复提交",
+        "  retryLoop 重复提交",
+        "  位置：`pkg/runtime/retry.go`",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-bare-colon",
+      extractedAt: "2026-10-15T00:00:00.000Z",
+    });
+    expect(file.findings).toHaveLength(4);
+    expect(file.findings.map((row) => row.title).sort()).toEqual(
+      [
+        "超时阈值:30 提前返回丢弃已接受的工作",
+        "超时阈值:30 跳过校验写入未授权请求",
+        "在 12:30 窗口未持锁",
+        "在 12:30 窗口重复提交",
+      ].sort(),
+    );
+  });
+
+  it("does not alias a bare colon-number onto a real file:line finding", () => {
+    const prior = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] 提前返回丢弃已接受的工作",
+        "  retryLoop 在该行直接 return",
+        "  位置：`pkg/runtime/retry.go:30`",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-prior-line",
+      extractedAt: "2026-10-15T00:00:00.000Z",
+    });
+    const next = extractFindingsFromReport({
+      markdown: [
+        "# Autonomous Review Report",
+        "",
+        "---",
+        "",
+        "## 共识发现",
+        "",
+        "- [major] 超时阈值:30 跳过校验写入未授权请求",
+        "  retryLoop 跳过授权",
+        "  位置：`pkg/runtime/retry.go`",
+        "",
+        "## 结论",
+        "",
+        "changes-requested",
+      ].join("\n"),
+      runId: "ck-review-next-bare",
+      extractedAt: "2026-10-15T00:00:00.000Z",
+    });
+    const classified = classifyAgainstPrior(prior.findings, next.findings);
+    expect(classified.map((row) => row.id).sort()).toEqual(
+      [prior.findings[0]?.id, next.findings[0]?.id].sort(),
+    );
+    expect(classified.map((row) => row.title).sort()).toEqual(
+      ["提前返回丢弃已接受的工作", "超时阈值:30 跳过校验写入未授权请求"].sort(),
+    );
   });
 
   it("does not collapse same-file findings that lack a shared line locus", () => {
