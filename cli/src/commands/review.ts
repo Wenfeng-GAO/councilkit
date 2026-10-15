@@ -221,6 +221,61 @@ function logProbeAttempt(params: {
   console.error(JSON.stringify(log));
 }
 
+export const REVIEW_FLAGS = {
+  json: { type: "boolean" },
+  agents: { type: "string" },
+  "review-models": { type: "string" },
+  aggregator: { type: "string" },
+  council: { type: "string" },
+  pr: { type: "string" },
+  task: { type: "string" },
+  focus: { type: "string" },
+  timeout: { type: "string" },
+  "codex-timeout": { type: "string" },
+  concurrency: { type: "string" },
+  out: { type: "string" },
+  resume: { type: "string" },
+  "run-id": { type: "string" },
+  repo: { type: "string" },
+  against: { type: "string" },
+  "repair-package": { type: "string" },
+  "pin-sha": { type: "string" },
+  spec: { type: "string" },
+  "require-spec": { type: "boolean" },
+  "no-require-spec": { type: "boolean" },
+  "allow-write": { type: "boolean" },
+} as const;
+
+/** One help line per REVIEW_FLAGS key; tests assert the two never drift. */
+const REVIEW_FLAG_DESCRIPTIONS: Record<keyof typeof REVIEW_FLAGS, string> = {
+  json: "Machine-readable output (one final JSON on stdout).",
+  agents: "'<json-array>' of agent names/ids, one independent seat each.",
+  "review-models": "'<json>' per-run {models, aggregatorIndex}; saved agents unchanged.",
+  aggregator: "<id> Agent that synthesizes the final report.",
+  council: "<ref> Use a stored council (agents -> seats, reporter -> aggregator).",
+  pr: "<url> PR to review (same as the positional <pr-url>).",
+  task: '"<text>" Free-text task instead of a PR (e.g. a local repo path).',
+  focus: "<text> Extra focus for every seat.",
+  timeout: "<dur> Per-seat timeout (default 45m).",
+  "codex-timeout": "<dur> Timeout for codex seats (default 90m).",
+  concurrency: "<n> Max seats running at once (default 10).",
+  out: "<file> Also write a copy of report.md here.",
+  resume: "<run-id> Re-run failed seats; reuse successful ones.",
+  "run-id": "<ck-review-uuid> Use this run id (not with --resume).",
+  repo: "<path> Local clone of the PR repo (remembered).",
+  against: "<run-id> Incremental review vs that run's findings.json.",
+  "repair-package": "<file> Verify the selected repair task (with --against).",
+  "pin-sha": "<40-char sha> Review exactly this commit of --repo.",
+  spec: "<path|url> Spec contract to review against.",
+  "require-spec": "Refuse to run without a bound spec contract (default).",
+  "no-require-spec": "Review without a bound spec contract (legacy mode).",
+  "allow-write": "Let seats edit files / run commands (default: read-only).",
+};
+
+export const REVIEW_FLAG_HELP = (Object.keys(REVIEW_FLAGS) as (keyof typeof REVIEW_FLAGS)[])
+  .map((name) => `  --${name.padEnd(18)} ${REVIEW_FLAG_DESCRIPTIONS[name]}`)
+  .join("\n");
+
 export async function runReview(
   argv: string[],
   out: OutputSink,
@@ -228,30 +283,7 @@ export async function runReview(
 ): Promise<void> {
   const { values, positionals } = parseFlags(
     {
-      flags: {
-        json: { type: "boolean" },
-        agents: { type: "string" },
-        "review-models": { type: "string" },
-        aggregator: { type: "string" },
-        council: { type: "string" },
-        pr: { type: "string" },
-        task: { type: "string" },
-        focus: { type: "string" },
-        timeout: { type: "string" },
-        "codex-timeout": { type: "string" },
-        concurrency: { type: "string" },
-        out: { type: "string" },
-        resume: { type: "string" },
-        "run-id": { type: "string" },
-        repo: { type: "string" },
-        against: { type: "string" },
-        "repair-package": { type: "string" },
-        "pin-sha": { type: "string" },
-        spec: { type: "string" },
-        "require-spec": { type: "boolean" },
-        "no-require-spec": { type: "boolean" },
-        "allow-write": { type: "boolean" },
-      },
+      flags: REVIEW_FLAGS,
       allowPositionals: 1,
     },
     argv,
