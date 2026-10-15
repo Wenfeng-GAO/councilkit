@@ -300,6 +300,18 @@ export function SettingsPage() {
   // (readiness state !== "ready") is a successful HTTP response and is written
   // back too, so the rendered row matches the fresh handshake; transport errors
   // (4xx/5xx) leave the cached value intact rather than blanking the row.
+  const handleRecheckCli = async () => {
+    setRecheckInFlight(true);
+    try {
+      const data = await client.health({ refresh: true });
+      queryClient.setQueryData(["host", "health"], data);
+    } catch {
+      // Transport/4xx/5xx: leave the cached health intact.
+    } finally {
+      setRecheckInFlight(false);
+    }
+  };
+
   const handleRecheckAll = async () => {
     setRecheckInFlight(true);
     try {
@@ -595,12 +607,13 @@ export function SettingsPage() {
           hostOnline={hostOnline === true}
           installations={readinessModel.installations}
           drivers={readinessModel.drivers}
+          cliDrivers={healthQuery.data?.drivers ?? []}
           isLoading={installationsQuery.isPending}
           revalidatingId={revalidateMut.isPending ? (revalidateMut.variables ?? null) : null}
-          driversRechecking={healthQuery.isRefetching}
+          driversRechecking={healthQuery.isRefetching || recheckInFlight}
           onRevalidate={(id) => revalidateMut.mutate(id)}
           onShowRequirements={() => setInfoModal("requirements")}
-          onRecheckDrivers={() => void healthQuery.refetch()}
+          onRecheckDrivers={() => void handleRecheckCli()}
           rediscovering={rediscoverMut.isPending}
           onRediscover={() => rediscoverMut.mutate()}
           onShowDiagnostics={(driverId) => {

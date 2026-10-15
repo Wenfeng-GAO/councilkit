@@ -36,7 +36,15 @@ const HEALTH = {
   apiVersion: "v1" as const,
   hostInstanceId: "host-1",
   node: { version: "v22.14.0", major: 22 },
-  drivers: [{ driverId: "kimi-stream-json" as const, capability: "ready" as const }],
+  checkoutPath: "/tmp/ck",
+  drivers: [
+    {
+      driverId: "kimi-stream-json" as const,
+      capability: "ready" as const,
+      cliState: "ready" as const,
+      fixCommand: "",
+    },
+  ],
 };
 
 const DIAGNOSTICS = {

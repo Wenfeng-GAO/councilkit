@@ -42,12 +42,7 @@
       "priority": "P2"
     }
   ],
-  "browserWidths": [
-    1440,
-    1120,
-    900,
-    390
-  ],
+  "browserWidths": [1440, 1120, 900, 390],
   "knownUnitTests": 31,
   "typecheck": "pass",
   "fullE2E": "not_run_production_port",

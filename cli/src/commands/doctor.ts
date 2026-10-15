@@ -100,7 +100,7 @@ function renderHuman(d: {
   lines.push(`  hostInstanceId: ${d.health.hostInstanceId}`);
   lines.push(`  node: ${d.health.node.version}`);
   lines.push(
-    `  drivers (health): ${d.health.drivers.map((dr) => `${dr.driverId}=${dr.capability}`).join(", ")}`,
+    `  drivers (health): ${d.health.drivers.map((dr) => `${dr.driverId}=${dr.cliState}`).join(", ")}`,
   );
   lines.push(`  installations: ${d.installations.length}`);
   for (const dr of d.drivers) {

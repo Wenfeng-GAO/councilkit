@@ -161,6 +161,7 @@ describe("cli auth against a mock host", () => {
               apiVersion: "v1",
               hostInstanceId: "h",
               node: { version: "v22", major: 22 },
+              checkoutPath: "/tmp/ck",
               drivers: [],
             },
           }),

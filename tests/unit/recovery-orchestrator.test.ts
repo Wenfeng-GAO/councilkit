@@ -374,6 +374,7 @@ class FakeHost {
         apiVersion: "v1",
         hostInstanceId: this.hostInstanceId,
         node: { version: "v22.17.0", major: 22 },
+        checkoutPath: "/tmp/ck",
         drivers: [],
       });
     }

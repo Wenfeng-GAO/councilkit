@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 /**
  * Process and port helpers for the CouncilKit verification skill.
  *
@@ -5,8 +7,6 @@
  * selects processes by name alone, and nothing sends a signal.
  */
 import { createServer } from "node:net";
-import { readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const LISTEN_STATE = "0A";
@@ -54,7 +54,10 @@ export function readProc(pid) {
 function parseStat(stat) {
   const rparen = stat.lastIndexOf(")");
   if (rparen < 0) return null;
-  const rest = stat.slice(rparen + 2).trim().split(/\s+/);
+  const rest = stat
+    .slice(rparen + 2)
+    .trim()
+    .split(/\s+/);
   if (rest.length < 20) return null;
   return {
     state: rest[0],
@@ -261,59 +264,60 @@ function printPids(pids) {
   for (const pid of pids) process.stdout.write(`${pid}\n`);
 }
 
-const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain =
+  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
-await runCli(process.argv.slice(2));
+  await runCli(process.argv.slice(2));
 }
 
 async function runCli(argv) {
-const [command, ...rest] = argv;
+  const [command, ...rest] = argv;
 
-function flag(name) {
-  const index = rest.indexOf(name);
-  if (index === -1 || rest[index + 1] === undefined) return null;
-  return rest[index + 1];
-}
+  function flag(name) {
+    const index = rest.indexOf(name);
+    if (index === -1 || rest[index + 1] === undefined) return null;
+    return rest[index + 1];
+  }
 
-if (command === "free-port") {
-  const port = await freePort();
-  process.stdout.write(`${port}\n`);
-} else if (command === "listeners") {
-  const port = Number(flag("--port"));
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    process.stderr.write("listeners requires --port\n");
+  if (command === "free-port") {
+    const port = await freePort();
+    process.stdout.write(`${port}\n`);
+  } else if (command === "listeners") {
+    const port = Number(flag("--port"));
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      process.stderr.write("listeners requires --port\n");
+      process.exit(2);
+    }
+    printPids(listenerPids(port));
+  } else if (command === "descendants") {
+    const pid = Number(flag("--pid"));
+    printPids(descendants(pid));
+  } else if (command === "ancestors") {
+    const pid = Number(flag("--pid"));
+    printPids(ancestors(pid));
+  } else if (command === "alive") {
+    const pid = Number(flag("--pid"));
+    process.exit(alive(pid) ? 0 : 1);
+  } else if (command === "holders") {
+    const root = flag("--root");
+    if (!root) {
+      process.stderr.write("holders requires --root\n");
+      process.exit(2);
+    }
+    const extra = (flag("--exclude") ?? "")
+      .split(",")
+      .map((part) => Number(part))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+    for (const proc of holders(root, extra)) {
+      process.stdout.write(`${proc.pid}\t${proc.cwd}\t${proc.cmd}\n`);
+    }
+  } else if (command === "self-test") {
+    await selfTest();
+  } else {
+    process.stderr.write(
+      "usage: proc.mjs free-port|listeners --port N|descendants --pid N|ancestors --pid N|alive --pid N|holders --root PATH [--exclude pids]|self-test\n",
+    );
     process.exit(2);
   }
-  printPids(listenerPids(port));
-} else if (command === "descendants") {
-  const pid = Number(flag("--pid"));
-  printPids(descendants(pid));
-} else if (command === "ancestors") {
-  const pid = Number(flag("--pid"));
-  printPids(ancestors(pid));
-} else if (command === "alive") {
-  const pid = Number(flag("--pid"));
-  process.exit(alive(pid) ? 0 : 1);
-} else if (command === "holders") {
-  const root = flag("--root");
-  if (!root) {
-    process.stderr.write("holders requires --root\n");
-    process.exit(2);
-  }
-  const extra = (flag("--exclude") ?? "")
-    .split(",")
-    .map((part) => Number(part))
-    .filter((pid) => Number.isInteger(pid) && pid > 0);
-  for (const proc of holders(root, extra)) {
-    process.stdout.write(`${proc.pid}\t${proc.cwd}\t${proc.cmd}\n`);
-  }
-} else if (command === "self-test") {
-  await selfTest();
-} else {
-  process.stderr.write(
-    "usage: proc.mjs free-port|listeners --port N|descendants --pid N|ancestors --pid N|alive --pid N|holders --root PATH [--exclude pids]|self-test\n",
-  );
-  process.exit(2);
-}
 }

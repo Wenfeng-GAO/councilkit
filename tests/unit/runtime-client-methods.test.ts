@@ -23,7 +23,15 @@ const HEALTH = {
   apiVersion: "v1" as const,
   hostInstanceId: "host-1",
   node: { version: "v22.14.0", major: 22 },
-  drivers: [{ driverId: "codex-app-server" as const, capability: "ready" as const }],
+  checkoutPath: "/tmp/ck",
+  drivers: [
+    {
+      driverId: "codex-app-server" as const,
+      capability: "ready" as const,
+      cliState: "ready" as const,
+      fixCommand: "",
+    },
+  ],
 };
 
 const INSTALLATION = {
@@ -186,6 +194,21 @@ describe("RuntimeClient session and mutation methods", () => {
       method: "GET",
       headers: {},
     });
+  });
+
+  it("health({ refresh: true }) appends refresh=1", async () => {
+    const calls: RecordedCall[] = [];
+    const fetchMock: typeof fetch = async (input, init) => {
+      calls.push({
+        url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        init: init ?? {},
+      });
+      return ok(HEALTH);
+    };
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RuntimeClient({ baseUrl: "http://127.0.0.1:9", csrfToken: "csrf-token" });
+    await client.health({ refresh: true });
+    expect(calls[0]?.url).toBe("http://127.0.0.1:9/api/v1/health?refresh=1");
   });
 
   it("diagnostics returns the sanitized bundle from a session GET", async () => {

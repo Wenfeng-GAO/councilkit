@@ -66,6 +66,31 @@ if [ -z "$ok" ]; then
 fi
 head -c 2000 "$LOG.health"; echo
 
+step "CLI-02: clean HOME /health reaches not_installed within 15s (no checking)"
+states_ok=""
+deadline=$((SECONDS + 15))
+while [ "$SECONDS" -le "$deadline" ]; do
+  if curl -fsS http://127.0.0.1:43127/api/v1/health >"$LOG.health" 2>/dev/null; then
+    if node -e '
+      const fs = require("fs");
+      const body = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const data = body.data;
+      if (!data || !Array.isArray(data.drivers) || data.drivers.length !== 5) process.exit(2);
+      if (data.drivers.some((d) => d.cliState === "checking")) process.exit(3);
+      if (!data.drivers.every((d) => d.cliState === "not_installed")) process.exit(4);
+    ' "$LOG.health"; then
+      states_ok=1
+      break
+    fi
+  fi
+  sleep 0.25
+done
+if [ -z "$states_ok" ]; then
+  echo "ci-smoke: a driver stayed checking or was not not_installed within 15s" >&2
+  cat "$LOG.health" >&2
+  exit 1
+fi
+
 step "councilkit demo (mock review, CI-03)"
 $CK demo --json | tee "$LOG.demo"
 grep -q '"demo": *true' "$LOG.demo"

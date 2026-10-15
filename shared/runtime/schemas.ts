@@ -11,6 +11,7 @@ import { CLI_RUN_PIPELINE_PHASES, CLI_RUN_PROGRESS_PHASES } from "./cli-run-phas
 import {
   ACK_DISPOSITIONS,
   ACK_STATES,
+  CLI_STATES,
   CREDENTIAL_MODE,
   DRIVER_CAPABILITY_STATES,
   DRIVER_IDS,
@@ -33,17 +34,22 @@ import { reviewEvidenceSchema } from "./review-case";
 export const driverDescriptorSchema = z
   .object({
     driverId: z.enum(DRIVER_IDS),
+    /** Legacy 4-value field; Settings and new clients use `cliState`. */
     capability: z.enum(DRIVER_CAPABILITY_STATES),
+    cliState: z.enum(CLI_STATES),
+    /** Copyable repair command: install / `<cli> login` / `<cli> --version`. */
+    fixCommand: z.string(),
   })
   .strict();
 export type DriverDescriptor = z.infer<typeof driverDescriptorSchema>;
 
-/** Public health: no paths, accounts, models or fingerprints. */
+/** Public health: no accounts, models or fingerprints. `checkoutPath` is the Host cwd. */
 export const healthResponseSchema = z
   .object({
     apiVersion: z.literal("v1"),
     hostInstanceId: z.string().min(1),
     node: z.object({ version: z.string(), major: z.number().int() }).strict(),
+    checkoutPath: z.string().min(1),
     drivers: z.array(driverDescriptorSchema),
   })
   .strict();
@@ -812,6 +818,17 @@ export const cliRunStartReviewResponseSchema = z
   })
   .strict();
 export type CliRunStartReviewResponse = z.infer<typeof cliRunStartReviewResponseSchema>;
+
+/** UI-03 / #281: 「先看示例」 writes (or reuses) the built-in sample review. */
+export const cliRunDemoRequestSchema = z.object({}).strict();
+export const cliRunDemoResponseSchema = z
+  .object({
+    runId: z.string().min(1),
+    demo: z.literal(true),
+    reused: z.boolean(),
+  })
+  .strict();
+export type CliRunDemoResponse = z.infer<typeof cliRunDemoResponseSchema>;
 
 export const cliRunStartRepairRequestSchema = z
   .object({

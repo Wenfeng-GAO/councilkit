@@ -1,10 +1,10 @@
-import { API_VERSION, DRIVER_IDS } from "@shared/runtime/contracts";
 import { type HealthResponse, healthResponseSchema } from "@shared/runtime/schemas";
+import { composeHealthResponse } from "../cli-state";
 import type { HostServices, Route } from "../server";
 
 /**
- * Minimal public health: version and driver capability states only.
- * Never returns paths, accounts, models or fingerprints.
+ * Public health: version, Host checkout path, and per-driver CLI state.
+ * No accounts, models or fingerprints. `?refresh=1` restarts CLI probes.
  */
 export function healthRoutes(services: HostServices): Route[] {
   return [
@@ -13,20 +13,8 @@ export function healthRoutes(services: HostServices): Route[] {
       pattern: "/api/v1/health",
       auth: "public",
       responseSchema: healthResponseSchema,
-      handler: (): HealthResponse => {
-        const capabilityProvider = services.driverCapabilities as
-          | (() => { driverId: string; capability: string }[])
-          | undefined;
-        const drivers =
-          capabilityProvider?.() ??
-          DRIVER_IDS.map((driverId) => ({ driverId, capability: "checking" as const }));
-        return {
-          apiVersion: API_VERSION,
-          hostInstanceId: services.hostInstanceId,
-          node: { version: process.version, major: Number.parseInt(process.version.slice(1), 10) },
-          drivers: drivers as HealthResponse["drivers"],
-        };
-      },
+      handler: (ctx): HealthResponse =>
+        composeHealthResponse(services, { refresh: ctx.query.get("refresh") === "1" }),
     },
   ];
 }

@@ -15,7 +15,13 @@ if (!statePath || !evidenceDir) {
 }
 
 function fail(reason, extra = {}, code = 1) {
-  const payload = { ok: false, ready: false, reason, ...extra, checkedAt: new Date().toISOString() };
+  const payload = {
+    ok: false,
+    ready: false,
+    reason,
+    ...extra,
+    checkedAt: new Date().toISOString(),
+  };
   writeFileSync(`${evidenceDir}/doctor.json`, `${JSON.stringify(payload, null, 2)}\n`);
   process.stderr.write(`${reason}\n`);
   process.exit(code);
@@ -48,16 +54,24 @@ if (
   state.supervisorStarttime != null &&
   supervisor.starttime !== state.supervisorStarttime
 ) {
-  fail("PID reused / start time mismatch", {
-    supervisorPid: state.supervisorPid,
-    expectedStarttime: state.supervisorStarttime,
-    actualStarttime: supervisor.starttime,
-  }, 10);
+  fail(
+    "PID reused / start time mismatch",
+    {
+      supervisorPid: state.supervisorPid,
+      expectedStarttime: state.supervisorStarttime,
+      actualStarttime: supervisor.starttime,
+    },
+    10,
+  );
 }
 if (!supervisor || !isVerificationProcess(supervisor, state.cwd)) {
-  fail("supervisor pid is not the verification host we started", {
-    supervisorPid: state.supervisorPid,
-  }, 10);
+  fail(
+    "supervisor pid is not the verification host we started",
+    {
+      supervisorPid: state.supervisorPid,
+    },
+    10,
+  );
 }
 
 let logText = "";
@@ -95,18 +109,26 @@ const tree = new Set(descendants(state.supervisorPid));
 const listeners = listenerPids(state.port);
 const foreign = listeners.filter((pid) => !tree.has(pid));
 if (foreign.length > 0) {
-  fail(`port ${state.port} is held by a process this run did not start`, {
-    port: state.port,
-    foreignPids: foreign,
-  }, 1);
+  fail(
+    `port ${state.port} is held by a process this run did not start`,
+    {
+      port: state.port,
+      foreignPids: foreign,
+    },
+    1,
+  );
 }
 
 if (!loggedStart || listeners.length === 0) {
-  fail("host process is up but not listening yet", {
-    port: state.port,
-    loggedStart,
-    listeners,
-  }, 10);
+  fail(
+    "host process is up but not listening yet",
+    {
+      port: state.port,
+      loggedStart,
+      listeners,
+    },
+    10,
+  );
 }
 
 const origin = state.origin;
@@ -116,9 +138,13 @@ try {
   healthResponse = await fetch(`${origin}/api/v1/health`, { signal: AbortSignal.timeout(15_000) });
   documentResponse = await fetch(`${origin}/`, { signal: AbortSignal.timeout(20_000) });
 } catch (error) {
-  fail(`origin not accepting HTTP yet: ${error instanceof Error ? error.name : "error"}`, {
-    origin,
-  }, 10);
+  fail(
+    `origin not accepting HTTP yet: ${error instanceof Error ? error.name : "error"}`,
+    {
+      origin,
+    },
+    10,
+  );
 }
 
 if (!healthResponse.ok) {
@@ -140,14 +166,18 @@ const hasCsrfMeta = html.includes('name="councilkit-csrf"');
 const hasRoot = html.includes('id="root"');
 const hasTitle = html.includes("<title>CouncilKit</title>");
 if (documentResponse.status !== 200 || !hasSessionCookie || !hasCsrfMeta || !hasRoot || !hasTitle) {
-  fail("document shell is not usable yet", {
-    origin,
-    status: documentResponse.status,
-    hasSessionCookie,
-    hasCsrfMeta,
-    hasRoot,
-    hasTitle,
-  }, 10);
+  fail(
+    "document shell is not usable yet",
+    {
+      origin,
+      status: documentResponse.status,
+      hasSessionCookie,
+      hasCsrfMeta,
+      hasRoot,
+      hasTitle,
+    },
+    10,
+  );
 }
 
 const payload = {

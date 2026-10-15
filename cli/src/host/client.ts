@@ -129,8 +129,8 @@ export class HostClient {
 
   // ----- delegated surface (each wrapped for one auth retry) ----------------
 
-  health(): Promise<HealthResponse> {
-    return this.withAuthRetry((c) => c.health());
+  health(options?: { refresh?: boolean }): Promise<HealthResponse> {
+    return this.withAuthRetry((c) => c.health(options));
   }
 
   diagnostics(): Promise<DiagnosticsResponse> {

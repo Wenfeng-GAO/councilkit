@@ -32,8 +32,9 @@ export async function runJuryCli(config?: ReviewJuryUpdate): Promise<ReviewJuryR
   }
 }
 
-const MISSING_REVIEW_JURY =
-  "无法读取或保存默认席位。请检查 CLI 配置；尚未初始化时先运行 councilkit init。";
+/** UI-03 / #281: a fresh machine is an empty state, not an error (designer copy). */
+export const MISSING_REVIEW_JURY =
+  "还没有审查团。点「先看示例」看一份示例报告，或在终端运行 `councilkit init`。";
 const REVIEW_JURY_CONFLICT = "默认席位已被修改，请重新加载后再保存。";
 const JURY_CLI_MESSAGE_MAX = 512;
 
@@ -48,7 +49,7 @@ function reviewJuryFailure(error: unknown): HttpError {
   if (cliMessage !== null && /no council matches/i.test(cliMessage)) {
     return httpError(
       400,
-      makeError("BAD_REQUEST", "discovery", MISSING_REVIEW_JURY, { retryable: false }),
+      makeError("NOT_FOUND", "discovery", MISSING_REVIEW_JURY, { retryable: false }),
     );
   }
   const message = cliMessage ?? "无法读取或保存默认席位。";

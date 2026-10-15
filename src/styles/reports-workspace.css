@@ -623,6 +623,45 @@
   font-size: 12px;
   line-height: 1.7;
 }
+/* UI-03 / #281: grey info bar for the fresh-machine empty state. */
+.ck-jury-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-2, var(--color-surface));
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ck-jury-empty code {
+  color: var(--color-fg);
+}
+.ck-jury-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+.ck-jury-empty-primary {
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.ck-jury-empty-primary:hover {
+  background: var(--color-surface);
+}
+.ck-jury-empty-detail {
+  flex-basis: 100%;
+  font-size: 12px;
+}
 .ck-model-message {
   display: block;
   padding: 14px 0;

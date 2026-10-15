@@ -82,6 +82,24 @@ export const DRIVER_CAPABILITY_STATES = [
 ] as const;
 export type DriverCapabilityState = (typeof DRIVER_CAPABILITY_STATES)[number];
 
+/**
+ * Per-driver CLI presence/login state for Settings + GET /health.
+ * Independent of Execution Profiles: a missing binary is `not_installed`
+ * even when no Profile exists. `checking` is in-flight only and is bounded
+ * (15s) to `check_failed`.
+ */
+export const CLI_STATES = [
+  "not_installed",
+  "not_logged_in",
+  "ready",
+  "checking",
+  "check_failed",
+] as const;
+export type CliState = (typeof CLI_STATES)[number];
+
+/** Wall-clock bound for a per-driver CLI probe. After this, `check_failed`. */
+export const CLI_STATE_PROBE_MS = 15_000;
+
 /** Execution Profile readiness = static binding + driver capability. */
 export const PROFILE_READINESS_STATES = [
   "ready",

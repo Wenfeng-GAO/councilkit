@@ -20,10 +20,7 @@
       "models": {
         "claude": {
           "requested": "GLM-5.2[1m]",
-          "effective": [
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]"
-          ]
+          "effective": ["GLM-5.2[1m]", "GLM-5.2[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
@@ -53,16 +50,8 @@
         "codex": 19382
       },
       "warmFirstDeltaMs": {
-        "claude": [
-          7141
-        ],
-        "codex": [
-          11510,
-          9049,
-          9926,
-          7861,
-          9188
-        ]
+        "claude": [7141],
+        "codex": [11510, 9049, 9926, 7861, 9188]
       },
       "ackLeaks": 0,
       "closeClean": true,
@@ -91,13 +80,7 @@
       "models": {
         "claude": {
           "requested": "GLM-5.2[1m]",
-          "effective": [
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]"
-          ]
+          "effective": ["GLM-5.2[1m]", "GLM-5.2[1m]", "GLM-5.2[1m]", "GLM-5.2[1m]", "GLM-5.2[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
@@ -139,24 +122,9 @@
         "codex": 13959
       },
       "warmFirstDeltaMs": {
-        "claude": [
-          11164
-        ],
+        "claude": [11164],
         "codex": [
-          9648,
-          8937,
-          5335,
-          7264,
-          7824,
-          7991,
-          5222,
-          8038,
-          7697,
-          4853,
-          4058,
-          7441,
-          11016,
-          19107
+          9648, 8937, 5335, 7264, 7824, 7991, 5222, 8038, 7697, 4853, 4058, 7441, 11016, 19107
         ]
       },
       "ackLeaks": 0,

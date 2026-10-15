@@ -50,6 +50,7 @@ test("Cursor 失效模型在启动前阻止提交，显式重选后恢复", asyn
           apiVersion: "v1",
           hostInstanceId: "test",
           node: { version: "v22.0.0", major: 22 },
+          checkoutPath: "/tmp/ck",
           drivers: [],
         },
       },

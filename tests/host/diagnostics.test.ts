@@ -166,7 +166,15 @@ describe("diagnostics route", () => {
     expect(dto.scopes).toEqual(FAKE_COUNTS);
     expect(dto.installations).toEqual([FAKE_INSTALLATION]);
     expect(dto.health.hostInstanceId).toBe("test-host-instance");
-    expect(dto.health.drivers).toEqual(FAKE_DRIVERS);
+    expect(dto.health.checkoutPath.length).toBeGreaterThan(0);
+    expect(dto.health.drivers.find((row) => row.driverId === "claude-stream-json")).toMatchObject({
+      capability: "ready",
+      cliState: "ready",
+    });
+    expect(dto.health.drivers.find((row) => row.driverId === "codex-app-server")).toMatchObject({
+      capability: "checking",
+      cliState: "checking",
+    });
     expect(dto.config.mode).toBe("production");
     expect(dto.config.port).toBe(CANONICAL_PORT);
     expect(dto.config.node.version).toBe(process.version);

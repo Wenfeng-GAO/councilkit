@@ -38,10 +38,7 @@
   },
   "overrides": [
     {
-      "include": [
-        "tests/**",
-        "cli/tests/**"
-      ],
+      "include": ["tests/**", "cli/tests/**"],
       "linter": {
         "rules": {
           "style": {

@@ -501,6 +501,7 @@ async function mockReviewApis(page: Page): Promise<void> {
           apiVersion: "v1",
           hostInstanceId: "preview",
           node: { version: "v22.0.0", major: 22 },
+          checkoutPath: "/tmp/ck",
           drivers: [],
         },
       },

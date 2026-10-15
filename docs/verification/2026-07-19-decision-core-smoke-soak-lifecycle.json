@@ -20,18 +20,11 @@
       "models": {
         "claude": {
           "requested": "GLM-5.2[1m]",
-          "effective": [
-            "GLM-5.2[1m]"
-          ]
+          "effective": ["GLM-5.2[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -51,11 +44,7 @@
       },
       "warmFirstDeltaMs": {
         "claude": [],
-        "codex": [
-          5989,
-          9719,
-          2812
-        ]
+        "codex": [5989, 9719, 2812]
       },
       "ackLeaks": 0,
       "closeClean": true,
@@ -89,11 +78,7 @@
       "models": {
         "claude": {
           "requested": "GLM-5.2[1m]",
-          "effective": [
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]"
-          ]
+          "effective": ["GLM-5.2[1m]", "GLM-5.2[1m]", "GLM-5.2[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
@@ -127,19 +112,8 @@
         "codex": 9952
       },
       "warmFirstDeltaMs": {
-        "claude": [
-          6797
-        ],
-        "codex": [
-          24509,
-          9998,
-          11345,
-          9888,
-          6545,
-          10452,
-          14468,
-          12669
-        ]
+        "claude": [6797],
+        "codex": [24509, 9998, 11345, 9888, 6545, 10452, 14468, 12669]
       },
       "ackLeaks": 0,
       "closeClean": true,
