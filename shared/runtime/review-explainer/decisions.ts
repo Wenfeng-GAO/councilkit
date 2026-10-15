@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
+import { mkdirPrivate } from "../durable-write";
 import { type ExclusiveLock, LockBusyError, acquireExclusiveLock } from "../exclusive-lock";
 import type { DecisionItem, DecisionsFile, FindingDecision } from "./contracts";
 import { ExplainerError, assertPrivatePath, atomicJson, readBounded } from "./io";
@@ -68,7 +68,7 @@ export function applyFindingDecision(input: {
   let held: ExclusiveLock | undefined;
   try {
     if (input.root) assertPrivatePath(input.root, input.file, true);
-    mkdirSync(dirname(input.file), { recursive: true, mode: 0o700 });
+    mkdirPrivate(dirname(input.file));
     try {
       held = acquireExclusiveLock(lock);
     } catch (error) {

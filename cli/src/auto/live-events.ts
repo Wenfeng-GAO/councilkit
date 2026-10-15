@@ -2,7 +2,6 @@
  * Incremental driver-stdout → AttemptLiveEvent collector and sidecar writer.
  * Observational only: IO errors are swallowed and never fail a review.
  */
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -12,7 +11,7 @@ import {
   LIVE_SUMMARY_MAX,
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
-import { appendPrivateFile, readPrivateText } from "@shared/runtime/durable-write";
+import { appendPrivateFile, mkdirPrivate, readPrivateText } from "@shared/runtime/durable-write";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { asText, parseJsonLine, stripProxyPrefix } from "./driver-commands";
 
@@ -417,7 +416,7 @@ export class LiveEventWriter {
 
   private ensureDir(): void {
     if (this.dirReady) return;
-    mkdirSync(join(this.runDir, "live"), { recursive: true });
+    mkdirPrivate(join(this.runDir, "live"));
     this.dirReady = true;
   }
 

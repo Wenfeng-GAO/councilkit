@@ -35,10 +35,11 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
+import { mkdirPrivate } from "@shared/runtime/durable-write";
 import { jsonParse } from "@shared/runtime/json-parse";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
@@ -460,8 +461,8 @@ export function ensureWarmGrokHome(origHome: string | undefined): string | null 
   }
   const dir = join(grokLeaderSocketDir(), "warm-home");
   try {
-    mkdirSync(grokLeaderSocketDir(), { recursive: true, mode: 0o700 });
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    ensurePrivateSocketDir(grokLeaderSocketDir());
+    mkdirPrivate(dir);
   } catch {
     return null;
   }
@@ -487,7 +488,7 @@ function isolateGrokHome(
   }
   const isolated = join(cwd, GROK_ISOLATED_HOME_DIR);
   try {
-    mkdirSync(isolated, { recursive: true, mode: 0o700 });
+    mkdirPrivate(isolated);
   } catch {
     return null;
   }
@@ -506,6 +507,11 @@ function isolateGrokHome(
 }
 
 function copyGrokCredentials(srcDir: string, dstDir: string, opts?: { overwrite?: boolean }): void {
+  try {
+    if (lstatSync(dstDir).isSymbolicLink()) return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
+  }
   for (const name of ["auth.json", "credentials.json"] as const) {
     const src = join(srcDir, name);
     const dest = join(dstDir, name);
@@ -557,6 +563,11 @@ function writeIsolatedGrokConfig(isolated: string, contents: string = ISOLATED_G
 }
 
 function writeIsolatedTextFile(path: string, contents: string): void {
+  try {
+    if (lstatSync(dirname(path)).isSymbolicLink()) return;
+  } catch {
+    return;
+  }
   const data = Buffer.from(contents, "utf8");
   try {
     const fd = openSync(

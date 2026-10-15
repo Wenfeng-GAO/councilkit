@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
-import { appendPrivateFile, replacePrivateFile } from "@shared/runtime/durable-write";
+import { appendPrivateFile, mkdirPrivate, replacePrivateFile } from "@shared/runtime/durable-write";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import {
   type RunCommand,
@@ -692,7 +692,7 @@ function prepareApplyWorkspace(runDir: string, root: TrustedRoot): string {
 function excludeApplyArtifacts(workspace: string): void {
   const excludePath = join(workspace, ".git", "info", "exclude");
   try {
-    mkdirSync(dirname(excludePath), { recursive: true, mode: 0o700 });
+    mkdirPrivate(dirname(excludePath));
     appendPrivateFile(
       excludePath,
       `\n${APPLY_REPORT_FILENAME}\n${APPLY_PLAN_FILENAME}\n${GROK_LEADER_SOCK}\n`,

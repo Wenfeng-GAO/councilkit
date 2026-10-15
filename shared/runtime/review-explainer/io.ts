@@ -5,7 +5,6 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -13,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { mkdirPrivate } from "../durable-write";
 
 export class ExplainerError extends Error {
   constructor(
@@ -64,7 +64,7 @@ export function atomicJson(path: string, value: unknown): void {
   const tmp = join(dirname(path), `.${randomUUID()}.tmp`);
   let fd: number | undefined;
   try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    mkdirPrivate(dirname(path));
     fd = openSync(tmp, "wx", 0o600);
     writeFileSync(fd, `${JSON.stringify(value)}\n`, "utf8");
     fsyncSync(fd);

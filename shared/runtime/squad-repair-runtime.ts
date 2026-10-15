@@ -4,7 +4,6 @@ import { randomBytes } from "node:crypto";
 import {
   closeSync,
   fsyncSync,
-  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -14,6 +13,7 @@ import {
 import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "./cli-home";
 import { DEFAULT_MODEL_ALIASES } from "./default-model-alias";
+import { mkdirPrivate } from "./durable-write";
 
 export const CURSOR_REPAIR_MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]";
 
@@ -394,7 +394,7 @@ function parseSquadBridgeText(raw: string): { file: SquadBridgeFile; reason: str
 }
 
 function atomicWritePrivateText(path: string, data: string): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  mkdirPrivate(dirname(path));
   const tmp = join(
     dirname(path),
     `.${path.split("/").pop() ?? "file"}.${randomBytes(6).toString("hex")}.tmp`,

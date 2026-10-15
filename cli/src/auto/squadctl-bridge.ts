@@ -2,7 +2,11 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { openNoFollowAppend, replacePrivateFile } from "@shared/runtime/durable-write";
+import {
+  mkdirPrivate,
+  openNoFollowAppend,
+  replacePrivateFile,
+} from "@shared/runtime/durable-write";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { assertSquadPipelineIsolation } from "@shared/runtime/repair-isolation";
 import {
@@ -1698,7 +1702,7 @@ function defaultSpawnOrchestrator(input: SpawnOrchestratorInput): {
   child: ChildProcess;
   stdoutBuf: { text: string };
 } {
-  mkdirSync(dirname(input.logPath), { recursive: true });
+  mkdirPrivate(dirname(input.logPath));
   const out = createWriteStream(input.logPath, { fd: openNoFollowAppend(input.logPath) });
   out.on("error", () => {
     // log path may disappear after tests tear down the temp home

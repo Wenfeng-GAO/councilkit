@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -15,7 +16,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { IDEATE_EMPTY_MCP, prepareIdeateWorkspace } from "../src/auto/ideate-policy";
+import { spawnEnvForDriver } from "../src/auto/driver-commands";
+import {
+  IDEATE_CLAUDE_CONFIG_DIR,
+  IDEATE_EMPTY_MCP,
+  IDEATE_OS_HOME_DIR,
+  prepareIdeateWorkspace,
+} from "../src/auto/ideate-policy";
 import { LiveEventWriter } from "../src/auto/live-events";
 import { spawnDeadlineSupervisor } from "../src/auto/repair-deadline-supervisor";
 import { readRepairHandoff } from "../src/auto/repair-handoff";
@@ -157,6 +164,58 @@ describe("managed artifact symlink writes", () => {
     expect(readFileSync(mcp, "utf8")).toBe(IDEATE_EMPTY_MCP);
   });
 
+  it("does not write ideate policy through planted directory symlinks", () => {
+    for (const name of [IDEATE_CLAUDE_CONFIG_DIR, ".grok", IDEATE_OS_HOME_DIR]) {
+      const parent = makeParent();
+      const workspace = join(parent, "workspace");
+      const outside = join(parent, "outside");
+      mkdirSync(workspace);
+      mkdirSync(outside);
+      writeFileSync(join(outside, "keep.txt"), "SECRET\n");
+      symlinkSync(outside, join(workspace, name));
+
+      expect(() => prepareIdeateWorkspace(workspace)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+
+      expect(readdirSync(outside)).toEqual(["keep.txt"]);
+      expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("SECRET\n");
+      expect(lstatSync(join(workspace, name)).isSymbolicLink()).toBe(true);
+      expect(() => lstatSync(join(outside, ".claude"))).toThrow(
+        expect.objectContaining({ code: "ENOENT" }),
+      );
+    }
+  });
+
+  it("does not copy an isolated grok home through a planted directory symlink", () => {
+    const parent = makeParent();
+    const workspace = join(parent, "workspace");
+    const outside = join(parent, "outside-home");
+    const grokHome = join(parent, "real-grok");
+    mkdirSync(workspace);
+    mkdirSync(outside);
+    mkdirSync(grokHome);
+    writeFileSync(join(outside, "config.toml"), "USER CONFIG\n");
+    writeFileSync(join(outside, "keep.txt"), "SECRET\n");
+    writeFileSync(join(outside, "auth.json"), "OLD\n");
+    writeFileSync(join(grokHome, "auth.json"), '{"token":"user-secret"}\n');
+    symlinkSync(outside, join(workspace, ".grok-home"));
+
+    const env = spawnEnvForDriver(
+      "grok-stream-json",
+      workspace,
+      { ...process.env, GROK_HOME: grokHome },
+      { localProxyPort: () => null },
+    );
+
+    expect(readdirSync(outside).sort()).toEqual(["auth.json", "config.toml", "keep.txt"]);
+    expect(readFileSync(join(outside, "config.toml"), "utf8")).toBe("USER CONFIG\n");
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("SECRET\n");
+    expect(readFileSync(join(outside, "auth.json"), "utf8")).toBe("OLD\n");
+    expect(lstatSync(join(workspace, ".grok-home")).isSymbolicLink()).toBe(true);
+    expect(env.GROK_HOME).toBe(grokHome);
+  });
+
   it("does not append live events through a symlink", () => {
     const parent = makeParent();
     const outside = join(parent, "outside.jsonl");
@@ -170,6 +229,23 @@ describe("managed artifact symlink writes", () => {
 
     expect(readFileSync(outside, "utf8")).toBe("SECRET\n");
     expect(lstatSync(join(runDir, "live", "attempt-0.jsonl")).isSymbolicLink()).toBe(true);
+  });
+
+  it("does not append live events through a directory symlink", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside-live");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "SECRET\n");
+    const runDir = join(parent, "run");
+    mkdirSync(runDir);
+    symlinkSync(outside, join(runDir, "live"));
+    const writer = new LiveEventWriter(runDir, { mergeWindowMs: 60_000 });
+
+    writer.append("attempt-0", [{ type: "tool.completed", name: "Bash", summary: "ls" }]);
+
+    expect(readdirSync(outside)).toEqual(["keep.txt"]);
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("SECRET\n");
+    expect(lstatSync(join(runDir, "live")).isSymbolicLink()).toBe(true);
   });
 
   it("returns the supervisor pid when the log path is a symlink", () => {

@@ -2,7 +2,15 @@
  * Managed writes must not follow a destination symlink.
  * Rename replaces the link. O_NOFOLLOW append refuses it, including a dangling link.
  */
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -47,6 +55,50 @@ describe("replacePrivateFile", () => {
     expect(replacePrivateFile(file, "")).toBe(0);
     expect(readFileSync(file, "utf8")).toBe("");
   });
+
+  it("creates a missing parent directory and writes the file there", () => {
+    const parent = makeParent();
+    const file = join(parent, "sub", "note.txt");
+    expect(replacePrivateFile(file, "ok\n")).toBe(3);
+    expect(readFileSync(file, "utf8")).toBe("ok\n");
+    expect(lstatSync(join(parent, "sub")).isDirectory()).toBe(true);
+  });
+
+  it("does not write through a parent directory symlink", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(() => replacePrivateFile(join(link, "new.txt"), "NEW\n")).toThrow(
+      expect.objectContaining({ code: "ELOOP" }),
+    );
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("SECRET\n");
+    expect(() => lstatSync(join(outside, "new.txt"))).toThrow(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  it("does not create a nested directory through an ancestor symlink", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(() => replacePrivateFile(join(link, "nested", "new.txt"), "NEW\n")).toThrow(
+      expect.objectContaining({ code: "ELOOP" }),
+    );
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("SECRET\n");
+    expect(() => lstatSync(join(outside, "nested"))).toThrow(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
 });
 
 describe("appendPrivateFile", () => {
@@ -69,6 +121,24 @@ describe("appendPrivateFile", () => {
       expect.objectContaining({ code: "ELOOP" }),
     );
     expect(readFileSync(outside, "utf8")).toBe("SECRET\n");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
+  it("does not append through a parent directory symlink", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(() => appendPrivateFile(join(link, "log.txt"), "APPENDED\n")).toThrow(
+      expect.objectContaining({ code: "ELOOP" }),
+    );
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("SECRET\n");
+    expect(() => lstatSync(join(outside, "log.txt"))).toThrow(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
   });
 

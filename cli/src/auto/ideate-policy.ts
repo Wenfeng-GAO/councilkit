@@ -35,7 +35,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
-import { replacePrivateFile } from "@shared/runtime/durable-write";
+import { mkdirPrivate, replacePrivateFile } from "@shared/runtime/durable-write";
 import { errors } from "../errors";
 
 export const IDEATE_POLICY_MARKER = ".councilkit-ideate-policy";
@@ -303,10 +303,11 @@ export function prepareIdeateWorkspace(workspace: string): IdeatePolicyFiles {
   const grokProjectConfig = join(grokDir, "config.toml");
   const isolatedClaude = join(osHome, ".claude");
 
-  mkdirSync(kimiSkills, { recursive: true, mode: 0o700 });
-  mkdirSync(claudeConfig, { recursive: true, mode: 0o700 });
-  mkdirSync(grokDir, { recursive: true, mode: 0o700 });
-  mkdirSync(isolatedClaude, { recursive: true, mode: 0o700 });
+  mkdirPrivate(kimiSkills);
+  mkdirPrivate(claudeConfig);
+  mkdirPrivate(grokDir);
+  mkdirPrivate(osHome);
+  mkdirPrivate(isolatedClaude);
 
   writeRestrictedFile(marker, "ideate-restricted\n");
   writeRestrictedFile(kimiAgent, IDEATE_KIMI_AGENT);
@@ -719,7 +720,7 @@ function copyAuthTree(src: string, dest: string): void {
   } catch (error) {
     if ((error as { code?: string }).code !== "ENOENT") return;
   }
-  mkdirSync(dest, { recursive: true, mode: 0o700 });
+  mkdirPrivate(dest);
   let entries: string[] = [];
   try {
     entries = readdirSync(src);

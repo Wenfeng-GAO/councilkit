@@ -11,16 +11,16 @@
  * for any non-ENOENT fault, so a present-but-unreadable file is never mistaken
  * for "missing" and overwritten (F4).
  */
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import { replacePrivateFile } from "@shared/runtime/durable-write";
+import { mkdirPrivate, replacePrivateFile } from "@shared/runtime/durable-write";
 import { errors } from "../errors";
 
 export const DEFAULT_FILE_MODE = 0o600;
 
-/** Create the parent dir (0700) if missing; safe to call repeatedly. */
+/** Create the parent dir (0700) if missing; safe to call repeatedly. A symlink parent throws ELOOP. */
 export function ensureParentDir(filePath: string): void {
-  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+  mkdirPrivate(dirname(filePath));
 }
 
 /** Write `data` to `filePath` atomically: tmp + fsync + rename. Returns the
