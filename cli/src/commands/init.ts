@@ -201,11 +201,13 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
         : reusedProductCouncil !== null
           ? briefCouncil(reusedProductCouncil, store)
           : null,
-    missingDrivers,
+    // CLI-10 / #311: JSON + human PATH list name the same public tools (no cld).
+    missingDrivers: publicMissingDrivers(missingDrivers),
     next: initNextHints({
       hasPrJury: findCouncilByName(store, PR_JURY_COUNCIL_NAME) !== null,
       hasProductJury: findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME) !== null,
       ideateFound: ideateClisOnPath(env),
+      env,
     }),
   };
   await out.finish(outcome, (d) => renderHuman(d as InitOutcome));

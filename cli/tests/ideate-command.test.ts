@@ -22,6 +22,7 @@ import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/au
 import { IDEATE_REPORT_HEADINGS } from "../src/auto/templates/ideate";
 import { IdeateExit, runIdeate } from "../src/commands/ideate";
 import { CliError } from "../src/errors";
+import { renderErrorHuman } from "../src/output";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -153,37 +154,69 @@ describe("councilkit ideate", () => {
     rmSync(poisoned, { recursive: true, force: true });
   });
 
-  it("CK-1 ideate error hint matches what init actually does", async () => {
+  it("CK-1 BUG-01 only kimi: exact designer zh sentence, no error[N] prefix", async () => {
     const onlyKimi = mkdtempSync(join(tmpdir(), "ck-ideate-only-kimi-"));
     writeFileSync(join(onlyKimi, "kimi"), "#!/bin/sh\nexit 0\n");
     chmodSync(join(onlyKimi, "kimi"), 0o755);
-    const prevPath = process.env.PATH;
+    const prev = {
+      PATH: process.env.PATH,
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      LC_MESSAGES: process.env.LC_MESSAGES,
+      LANGUAGE: process.env.LANGUAGE,
+    };
     process.env.PATH = onlyKimi;
+    process.env.LANG = "zh_CN.UTF-8";
+    process.env.LC_ALL = "zh_CN.UTF-8";
+    process.env.LC_MESSAGES = "zh_CN.UTF-8";
+    process.env.LANGUAGE = "zh_CN";
     try {
-      await runIdeate(["a one-line idea"], makeSink());
+      await runIdeate(["一个想法"], makeSink());
       throw new Error("expected usage");
     } catch (error) {
       expect(error).toBeInstanceOf(CliError);
       const err = error as CliError;
       expect(err.exitCode).toBe(2);
-      expect(err.message).toContain("product-jury");
-      expect(err.message).not.toContain("creates product-jury");
-      expect(err.message).toContain("kimi");
-      expect(err.message).toContain("councilkit init");
+      expect(err.message).toBe(
+        "产品创意需要至少两个 AI 工具，现在只找到 kimi。再装好并登录 grok 或 codex 中的一个，然后运行 `councilkit init`。",
+      );
+      expect(renderErrorHuman(err)).toBe(err.message);
+      expect(renderErrorHuman(err)).not.toMatch(/error\[\d+\]/);
     } finally {
-      process.env.PATH = prevPath;
+      Object.assign(process.env, prev);
       rmSync(onlyKimi, { recursive: true, force: true });
     }
+  });
 
+  it("CK-1 BUG-01 only kimi: exact designer en sentence", async () => {
+    const onlyKimi = mkdtempSync(join(tmpdir(), "ck-ideate-only-kimi-en-"));
+    writeFileSync(join(onlyKimi, "kimi"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(onlyKimi, "kimi"), 0o755);
+    const prev = {
+      PATH: process.env.PATH,
+      LANG: process.env.LANG,
+      LC_ALL: process.env.LC_ALL,
+      LC_MESSAGES: process.env.LC_MESSAGES,
+      LANGUAGE: process.env.LANGUAGE,
+    };
+    process.env.PATH = onlyKimi;
+    process.env.LANG = "en_US.UTF-8";
+    process.env.LC_ALL = "en_US.UTF-8";
+    process.env.LC_MESSAGES = "en_US.UTF-8";
+    process.env.LANGUAGE = "en";
     try {
-      await runIdeate(["a one-line idea"], makeSink());
-      throw new Error("expected usage with grok+kimi");
+      await runIdeate(["an idea"], makeSink());
+      throw new Error("expected usage");
     } catch (error) {
       expect(error).toBeInstanceOf(CliError);
       const err = error as CliError;
-      expect(err.message).toContain("product-jury");
-      expect(err.message).not.toContain("creates product-jury");
-      expect(err.message).toContain("councilkit init");
+      expect(err.message).toBe(
+        "Product ideation needs at least two AI CLIs; found only kimi. Install and log in to grok or codex, then run `councilkit init`.",
+      );
+      expect(renderErrorHuman(err)).toBe(err.message);
+    } finally {
+      Object.assign(process.env, prev);
+      rmSync(onlyKimi, { recursive: true, force: true });
     }
   });
 

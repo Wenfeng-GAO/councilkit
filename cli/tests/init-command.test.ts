@@ -221,10 +221,16 @@ describe("councilkit init", () => {
     const out = sink.finished as {
       createdCouncil: { name: string } | null;
       next: string;
+      missingDrivers: string[];
     };
     expectCreatedCouncilAndNextAgree(out, new Store());
     expect(out.createdCouncil?.name).toBe("pr-jury");
     expect(out.next).not.toContain("--council product-jury");
+    expect(out.next).toContain(
+      "Product ideation needs at least two AI CLIs; found only kimi. Install and log in to grok or codex, then run `councilkit init`.",
+    );
+    expect(out.missingDrivers).not.toContain("cld");
+    expect(out.missingDrivers).not.toContain("codex-model");
     expect(() => new Store().getCouncil("product-jury")).toThrow(/no council/);
   });
 
@@ -335,7 +341,9 @@ describe("councilkit init", () => {
     const sink = makeSink();
     await runInit([], sink);
     const out = sink.finished as { missingDrivers: string[] };
-    expect(out.missingDrivers).toContain("codex-model");
+    expect(out.missingDrivers).toContain("codex");
+    expect(out.missingDrivers).not.toContain("codex-model");
+    expect(out.missingDrivers).not.toContain("cld");
     expect(new Store().listAgents().map((agent) => agent.name)).not.toContain("ideate-challenger");
   });
 
@@ -425,7 +433,8 @@ describe("councilkit init", () => {
       "review-maintainability",
     ]);
     expect(out.createdCouncil.reporter).toBe("review-maintainability");
-    expect(out.missingDrivers.sort()).toEqual(["cld", "codex", "cursor-agent", "grok"]);
+    expect([...out.missingDrivers].sort()).toEqual(["codex", "cursor-agent", "grok"]);
+    expect(out.missingDrivers).not.toContain("cld");
   });
 
   it("creates review-maintainability when kimi lives only in ~/.kimi-code/bin", async () => {

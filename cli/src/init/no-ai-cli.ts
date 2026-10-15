@@ -6,6 +6,11 @@ const DISPLAY_ORDER = ["grok", "kimi", "codex", "cursor-agent"] as const;
 /** Public tool names derived from missingDrivers (single source). `cld` stays internal. */
 export function publicMissingDrivers(missingDrivers: readonly string[]): string[] {
   const publicOnes = missingDrivers.filter((name) => !INTERNAL_DRIVERS.has(name));
+  // Codex on PATH without a discovered model was recorded as internal
+  // `codex-model`. Surface it as public `codex` so JSON never names internals.
+  if (missingDrivers.includes("codex-model") && !publicOnes.includes("codex")) {
+    publicOnes.push("codex");
+  }
   const ordered: string[] = DISPLAY_ORDER.filter((name) => publicOnes.includes(name));
   for (const name of publicOnes) {
     if (!ordered.includes(name)) ordered.push(name);

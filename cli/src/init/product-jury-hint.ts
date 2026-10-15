@@ -1,4 +1,5 @@
 import { findExecutable } from "../auto/driver-commands";
+import { cliLang } from "../cli-locale";
 import { discoverCodexModel } from "../commands/jury";
 import { NEXT_REVIEW_HINT, PR_JURY_COUNCIL_NAME } from "./defaults";
 import { NEXT_IDEATE_HINT, PRODUCT_JURY_COUNCIL_NAME } from "./ideate-defaults";
@@ -20,6 +21,7 @@ export function canCreateProductJury(env: NodeJS.ProcessEnv = process.env): bool
   return ideateClisOnPath(env).length >= 2;
 }
 
+/** Designer-locked CK-1 copy (2026-10-16 reject of #311). Tool names come from detection. */
 export function missingProductJuryMessage(
   councilRef: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -29,26 +31,51 @@ export function missingProductJuryMessage(
   }
   const found = ideateClisOnPath(env);
   if (found.length >= 2) {
-    return 'no council "product-jury". Run: councilkit init';
+    return cliLang(env) === "zh"
+      ? "还没有产品创意审查团。运行 `councilkit init`。"
+      : 'no council "product-jury". Run: councilkit init';
   }
-  const foundBit = found.length > 0 ? found.join(", ") : "none";
-  return `no council "product-jury". product-jury needs at least two of grok, kimi, or a configured Codex (found: ${foundBit}). Install another AI CLI, then run councilkit init.`;
+  return productJuryNeedsTwoMessage(found, env);
+}
+
+export function productJuryNeedsTwoMessage(
+  found: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const zh = cliLang(env) === "zh";
+  const others = IDEATE_CLIS.filter((name) => !found.includes(name));
+  if (found.length === 0) {
+    return zh
+      ? "产品创意需要至少两个 AI 工具，现在一个都没找到。装好并登录 grok、kimi 或 codex 中的任意两个，然后运行 `councilkit init`。"
+      : "Product ideation needs at least two AI CLIs; found none. Install and log in to any two of grok, kimi, or codex, then run `councilkit init`.";
+  }
+  if (found.length === 1) {
+    const only = found[0]!;
+    if (zh) {
+      const alt = others.join(" 或 ");
+      return `产品创意需要至少两个 AI 工具，现在只找到 ${only}。再装好并登录 ${alt} 中的一个，然后运行 \`councilkit init\`。`;
+    }
+    const alt = others.join(" or ");
+    return `Product ideation needs at least two AI CLIs; found only ${only}. Install and log in to ${alt}, then run \`councilkit init\`.`;
+  }
+  // found.length >= 2 is handled by the caller; keep a safe fallback.
+  return zh
+    ? "还没有产品创意审查团。运行 `councilkit init`。"
+    : 'no council "product-jury". Run: councilkit init';
 }
 
 export function initNextHints(opts: {
   hasPrJury: boolean;
   hasProductJury: boolean;
   ideateFound: string[];
+  env?: NodeJS.ProcessEnv;
 }): string {
   const parts: string[] = [];
   if (opts.hasPrJury) parts.push(NEXT_REVIEW_HINT);
   if (opts.hasProductJury) {
     parts.push(NEXT_IDEATE_HINT);
   } else {
-    const foundBit = opts.ideateFound.length > 0 ? opts.ideateFound.join(", ") : "none";
-    parts.push(
-      `product-jury needs at least two of grok, kimi, or a configured Codex (found: ${foundBit}). Install another AI CLI, then re-run councilkit init.`,
-    );
+    parts.push(productJuryNeedsTwoMessage(opts.ideateFound, opts.env));
   }
   return parts.join(" · ");
 }

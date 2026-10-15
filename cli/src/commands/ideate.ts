@@ -50,7 +50,7 @@ import {
   type IdeateTranscriptRecord,
   writeIdeateTranscript,
 } from "../auto/transcript";
-import { EXIT, errors } from "../errors";
+import { CliError, EXIT, errors } from "../errors";
 import { PRODUCT_JURY_COUNCIL_NAME } from "../init/ideate-defaults";
 import { missingProductJuryMessage } from "../init/product-jury-hint";
 import type { OutputSink } from "../output";
@@ -167,7 +167,12 @@ export async function runIdeate(
     try {
       council = store.getCouncil(councilRef);
     } catch {
-      throw errors.usage(missingProductJuryMessage(councilRef));
+      // CK-1 (#311 reject): designer zh/en sentence only — no error[N] prefix.
+      throw new CliError({
+        code: EXIT.usage,
+        message: missingProductJuryMessage(councilRef),
+        plain: true,
+      });
     }
     attemptAgents = store.councilAgents(council);
     aggregatorAgent = store.getAgent(council.reporterAgentId);
