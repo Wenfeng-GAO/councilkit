@@ -46,6 +46,44 @@ describe("jsonParseEmbedded", () => {
     expect(jsonParseEmbedded('{"a":1}\n{"b":2}')).toBeNull();
   });
 
+  it("does not let a later object win when a non-JSON span hides one", () => {
+    const hidden = [
+      '{failed to decode payload {"text":"REAL","sessionId":"sid-1"}}',
+      '{"text":"WRONG","sessionId":"sid-2"}',
+    ].join(" ");
+    expect(jsonParseEmbedded(hidden)).toBeNull();
+    expect(
+      jsonParseEmbedded('{failed to decode payload {"text":"REAL","sessionId":"sid-1"}}'),
+    ).toBeNull();
+    expect(jsonParseEmbedded('{"text":"REAL","meta":{"text":"INNER"} bogus}')).toBeNull();
+  });
+
+  it("keeps the one object after an unmatched brace", () => {
+    expect(jsonParseEmbedded('{still open\n{"text":"OK","sessionId":"sid"}')).toEqual({
+      text: "OK",
+      sessionId: "sid",
+    });
+    expect(jsonParseEmbedded(`${"{".repeat(8)}{"text":"OK","sessionId":"sid"}`)).toEqual({
+      text: "OK",
+      sessionId: "sid",
+    });
+    expect(jsonParseEmbedded('{ {"a":{"b":1},"c":{"d":2}}')).toEqual({
+      a: { b: 1 },
+      c: { d: 2 },
+    });
+  });
+
+  it("returns null quickly when unmatched braces cover a long buffer", () => {
+    const unmatched = "{".padEnd(75, "x").repeat(20_000);
+    const started = Date.now();
+    expect(jsonParseEmbedded(unmatched)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    const retries = `${"{retry}".repeat(20_000)}\n{"text":"OK","sessionId":"sid"}`;
+    const retryStarted = Date.now();
+    expect(jsonParseEmbedded(retries)).toEqual({ text: "OK", sessionId: "sid" });
+    expect(Date.now() - retryStarted).toBeLessThan(1_000);
+  });
+
   it("parses an official freeze when the note after the object contains a brace", () => {
     const body = JSON.stringify({
       policy_hash: HASH,
