@@ -9,14 +9,15 @@
  */
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { nonBlank } from "./non-blank";
 
 export const CLI_STORE_DIR_NAME = "councilkit" as const;
 
 export function resolveCouncilkitHome(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.COUNCILKIT_HOME;
-  if (override !== undefined && override.length > 0) return resolve(override);
-  const xdg = env.XDG_CONFIG_HOME;
-  if (xdg !== undefined && xdg.length > 0) return resolve(xdg, CLI_STORE_DIR_NAME);
+  const override = nonBlank(env.COUNCILKIT_HOME);
+  if (override !== undefined) return resolve(override);
+  const xdg = nonBlank(env.XDG_CONFIG_HOME);
+  if (xdg !== undefined) return resolve(xdg, CLI_STORE_DIR_NAME);
   return resolve(homedir(), ".config", CLI_STORE_DIR_NAME);
 }
 

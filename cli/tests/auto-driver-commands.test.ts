@@ -29,6 +29,7 @@ import {
   buildProbeSpec,
   buildSpawnSpec,
   disposeIsolatedGrokHome,
+  envHasProxy,
   extractFinalOutput,
   probeTimeoutMs,
   resolveExecutable,
@@ -525,6 +526,20 @@ describe("cli auto driver-commands", () => {
       expect(existsSync(join(cwd, GROK_ISOLATED_HOME_DIR))).toBe(false);
     });
 
+    it("copies grok credentials from a padded GROK_HOME", () => {
+      const orig = mkdtempSync(join(tmpdir(), "ck-grok-padded-"));
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-padded-cwd-"));
+      writeFileSync(join(orig, "auth.json"), '{"token":"padded"}\n', { mode: 0o600 });
+      const env = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin", GROK_HOME: `  ${orig}  ` },
+        { localProxyPort: () => null },
+      );
+      expect(readFileSync(join(env.GROK_HOME ?? "", "auth.json"), "utf8")).toContain("padded");
+      disposeIsolatedGrokHome(cwd);
+    });
+
     it("grok isolated config replaces a stale skills=true file", () => {
       const cwd = mkdtempSync(join(tmpdir(), "ck-grok-stale-"));
       const first = spawnEnvForDriver(
@@ -632,7 +647,14 @@ describe("cli auto driver-commands", () => {
           },
         },
       );
-      for (const k of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]) {
+      for (const k of [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+      ]) {
         expect(env[k]).toBeUndefined();
       }
       expect(env.NO_PROXY).toBe("*");
@@ -642,7 +664,12 @@ describe("cli auto driver-commands", () => {
 
     it("claude/cursor spawn env is parent env + PWD (no proxy injection)", () => {
       for (const id of ["claude-stream-json", "cursor-stream-json"]) {
-        const env = spawnEnvForDriver(id, "/tmp/x", { PATH: "/bin" }, { localProxyPort: () => 7897 });
+        const env = spawnEnvForDriver(
+          id,
+          "/tmp/x",
+          { PATH: "/bin" },
+          { localProxyPort: () => 7897 },
+        );
         expect(env).toEqual({ PATH: "/bin", PWD: "/tmp/x" });
       }
     });
@@ -650,6 +677,29 @@ describe("cli auto driver-commands", () => {
     it("withLocalHttpProxy is a no-op when nothing is listening", () => {
       const env = withLocalHttpProxy({ PATH: "/bin" }, () => null);
       expect(env.HTTPS_PROXY).toBeUndefined();
+    });
+
+    it("does not treat a blank proxy or NO_PROXY as set when injecting a local proxy", () => {
+      expect(envHasProxy({ HTTPS_PROXY: "   " })).toBe(false);
+      expect(envHasProxy({ HTTPS_PROXY: "", HTTP_PROXY: "http://10.0.0.1:3128" })).toBe(true);
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-blank-proxy-"));
+      const env = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin", HTTPS_PROXY: "  ", NO_PROXY: "", no_proxy: "   " },
+        { localProxyPort: () => 7897 },
+      );
+      expect(env.HTTPS_PROXY).toBe("http://127.0.0.1:7897");
+      expect(env.NO_PROXY).toMatch(/localhost/);
+      expect(env.no_proxy).toMatch(/localhost/);
+      const kept = spawnEnvForDriver(
+        "codex-app-server",
+        "/tmp/ck-codex",
+        { PATH: "/bin", NO_PROXY: "example.com" },
+        { localProxyPort: () => 7897 },
+      );
+      expect(kept.NO_PROXY).toBe("example.com");
+      expect(kept.no_proxy).toBe("example.com");
     });
 
     it("claude non-cfuse route → usage error", () => {

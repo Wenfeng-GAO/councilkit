@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { replacePrivateFile } from "@shared/runtime/durable-write";
+import { nonBlank } from "@shared/runtime/non-blank";
 import {
   type IsolationCapability,
   type IsolationMode,
@@ -26,10 +27,15 @@ export function detectIsolationCapability(
   return probeIsolationCapability(process.platform, sandboxExecAvailable(env));
 }
 
-function sandboxExecAvailable(env: NodeJS.ProcessEnv): boolean {
-  const explicit = env.COUNCILKIT_SANDBOX_EXEC;
-  if (explicit && explicit.length > 0) return existsSync(explicit);
-  return ["/usr/bin/sandbox-exec", "/usr/sbin/sandbox-exec"].some((path) => existsSync(path));
+const DEFAULT_SANDBOX_EXEC = ["/usr/bin/sandbox-exec", "/usr/sbin/sandbox-exec"] as const;
+
+export function sandboxExecAvailable(
+  env: NodeJS.ProcessEnv = process.env,
+  defaults: readonly string[] = DEFAULT_SANDBOX_EXEC,
+): boolean {
+  const explicit = nonBlank(env.COUNCILKIT_SANDBOX_EXEC);
+  if (explicit !== undefined) return existsSync(explicit);
+  return defaults.some((path) => existsSync(path));
 }
 
 export function stripCredentialEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -74,10 +80,9 @@ export function wrapIsolatedSpawn(input: {
   };
 }
 
-function sandboxExecBin(): string {
-  if (process.env.COUNCILKIT_SANDBOX_EXEC && existsSync(process.env.COUNCILKIT_SANDBOX_EXEC)) {
-    return process.env.COUNCILKIT_SANDBOX_EXEC;
-  }
+function sandboxExecBin(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = nonBlank(env.COUNCILKIT_SANDBOX_EXEC);
+  if (explicit !== undefined && existsSync(explicit)) return explicit;
   if (existsSync("/usr/bin/sandbox-exec")) return "/usr/bin/sandbox-exec";
   return "sandbox-exec";
 }
@@ -118,7 +123,7 @@ export async function runIsolatedCommand(input: {
     tmpDir: input.tmpDir,
     extraWritePaths: input.extraWritePaths,
     allowNetwork: input.allowNetwork,
-    credentialHome: env.HOME,
+    credentialHome: nonBlank(env.HOME),
   });
   const run = input.runCommand ?? defaultRunCommand;
   return run({

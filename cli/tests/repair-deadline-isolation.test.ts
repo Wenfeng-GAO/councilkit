@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createExecutionIntent, markExecutionStarted } from "@shared/runtime/repair-execution";
@@ -14,7 +14,9 @@ import {
   disableCandidateGitHooksEnv,
   publishGitArgv,
   runIsolatedCommand,
+  sandboxExecAvailable,
   stripCredentialEnv,
+  wrapIsolatedSpawn,
 } from "../src/auto/repair-isolated-run";
 
 const SHA = "a".repeat(40);
@@ -267,6 +269,95 @@ describe("isolated runner env", () => {
     const env = disableCandidateGitHooksEnv({ PATH: "/usr/bin" });
     expect(env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
     expect(env.GIT_CONFIG_VALUE_0).toBe("/dev/null");
+  });
+
+  it("treats a blank COUNCILKIT_SANDBOX_EXEC as unset and trims a padded path", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-sandbox-exec-"));
+    const builtin = join(root, "builtin-sandbox-exec");
+    const custom = join(root, "custom-sandbox-exec");
+    writeFileSync(builtin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(custom, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const defaults = [builtin];
+    expect(sandboxExecAvailable({}, defaults)).toBe(true);
+    expect(sandboxExecAvailable({ COUNCILKIT_SANDBOX_EXEC: "" }, defaults)).toBe(true);
+    expect(sandboxExecAvailable({ COUNCILKIT_SANDBOX_EXEC: " \t " }, defaults)).toBe(true);
+    expect(sandboxExecAvailable({ COUNCILKIT_SANDBOX_EXEC: `  ${custom}  ` }, defaults)).toBe(true);
+    expect(sandboxExecAvailable({ COUNCILKIT_SANDBOX_EXEC: join(root, "missing") }, defaults)).toBe(
+      false,
+    );
+
+    const previous = process.env.COUNCILKIT_SANDBOX_EXEC;
+    const worktree = join(root, "wt");
+    const outputDir = join(root, "out");
+    const tmpDir = join(root, "tmp");
+    const capability = probeIsolationCapability("darwin", true);
+    try {
+      process.env.COUNCILKIT_SANDBOX_EXEC = `  ${custom}  `;
+      const wrapped = wrapIsolatedSpawn({
+        mode: "strong",
+        capability,
+        executable: "/bin/true",
+        argv: ["-n"],
+        worktree,
+        outputDir,
+        tmpDir,
+      });
+      expect(wrapped.executable).toBe(custom);
+
+      process.env.COUNCILKIT_SANDBOX_EXEC = "   ";
+      const fellThrough = wrapIsolatedSpawn({
+        mode: "strong",
+        capability,
+        executable: "/bin/true",
+        argv: ["-n"],
+        worktree,
+        outputDir,
+        tmpDir,
+      });
+      expect(fellThrough.executable).not.toBe("   ");
+      expect(["/usr/bin/sandbox-exec", "sandbox-exec"]).toContain(fellThrough.executable);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "COUNCILKIT_SANDBOX_EXEC");
+      else process.env.COUNCILKIT_SANDBOX_EXEC = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("trims HOME in the sandbox profile and skips a blank home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-iso-home-"));
+    const capability = probeIsolationCapability("darwin", true);
+    const run = async () => ({ stdout: "", stderr: "", exitCode: 0 });
+    const paddedTmp = join(root, "tmp-padded");
+    await runIsolatedCommand({
+      mode: "strong",
+      capability,
+      executable: "/bin/true",
+      argv: [],
+      cwd: join(root, "wt"),
+      outputDir: join(root, "out"),
+      tmpDir: paddedTmp,
+      env: { HOME: "  /tmp/ck-home  ", PATH: "/bin" },
+      runCommand: run,
+    });
+    const padded = readFileSync(join(paddedTmp, "sandbox.sb"), "utf8");
+    expect(padded).toContain('"/tmp/ck-home/.ssh"');
+    expect(padded).not.toContain("  /tmp/ck-home");
+
+    const blankTmp = join(root, "tmp-blank");
+    await runIsolatedCommand({
+      mode: "strong",
+      capability,
+      executable: "/bin/true",
+      argv: [],
+      cwd: join(root, "wt"),
+      outputDir: join(root, "out"),
+      tmpDir: blankTmp,
+      env: { HOME: "   ", PATH: "/bin" },
+      runCommand: run,
+    });
+    const blank = readFileSync(join(blankTmp, "sandbox.sb"), "utf8");
+    expect(blank).not.toContain('subpath "   ');
+    rmSync(root, { recursive: true, force: true });
   });
 });
 

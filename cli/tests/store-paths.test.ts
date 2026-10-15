@@ -60,6 +60,19 @@ describe("councilkitHome", () => {
     );
   });
 
+  it("treats a whitespace COUNCILKIT_HOME or XDG_CONFIG_HOME as unset", () => {
+    const parent = makeParent();
+    const xdg = join(parent, "xdg");
+    const home = join(parent, "home");
+    expect(councilkitHome({ COUNCILKIT_HOME: "   ", XDG_CONFIG_HOME: xdg })).toBe(
+      join(xdg, "councilkit"),
+    );
+    expect(councilkitHome({ COUNCILKIT_HOME: `\n\t${home}\t`, XDG_CONFIG_HOME: xdg })).toBe(home);
+    expect(councilkitHome({ COUNCILKIT_HOME: "", XDG_CONFIG_HOME: "  " })).toBe(
+      resolve(homedir(), ".config", "councilkit"),
+    );
+  });
+
   it("falls back to the os home config dir when both overrides are empty", () => {
     const fallback = resolve(homedir(), ".config", "councilkit");
     expect(councilkitHome({})).toBe(fallback);

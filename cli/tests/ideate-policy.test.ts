@@ -189,6 +189,56 @@ describe("ideate policy isolation", () => {
     );
   });
 
+  it("copies kimi and grok auth from a padded source home and a blank override", () => {
+    const workspace = join(tmp, "ws-padded-home");
+    mkdirSync(workspace, { recursive: true });
+    const kimi = buildIdeateSpawnSpec(
+      agent({ driverId: "kimi-stream-json", options: {} }, "kimi-code/k3"),
+      {
+        attemptId: "proposal-seat1",
+        workspace,
+        prompt: "idea",
+        env: {
+          ...env(),
+          KIMI_CODE_HOME: `  ${join(poisoned, ".kimi-code")}  `,
+          HOME: `  ${poisoned}  `,
+        },
+      },
+    );
+    homes.push(kimi.ephemeralHome ?? "");
+    expect(existsSync(join(kimi.envOverlay?.KIMI_CODE_HOME ?? "", "server.token"))).toBe(true);
+
+    const blankWorkspace = join(tmp, "ws-blank-kimi");
+    mkdirSync(blankWorkspace, { recursive: true });
+    const blank = buildIdeateSpawnSpec(
+      agent({ driverId: "kimi-stream-json", options: {} }, "kimi-code/k3"),
+      {
+        attemptId: "proposal-seat1",
+        workspace: blankWorkspace,
+        prompt: "idea",
+        env: { ...env(), KIMI_CODE_HOME: "   ", HOME: poisoned },
+      },
+    );
+    homes.push(blank.ephemeralHome ?? "");
+    expect(existsSync(join(blank.envOverlay?.KIMI_CODE_HOME ?? "", "server.token"))).toBe(true);
+
+    const grokWorkspace = join(tmp, "ws-padded-grok");
+    mkdirSync(grokWorkspace, { recursive: true });
+    const grok = buildIdeateSpawnSpec(
+      agent({ driverId: "grok-stream-json", options: {} }, "grok-4.6"),
+      {
+        attemptId: "proposal-seat1",
+        workspace: grokWorkspace,
+        prompt: "idea",
+        env: { ...env(), GROK_HOME: `  ${join(poisoned, ".grok")}  ` },
+      },
+    );
+    homes.push(grok.ephemeralHome ?? "");
+    expect(readFileSync(join(grok.ephemeralHome ?? "", "auth.json"), "utf8")).toContain(
+      "grok-secret",
+    );
+  });
+
   it("does not copy kimi auth when building a grok spec", () => {
     const workspace = join(tmp, "ws-grok-only");
     mkdirSync(workspace, { recursive: true });

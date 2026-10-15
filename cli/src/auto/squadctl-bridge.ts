@@ -34,6 +34,7 @@ import {
   canonicalizeRepairModel,
   cursorOrchestratorArgv,
   executableServesRuntime,
+  preferredCursorModel,
   readSquadBridgeFile,
   repairModelReceiptMatches,
   resolveRepairRoles,
@@ -1417,7 +1418,7 @@ export class SquadctlBridge implements SquadBridge {
     if (loaded.reason) throw errors.runFailed(loaded.reason);
     const resolved = resolveRepairRoles({
       orchestratorRuntime: probe.orchestrator?.requestedRuntime ?? "cursor",
-      cursorModel: env.COUNCILKIT_CURSOR_MODEL ?? loaded.file.model,
+      cursorModel: preferredCursorModel(env, loaded.file.model),
       roles: loaded.file.roles,
     });
     if (!resolved.ok) throw errors.runFailed(resolved.reason);

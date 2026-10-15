@@ -40,4 +40,13 @@ describe("vendor driver bin dirs", () => {
     const again = withDriverWellKnownPath(next);
     expect(again.PATH).toBe(next.PATH);
   });
+
+  it("trims a padded HOME and treats a blank HOME as unset", () => {
+    expect(defaultDriverWellKnownBinDirs({ HOME: "  /tmp/ck-home  " })).toEqual(
+      defaultDriverWellKnownBinDirs({ HOME: "/tmp/ck-home" }),
+    );
+    expect(defaultDriverWellKnownBinDirs({ HOME: " \t " })).toEqual(
+      defaultDriverWellKnownBinDirs({}),
+    );
+  });
 });

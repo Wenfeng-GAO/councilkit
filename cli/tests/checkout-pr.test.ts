@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type RunCommand,
   checkoutPullRequest,
+  commitLeftoverChanges,
   defaultRunCommand,
   inspectPullRequest,
   parseApplyPrUrl,
@@ -471,5 +472,40 @@ describe("trimCmdError UTF-16 boundary", () => {
     // Keep the ASCII prefix; drop the straddling emoji rather than split it.
     expect(clipped.startsWith("a".repeat(299))).toBe(true);
     expect(clipped).toBe(`${"a".repeat(299)}…`);
+  });
+});
+
+describe("commit author env", () => {
+  it("replaces a blank git author with the councilkit default and keeps a real one", async () => {
+    const calls: Array<{ argv: string[]; env?: NodeJS.ProcessEnv }> = [];
+    const run: RunCommand = async (input) => {
+      calls.push({ argv: input.argv, env: input.env });
+      if (input.argv[0] === "diff") return { stdout: "", stderr: "", exitCode: 1 };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    await commitLeftoverChanges("/tmp/repo", "msg", run, {
+      GIT_AUTHOR_NAME: "   ",
+      GIT_AUTHOR_EMAIL: "",
+      GIT_COMMITTER_NAME: " \t",
+      GIT_COMMITTER_EMAIL: "  ",
+    });
+    const commit = calls.find((call) => call.argv[0] === "commit");
+    expect(commit?.env?.GIT_AUTHOR_NAME).toBe("councilkit");
+    expect(commit?.env?.GIT_AUTHOR_EMAIL).toBe("councilkit@localhost");
+    expect(commit?.env?.GIT_COMMITTER_NAME).toBe("councilkit");
+    expect(commit?.env?.GIT_COMMITTER_EMAIL).toBe("councilkit@localhost");
+
+    calls.length = 0;
+    await commitLeftoverChanges("/tmp/repo", "msg", run, {
+      GIT_AUTHOR_NAME: "Ada",
+      GIT_AUTHOR_EMAIL: "ada@example.com",
+      GIT_COMMITTER_NAME: "  ",
+      GIT_COMMITTER_EMAIL: "commit@example.com",
+    });
+    const kept = calls.find((call) => call.argv[0] === "commit");
+    expect(kept?.env?.GIT_AUTHOR_NAME).toBe("Ada");
+    expect(kept?.env?.GIT_AUTHOR_EMAIL).toBe("ada@example.com");
+    expect(kept?.env?.GIT_COMMITTER_NAME).toBe("Ada");
+    expect(kept?.env?.GIT_COMMITTER_EMAIL).toBe("commit@example.com");
   });
 });
