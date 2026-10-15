@@ -24,6 +24,9 @@ import {
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useMemo, useState } from "react";
 
+const BLOCKING_RULE =
+  "阻塞依据（规格合同减法）：合同内 Act On——重大/致命且引用具名不变量 ID + 可复现反例，尚未验证解决或接受不修。标为规格外 / 建议修订规格的项默认不阻塞；nit 不阻塞。报告中的“本轮不阻塞”不会自动改变这项门禁。";
+
 export function FindingLedger({
   run,
   againstState = { status: "none" },
@@ -89,11 +92,16 @@ export function FindingLedger({
       <h2 id="ck-ledger">问题清单</h2>
       <p className="ck-finding-list-summary">{summary}</p>
       {projection.blockingCount > 0 ? (
-        <p className="ck-finding-list-note">
-          阻塞依据（规格合同减法）：合同内 Act On——重大/致命且引用具名不变量 ID +
-          可复现反例，尚未验证解决或接受不修。标为规格外 / 建议修订规格的项默认不阻塞；nit
-          不阻塞。报告中的“本轮不阻塞”不会自动改变这项门禁。
-        </p>
+        run.demo === true ? (
+          // Designer (#295): in the sample report this rule text is noise for a
+          // first-time reader; fold it to one line, expandable on demand.
+          <details className="ck-finding-list-note ck-blocking-rule">
+            <summary>阻塞是怎么判的 ▸</summary>
+            <p>{BLOCKING_RULE}</p>
+          </details>
+        ) : (
+          <p className="ck-finding-list-note">{BLOCKING_RULE}</p>
+        )
       ) : null}
       {countNote ? <p className="ck-finding-list-note">{countNote}</p> : null}
       {relation ? <p className="ck-finding-list-note">{relation}</p> : null}

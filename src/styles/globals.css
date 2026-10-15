@@ -168,3 +168,15 @@
 .ck-library-kinds + .ck-library-kinds {
   margin-top: 0;
 }
+
+/* #295: folded blocking-rule note in the sample report */
+.ck-blocking-rule summary {
+  cursor: pointer;
+  list-style: none;
+}
+.ck-blocking-rule summary::-webkit-details-marker {
+  display: none;
+}
+.ck-blocking-rule[open] summary {
+  margin-bottom: 4px;
+}
