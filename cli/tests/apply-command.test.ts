@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stubCliBody } from "../../tests/helpers/seat-cli-stub";
 import type { RunCommand } from "../src/auto/checkout-pr";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import { acquireWriterLease } from "../src/auto/repair-lease";
@@ -57,7 +58,7 @@ describe("cli apply command", () => {
     bin = join(home, "bin");
     mkdirSync(bin, { recursive: true });
     for (const name of ["grok", "gh", "git", "antcode"]) {
-      writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(bin, name), stubCliBody(name));
       chmodSync(join(bin, name), 0o755);
     }
     process.env.COUNCILKIT_HOME = home;

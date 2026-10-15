@@ -92,7 +92,11 @@ async function waitForStates(
   );
 }
 
-const READY = "#!/bin/sh\necho ok\nexit 0\n";
+// Real `grok models` shape (box, grok 1.0.50). `echo ok` + exit 0 is NOT ready (#307).
+const READY =
+  "#!/bin/sh\nprintf 'You are logged in with grok.com.\\n\\nDefault model: grok-4.7\\n\\nAvailable models:\\n  * grok-4.7 (default)\\n  - grok-4.6\\n'\nexit 0\n";
+const EXIT0_SILENT = "#!/bin/sh\nexit 0\n";
+const EXIT0_GARBLED = '#!/bin/sh\necho "%%% ??? garbled output 0xDEAD"\nexit 0\n';
 const AUTH = '#!/bin/sh\necho "not logged in" >&2\nexit 1\n';
 const AUTH_CODE = "#!/bin/sh\necho AUTH_REQUIRED >&2\nexit 1\n";
 const AMBIGUOUS = '#!/bin/sh\necho "boom: unexpected error" >&2\nexit 1\n';
@@ -158,6 +162,39 @@ describe("CLI state health (#274 / #276)", () => {
     expect(kimi?.cliState).not.toBe("not_installed");
     expect(kimi?.cliState).not.toBe("not_logged_in");
     expect(kimi?.fixCommand).toBe("kimi --version");
+  });
+
+  it("CLI-07 #307 fake grok (exit 0, no output) -> check_failed, not ready", async () => {
+    const { host } = await boot({ stubs: { grok: EXIT0_SILENT } });
+    const health = await waitForStates(
+      host,
+      (states) => states["grok-stream-json"] !== "checking",
+      4_000,
+    );
+    const grok = health.drivers.find((row) => row.driverId === "grok-stream-json");
+    expect(grok?.cliState).toBe("check_failed");
+    expect(grok?.capability).toBe("incompatible");
+    expect(grok?.fixCommand).toBe("grok --version");
+  });
+
+  it("CLI-07 #322 every seat CLI: exit 0 + garbled output -> check_failed", async () => {
+    const { host } = await boot({
+      stubs: {
+        cld: EXIT0_GARBLED,
+        codex: EXIT0_GARBLED,
+        kimi: EXIT0_GARBLED,
+        grok: EXIT0_GARBLED,
+        "cursor-agent": EXIT0_GARBLED,
+      },
+    });
+    const health = await waitForStates(
+      host,
+      (states) => Object.values(states).every((state) => state !== "checking"),
+      4_000,
+    );
+    for (const row of health.drivers) {
+      expect(row.cliState, row.driverId).toBe("check_failed");
+    }
   });
 
   it('CLI-03 positive auth-required -> not_logged_in with "<cli> login"', async () => {

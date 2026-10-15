@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stubCliBody } from "../../tests/helpers/seat-cli-stub";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { dispatch } from "../src/cli";
 import { runInit } from "../src/commands/init";
@@ -97,7 +98,7 @@ describe("councilkit init", () => {
   function stub(names: string[]): void {
     for (const name of names) {
       const p = join(bin, name);
-      writeFileSync(p, "#!/bin/sh\nexit 0\n");
+      writeFileSync(p, stubCliBody(name));
       chmodSync(p, 0o755);
     }
     process.env.PATH = bin;
@@ -275,7 +276,7 @@ describe("councilkit init", () => {
     const vendor = join(home, ".kimi-code", "bin");
     mkdirSync(vendor, { recursive: true });
     const kimi = join(vendor, "kimi");
-    writeFileSync(kimi, "#!/bin/sh\nexit 0\n");
+    writeFileSync(kimi, stubCliBody("kimi"));
     chmodSync(kimi, 0o755);
     const sink = makeSink();
     await runInit([], sink);

@@ -7,6 +7,7 @@ import { DRIVER_PROBE_PROMPT } from "../../cli/src/auto/driver-commands";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../../cli/src/auto/runner";
 import { ReviewExit, runReview } from "../../cli/src/commands/review";
 import { Store } from "../../cli/src/store/store";
+import { stubCliBody } from "../helpers/seat-cli-stub";
 import { ASSERTION, FINDING, PR_URL } from "./contract";
 
 export function makeSink() {
@@ -30,7 +31,7 @@ export function makeSink() {
 export function fakeCliPath(home: string, originalPath: string | undefined): string {
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, "cld"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  writeFileSync(join(bin, "cld"), stubCliBody("cld"), { mode: 0o755 });
   chmodSync(join(bin, "cld"), 0o755);
   return `${bin}${originalPath ? `:${originalPath}` : ""}`;
 }

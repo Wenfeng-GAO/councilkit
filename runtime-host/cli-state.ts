@@ -12,6 +12,11 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import {
+  CLI_PROBE_SPECS,
+  classifyCliProbe,
+  looksLikeAuthRequired,
+} from "@shared/runtime/cli-probe";
+import {
   CLI_STATE_PROBE_MS,
   type CliState,
   DRIVER_IDS,
@@ -34,32 +39,27 @@ export interface DriverCliTool {
 
 export const DRIVER_CLI_TOOLS: Record<DriverId, DriverCliTool> = {
   "claude-stream-json": {
-    bin: "cld",
-    probeArgv: ["--version"],
+    ...CLI_PROBE_SPECS["claude-stream-json"],
     loginCommand: "cld login",
     installCommand: "",
   },
   "codex-app-server": {
-    bin: "codex",
-    probeArgv: ["--version"],
+    ...CLI_PROBE_SPECS["codex-app-server"],
     loginCommand: "codex login",
     installCommand: "",
   },
   "kimi-stream-json": {
-    bin: "kimi",
-    probeArgv: ["provider", "list"],
+    ...CLI_PROBE_SPECS["kimi-stream-json"],
     loginCommand: "kimi login",
     installCommand: "",
   },
   "grok-stream-json": {
-    bin: "grok",
-    probeArgv: ["models"],
+    ...CLI_PROBE_SPECS["grok-stream-json"],
     loginCommand: "grok login",
     installCommand: "",
   },
   "cursor-stream-json": {
-    bin: "cursor-agent",
-    probeArgv: ["models"],
+    ...CLI_PROBE_SPECS["cursor-stream-json"],
     loginCommand: "cursor-agent login",
     installCommand: "curl https://cursor.com/install -fsS | bash",
   },
@@ -69,11 +69,7 @@ const PROBE_TEXT_CAP = 64 * 1024;
 const KILL_GRACE_MS = 200;
 const INHERITED_ENV = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR"] as const;
 
-const AUTH_REQUIRED_RE = /AUTH_REQUIRED|not logged in|please (?:run )?\S* ?login|unauthoriz/i;
-
-export function looksLikeAuthRequired(text: string): boolean {
-  return AUTH_REQUIRED_RE.test(text);
-}
+export { looksLikeAuthRequired };
 
 export interface ProbeOutput {
   code: number | null;
@@ -81,14 +77,14 @@ export interface ProbeOutput {
   text: string;
 }
 
-/** Classify a finished probe. Never returns `not_installed` or `checking`. */
+/** Classify a finished probe. Never returns `not_installed` or `checking`.
+ * Exit 0 is not enough (#307/#322): the output must look like the real CLI;
+ * see shared/runtime/cli-probe.ts (also used by the CLI lightweight probe). */
 export function classifyProbeOutput(
+  driverId: DriverId,
   result: ProbeOutput,
 ): Exclude<CliState, "not_installed" | "checking"> {
-  if (result.timedOut) return "check_failed";
-  if (looksLikeAuthRequired(result.text)) return "not_logged_in";
-  if (result.code === 0) return "ready";
-  return "check_failed";
+  return classifyCliProbe(driverId, result);
 }
 
 export function capabilityFromCliState(state: CliState): DriverCapabilityState {
@@ -311,7 +307,7 @@ export function createCliStateMonitor(options: CliStateMonitorOptions = {}): Cli
     }
     kills.delete(driverId);
     if (gen !== generation) return;
-    write(driverId, classifyProbeOutput(result));
+    write(driverId, classifyProbeOutput(driverId, result));
   }
 
   function refresh(): void {
