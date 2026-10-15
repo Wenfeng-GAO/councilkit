@@ -7,6 +7,7 @@ import {
   sortReviewFindings,
   splitH3Blocks,
 } from "@/lib/review-report";
+import { markdownLines, markdownLinesLf } from "@shared/runtime/aggregator-verdict";
 import { describe, expect, it } from "vitest";
 
 const SAMPLE = `# Autonomous Review Report
@@ -444,5 +445,17 @@ describe("sortReviewFindings", () => {
       ]),
     ).toBe("2 重大 · 1 琐碎");
     expect(formatFindingSeverityStats([{ severity: null, qualifier: null, text: "x" }])).toBeNull();
+  });
+});
+
+describe("markdown fence walk", () => {
+  it("keeps a classic-Mac CR on the line in review parsing and splits it in markdownLines", () => {
+    const cr = "```\rapprove\r```";
+    expect([...markdownLines(cr)].map((row) => row.line)).toEqual(["```", "approve", "```"]);
+    expect([...markdownLines(cr)].every((row) => row.fenced)).toBe(true);
+    expect([...markdownLinesLf(cr)].map((row) => row.line)).toEqual([cr]);
+    // `.` does not cross CR, and this walk does not turn CR into a line break,
+    // so the heading stays one preface line instead of a card plus a body.
+    expect(splitH3Blocks("### card\rbody")).toEqual([{ title: "", body: "### card\rbody" }]);
   });
 });

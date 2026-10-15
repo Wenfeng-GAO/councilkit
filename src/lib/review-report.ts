@@ -3,7 +3,10 @@
  * `councilkit review` writes. Returns null when the document is not that
  * format so the page can fall back to plain document rendering.
  */
-import { extractAggregatorVerdict } from "@shared/runtime/aggregator-verdict";
+import {
+  extractAggregatorVerdict,
+  markdownLinesLf as markdownLines,
+} from "@shared/runtime/aggregator-verdict";
 import {
   FINDING_SEVERITIES,
   type FindingSeverity,
@@ -356,41 +359,6 @@ export function conclusionSectionVerdict(body: string): ParsedReviewReport["verd
 }
 
 const GLUED_HEADING = /([^\n#])(## (?:概览|共识发现|独有发现|分歧|结论|过程对比|附录))/g;
-
-type MarkdownFence = { char: string; length: number };
-
-function fenceOpens(line: string): MarkdownFence | null {
-  const open = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
-  const marker = open?.[2];
-  if (!marker) return null;
-  const info = open?.[3] ?? "";
-  if (marker[0] === "`" && info.includes("`")) return null;
-  return { char: marker[0] ?? "`", length: marker.length };
-}
-
-function fenceCloses(line: string, fence: MarkdownFence): boolean {
-  const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-  const marker = close?.[1];
-  return Boolean(marker && marker[0] === fence.char && marker.length >= fence.length);
-}
-
-function* markdownLines(markdown: string): Generator<{ line: string; fenced: boolean }> {
-  let fence: MarkdownFence | null = null;
-  for (const line of markdown.split("\n")) {
-    if (fence) {
-      yield { line, fenced: true };
-      if (fenceCloses(line, fence)) fence = null;
-      continue;
-    }
-    const open = fenceOpens(line);
-    if (open) {
-      fence = open;
-      yield { line, fenced: true };
-      continue;
-    }
-    yield { line, fenced: false };
-  }
-}
 
 function unglueHeadings(markdown: string): string {
   const lines: string[] = [];

@@ -16,10 +16,20 @@ function fenceOpen(line: string): { char: string; length: number } | null {
   return { char: marker[0] ?? "`", length: marker.length };
 }
 
+/** CR and CRLF become LF, then the fence walk runs. */
 export function* markdownLines(markdown: string): Generator<{ line: string; fenced: boolean }> {
-  const lines = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  yield* markdownLinesLf(markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
+}
+
+/**
+ * Same fence walk as `markdownLines`, split on `\n` only.
+ *
+ * A classic-Mac CR stays on the line. Review-report parsing rewrites CRLF
+ * itself and then uses this walk, so a bare CR does not become a new line.
+ */
+export function* markdownLinesLf(markdown: string): Generator<{ line: string; fenced: boolean }> {
   let fence: { char: string; length: number } | null = null;
-  for (const line of lines) {
+  for (const line of markdown.split("\n")) {
     if (fence) {
       yield { line, fenced: true };
       const close = FENCE_CLOSE.exec(line);
