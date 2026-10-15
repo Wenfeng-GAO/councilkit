@@ -6,21 +6,15 @@ import {
   isFindingBlocking,
   isFindingVerifiedClosed,
 } from "./cli-ledger";
-import { type FindingGroupsFile, resolveRootCause, validateFindingGroups } from "./finding-groups";
+import {
+  type FindingGroupsFile,
+  plainText,
+  resolveRootCause,
+  validateFindingGroups,
+} from "./finding-groups";
 import { shellSingleQuote } from "./shell-quote";
 
-const text = z
-  .string()
-  .min(1)
-  .refine(
-    (value) =>
-      value.trim().length > 0 &&
-      Array.from(value).every((char) => {
-        const code = char.codePointAt(0) ?? 0;
-        return code !== 0 && !(code >= 0xd800 && code <= 0xdfff);
-      }),
-    "Invalid text",
-  );
+const text = plainText;
 const repoPath = text
   .max(400)
   .refine(

@@ -7,7 +7,8 @@ import { z } from "zod";
 export const FINDING_GROUPS_FILE = "finding-groups.v1.json";
 export const FINDING_GROUPS_KIND = "councilkit-finding-groups";
 
-const text = z
+/** Non-blank text: no whitespace-only, NUL, or unpaired surrogate. `.max` clones it. */
+export const plainText = z
   .string()
   .min(1)
   .refine(
@@ -19,6 +20,8 @@ const text = z
       }),
     "Invalid text",
   );
+
+const text = plainText;
 
 export const findingGroupAdjudicationSchema = z
   .object({
