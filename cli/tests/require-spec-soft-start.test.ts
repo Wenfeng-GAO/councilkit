@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stubCliBody } from "../../tests/helpers/seat-cli-stub";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { ReviewExit, runReview } from "../src/commands/review";
 import { Store } from "../src/store/store";
@@ -61,7 +62,7 @@ describe("require-spec soft-start", () => {
     const bin = join(home, "bin");
     mkdirSync(bin, { recursive: true });
     for (const name of ["cld", "kimi", "codex"]) {
-      writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(bin, name), stubCliBody(name));
       chmodSync(join(bin, name), 0o755);
     }
     process.env.PATH = `${bin}${oldPath ? `:${oldPath}` : ""}`;

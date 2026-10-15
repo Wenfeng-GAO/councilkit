@@ -34,6 +34,13 @@ import {
 } from "../src/auto/driver-probe";
 import type { AgentRecord } from "../src/store/schemas";
 
+/** Self-check output shaped like every real seat CLI (see shared/runtime/cli-probe.ts). */
+const realShapedProbe = () => ({
+  code: 0,
+  timedOut: false,
+  text: "codex-cli 0.162.1\nDefault model: kimi-code/k3\n  * grok-4.7 (default)\nauto - Auto\n",
+});
+
 function agent(driverSelection: AgentRecord["driverSelection"], modelId = "model-x"): AgentRecord {
   return {
     id: "a-1",
@@ -106,6 +113,7 @@ describe("driver-probe cache + lightweight", () => {
         platform: "linux",
         detectLocalProxyPort: () => null,
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -140,6 +148,7 @@ describe("driver-probe cache + lightweight", () => {
         platform: "linux",
         detectLocalProxyPort: () => null,
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -164,6 +173,7 @@ describe("driver-probe cache + lightweight", () => {
       ttlMs: 60_000,
       lightweightDeps: {
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -196,6 +206,7 @@ describe("driver-probe cache + lightweight", () => {
       disableLightweight: true,
       lightweightDeps: {
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -229,6 +240,7 @@ describe("driver-probe cache + lightweight", () => {
       lightweightDeps: {
         platform: "linux",
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -265,6 +277,90 @@ describe("driver-probe cache + lightweight", () => {
     expect(getProbeCacheEntryForTests(probeCacheKey(a))).toBeUndefined();
   });
 
+  it("CLI-07 #307 fake grok on PATH (exit 0, no output) fails the self-check, no LLM, no cache", async () => {
+    const a = agent(GROK);
+    const fakeGrok = join(tmp, "fakebin", "grok");
+    mkdirSync(join(tmp, "fakebin"), { recursive: true });
+    writeFileSync(fakeGrok, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    let llmCalls = 0;
+    const out = await runDriverProbe({
+      agent: a,
+      probeId: "p1",
+      cwd: tmp,
+      env: { PATH: join(tmp, "fakebin") },
+      now,
+      // Real spawn of the stub (no runCliProbe injection): the QA reproduction.
+      lightweightDeps: { platform: "linux", findExecutable: () => fakeGrok },
+      runLlmProbe: async () => {
+        llmCalls += 1;
+        throw new Error("should not LLM");
+      },
+    });
+    expect(out.status).toBe("failure");
+    expect(out.path).toBe("lightweight");
+    expect(out.failure?.code).toBe("DRIVER_UNREACHABLE");
+    expect(out.failure?.message).toContain('grok self-check failed: "grok models"');
+    expect(llmCalls).toBe(0);
+    expect(getProbeCacheEntryForTests(probeCacheKey(a))).toBeUndefined();
+  });
+
+  it("CLI-07 #322 every seat CLI: exit 0 + garbled output is not ok (QA codex stub)", () => {
+    for (const selection of [
+      CLAUDE,
+      GROK,
+      KIMI,
+      { driverId: "codex-app-server" as const, options: {} },
+      { driverId: "cursor-stream-json" as const, options: {} },
+    ]) {
+      const check = lightweightConnectivityCheck(
+        agent(selection),
+        { PATH: tmp },
+        {
+          platform: "linux",
+          findExecutable: (name) => join(tmp, name),
+          runCliProbe: () => ({
+            code: 0,
+            timedOut: false,
+            text: "%%% ??? garbled output 0xDEAD\n",
+          }),
+        },
+      );
+      expect(check.ok, selection.driverId).toBe(false);
+      expect(check.reason, selection.driverId).toContain("self-check failed");
+    }
+  });
+
+  it("#307 not-logged-in self-check output reports a login hint", () => {
+    const check = lightweightConnectivityCheck(
+      agent(KIMI),
+      { PATH: tmp },
+      {
+        findExecutable: (name) => join(tmp, name),
+        runCliProbe: () => ({ code: 1, timedOut: false, text: "Error: not logged in" }),
+      },
+    );
+    expect(check.ok).toBe(false);
+    expect(check.reason).toContain('run "kimi login"');
+  });
+
+  it("#307 a real-shaped codex --version via a real spawn is still ok", () => {
+    const codex = join(tmp, "realbin", "codex");
+    mkdirSync(join(tmp, "realbin"), { recursive: true });
+    writeFileSync(
+      codex,
+      '#!/bin/sh\n[ "$1" = "--version" ] && echo "codex-cli 0.162.1"\nexit 0\n',
+      {
+        mode: 0o755,
+      },
+    );
+    const check = lightweightConnectivityCheck(
+      agent({ driverId: "codex-app-server" as const, options: {} }),
+      { PATH: join(tmp, "realbin") },
+      { platform: "linux", findExecutable: () => codex, detectLocalProxyPort: () => null },
+    );
+    expect(check.ok).toBe(true);
+  });
+
   it("failures from LLM are not cached", async () => {
     const a = agent(GROK);
     await runDriverProbe({
@@ -277,6 +373,7 @@ describe("driver-probe cache + lightweight", () => {
       lightweightDeps: {
         platform: "linux",
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => ({
         attemptId: "p1",
@@ -308,6 +405,7 @@ describe("driver-probe cache + lightweight", () => {
         platform: "darwin",
         detectLocalProxyPort: () => null,
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -343,6 +441,7 @@ describe("driver-probe cache + lightweight", () => {
         platform: "darwin",
         detectLocalProxyPort: () => 7897,
         findExecutable: (name, e) => join((e?.PATH as string | undefined) ?? tmp, name),
+        runCliProbe: realShapedProbe,
       },
       runLlmProbe: async () => {
         llmCalls += 1;
@@ -362,6 +461,7 @@ describe("driver-probe cache + lightweight", () => {
       },
       {
         findExecutable: (name) => join(tmp, name),
+        runCliProbe: realShapedProbe,
         detectLocalProxyPort: () => {
           throw new Error("kimi must not probe for a proxy");
         },

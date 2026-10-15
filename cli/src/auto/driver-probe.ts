@@ -18,6 +18,8 @@
  * `ensureWarmGrokHome` / `spawnEnvForDriver({ warmGrokHome: true })`.
  */
 import { spawnSync } from "node:child_process";
+import { CLI_PROBE_SPECS, type CliProbeResult, classifyCliProbe } from "@shared/runtime/cli-probe";
+import { CLI_STATE_PROBE_MS, DRIVER_IDS, type DriverId } from "@shared/runtime/contracts";
 import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import type { AgentRecord } from "../store/schemas";
 import {
@@ -106,6 +108,24 @@ export interface LightweightDeps {
   /** Platform override for tests (`darwin` → expect Clash when no proxy). */
   platform?: NodeJS.Platform;
   now?: () => number;
+  /**
+   * Runs the seat CLI's self-check command (`grok models`, `codex --version`,
+   * ...). Same command + same verdict as the Host's Settings rows (#307).
+   */
+  runCliProbe?: (exe: string, argv: string[], env: NodeJS.ProcessEnv) => CliProbeResult;
+}
+
+function defaultRunCliProbe(exe: string, argv: string[], env: NodeJS.ProcessEnv): CliProbeResult {
+  const r = spawnSync(exe, argv, {
+    env,
+    encoding: "utf8",
+    timeout: CLI_STATE_PROBE_MS,
+    // A CLI that ignores SIGTERM must not hang the self-check past its bound.
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const timedOut = (r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+  return { code: r.status, timedOut, text: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
 }
 
 const LOCAL_PROXY_WITH_PORT = /^(?:https?|socks5?h?):\/\/(?:127\.0\.0\.1|localhost):/i;
@@ -194,6 +214,26 @@ export function lightweightConnectivityCheck(
       reason: `executable "${exeName}" not found`,
       durationMs: Math.max(0, (deps.now ?? Date.now)() - started),
     };
+  }
+
+  // #307/#322: PATH presence is not enough. Run the same self-check the Host
+  // uses for Settings and require recognizable output (exit 0 alone is not ready).
+  if ((DRIVER_IDS as readonly string[]).includes(driverId)) {
+    const spec = CLI_PROBE_SPECS[driverId as DriverId];
+    const run = deps.runCliProbe ?? defaultRunCliProbe;
+    const verdict = classifyCliProbe(driverId as DriverId, run(exe, spec.probeArgv, env));
+    if (verdict !== "ready") {
+      const cmd = `${exeName} ${spec.probeArgv.join(" ")}`;
+      return {
+        ok: false,
+        suspicious: false,
+        reason:
+          verdict === "not_logged_in"
+            ? `${exeName} is not logged in (self-check "${cmd}"); run "${exeName} login"`
+            : `${exeName} self-check failed: "${cmd}" did not print the expected output (check failed; run "${exeName} --version" or reinstall it)`,
+        durationMs: Math.max(0, (deps.now ?? Date.now)() - started),
+      };
+    }
   }
 
   const detect = deps.detectLocalProxyPort ?? detectListeningLocalProxy;
