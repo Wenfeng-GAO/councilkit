@@ -15,7 +15,8 @@ export type DriverTerminal = {
 };
 
 const QUOTA = /usage[_\s-]?limit|quota[_\s-]?exceeded|insufficient[_\s-]?quota/i;
-const AUTH_PHRASE = /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key/i;
+const AUTH_PHRASE =
+  /auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key|not logged in|please (?:run )?\S* ?login|AUTH_REQUIRED/i;
 const MODEL = /unsupported model|unknown model|model[_ ]not[_ ]found|invalid model/i;
 const RATE_PHRASE = /rate[_ ]limit|too many requests/i;
 const TRANSPORT_PHRASE =
