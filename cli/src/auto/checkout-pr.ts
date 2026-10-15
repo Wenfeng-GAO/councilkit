@@ -50,6 +50,15 @@ const BRANCH_RE = /^(?![-.])[A-Za-z0-9._/\-]+$/;
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 const GH_JSON_FIELDS =
   "headRefName,baseRefName,headRefOid,baseRefOid,headRepository,headRepositoryOwner,isCrossRepository,url,state";
+/** gh < ~2.5x (e.g. Debian 2.46) rejects baseRefOid (#302). */
+const GH_JSON_FIELDS_NO_BASE_OID =
+  "headRefName,baseRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,url,state";
+
+function isUnknownGhJsonField(result: RunCommandResult): boolean {
+  const text = `${result.stderr}
+${result.stdout}`;
+  return /Unknown JSON field/i.test(text) && /baseRefOid/i.test(text);
+}
 
 /** Env for internal CLIs (antcode): strip proxies on that one command only. */
 export function internalToolEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -184,14 +193,12 @@ export async function inspectPullRequest(
     if (findExecutable("gh", env) === null) {
       throw errors.runFailed("GitHub PRs need `gh` on PATH to resolve the source branch");
     }
-    const view = await runCommand({
-      executable: "gh",
-      argv: ["pr", "view", parsed.url.toString(), "--json", GH_JSON_FIELDS],
+    const meta = await ghPrViewWithCompat({
+      prUrl: parsed.url.toString(),
+      runCommand,
       cwd,
       env,
     });
-    assertOk(view, "gh pr view");
-    const meta = parseGhPrView(view.stdout);
     return {
       prUrl: parsed.url.toString(),
       host: "github",
@@ -273,14 +280,12 @@ async function checkoutGitHub(
   if (findExecutable("gh", env) === null) {
     throw errors.usage("GitHub apply needs `gh` on PATH");
   }
-  const view = await runCommand({
-    executable: "gh",
-    argv: ["pr", "view", url.toString(), "--json", GH_JSON_FIELDS],
+  const meta = await ghPrViewWithCompat({
+    prUrl: url.toString(),
+    runCommand,
     cwd,
     env,
   });
-  assertOk(view, "gh pr view");
-  const meta = parseGhPrView(view.stdout);
   const clone = await runCommand({
     executable: "gh",
     argv: ["repo", "clone", meta.nameWithOwner, ".", "--", "--depth", "1"],
@@ -538,6 +543,55 @@ export async function resolveRemoteBranchSha(input: {
   const line = result.stdout.trim().split("\n")[0] ?? "";
   const sha = line.split(/[\s\t]/)[0] ?? "";
   return FULL_SHA.test(sha) ? sha.toLowerCase() : undefined;
+}
+
+/**
+ * `gh pr view --json …` with a one-shot fallback when the installed gh does not
+ * know `baseRefOid` (PR-GH-01). Missing base SHA is filled via `git ls-remote`
+ * of the base branch when possible.
+ */
+export async function ghPrViewWithCompat(input: {
+  prUrl: string;
+  runCommand: RunCommand;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<ReturnType<typeof parseGhPrView>> {
+  const { prUrl, runCommand, cwd, env } = input;
+  const first = await runCommand({
+    executable: "gh",
+    argv: ["pr", "view", prUrl, "--json", GH_JSON_FIELDS],
+    cwd,
+    env,
+  });
+  let view = first;
+  if (first.exitCode !== 0 || first.error !== undefined) {
+    if (!isUnknownGhJsonField(first)) {
+      assertOk(first, "gh pr view");
+    }
+    const second = await runCommand({
+      executable: "gh",
+      argv: ["pr", "view", prUrl, "--json", GH_JSON_FIELDS_NO_BASE_OID],
+      cwd,
+      env,
+    });
+    if (second.exitCode !== 0 || second.error !== undefined) {
+      throw errors.runFailed(
+        `gh pr view failed: ${trimCmdError(second)}. Upgrade gh (needs fields like baseRefOid) or use a newer GitHub CLI.`,
+        { phase: "checkout", code: "GH_JSON_FIELD" },
+      );
+    }
+    view = second;
+  }
+  const meta = parseGhPrView(view.stdout);
+  if (meta.baseSha) return meta;
+  const filled = await resolveRemoteBranchSha({
+    cloneUrl: `https://github.com/${meta.nameWithOwner}.git`,
+    branch: meta.baseBranch,
+    runCommand,
+    env,
+    cwd,
+  });
+  return filled ? { ...meta, baseSha: filled } : meta;
 }
 
 function parseGhPrView(stdout: string): {
