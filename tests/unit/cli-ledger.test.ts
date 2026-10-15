@@ -129,6 +129,33 @@ describe("trusted resolution", () => {
       }),
     ).toBe(false);
   });
+
+  it("does not treat a bare colon-number as code-trace evidence", () => {
+    const closed = (locations: string[]) => ({
+      ...historical,
+      status: "closed" as const,
+      verification: {
+        outcome: "verified_closed" as const,
+        candidateSha: "a".repeat(40),
+        runId: "review",
+        attemptId: "attempt-0",
+        reviewer: "reviewer",
+        method: "code_trace" as const,
+        reason: "The write error retains the only copy",
+        evidence: "The error branch returns before clearing pending text",
+        locations,
+        runComplete: true,
+      },
+    });
+    expect(isFindingVerifiedClosed(closed(["retry.go:30"]), "a".repeat(40))).toBe(true);
+    expect(isFindingVerifiedClosed(closed(["pkg/log.go:12-20"]), "a".repeat(40))).toBe(true);
+    expect(isFindingBlocking(closed(["retry.go:30"]), "a".repeat(40))).toBe(false);
+    for (const location of ["12:30", "超时阈值:30", "上限:3"]) {
+      const row = closed([location]);
+      expect(isFindingVerifiedClosed(row, "a".repeat(40))).toBe(false);
+      expect(isFindingBlocking(row, "a".repeat(40))).toBe(true);
+    }
+  });
 });
 
 describe("countLedgerFindings", () => {

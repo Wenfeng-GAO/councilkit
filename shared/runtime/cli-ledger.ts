@@ -11,6 +11,7 @@
  */
 import { z } from "zod";
 import { clipUtf16 } from "../text/clip-utf16";
+import { FILE_LINE_CITATION_SOURCE } from "./source-locus";
 
 export const CLI_RUN_FINDINGS_FILE = "findings.json";
 export const CLI_RUN_PLAN_LOCK_FILE = "plan.lock.json";
@@ -26,8 +27,12 @@ export const FINDING_SOURCES = ["consensus", "unique", "unknown"] as const;
 export type FindingSource = (typeof FINDING_SOURCES)[number];
 
 export const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/;
-/** `file:12` or `file:12-20`. Shared by assessment parse and persisted verification. */
-export const ASSESSMENT_LOCATION = /.+:\d+(?:-\d+)?$/;
+/**
+ * One file:line citation (`retry.go:12`, `pkg/log.go:12-20`).
+ * A bare colon-number (`12:30`, `超时阈值:30`) is not a location.
+ * Shared by assessment parse and persisted verification.
+ */
+export const ASSESSMENT_LOCATION = new RegExp(`^${FILE_LINE_CITATION_SOURCE}$`);
 export const findingVerificationSchema = z
   .object({
     outcome: z.enum(["verified_closed", "still_open", "not_evaluated"]),
