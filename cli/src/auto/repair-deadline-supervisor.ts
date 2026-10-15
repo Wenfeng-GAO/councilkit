@@ -45,17 +45,56 @@ export function setExecutionRecordCommitGate(gate: (() => void) | null): void {
   commitGate = gate;
 }
 
-// The terminal check and the rename share one lock so the first terminal record stays.
-export function writeExecutionRecord(path: string, execution: RepairExecution): void {
+export interface ExecutionRecordDecision {
+  wrote: boolean;
+  execution: RepairExecution | null;
+}
+
+// Re-reads under the record lock. A terminal file is left unchanged.
+// `decide` runs only for a missing or non-terminal record, still holding the lock.
+export function decideExecutionRecord(
+  path: string,
+  decide: (existing: RepairExecution | null) => RepairExecution | null,
+): ExecutionRecordDecision {
   const release = acquireRecordLock(`${path}.lock`);
   try {
     const existing = readExecutionRecord(path);
-    if (existing !== null && isTerminalRepairExecution(existing.state)) return;
+    if (existing !== null && isTerminalRepairExecution(existing.state)) {
+      return { wrote: false, execution: existing };
+    }
+    const next = decide(existing);
+    if (next === null) return { wrote: false, execution: existing };
     commitGate?.();
-    atomicWriteJson(path, execution);
+    atomicWriteJson(path, next);
+    return { wrote: true, execution: next };
   } finally {
     release();
   }
+}
+
+export function writeExecutionRecord(path: string, execution: RepairExecution): void {
+  decideExecutionRecord(path, () => execution);
+}
+
+// Certify from the on-disk record. The kill and the write share the lock so a
+// pid bound after the unlocked deadline read is the pid that is stopped.
+export function commitDeadlineIfDue(input: {
+  executionPath: string;
+  nowMs: number;
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+  isPidAlive?: (pid: number) => boolean;
+}): RepairExecution | null {
+  const decision = decideExecutionRecord(input.executionPath, (existing) => {
+    if (existing === null) return null;
+    const next = superviseDeadlineOnce({
+      execution: existing,
+      nowMs: input.nowMs,
+      kill: input.kill,
+      isPidAlive: input.isPidAlive,
+    });
+    return next === existing ? null : next;
+  });
+  return decision.execution;
 }
 
 export function superviseDeadlineOnce(input: {
@@ -132,6 +171,8 @@ export async function runDeadlineSupervisorLoop(input: {
   nowMs?: () => number;
   sleep?: (ms: number) => Promise<void>;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
+  isPidAlive?: (pid: number) => boolean;
+  beforeCertify?: () => void;
 }): Promise<RepairExecution> {
   const sleep = input.sleep ?? defaultSleep;
   const nowMs = input.nowMs ?? (() => Date.now());
@@ -139,11 +180,23 @@ export async function runDeadlineSupervisorLoop(input: {
   for (;;) {
     const execution = readExecutionRecord(input.executionPath);
     if (execution === null) throw errors.io("execution record missing");
-    const next = superviseDeadlineOnce({ execution, nowMs: nowMs(), kill });
-    if (next !== execution) writeExecutionRecord(input.executionPath, next);
-    const persisted = readExecutionRecord(input.executionPath) ?? next;
+    if (isTerminalRepairExecution(execution.state)) return execution;
+    const now = nowMs();
+    if (now < execution.deadlineAtMs) {
+      const remaining = Math.max(20, execution.deadlineAtMs - now);
+      await sleep(Math.min(remaining, 1_000));
+      continue;
+    }
+    input.beforeCertify?.();
+    const persisted = commitDeadlineIfDue({
+      executionPath: input.executionPath,
+      nowMs: now,
+      kill,
+      isPidAlive: input.isPidAlive,
+    });
+    if (persisted === null) throw errors.io("execution record missing");
     if (isTerminalRepairExecution(persisted.state)) return persisted;
-    const remaining = Math.max(20, next.deadlineAtMs - nowMs());
+    const remaining = Math.max(20, persisted.deadlineAtMs - nowMs());
     await sleep(Math.min(remaining, 1_000));
   }
 }

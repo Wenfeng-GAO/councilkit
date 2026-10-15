@@ -10,6 +10,7 @@ import {
 import { probeIsolationCapability } from "@shared/runtime/repair-isolation";
 import { describe, expect, it } from "vitest";
 import {
+  runDeadlineSupervisorLoop,
   setExecutionRecordCommitGate,
   superviseDeadlineOnce,
   writeExecutionRecord,
@@ -353,6 +354,50 @@ process.exit(0);
     }
     throw new Error("deadline supervisor did not stop the sleeper after parent exit");
   }, 10_000);
+
+  it("kills the on-disk pid when it appears after the deadline snapshot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-exec-late-pid-"));
+    const recordPath = join(dir, "exec.json");
+    const base = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-late-pid",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [42],
+      1,
+    );
+    writeExecutionRecord(recordPath, base);
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const dead = new Set<number>();
+    try {
+      const persisted = await runDeadlineSupervisorLoop({
+        executionPath: recordPath,
+        nowMs: () => 10,
+        sleep: async () => {
+          throw new Error("supervisor slept after a due deadline");
+        },
+        kill: (pid, signal) => {
+          killed.push({ pid, signal });
+          dead.add(pid);
+        },
+        isPidAlive: (pid) => !dead.has(pid),
+        beforeCertify: () => {
+          writeExecutionRecord(recordPath, markExecutionStarted(base, [99], 2));
+        },
+      });
+      expect(persisted.state).toBe("deadline_enforced");
+      expect(persisted.pids).toEqual([99]);
+      expect(killed).toEqual([{ pid: 99, signal: "SIGTERM" }]);
+      expect(JSON.parse(readFileSync(recordPath, "utf8")).pids).toEqual([99]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("isolated runner env", () => {
