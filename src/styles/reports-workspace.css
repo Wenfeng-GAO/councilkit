@@ -648,15 +648,26 @@
   margin-left: auto;
 }
 .ck-jury-empty-primary {
-  padding: 6px 12px;
-  border: 1px solid var(--color-border);
+  padding: 8px 16px;
+  border: 1px solid var(--color-accent);
   border-radius: 4px;
-  color: var(--color-fg);
+  background: var(--color-accent);
+  color: #fff;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .ck-jury-empty-primary:hover {
-  background: var(--color-surface);
+  opacity: 0.9;
+}
+.ck-jury-empty-primary:disabled {
+  opacity: 0.6;
+}
+/* 开始审查 stays muted while the jury is missing (disabled). */
+.ck-composer-footer .ck-start-button:disabled {
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  border-color: var(--color-border);
+  opacity: 1;
 }
 .ck-jury-empty-detail {
   flex-basis: 100%;

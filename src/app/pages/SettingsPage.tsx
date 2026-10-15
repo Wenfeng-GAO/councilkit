@@ -578,9 +578,7 @@ export function SettingsPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">设置</h1>
-          <p className="mt-1 text-sm text-muted">
-            V1 唯一配置入口：自上而下完成四段配置后，即可创建 Agent 与讨论。
-          </p>
+          <p className="mt-1 text-sm text-muted">管理本机 AI 工具、执行配置与 Agent。</p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <Button
@@ -590,7 +588,7 @@ export function SettingsPage() {
           >
             {rechecking ? "正在重新检查…" : "重新检查"}
           </Button>
-          <p className="text-xs text-muted">强制重新握手（refresh=1），绕过 60 秒缓存与失败退避</p>
+          <p className="text-xs text-muted">重新探测本机工具状态</p>
         </div>
       </div>
 

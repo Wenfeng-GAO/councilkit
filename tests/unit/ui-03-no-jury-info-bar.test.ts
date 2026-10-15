@@ -93,6 +93,7 @@ describe("UI-03 no review jury yet", () => {
     expect(bar?.textContent).toContain(NO_JURY_COPY.replace(/`/g, ""));
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(container.querySelector(".ck-jury-error")).toBeNull();
+    expect(container.textContent).not.toContain("尚未读取");
     expect(container.textContent).not.toContain("无法读取或保存默认席位");
     expect(container.textContent).not.toContain("NOT_FOUND");
     expect(onStatus).toHaveBeenLastCalledWith({

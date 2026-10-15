@@ -23,4 +23,4 @@ Checks:
   PASS P1-2 contract footing preserved on collapse: DenyAll merge keeps INV-DENY-ALL + counterexample; blocking=true
   PASS Naive before wrongly under-counts distinct causes: naive buckets=3, fixed extract=4 (fixed keeps validation≠authorization)
 
-HTML: /workspace/ck-week1/ci/artifacts/locus-dedupe-sim/report.html
+HTML: /workspace/ck-week1/cli-states/artifacts/locus-dedupe-sim/report.html

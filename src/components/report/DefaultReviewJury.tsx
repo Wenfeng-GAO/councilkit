@@ -165,7 +165,7 @@ export function DefaultReviewJury({
       <div className="ck-roster-heading">
         <div>
           <strong>默认审查席位</strong>
-          <span className="ck-jury-count">{data ? `${seats.length} / 8` : "尚未读取"}</span>
+          {data ? <span className="ck-jury-count">{`${seats.length} / 8`}</span> : null}
         </div>
         {data && !draft ? (
           <div className="ck-jury-heading-actions">

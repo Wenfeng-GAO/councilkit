@@ -71,46 +71,20 @@ function FixLine({
       return <p>可以直接用</p>;
     case "not_logged_in":
       return (
-        <div>
-          <p>
-            在终端运行 <Copyable text={login} />
-            ，完成后点「重新检查」
-          </p>
-          <p className="text-xs text-muted">
-            Run <Copyable text={login} /> in a terminal, then Re-check
-          </p>
-        </div>
+        <p>
+          在终端运行 <Copyable text={login} />
+          ，完成后点「重新检查」
+        </p>
       );
     case "checking":
       return <p>正在试连一次（超过 15 秒会给出结论）</p>;
     case "check_failed":
       return (
         <p>
-          15 秒内没有结果。在终端运行 <Copyable text={version} /> 看看，或点「重试」
+          检查没成功。在终端运行 <Copyable text={version} /> 看看，或点「重新检查」
         </p>
       );
     case "not_installed":
-      if (driverId === "claude-stream-json") {
-        return (
-          <div>
-            <p>
-              PATH 上找不到 <Copyable text="cld" />。
-              <a
-                href="https://docs.anthropic.com/en/docs/claude-code"
-                target="_blank"
-                rel="noreferrer"
-                className="text-accent hover:underline"
-              >
-                安装说明 ↗
-              </a>
-              {"　·　装好后点「重新检查」"}
-            </p>
-            <p className="text-xs text-muted">
-              <Copyable text="cld" /> not found on PATH. Install guide ↗
-            </p>
-          </div>
-        );
-      }
       if (driverId === "cursor-stream-json") {
         const install = fixCommand || "curl https://cursor.com/install -fsS | bash";
         return (
@@ -118,6 +92,7 @@ function FixLine({
             安装：
             <Copyable text={install} />
             ，再 <Copyable text="cursor-agent login" />
+            。装好后点「重新检查」
           </p>
         );
       }
@@ -180,21 +155,26 @@ export function InstallationsSection({
         <p className="mt-1 text-sm text-muted">
           CouncilKit 只调用你电脑上已登录的命令行工具，不读取、不保存密钥。至少需要 1 个「就绪」。
         </p>
-        <p className="mt-1 text-xs text-muted">
-          AI tools on this machine · at least one must be Ready
-        </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted">
+      <div
+        className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted"
+        aria-label="状态图例"
+      >
         <span className="inline-flex items-center gap-1">
-          <StatusPill tone="success" text="就绪 Ready" /> 可以直接用
+          <StatusPill tone="success" text="就绪" /> 可以直接用
         </span>
         <span className="inline-flex items-center gap-1">
-          <StatusPill tone="warn" text="未登录 Not logged in" /> 已安装，需要登录
+          <StatusPill tone="warn" text="未登录" /> 已安装，需要登录
         </span>
-        <StatusPill tone="muted" text="未安装 Not installed" />
         <span className="inline-flex items-center gap-1">
-          <StatusPill tone="info" text="检查中 Checking" /> 最多 15 秒
+          <StatusPill tone="muted" text="未安装" /> 本机没有这个命令
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <StatusPill tone="info" text="检查中" /> 最多 15 秒
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <StatusPill tone="error" text="检查失败" /> 点「重新检查」再试
         </span>
       </div>
 

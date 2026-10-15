@@ -35,11 +35,11 @@ export function driverDisplayName(driverId: DriverId): string {
 }
 
 /** Settings 「本机 AI 工具」 row order — locked mock after2-settings.html. */
+/** External V1 list — no cld (#309 designer reject / #280). */
 export const AI_TOOL_ORDER: readonly DriverId[] = [
   "grok-stream-json",
   "kimi-stream-json",
   "codex-app-server",
-  "claude-stream-json",
   "cursor-stream-json",
 ];
 
@@ -96,7 +96,7 @@ export function aiToolActionLabel(state: CliState): string {
     case "ready":
       return "建 Agent";
     case "check_failed":
-      return "重试";
+      return "重新检查";
     case "checking":
     case "not_installed":
     case "not_logged_in":
