@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import { terminateChild } from "@shared/runtime/terminate-child";
 import { afterEach, describe, expect, it } from "vitest";
@@ -210,6 +211,63 @@ describe("terminateChild", () => {
       group.restore();
     }
     expect(group.signals.filter((signal) => signal !== "0")).toEqual(["SIGTERM"]);
+  });
+
+  it("releases group escalation when a grandchild exits during the grace window", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-reap-drain-"));
+    dirs.push(root);
+    const graceMs = 3_000;
+    const holdMs = 200;
+    const runner = fileURLToPath(new URL("../fixtures/group-drain-runner.ts", import.meta.url));
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+    const proc = spawn(
+      process.execPath,
+      ["--import", "tsx", runner, root, String(graceMs), String(holdMs)],
+      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    proc.stderr?.setEncoding("utf8");
+    proc.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    let code: number | null = null;
+    try {
+      code = await new Promise<number | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          proc.kill("SIGKILL");
+          reject(new Error(`drain runner still alive after 4s\n${stderr}`));
+        }, 4_000);
+        proc.once("exit", (exitCode) => {
+          clearTimeout(timer);
+          resolve(exitCode);
+        });
+        proc.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
+    } finally {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // runner already exited
+      }
+      for (const name of ["leader.pid", "grand.pid"]) {
+        try {
+          const pid = Number(readFileSync(join(root, name), "utf8"));
+          if (pid > 0) leakedPids.push(pid);
+        } catch {
+          // pid file was not written
+        }
+      }
+    }
+    if (code !== 0) throw new Error(`drain runner exited ${String(code)}: ${stderr}`);
+    const stamp = Number(readFileSync(join(root, "stamp"), "utf8"));
+    const signals = JSON.parse(readFileSync(join(root, "signals.json"), "utf8")) as string[];
+    const grandchildPid = Number(readFileSync(join(root, "grand.pid"), "utf8"));
+    expect(Date.now() - stamp).toBeLessThan(1_500);
+    expect(signals.filter((signal) => signal !== "0")).toEqual(["SIGTERM"]);
+    expect(isPidAlive(grandchildPid)).toBe(false);
   });
 
   it("falls back to the child handle when the pid is not a process group", async () => {

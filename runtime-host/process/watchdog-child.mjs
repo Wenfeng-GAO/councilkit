@@ -30,6 +30,7 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 
 const REAP_GRACE_MS = 5000;
+const DRAIN_POLL_MS = 25;
 
 const hostStdin = process.stdin;
 const hostStdout = process.stdout;
@@ -44,6 +45,7 @@ let groupPid = null;
 let reaping = false;
 let reapFinished = false;
 let reapTimer = null;
+let drainTimer = null;
 let reapReason = null;
 
 function send(message) {
@@ -78,6 +80,12 @@ function groupOccupiedByOriginalMembers(pid) {
   return signalTargetsLiveProcess(-pid);
 }
 
+function stopDrainWatch() {
+  if (drainTimer === null) return;
+  clearInterval(drainTimer);
+  drainTimer = null;
+}
+
 function killGroup(signal) {
   if (groupPid === null) return false;
   try {
@@ -98,6 +106,7 @@ function killGroup(signal) {
 function finishReap() {
   if (reapFinished) return;
   reapFinished = true;
+  stopDrainWatch();
   if (reapTimer !== null) {
     clearTimeout(reapTimer);
     reapTimer = null;
@@ -125,8 +134,33 @@ function finishReap() {
  * Reap the entire process group: SIGTERM first, SIGKILL after the grace
  * window, then the watchdog exits. Idempotent. The grace timer stays
  * referenced so a leader that exits cannot drop the loop before descendants
- * are SIGKILLed (exitSoon is unref'd).
+ * are SIGKILLed (exitSoon is unref'd). If the group drains during that
+ * window, the leader exit path cancels the timer and leaves without SIGKILL.
  */
+function releaseEmptyGroup() {
+  if (reapFinished) return;
+  reapFinished = true;
+  stopDrainWatch();
+  if (reapTimer !== null) {
+    clearTimeout(reapTimer);
+    reapTimer = null;
+  }
+  groupPid = null;
+  exitSoon(0);
+}
+
+function watchGroupDrain(pid) {
+  if (drainTimer !== null || reapFinished) return;
+  drainTimer = setInterval(() => {
+    if (reapFinished) {
+      stopDrainWatch();
+      return;
+    }
+    if (groupOccupiedByOriginalMembers(pid)) return;
+    releaseEmptyGroup();
+  }, DRAIN_POLL_MS);
+}
+
 function reap(reason, graceMs = REAP_GRACE_MS) {
   if (reaping) return;
   reaping = true;
@@ -184,15 +218,13 @@ function handleSpawn(message) {
     }
     if (reapFinished) return;
     // Descendants that ignored SIGTERM still hold the group. Keep the grace
-    // timer; do not exit the watchdog out from under it.
-    if (groupPid !== null && groupOccupiedByOriginalMembers(groupPid)) return;
-    if (reapTimer !== null) {
-      clearTimeout(reapTimer);
-      reapTimer = null;
+    // timer and recheck until it fires, so a descendant that exits during
+    // cleanup does not hold shutdown for the rest of the grace.
+    if (groupPid !== null && groupOccupiedByOriginalMembers(groupPid)) {
+      watchGroupDrain(groupPid);
+      return;
     }
-    reapFinished = true;
-    groupPid = null;
-    exitSoon(0);
+    releaseEmptyGroup();
   });
 
   send({
