@@ -5,7 +5,7 @@
   "type": "module",
   "description": "CouncilKit CLI — council orchestration outside the browser.",
   "engines": {
-    "node": "^22"
+    "node": ">=22"
   },
   "bin": {
     "councilkit": "./bin/councilkit.mjs"
