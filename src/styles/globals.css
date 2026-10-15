@@ -106,3 +106,65 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* 示例报告（councilkit demo）：琥珀色标签和横幅。列表、报告头、工作台共用。 */
+.ck-demo-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 6px;
+  /* 琥珀色实底（UX 审计 ③）：不能和失败红、完成绿混用。 */
+  border: 1px solid var(--color-warn);
+  border-radius: 999px;
+  background: var(--color-warn);
+  color: #1a1408;
+  font-weight: 600;
+  font-family: var(--font-command);
+  font-size: 10px;
+  line-height: 16px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.ck-demo-banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-warn) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  color: var(--color-fg);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.ck-demo-banner p + p {
+  margin-top: 6px;
+}
+.ck-demo-banner-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ck-demo-banner-tags .ck-demo-tag {
+  margin-left: 0;
+}
+.ck-readonly-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border, color-mix(in srgb, var(--color-fg) 25%, transparent));
+  border-radius: 999px;
+  color: var(--color-fg);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.ck-demo-banner-cta {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--color-warn);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ck-library-kinds + .ck-library-kinds {
+  margin-top: 0;
+}

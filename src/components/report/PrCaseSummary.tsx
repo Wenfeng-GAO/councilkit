@@ -1,3 +1,4 @@
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { Link } from "react-router-dom";
@@ -9,6 +10,7 @@ export function PrCaseSummary({
   runs: readonly CliRunSummaryDto[];
   variant?: "full" | "inline";
 }) {
+  if (runs.length > 0 && runs.every((run) => isDemoRun(run))) return null;
   const state = summarizePrCase(runs);
   if (!state.prUrl) return null;
   const inline = variant === "inline";

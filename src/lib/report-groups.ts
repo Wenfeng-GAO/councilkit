@@ -1,6 +1,7 @@
 import { cliRunNeedsPoll } from "@/lib/cli-run-status";
 import { extractPrUrl } from "@/lib/fix-prompt";
 import type { ParsedReviewReport } from "@/lib/review-report";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
 import { normalizeReviewPr, summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
@@ -20,6 +21,7 @@ type RunLike = Pick<CliRunSummaryDto, "kind" | "title" | "status" | "pipeline"> 
   reviewEvidence?: CliRunSummaryDto["reviewEvidence"];
   startedAt?: string | null;
   runId?: string;
+  demo?: boolean | null;
 };
 
 export function isWorkspaceRun(run: Pick<CliRunSummaryDto, "kind">): boolean {
@@ -126,11 +128,10 @@ export interface CaseStatusAxis {
 export function caseStatusAxis(scopedRuns: readonly CliRunSummaryDto[]): CaseStatusAxis | null {
   const representative = latestRun(scopedRuns);
   if (!representative) return null;
-  const active = cliRunNeedsPoll(
-    representative.status,
-    representative.pipeline,
-    representative.kind,
-  );
+  const demoOnly = scopedRuns.every((run) => isDemoRun(run));
+  const active =
+    !demoOnly &&
+    cliRunNeedsPoll(representative.status, representative.pipeline, representative.kind);
   const done =
     !active &&
     (representative.status === "completed" || representative.status === "closed") &&
@@ -141,7 +142,8 @@ export function caseStatusAxis(scopedRuns: readonly CliRunSummaryDto[]): CaseSta
   // squad/repair 已经接手并收尾，历史失败本身不能把案件拖回待处理。
   const recoveryOnRepresentative =
     summary.needsRecovery && summary.latest?.runId === representative.runId;
-  const attention = active || !done || (summary.blockingCount ?? 0) > 0 || recoveryOnRepresentative;
+  const attention =
+    !demoOnly && (active || !done || (summary.blockingCount ?? 0) > 0 || recoveryOnRepresentative);
   return { active, done, attention };
 }
 
@@ -206,6 +208,7 @@ export function caseNeedsAttention(runs: readonly CliRunSummaryDto[]): boolean {
 }
 
 export function runNeedsAttention(run: RunLike): boolean {
+  if (isDemoRun(run)) return false;
   return (
     cliRunNeedsPoll(run.status, run.pipeline) ||
     run.status === "failed" ||
