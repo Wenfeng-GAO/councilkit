@@ -300,15 +300,22 @@ export function SettingsPage() {
   // (readiness state !== "ready") is a successful HTTP response and is written
   // back too, so the rendered row matches the fresh handshake; transport errors
   // (4xx/5xx) leave the cached value intact rather than blanking the row.
-  const handleRecheckCli = async () => {
-    setRecheckInFlight(true);
+  // #321: a row's 「重新检查」 re-probes only that CLI (`?refresh=1&driver=`);
+  // the other rows keep their state and stay clickable.
+  const [rowRecheckIds, setRowRecheckIds] = useState<ReadonlySet<DriverId>>(() => new Set());
+  const handleRecheckCli = async (driverId: DriverId) => {
+    setRowRecheckIds((prev) => new Set(prev).add(driverId));
     try {
-      const data = await client.health({ refresh: true });
+      const data = await client.health({ refresh: true, driverId });
       queryClient.setQueryData(["host", "health"], data);
     } catch {
       // Transport/4xx/5xx: leave the cached health intact.
     } finally {
-      setRecheckInFlight(false);
+      setRowRecheckIds((prev) => {
+        const next = new Set(prev);
+        next.delete(driverId);
+        return next;
+      });
     }
   };
 
@@ -343,7 +350,16 @@ export function SettingsPage() {
           // Transport/4xx/5xx: leave the cached catalog intact.
         }
       });
-      await Promise.all([...readinessCalls, ...catalogCalls]);
+      // 「全部重新检查」 also re-probes every 本机 AI 工具 row (#321).
+      const healthCall = (async () => {
+        try {
+          const data = await client.health({ refresh: true });
+          queryClient.setQueryData(["host", "health"], data);
+        } catch {
+          // Transport/4xx/5xx: leave the cached health intact.
+        }
+      })();
+      await Promise.all([healthCall, ...readinessCalls, ...catalogCalls]);
     } finally {
       setRecheckInFlight(false);
     }
@@ -586,7 +602,7 @@ export function SettingsPage() {
             onClick={handleRecheckAll}
             disabled={hostOnline !== true || rechecking}
           >
-            {rechecking ? "正在重新检查…" : "重新检查"}
+            {rechecking ? "正在重新检查…" : "全部重新检查"}
           </Button>
           <p className="text-xs text-muted">重新探测本机工具状态</p>
         </div>
@@ -608,10 +624,11 @@ export function SettingsPage() {
           cliDrivers={healthQuery.data?.drivers ?? []}
           isLoading={installationsQuery.isPending}
           revalidatingId={revalidateMut.isPending ? (revalidateMut.variables ?? null) : null}
-          driversRechecking={healthQuery.isRefetching || recheckInFlight}
+          driversRechecking={recheckInFlight}
+          recheckingDriverIds={rowRecheckIds}
           onRevalidate={(id) => revalidateMut.mutate(id)}
           onShowRequirements={() => setInfoModal("requirements")}
-          onRecheckDrivers={() => void handleRecheckCli()}
+          onRecheckDriver={(driverId) => void handleRecheckCli(driverId)}
           rediscovering={rediscoverMut.isPending}
           onRediscover={() => rediscoverMut.mutate()}
           onShowDiagnostics={(driverId) => {
@@ -669,7 +686,11 @@ export function SettingsPage() {
           <p>Runtime Host 是一个前台本机进程，固定在 127.0.0.1:43127 提供服务：</p>
           <ol className="list-decimal pl-5">
             <li>在启动它的终端按 Ctrl+C 停止旧进程（若仍在运行）。</li>
-            <li>开发模式运行 `pnpm dev`；或先 `pnpm build` 后以 `pnpm start` 运行生产模式。</li>
+            <li>
+              开发模式运行 <code className="font-command">pnpm dev</code>；或先{" "}
+              <code className="font-command">pnpm build</code> 后以{" "}
+              <code className="font-command">pnpm start</code> 运行生产模式。
+            </li>
             <li>若提示端口被占用，先找到并停止占用 43127 的进程； canonical origin 不会更换。</li>
           </ol>
           <p className="text-xs text-muted">重启后回到本页，健康检查每 5 秒自动恢复。</p>
@@ -684,7 +705,7 @@ export function SettingsPage() {
         <div className="flex flex-col gap-2 text-sm text-fg">
           <p>Runtime Installation 只能由 Host 在本机发现并经校验后信任：</p>
           <ol className="list-decimal pl-5">
-            <li>在本机安装对应 CLI（cld 或 Codex），保持默认安装路径。</li>
+            <li>在本机安装对应 CLI（grok、kimi、codex 或 cursor-agent），保持默认安装路径。</li>
             <li>Host 会校验真实路径与文件指纹；symlink 替换或路径异常会标记为 invalid。</li>
             <li>程序被升级或替换后状态变为 changed，使用「重新验证」确认新版本。</li>
           </ol>

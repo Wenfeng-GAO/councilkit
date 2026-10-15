@@ -219,7 +219,9 @@ export interface CliStateMonitorOptions {
 export interface CliStateMonitor {
   readonly checkoutPath: string;
   snapshot(): DriverDescriptor[];
-  refresh(): void;
+  /** Re-probe every driver, or only `driverId` (#321: a row's 「重新检查」
+   * must not put the other rows back into 「检查中」). */
+  refresh(driverId?: DriverId): void;
   close(): void;
 }
 
@@ -237,15 +239,23 @@ export function createCliStateMonitor(options: CliStateMonitorOptions = {}): Cli
   const spawnProbe = options.spawnProbe ?? defaultSpawnProbe;
   const rows = new Map<DriverId, InternalRow>();
   const kills = new Map<DriverId, () => void>();
-  let generation = 0;
+  // Per-driver generation: refreshing one row must not cancel or discard the
+  // in-flight probe of another row (#321).
+  const generations = new Map<DriverId, number>();
+  const genOf = (driverId: DriverId): number => generations.get(driverId) ?? 0;
+  const bump = (driverId: DriverId): number => {
+    const next = genOf(driverId) + 1;
+    generations.set(driverId, next);
+    return next;
+  };
 
   function write(driverId: DriverId, cliState: CliState): void {
     rows.set(driverId, { cliState, fixCommand: fixCommandFor(driverId, cliState) });
   }
 
-  function scanAndMark(): DriverId[] {
+  function scanAndMark(targets: readonly DriverId[]): DriverId[] {
     const pending: DriverId[] = [];
-    for (const driverId of DRIVER_IDS) {
+    for (const driverId of targets) {
       const found = findDriverBinary(DRIVER_CLI_TOOLS[driverId].bin, env, wellKnownDirs);
       if (!found) {
         write(driverId, "not_installed");
@@ -260,7 +270,7 @@ export function createCliStateMonitor(options: CliStateMonitorOptions = {}): Cli
   async function probeOne(driverId: DriverId, gen: number): Promise<void> {
     const tool = DRIVER_CLI_TOOLS[driverId];
     const executable = findDriverBinary(tool.bin, env, wellKnownDirs);
-    if (gen !== generation) return;
+    if (gen !== genOf(driverId)) return;
     if (!executable) {
       write(driverId, "not_installed");
       return;
@@ -283,7 +293,7 @@ export function createCliStateMonitor(options: CliStateMonitorOptions = {}): Cli
           env,
           timeoutMs,
           onSpawn: (kill) => {
-            if (gen !== generation) {
+            if (gen !== genOf(driverId)) {
               kill();
               return;
             }
@@ -301,22 +311,25 @@ export function createCliStateMonitor(options: CliStateMonitorOptions = {}): Cli
       });
     } catch {
       kills.delete(driverId);
-      if (gen !== generation) return;
+      if (gen !== genOf(driverId)) return;
       write(driverId, "check_failed");
       return;
     }
     kills.delete(driverId);
-    if (gen !== generation) return;
+    if (gen !== genOf(driverId)) return;
     write(driverId, classifyProbeOutput(driverId, result));
   }
 
-  function refresh(): void {
-    generation += 1;
-    const gen = generation;
-    for (const kill of kills.values()) kill();
-    kills.clear();
-    const pending = scanAndMark();
-    for (const driverId of pending) void probeOne(driverId, gen);
+  function refresh(only?: DriverId): void {
+    const targets: readonly DriverId[] = only ? [only] : DRIVER_IDS;
+    const gens = new Map<DriverId, number>();
+    for (const driverId of targets) {
+      gens.set(driverId, bump(driverId));
+      kills.get(driverId)?.();
+      kills.delete(driverId);
+    }
+    const pending = scanAndMark(targets);
+    for (const driverId of pending) void probeOne(driverId, gens.get(driverId) ?? 0);
   }
 
   refresh();
@@ -331,7 +344,7 @@ export function createCliStateMonitor(options: CliStateMonitorOptions = {}): Cli
     },
     refresh,
     close() {
-      generation += 1;
+      for (const driverId of DRIVER_IDS) bump(driverId);
       for (const kill of kills.values()) kill();
       kills.clear();
     },
@@ -361,13 +374,14 @@ function fallbackDrivers(
   });
 }
 
-/** Assemble the public health payload. `refresh` restarts in-flight probes. */
+/** Assemble the public health payload. `refresh` restarts in-flight probes:
+ * all drivers, or only `refreshDriverId` when given (#321). */
 export function composeHealthResponse(
   services: HostServices,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; refreshDriverId?: DriverId } = {},
 ): HealthResponse {
   const monitor = services.cliStateMonitor as CliStateMonitor | undefined;
-  if (options.refresh) monitor?.refresh();
+  if (options.refresh) monitor?.refresh(options.refreshDriverId);
   const drivers = monitor
     ? monitor.snapshot()
     : fallbackDrivers(

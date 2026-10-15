@@ -114,7 +114,7 @@ export function ProfilesSection({
                 {hostOnline && readiness?.retryAfterMs !== undefined ? (
                   <p className="text-xs text-muted">
                     握手失败退避中，约 {Math.ceil(readiness.retryAfterMs / 1000)}{" "}
-                    秒后可重新握手；点击页面右上角「重新检查」可立即强制刷新。
+                    秒后可重新握手；点击页面右上角「全部重新检查」可立即强制刷新。
                   </p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">

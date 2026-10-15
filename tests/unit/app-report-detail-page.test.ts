@@ -383,7 +383,7 @@ describe("ReportDetailPage", () => {
     expect(view.container.textContent).toContain("正在打开报告…");
     pending.reject(new TypeError("Failed to fetch"));
     await waitForText(view.container, HOST_DOWN_TITLE);
-    expect(view.container.textContent).toContain(HOST_DOWN_HINT);
+    expect(view.container.textContent).toContain(HOST_DOWN_HINT.replace(/`/g, ""));
     await view.unmount();
     mounted.splice(0);
 
@@ -688,7 +688,7 @@ describe("ReportDetailPage", () => {
     await clickButton(view.container, "发起复审");
     await waitForText(
       view.container,
-      "pipeline-error:Host 还没有加载修复接口。请重启 `pnpm dev` / `pnpm start` 后再点内置修复。",
+      "pipeline-error:Host 还没有加载修复接口。请重启 Host（pnpm dev 或 pnpm start）后再点内置修复。",
     );
 
     client.startCliRunAction.mockRejectedValueOnce(

@@ -168,7 +168,7 @@ describe("ReportsPage", () => {
 
     pending.reject(new TypeError("Failed to fetch"));
     await waitForText(view.container, HOST_DOWN_TITLE);
-    expect(view.container.textContent).toContain(HOST_DOWN_HINT);
+    expect(view.container.textContent).toContain(HOST_DOWN_HINT.replace(/`/g, ""));
     await view.unmount();
     mounted.splice(0);
 
@@ -181,9 +181,11 @@ describe("ReportsPage", () => {
     mounted.splice(0);
 
     const empty = await openWith({ runs: [] });
-    await waitForText(
-      empty.container,
-      "还没有报告。先看一份示例，或运行 `councilkit init` 后回来。",
+    // #318: the command renders as code; no literal backticks on screen.
+    await waitForText(empty.container, "还没有报告。先看一份示例，或运行 councilkit init 后回来。");
+    expect(empty.container.textContent).not.toContain("`");
+    expect([...empty.container.querySelectorAll("code")].map((node) => node.textContent)).toContain(
+      "councilkit init",
     );
     expect(empty.container.textContent).toContain(
       "上方的「先看示例」不需要账号；初始化后再粘贴 PR 链接开始真实审查。",

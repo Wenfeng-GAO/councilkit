@@ -39,7 +39,7 @@ function render(cliDrivers: DriverDescriptor[], installations: InstallationSecti
         driversRechecking: false,
         onRevalidate: () => undefined,
         onShowRequirements: () => undefined,
-        onRecheckDrivers: () => undefined,
+        onRecheckDriver: () => undefined,
         onShowDiagnostics: () => undefined,
         onRediscover: () => undefined,
       }),
