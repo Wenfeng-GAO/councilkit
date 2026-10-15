@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { cliFailureMessage } from "@shared/runtime/cli-failure-message";
 import { makeError } from "@shared/runtime/errors";
 import {
   type ReviewJuryResponse,
@@ -60,23 +61,6 @@ function reviewJuryFailure(error: unknown): HttpError {
       { retryable: false },
     ),
   );
-}
-
-function cliFailureMessage(error: unknown): string | null {
-  if (error === null || typeof error !== "object" || !("stdout" in error)) return null;
-  const stdout = String(error.stdout).trim();
-  if (stdout.length === 0) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (parsed === null || typeof parsed !== "object") return null;
-  const message = (parsed as { error?: { message?: unknown } }).error?.message;
-  if (typeof message !== "string") return null;
-  const trimmed = message.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 /** The Host delegates persistence to the CLI. Serialize saves from browser tabs. */
