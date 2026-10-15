@@ -171,7 +171,11 @@ export function createExecutionRegistry(_deps: { logger: Logger }): ExecutionReg
 
     emit(executionId, proto) {
       const record = records.get(executionId);
-      if (!record || record.tombstone) return null;
+      // The first terminal event is the ACK identity. Status polls treat
+      // lastSeq as that seq once the execution has left `running`. A later
+      // event would move lastSeq past it, and a second terminal would replace
+      // the one a follower already observed. Every driver emits through here.
+      if (!record || record.tombstone || record.terminal) return null;
       const stamped = {
         ...proto,
         executionId,

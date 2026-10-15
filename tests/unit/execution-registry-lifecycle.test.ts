@@ -437,17 +437,56 @@ describe("ExecutionRegistry follow", () => {
     expect(reg.eventConnectionCount()).toBe(0);
     unsubscribe();
     expect(reg.eventConnectionCount()).toBe(0);
-    expect(reg.emit("exec-term-follow", { type: "output.delta", text: "late" })).toEqual({
-      executionId: "exec-term-follow",
-      seq: 3,
-      at: AT,
-      type: "output.delta",
-      text: "late",
-    });
+    expect(reg.emit("exec-term-follow", { type: "output.delta", text: "late" })).toBeNull();
     expect(seqs).toEqual([1, 2]);
-    expect(reg.get("exec-term-follow")?.events.map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(reg.get("exec-term-follow")?.events.map((event) => event.seq)).toEqual([1, 2]);
+    expect(reg.get("exec-term-follow")?.lastSeq).toBe(2);
     expect(reg.get("exec-term-follow")?.state).toBe("interrupted");
     expect(reg.eventConnectionCount()).toBe(0);
+  });
+
+  it("drops events after the first terminal so lastSeq stays the ACK seq", () => {
+    const reg = registry();
+    reg.begin("exec-absorb", "p-1", "scope-1");
+    const seen: number[] = [];
+    mustUnsub(
+      reg.follow("exec-absorb", 0, (event) => {
+        seen.push(event.seq);
+      }),
+    );
+    const interrupted = reg.emit("exec-absorb", {
+      type: "interrupted",
+      reason: "user_cancelled",
+      dispatchState: "accepted",
+      toolState: "none",
+    });
+    expect(interrupted?.seq).toBe(1);
+    expect(
+      reg.emit("exec-absorb", {
+        type: "completed",
+        output: "late",
+        requestedModel: "m",
+        effectiveModel: null,
+        modelVerdict: "unknown",
+        toolState: "none",
+        dispatchState: "accepted",
+        usage: null,
+        finalSeq: 1,
+      }),
+    ).toBeNull();
+    expect(reg.emit("exec-absorb", { type: "output.delta", text: "late" })).toBeNull();
+    expect(seen).toEqual([1]);
+    expect(reg.get("exec-absorb")?.state).toBe("interrupted");
+    expect(reg.get("exec-absorb")?.terminal).toEqual(interrupted);
+    expect(reg.get("exec-absorb")?.lastSeq).toBe(1);
+    expect(reg.get("exec-absorb")?.events.map((event) => event.seq)).toEqual([1]);
+    expect(reg.ack("exec-absorb", 1, "discarded")).toEqual({
+      outcome: "acknowledged",
+      disposition: "discarded",
+    });
+    expect(reg.emit("exec-absorb", { type: "output.delta", text: "after-ack" })).toBeNull();
+    expect(reg.get("exec-absorb")?.lastSeq).toBe(1);
+    expect(reg.get("exec-absorb")?.tombstone).toBe(true);
   });
 
   it("keeps delivering to a listener that subscribed before the terminal event", () => {
