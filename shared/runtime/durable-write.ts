@@ -89,9 +89,24 @@ function assertParentNotSymlink(dir: string): void {
 }
 
 /**
+ * True when `real` is not `lexical`.
+ * macOS allows `real === "/private" + lexical` because `/tmp` and `/var` are
+ * symlinks to `/private/tmp` and `/private/var` and the tail is unchanged.
+ * Any other mismatch is an escape, including a same-basename link.
+ */
+export function realpathEscapesLexical(
+  lexical: string,
+  real: string,
+  platform: NodeJS.Platform,
+): boolean {
+  if (lexical === real) return false;
+  if (platform === "darwin" && real === `/private${lexical}`) return false;
+  return true;
+}
+
+/**
  * `lstat` follows every ancestor. Compare the lexical path with `realpath`.
- * A mismatch means some ancestor symlink left this directory. On macOS, `/tmp`
- * and `/var` are symlinks to `/private/tmp` and `/private/var`. The tail is unchanged.
+ * A mismatch means some ancestor symlink left this directory.
  */
 function rejectsEscapedDirectory(dir: string): void {
   const lexical = normalize(resolve(dir));
@@ -102,9 +117,7 @@ function rejectsEscapedDirectory(dir: string): void {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") throw ioError("ELOOP", dir);
     throw error;
   }
-  if (lexical === real) return;
-  if (process.platform === "darwin" && real === `/private${lexical}`) return;
-  throw ioError("ELOOP", dir);
+  if (realpathEscapesLexical(lexical, real, process.platform)) throw ioError("ELOOP", dir);
 }
 
 /** Write `data` over `filePath` without following a symlink. Returns bytes written. */
@@ -180,7 +193,7 @@ export function openNoFollowAppend(filePath: string): number {
  * Returns null for ENOENT, ELOOP, or a non-regular file. Other IO errors throw.
  */
 export function readPrivateText(filePath: string): string | null {
-  if (parentHidesFile(dirname(filePath))) return null;
+  if (directoryEscapes(dirname(filePath))) return null;
   let fd: number;
   try {
     fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -197,7 +210,11 @@ export function readPrivateText(filePath: string): string | null {
   }
 }
 
-function parentHidesFile(dir: string): boolean {
+/**
+ * True when `dir` is a symlink, or an existing directory reached through one.
+ * A missing path is false. Callers that reject a leaf symlink reject this too.
+ */
+export function directoryEscapes(dir: string): boolean {
   let st: Stats;
   try {
     st = lstatSync(dir);

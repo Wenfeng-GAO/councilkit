@@ -17,6 +17,7 @@ import {
   appendPrivateFile,
   openNoFollowAppend,
   readPrivateText,
+  realpathEscapesLexical,
   replacePrivateFile,
 } from "@shared/runtime/durable-write";
 import { afterEach, describe, expect, it } from "vitest";
@@ -247,5 +248,21 @@ describe("readPrivateText", () => {
 
     expect(readPrivateText(join(link, "nested", "secret.txt"))).toBeNull();
     expect(readFileSync(join(nested, "secret.txt"), "utf8")).toBe("SECRET\n");
+  });
+});
+
+describe("realpathEscapesLexical", () => {
+  it("allows the macOS /tmp and /var aliases and rejects every other mismatch", () => {
+    expect(realpathEscapesLexical("/tmp/ck", "/private/tmp/ck", "darwin")).toBe(false);
+    expect(realpathEscapesLexical("/tmp", "/private/tmp", "darwin")).toBe(false);
+    expect(realpathEscapesLexical("/var/folders/ab", "/private/var/folders/ab", "darwin")).toBe(
+      false,
+    );
+    expect(realpathEscapesLexical("/var", "/private/var", "darwin")).toBe(false);
+    expect(realpathEscapesLexical("/data/runs", "/data/runs", "darwin")).toBe(false);
+    expect(realpathEscapesLexical("/tmp/ck", "/private/tmp/other", "darwin")).toBe(true);
+    expect(realpathEscapesLexical("/Users/a/runs", "/tmp/attacker/runs", "darwin")).toBe(true);
+    expect(realpathEscapesLexical("/tmp/ck", "/private/tmp/ck", "linux")).toBe(true);
+    expect(realpathEscapesLexical("/data/runs", "/private/data/runs", "linux")).toBe(true);
   });
 });

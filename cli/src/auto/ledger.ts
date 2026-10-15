@@ -36,7 +36,7 @@ import {
   planLockFileSchema,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
-import { appendPrivateFile } from "@shared/runtime/durable-write";
+import { appendPrivateFile, directoryEscapes } from "@shared/runtime/durable-write";
 import type { DecisionsFile } from "@shared/runtime/review-explainer/contracts";
 import {
   ASSESSMENT_DIAGNOSTICS_FILE,
@@ -573,10 +573,13 @@ export function persistFindingsFromReport(input: {
     const againstDir = join(dirname(input.runDir), input.againstRunId);
     const sidecarPresent = existsSync(join(againstDir, FINDING_GROUPS_FILE));
     let priorBytes: string | undefined;
-    try {
-      priorBytes = readFileSync(join(againstDir, "findings.json"), "utf8");
-    } catch {
-      priorBytes = undefined;
+    const priorFindings = join(againstDir, "findings.json");
+    if (!directoryEscapes(dirname(priorFindings))) {
+      try {
+        priorBytes = readFileSync(priorFindings, "utf8");
+      } catch {
+        priorBytes = undefined;
+      }
     }
     try {
       priorGroups = loadFindingGroups({
@@ -649,10 +652,13 @@ export function loadAgainstContext(
   const existing = readFindings(againstRunDir);
   if (existing) return { findings: projectLandingClaims(existing, landings), range };
   let markdown = "";
-  try {
-    markdown = readFileSync(join(againstRunDir, "report.md"), "utf8");
-  } catch {
-    markdown = "";
+  const reportPath = join(againstRunDir, "report.md");
+  if (!directoryEscapes(dirname(reportPath))) {
+    try {
+      markdown = readFileSync(reportPath, "utf8");
+    } catch {
+      markdown = "";
+    }
   }
   const extracted = extractFindingsFromReport({
     markdown,
@@ -1400,7 +1406,7 @@ function assertRegularOrMissing(path: string): void {
     if (ioCode(error) === "ENOENT") return;
     throw errors.io(`cannot stat ${name}`);
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
+  if (stat.isSymbolicLink() || !stat.isFile() || directoryEscapes(dirname(path))) {
     throw errors.io(`${name} is not a regular file`);
   }
 }
