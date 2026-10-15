@@ -51,19 +51,31 @@ function rawGet(
 }
 
 describe("Node.js version gate", () => {
-  it("accepts Node.js 22", () => {
-    const result = checkNodeVersion("v22.17.0");
-    expect(result.ok).toBe(true);
-    expect(result.major).toBe(22);
+  it("#282 accepts Node.js 22 and every newer major (24 / 26 run in CI)", () => {
+    for (const [version, major] of [
+      ["v22.17.0", 22],
+      ["v23.1.0", 23],
+      ["v24.0.0", 24],
+      ["v26.1.2", 26],
+    ] as const) {
+      const result = checkNodeVersion(version);
+      expect(result.ok, version).toBe(true);
+      expect(result.major).toBe(major);
+    }
   });
 
-  it("rejects Node.js 21 and 23 with a structured unsupported error", () => {
-    for (const version of ["v21.7.3", "v23.1.0"]) {
+  it("#282 accepts the Node.js this test process runs on (the CI matrix leg)", () => {
+    expect(checkNodeVersion(process.version).ok).toBe(true);
+  });
+
+  it("#282 rejects Node.js < 22 with a structured error and a copyable fix", () => {
+    for (const version of ["v20.19.2", "v21.7.3", "garbage"]) {
       const result = checkNodeVersion(version);
-      expect(result.ok).toBe(false);
+      expect(result.ok, version).toBe(false);
       expect(result.error?.code).toBe("UNSUPPORTED_NODE");
       expect(result.error?.phase).toBe("bootstrap");
-      expect(result.error?.message).toContain("22");
+      expect(result.error?.message).toContain("Node.js 22 or newer");
+      expect(result.error?.message).toContain("nvm install 22 && nvm use 22");
     }
   });
 });

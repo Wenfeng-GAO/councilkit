@@ -13,6 +13,10 @@ export const CANONICAL_PORT = 43127 as const;
 export const CANONICAL_ORIGIN = "http://127.0.0.1:43127" as const;
 export const CANONICAL_HOST_HEADER = "127.0.0.1:43127" as const;
 
+/**
+ * Lowest supported Node.js major. The Host accepts this or newer, matching
+ * `engines: { node: ">=22" }` and the CI matrix (22 / 24 / 26). #282.
+ */
 export const SUPPORTED_NODE_MAJOR = 22 as const;
 
 /** Session capability cookie + CSRF header names (U2 security boundary). */

@@ -16,11 +16,19 @@ permissions:
 jobs:
   # CI-01 / CI-02: lint (0 errors), typecheck, build and unit tests on both OSes.
   check:
-    name: check (${{ matrix.os }})
+    name: check (${{ matrix.os }}, node ${{ matrix.node }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        node: [22]
+        # #282: engines is ">=22"; prove newer majors install, build, pass and
+        # start the Host instead of failing with UNSUPPORTED_NODE.
+        include:
+          - os: ubuntu-latest
+            node: 24
+          - os: ubuntu-latest
+            node: 26
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -28,13 +36,25 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test:unit
+      - name: Node version gate (#282)
+        run: pnpm exec vitest run tests/host/runtime-host-bootstrap.test.ts -t "#282"
+      - name: Built Host starts on this Node (#282)
+        run: |
+          node dist-host/main.mjs > host.log 2>&1 &
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:43127/api/v1/health > health.json 2>/dev/null; then break; fi
+            sleep 0.5
+          done
+          cat host.log
+          grep -q '"ok":true' health.json
+          grep -q "\"major\":${{ matrix.node }}" health.json
 
   # CI-03: macOS, brand-new HOME, no agent CLI, no tokens: install from scratch
   # and walk the demo path (scripts/ci-smoke.sh).

@@ -97,10 +97,14 @@ export interface NodeCheckResult {
   error?: RuntimeError;
 }
 
-/** Node.js 22 is a hard acceptance requirement, not optional hardening. */
+/**
+ * Node.js >= 22 is a hard requirement (#282): the same floor as
+ * `engines` in package.json, so install and Host start agree. Newer majors
+ * (24, 26) are exercised in CI.
+ */
 export function checkNodeVersion(version: string = process.version): NodeCheckResult {
   const major = Number.parseInt(version.replace(/^v/, "").split(".")[0] ?? "0", 10);
-  if (major === SUPPORTED_NODE_MAJOR) {
+  if (Number.isFinite(major) && major >= SUPPORTED_NODE_MAJOR) {
     return { ok: true, version, major };
   }
   return {
@@ -110,7 +114,7 @@ export function checkNodeVersion(version: string = process.version): NodeCheckRe
     error: makeError(
       "UNSUPPORTED_NODE",
       "bootstrap",
-      `CouncilKit Runtime Host requires Node.js ${SUPPORTED_NODE_MAJOR}.x (current: ${version}).`,
+      `CouncilKit Runtime Host requires Node.js ${SUPPORTED_NODE_MAJOR} or newer (current: ${version}). Fix: nvm install ${SUPPORTED_NODE_MAJOR} && nvm use ${SUPPORTED_NODE_MAJOR}`,
       { retryable: false },
     ),
   };

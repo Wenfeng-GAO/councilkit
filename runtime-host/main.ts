@@ -37,7 +37,7 @@ import { type HostServices, type Route, createRuntimeServer } from "./server";
 /**
  * CouncilKit Runtime Host entry point.
  *
- * Foreground Node.js 22 process serving the Web UI and the same-origin
+ * Foreground Node.js (>= 22) process serving the Web UI and the same-origin
  * /api/v1 from the fixed canonical origin. Startup failures (wrong Node
  * version, occupied port) are structured and fatal — the origin never moves.
  */
