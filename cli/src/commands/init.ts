@@ -5,6 +5,7 @@
  */
 import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { findExecutable } from "../auto/driver-commands";
+import { cliLang } from "../cli-locale";
 import { CliError, EXIT } from "../errors";
 import {
   DEFAULT_AGENT_SPECS,
@@ -210,7 +211,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       env,
     }),
   };
-  await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
+  await out.finish(outcome, (d) => renderHuman(d as InitOutcome, cliLang(env)));
 }
 
 function recreateDefaults(store: Store): void {
@@ -286,7 +287,14 @@ function briefCouncil(
   return { id: council.id, name: council.name, reporter };
 }
 
-function renderHuman(outcome: InitOutcome): string {
+/**
+ * Human-readable summary. In a zh locale the two lines a person acts on use
+ * Chinese prefixes (#318, designer 2026-10-16); `--json` field names and
+ * values are unchanged.
+ */
+function renderHuman(outcome: InitOutcome, lang: "zh" | "en"): string {
+  const missingPrefix = lang === "zh" ? "没找到：" : "missing on PATH: ";
+  const nextPrefix = lang === "zh" ? "下一步：" : "next: ";
   const lines: string[] = [];
   const created = outcome.createdAgents.length;
   const reused = outcome.reusedAgents.length;
@@ -302,9 +310,9 @@ function renderHuman(outcome: InitOutcome): string {
     lines.push(`  ${agent.name}  ${agent.driverId}/${agent.modelId}  [${mark}]`);
   }
   if (outcome.missingDrivers.length > 0) {
-    lines.push(`missing on PATH: ${outcome.missingDrivers.join(", ")}`);
+    lines.push(`${missingPrefix}${outcome.missingDrivers.join(", ")}`);
   }
-  lines.push(`next: ${outcome.next}`);
+  lines.push(`${nextPrefix}${outcome.next}`);
   lines.push("open reports: http://127.0.0.1:43127/reports");
   return lines.join("\n");
 }

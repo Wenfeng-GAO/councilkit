@@ -21,9 +21,11 @@ interface FakeSink {
   json: boolean;
   lines: string[];
   finished: unknown;
+  /** Human render of `finished` (what a terminal user sees without --json). */
+  rendered?: string;
   progress(m: string): void;
   diag(m: string): void;
-  finish(d: unknown): Promise<void>;
+  finish(d: unknown, humanRender?: (d: unknown) => string): Promise<void>;
 }
 
 function makeSink(): FakeSink {
@@ -33,8 +35,9 @@ function makeSink(): FakeSink {
     finished: undefined,
     progress: (m) => sink.lines.push(m),
     diag: () => {},
-    finish: (d) => {
+    finish: (d, humanRender) => {
       sink.finished = d;
+      sink.rendered = humanRender?.(d);
       return Promise.resolve();
     },
   };
@@ -121,6 +124,40 @@ describe("councilkit init", () => {
     }
     process.env.PATH = bin;
   }
+
+  function setLocale(lang: string): void {
+    process.env.LANG = lang;
+    process.env.LC_ALL = lang;
+    process.env.LC_MESSAGES = lang;
+    process.env.LANGUAGE = lang.slice(0, 2);
+  }
+
+  it("#318 zh init human lines use 「没找到：」 and 「下一步：」; --json keys stay English", async () => {
+    stub(["grok"]);
+    setLocale("zh_CN.UTF-8");
+    const sink = makeSink();
+    await runInit([], sink);
+    const human = sink.rendered ?? "";
+    expect(human).toMatch(/^没找到：/m);
+    expect(human).toMatch(/^下一步：/m);
+    expect(human).not.toContain("missing on PATH:");
+    expect(human).not.toMatch(/^next: /m);
+    const data = sink.finished as Record<string, unknown>;
+    expect(Object.keys(data)).toEqual(
+      expect.arrayContaining(["missingDrivers", "next", "createdAgents", "reusedAgents"]),
+    );
+  });
+
+  it("#318 en init human lines keep the English prefixes", async () => {
+    stub(["grok"]);
+    setLocale("en_US.UTF-8");
+    const sink = makeSink();
+    await runInit([], sink);
+    const human = sink.rendered ?? "";
+    expect(human).toMatch(/^missing on PATH: /m);
+    expect(human).toMatch(/^next: /m);
+    expect(human).not.toContain("没找到：");
+  });
 
   it("fails with exit 2 and writes no store when no drivers are on PATH", async () => {
     process.env.PATH = bin;
