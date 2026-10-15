@@ -7,8 +7,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -18,8 +18,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import { IDEATE_AUTH_BASENAMES } from "../src/auto/ideate-policy";
-import { IDEATE_REPORT_HEADINGS } from "../src/auto/templates/ideate";
 import type { RunnerTimers, SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
+import { IDEATE_REPORT_HEADINGS } from "../src/auto/templates/ideate";
 import { IdeateExit, runIdeate } from "../src/commands/ideate";
 import { CliError } from "../src/errors";
 import { resolvePaths } from "../src/store/paths";
@@ -117,9 +117,15 @@ describe("councilkit ideate", () => {
     poisoned = mkdtempSync(join(tmpdir(), "ck-ideate-poison-"));
     mkdirSync(join(poisoned, ".kimi-code", "credentials"), { recursive: true });
     mkdirSync(join(poisoned, ".grok"), { recursive: true });
-    writeFileSync(join(poisoned, ".kimi-code", "server.token"), "kimi-secret-token\n", { mode: 0o600 });
-    writeFileSync(join(poisoned, ".kimi-code", "credentials", "token"), "kimi-cred\n", { mode: 0o600 });
-    writeFileSync(join(poisoned, ".grok", "auth.json"), '{"token":"grok-secret"}\n', { mode: 0o600 });
+    writeFileSync(join(poisoned, ".kimi-code", "server.token"), "kimi-secret-token\n", {
+      mode: 0o600,
+    });
+    writeFileSync(join(poisoned, ".kimi-code", "credentials", "token"), "kimi-cred\n", {
+      mode: 0o600,
+    });
+    writeFileSync(join(poisoned, ".grok", "auth.json"), '{"token":"grok-secret"}\n', {
+      mode: 0o600,
+    });
     for (const name of ["cld", "kimi", "codex", "grok", "cursor-agent"]) {
       writeFileSync(join(bin, name), "#!/bin/sh\nexit 0\n");
       chmodSync(join(bin, name), 0o755);
@@ -514,7 +520,12 @@ describe("councilkit ideate", () => {
     let mid:
       | {
           runStatus: string;
-          proposals: Array<{ attemptId: string; status: string; durationMs: number | null; lastActivity: string | null }>;
+          proposals: Array<{
+            attemptId: string;
+            status: string;
+            durationMs: number | null;
+            lastActivity: string | null;
+          }>;
           aggregator: { status: string; durationMs: number | null };
         }
       | undefined;
@@ -526,7 +537,9 @@ describe("councilkit ideate", () => {
           fake.advance(30_000);
           fake.fire();
           const runs = readdirSync(join(home, "runs"));
-          const live = JSON.parse(readFileSync(join(home, "runs", runs[0], "status.json"), "utf8")) as {
+          const live = JSON.parse(
+            readFileSync(join(home, "runs", runs[0], "status.json"), "utf8"),
+          ) as {
             status: string;
             progress: {
               attempts: Array<{
@@ -539,8 +552,12 @@ describe("councilkit ideate", () => {
           };
           mid = {
             runStatus: live.status,
-            proposals: live.progress.attempts.filter((row) => row.attemptId.startsWith("proposal-")),
-            aggregator: live.progress.attempts.find((row) => row.attemptId === "aggregate-final") ?? {
+            proposals: live.progress.attempts.filter((row) =>
+              row.attemptId.startsWith("proposal-"),
+            ),
+            aggregator: live.progress.attempts.find(
+              (row) => row.attemptId === "aggregate-final",
+            ) ?? {
               status: "missing",
               durationMs: null,
             },
@@ -555,11 +572,15 @@ describe("councilkit ideate", () => {
     };
     const sink = makeSink();
     try {
-      await runIdeate(["status heartbeat idea", "--debate-rounds", "0", "--concurrency", "1", "--json"], sink, {
-        spawnImpl,
-        timers: fake.timers,
-        heartbeatIntervalMs: 30_000,
-      });
+      await runIdeate(
+        ["status heartbeat idea", "--debate-rounds", "0", "--concurrency", "1", "--json"],
+        sink,
+        {
+          spawnImpl,
+          timers: fake.timers,
+          heartbeatIntervalMs: 30_000,
+        },
+      );
     } catch (error) {
       if (!(error instanceof IdeateExit) || error.exitCode !== 0) throw error;
     }
@@ -580,14 +601,19 @@ describe("councilkit ideate", () => {
       readFileSync(join(resolvePaths().runDir(out.runId), "status.json"), "utf8"),
     ) as {
       status: string;
-      progress: { attempts: Array<{ attemptId: string; status: string; lastActivity: string | null }> };
+      progress: {
+        attempts: Array<{ attemptId: string; status: string; lastActivity: string | null }>;
+      };
     };
     expect(finalLive.status).toBe("completed");
-    expect(finalLive.progress.attempts.filter((row) => row.attemptId.startsWith("proposal-")).map((row) => row.status)).toEqual([
-      "success",
-      "success",
-    ]);
-    expect(finalLive.progress.attempts.find((row) => row.attemptId === "aggregate-final")?.status).toBe("success");
+    expect(
+      finalLive.progress.attempts
+        .filter((row) => row.attemptId.startsWith("proposal-"))
+        .map((row) => row.status),
+    ).toEqual(["success", "success"]);
+    expect(
+      finalLive.progress.attempts.find((row) => row.attemptId === "aggregate-final")?.status,
+    ).toBe("success");
     expect(fake.activeCount()).toBe(0);
   });
 
@@ -604,7 +630,9 @@ describe("councilkit ideate", () => {
       spawned = 0;
       let caught: unknown;
       try {
-        await runIdeate(["idea", "--debate-rounds", "0", "--concurrency", raw], sink, { spawnImpl });
+        await runIdeate(["idea", "--debate-rounds", "0", "--concurrency", raw], sink, {
+          spawnImpl,
+        });
       } catch (error) {
         caught = error;
       }

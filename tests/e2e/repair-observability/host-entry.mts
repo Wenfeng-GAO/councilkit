@@ -11,8 +11,8 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -33,6 +33,7 @@ import {
 } from "../../../runtime-host/installations/registry";
 import { createLogger } from "../../../runtime-host/logging";
 import { createProfileProbe } from "../../../runtime-host/profiles/probe";
+import { repairObservationRoutes } from "../../../runtime-host/repair-observation/routes";
 import { cliRunsRoutes } from "../../../runtime-host/routes/cli-runs";
 import { diagnosticsRoutes } from "../../../runtime-host/routes/diagnostics";
 import { healthRoutes } from "../../../runtime-host/routes/health";
@@ -44,24 +45,9 @@ import { scopeRoutes } from "../../../runtime-host/routes/scopes";
 import { createScopeManager } from "../../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../../runtime-host/scopes/session-reconciler";
 import { createSessionCapability } from "../../../runtime-host/security/session-capability";
-import {
-  type HostServices,
-  type Route,
-  createRuntimeServer,
-} from "../../../runtime-host/server";
-import { repairObservationRoutes } from "../../../runtime-host/repair-observation/routes";
-import {
-  type FixtureName,
-  HOST_HEADER,
-  PORT,
-  T0_MS,
-  TASK_ID_ROUND2,
-} from "./constants";
-import {
-  type CursorLine,
-  lineJson,
-  textProgress,
-} from "./fixtures/cursor-events";
+import { type HostServices, type Route, createRuntimeServer } from "../../../runtime-host/server";
+import { type FixtureName, HOST_HEADER, PORT, T0_MS, TASK_ID_ROUND2 } from "./constants";
+import { type CursorLine, lineJson, textProgress } from "./fixtures/cursor-events";
 import {
   appendOrchestratorLines,
   chmodPath,
@@ -74,7 +60,7 @@ process.env.COUNCILKIT_MODE = "production";
 process.env.COUNCILKIT_E2E = "1";
 
 // ---------------------------------------------------------------------------
- // Virtual clock + case home (shared by observation routes + producer)
+// Virtual clock + case home (shared by observation routes + producer)
 // ---------------------------------------------------------------------------
 
 const clock = {
@@ -147,13 +133,19 @@ const fakeInstallationRegistry: InstallationRegistry = {
     installationId in FAKE_INSTALLATIONS ? installationDto(installationId) : undefined,
   revalidate: (installationId: string) => {
     if (!(installationId in FAKE_INSTALLATIONS)) {
-      throw installationFailure("INSTALLATION_NOT_FOUND", `Unknown installation "${installationId}".`);
+      throw installationFailure(
+        "INSTALLATION_NOT_FOUND",
+        `Unknown installation "${installationId}".`,
+      );
     }
     return installationDto(installationId);
   },
   assertExecutable: (installationId: string): InstallationRecord => {
     if (!(installationId in FAKE_INSTALLATIONS)) {
-      throw installationFailure("INSTALLATION_NOT_FOUND", `Unknown installation "${installationId}".`);
+      throw installationFailure(
+        "INSTALLATION_NOT_FOUND",
+        `Unknown installation "${installationId}".`,
+      );
     }
     const base = FAKE_INSTALLATIONS[installationId];
     return {
@@ -359,10 +351,7 @@ function producerRoutes(): Route[] {
       pattern: `${TEST_BASE}/finish`,
       auth: "session",
       bodySchema: z.object({
-        businessResult: z
-          .enum(["approved", "needs_attention", "stopped"])
-          .nullable()
-          .optional(),
+        businessResult: z.enum(["approved", "needs_attention", "stopped"]).nullable().optional(),
         reasonCode: z.string().nullable().optional(),
         status: z.string().optional(),
         phase: z.string().optional(),
@@ -397,7 +386,10 @@ function producerRoutes(): Route[] {
           if (last) last.childReviewId = input.childReviewId;
           current.latestReviewId = input.childReviewId;
         }
-        writeFileSync(repairPath, `${JSON.stringify(current)}\n`, { encoding: "utf8", mode: 0o600 });
+        writeFileSync(repairPath, `${JSON.stringify(current)}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
         const statusPath = join(caseState.home, "runs", caseState.runId, "status.json");
         writeFileSync(
           statusPath,
@@ -482,11 +474,7 @@ function producerRoutes(): Route[] {
       pattern: `${TEST_BASE}/env-sentinel`,
       auth: "session",
       handler: () => {
-        const userHome = join(
-          process.env.HOME ?? tmpdir(),
-          ".config",
-          "councilkit",
-        );
+        const userHome = join(process.env.HOME ?? tmpdir(), ".config", "councilkit");
         let userHomeHash: string | null = null;
         if (existsSync(userHome)) {
           // Hash listing only — never read credential files.
@@ -581,7 +569,8 @@ async function main(): Promise<void> {
   const executions = createExecutionRegistry({ logger });
   const reconciler = createSessionReconciler();
   const driverFactories = {
-    "claude-stream-json": (participantId: string) => noopDriver("claude-stream-json", participantId),
+    "claude-stream-json": (participantId: string) =>
+      noopDriver("claude-stream-json", participantId),
     "codex-app-server": (participantId: string) => noopDriver("codex-app-server", participantId),
     "kimi-stream-json": (participantId: string) => noopDriver("kimi-stream-json", participantId),
     "grok-stream-json": (participantId: string) => noopDriver("grok-stream-json", participantId),

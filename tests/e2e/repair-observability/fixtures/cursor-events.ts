@@ -19,7 +19,10 @@ export function textProgress(
   };
 }
 
-export function thinkingBlock(text: string, opts: { sessionId?: string; at?: string } = {}): CursorLine {
+export function thinkingBlock(
+  text: string,
+  opts: { sessionId?: string; at?: string } = {},
+): CursorLine {
   return {
     type: "assistant",
     timestamp: opts.at,

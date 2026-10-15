@@ -155,12 +155,12 @@ export function parseOfficialPolicyFreezeStdout(
     ? (parsed.required_gates as OfficialRequiredGate[])
     : [];
   const expected = input.policy;
-  const requiredGates =
-    expected?.required_gates ?? (stdoutGates.length > 0 ? stdoutGates : []);
+  const requiredGates = expected?.required_gates ?? (stdoutGates.length > 0 ? stdoutGates : []);
   if (requiredGates.length === 0) {
     return { ok: false, reason: "official freeze missing required_gates" };
   }
-  const independence = expected?.independence ??
+  const independence =
+    expected?.independence ??
     (isIndependence(parsed.independence) ? parsed.independence : undefined);
   if (!independence) {
     return { ok: false, reason: "official freeze missing independence" };

@@ -205,10 +205,7 @@ function writeRepairTranscript(runDir: string, startedAt = T0_ISO): void {
       profileName: "e2e-repair-obs",
     })}\n`,
   );
-  writeText(
-    join(runDir, "report.md"),
-    `# Repair Report\n\n目标：${GOAL}\n\nPR：${PR_URL}\n`,
-  );
+  writeText(join(runDir, "report.md"), `# Repair Report\n\n目标：${GOAL}\n\nPR：${PR_URL}\n`);
   writeText(join(runDir, "journal.jsonl"), "");
 }
 
@@ -415,7 +412,7 @@ function writeBridgeTask(
     });
     writeJson(join(runDir, "receipt.json"), {
       role: run.role,
-      passed: run.role === "verifier" ? false : true,
+      passed: run.role !== "verifier",
       assertions: [
         { id: "a-pass", status: "passed", source: "independent-reviewer" },
         { id: "a-fail", status: "failed", source: "independent-reviewer" },
@@ -428,9 +425,14 @@ function writeBridgeTask(
       join(runDir, "events.jsonl"),
       linesJson([
         textProgress(`${run.role} started`, { sessionId: run.sessionId, at: T0_ISO }),
-        toolStarted(run.callIdClash ?? `call-${run.role}-1`, "shellToolCall", {
-          command: `echo ${run.role}`,
-        }, { sessionId: run.sessionId, at: T0_ISO }),
+        toolStarted(
+          run.callIdClash ?? `call-${run.role}-1`,
+          "shellToolCall",
+          {
+            command: `echo ${run.role}`,
+          },
+          { sessionId: run.sessionId, at: T0_ISO },
+        ),
       ]),
     );
   }
@@ -549,19 +551,20 @@ function writeEvidencePack(
     baseSha: opts.baseSha,
     assertionVersion: opts.assertionVersion ?? "assert-v2",
     verifiedAt: opts.approved ? T0_ISO : null,
-    assertions: opts.approved && !opts.bindOldCandidate && !opts.missingSha
-      ? [
-          { id: "cov-1", title: "恢复后会话可重试", status: "passed", source: "gate" },
-          { id: "cov-2", title: "不重复扣预算", status: "passed", source: "gate" },
-          { id: "cov-3", title: "远端身份核验", status: "passed", source: "gate" },
-          { id: "cov-4", title: "证据完整", status: "passed", source: "gate" },
-        ]
-      : [
-          { id: "cov-1", title: "恢复后会话可重试", status: "passed", source: "gate" },
-          { id: "cov-2", title: "不重复扣预算", status: "failed", source: "gate" },
-          { id: "cov-3", title: "远端身份核验", status: "pending", source: "gate" },
-          { id: "cov-4", title: "证据完整", status: "evidence_insufficient", source: "gate" },
-        ],
+    assertions:
+      opts.approved && !opts.bindOldCandidate && !opts.missingSha
+        ? [
+            { id: "cov-1", title: "恢复后会话可重试", status: "passed", source: "gate" },
+            { id: "cov-2", title: "不重复扣预算", status: "passed", source: "gate" },
+            { id: "cov-3", title: "远端身份核验", status: "passed", source: "gate" },
+            { id: "cov-4", title: "证据完整", status: "passed", source: "gate" },
+          ]
+        : [
+            { id: "cov-1", title: "恢复后会话可重试", status: "passed", source: "gate" },
+            { id: "cov-2", title: "不重复扣预算", status: "failed", source: "gate" },
+            { id: "cov-3", title: "远端身份核验", status: "pending", source: "gate" },
+            { id: "cov-4", title: "证据完整", status: "evidence_insufficient", source: "gate" },
+          ],
     frozenDenominator: 4,
   });
   if (opts.approved) {
@@ -599,11 +602,16 @@ export function rotateOrchestratorLog(
     renameSync(path, archive);
   }
   writeText(path, "");
-  writeJson(join(taskDir, "source-generation.json"), { generation, rotatedAt: new Date().toISOString() });
+  writeJson(join(taskDir, "source-generation.json"), {
+    generation,
+    rotatedAt: new Date().toISOString(),
+  });
   return { generation, path };
 }
 
-export async function writeLargeF9Log(path: string): Promise<{ bytes: number; operations: number }> {
+export async function writeLargeF9Log(
+  path: string,
+): Promise<{ bytes: number; operations: number }> {
   ensureDir(dirname(path));
   const stream = createWriteStream(path, { encoding: "utf8", mode: 0o600 });
   const operations = 100_000;
@@ -823,9 +831,7 @@ export async function materializeFixture(
         executionId: EXEC_BUILDER,
         sessionId: SESSION_BUILDER,
         process: { pid: 4242, pgid: 4242, startKey: "old-start-key", checkedAt: T0_ISO },
-        log: linesJson([
-          textProgress("历史活动保留", { sessionId: SESSION_BUILDER, at: T0_ISO }),
-        ]),
+        log: linesJson([textProgress("历史活动保留", { sessionId: SESSION_BUILDER, at: T0_ISO })]),
       });
       writeJson(join(taskDirRound2, "process-heartbeat.json"), {
         checkedAt: new Date(T0_MS - 60_000).toISOString(),
@@ -920,9 +926,7 @@ export async function materializeFixture(
         process: null,
         stopped: true,
         executionStatus: "stopped",
-        log: linesJson([
-          textProgress("本地候选完成", { sessionId: SESSION_BUILDER, at: T0_ISO }),
-        ]),
+        log: linesJson([textProgress("本地候选完成", { sessionId: SESSION_BUILDER, at: T0_ISO })]),
       });
       writeEvidencePack(taskDirRound2, { candidateSha: CANDIDATE_C, baseSha: BASE_B });
       taskDirRound1 = writeBridgeTask(home, TASK_ID_ROUND1, {
@@ -994,7 +998,9 @@ export async function materializeFixture(
         process: null,
         stopped: true,
         executionStatus: "stopped",
-        log: linesJson([textProgress("准出声明但证据冲突", { sessionId: SESSION_BUILDER, at: T0_ISO })]),
+        log: linesJson([
+          textProgress("准出声明但证据冲突", { sessionId: SESSION_BUILDER, at: T0_ISO }),
+        ]),
       });
       writeEvidencePack(taskDirRound2, {
         candidateSha: CANDIDATE_C,
@@ -1066,14 +1072,27 @@ export async function materializeFixture(
         // Interleaved same-name tools + replay.
         shellStarted("call_x1", "echo one", { sessionId: SESSION_BUILDER, at: at(0) }),
         shellStarted("call_x2", "echo one", { sessionId: SESSION_BUILDER, at: at(1) }),
-        shellCompleted("call_x1", "echo one", "one-a\n", 0, { sessionId: SESSION_BUILDER, at: at(2) }),
-        shellCompleted("call_x2", "echo one", "one-b\n", 0, { sessionId: SESSION_BUILDER, at: at(3) }),
+        shellCompleted("call_x1", "echo one", "one-a\n", 0, {
+          sessionId: SESSION_BUILDER,
+          at: at(2),
+        }),
+        shellCompleted("call_x2", "echo one", "one-b\n", 0, {
+          sessionId: SESSION_BUILDER,
+          at: at(3),
+        }),
         // Replay of call_x1 completed
-        shellCompleted("call_x1", "echo one", "one-a\n", 0, { sessionId: SESSION_BUILDER, at: at(4) }),
+        shellCompleted("call_x1", "echo one", "one-a\n", 0, {
+          sessionId: SESSION_BUILDER,
+          at: at(4),
+        }),
         // Unfinished tool
         shellStarted("call_hang", "sleep 999", { sessionId: SESSION_BUILDER, at: at(5) }),
         // Missing occurredAt
-        { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "无时间戳事件" }] }, session_id: SESSION_BUILDER },
+        {
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "text", text: "无时间戳事件" }] },
+          session_id: SESSION_BUILDER,
+        },
         // E1 then switch — late E1 completion added by producer in tests
         textProgress("execution E1 work", {
           sessionId: SESSION_BUILDER,
@@ -1093,19 +1112,34 @@ export async function materializeFixture(
         );
       }
       if (name === "F8-private") {
-        lines.push(thinkingBlock(`hidden reasoning ${SECRET_SENTINEL}`, { sessionId: SESSION_BUILDER, at: at(7) }));
-        lines.push(textProgress("公开事实：已读取配置", { sessionId: SESSION_BUILDER, at: at(8) }));
         lines.push(
-          toolStarted("call_public", "readToolCall", { path: "src/config.ts" }, {
+          thinkingBlock(`hidden reasoning ${SECRET_SENTINEL}`, {
             sessionId: SESSION_BUILDER,
-            at: at(9),
+            at: at(7),
           }),
         );
+        lines.push(textProgress("公开事实：已读取配置", { sessionId: SESSION_BUILDER, at: at(8) }));
         lines.push(
-          toolCompleted("call_public", "readToolCall", { success: { content: "ok" } }, {
-            sessionId: SESSION_BUILDER,
-            at: at(10),
-          }),
+          toolStarted(
+            "call_public",
+            "readToolCall",
+            { path: "src/config.ts" },
+            {
+              sessionId: SESSION_BUILDER,
+              at: at(9),
+            },
+          ),
+        );
+        lines.push(
+          toolCompleted(
+            "call_public",
+            "readToolCall",
+            { success: { content: "ok" } },
+            {
+              sessionId: SESSION_BUILDER,
+              at: at(10),
+            },
+          ),
         );
       }
       if (name === "F8-xss") {
@@ -1245,9 +1279,7 @@ export async function materializeFixture(
         executionId: EXEC_BUILDER,
         sessionId: SESSION_BUILDER,
         process,
-        log: linesJson([
-          textProgress("进入终验复审", { sessionId: SESSION_BUILDER, at: T0_ISO }),
-        ]),
+        log: linesJson([textProgress("进入终验复审", { sessionId: SESSION_BUILDER, at: T0_ISO })]),
       });
       taskDirRound1 = writeBridgeTask(home, TASK_ID_ROUND1, {
         executionId: `${EXEC_BUILDER}-r1`,
@@ -1304,7 +1336,10 @@ export async function materializeFixture(
 
   // Path-isolation sibling sentinel (always present for E49).
   writeText(join(home, "sibling-run-secret.txt"), PATH_SENTINEL);
-  writeText(join(home, "runs", "ck-repair-00000000-0000-4000-8000-000000000999", "secret.txt"), PATH_SENTINEL);
+  writeText(
+    join(home, "runs", "ck-repair-00000000-0000-4000-8000-000000000999", "secret.txt"),
+    PATH_SENTINEL,
+  );
 
   return {
     home,

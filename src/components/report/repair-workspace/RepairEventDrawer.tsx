@@ -1,8 +1,8 @@
 import { fetchRepairEventDetail } from "@/runtime/repair-observation-client";
 import type { RepairEventDetail, RepairOperation } from "@shared/runtime/repair-observation";
 import { type RefObject, useEffect, useRef, useState } from "react";
-import { activityPresentation, roleName } from "./presentation";
 import { IconCopy, IconX } from "./icons";
+import { activityPresentation, roleName } from "./presentation";
 
 export function RepairEventDrawer({
   open,

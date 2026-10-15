@@ -13,8 +13,8 @@ import {
   REPAIR_OBS_DETAIL_CHUNK,
   REPAIR_OBS_PAGE_LIMIT,
   REPAIR_OBS_SCHEMA_VERSION,
-  type RepairEvidence,
   type RepairEventDetail,
+  type RepairEvidence,
   type RepairObservation,
   type RepairOperation,
   type RepairRole,
@@ -29,8 +29,8 @@ import {
   observationDone,
   redactObservationText,
   redactObservationValue,
-  repairEvidenceSchema,
   repairEventDetailSchema,
+  repairEvidenceSchema,
   repairObservationSchema,
   roleLabel,
 } from "@shared/runtime/repair-observation";
@@ -109,9 +109,7 @@ function tryWriteCache(env: NodeJS.ProcessEnv, key: string, value: unknown): voi
   }
 }
 
-function readProcessEvidence(
-  sources: TrustedSource[],
-): {
+function readProcessEvidence(sources: TrustedSource[]): {
   evidence: {
     executionRef: string | null;
     pid: number | null;
@@ -122,7 +120,8 @@ function readProcessEvidence(
   currentExecutionRef: string | null;
 } {
   const currentExecutionRef =
-    sources.find((s) => s.kind === "orchestrator_log" || s.kind === "adapter_meta")?.executionRef ?? null;
+    sources.find((s) => s.kind === "orchestrator_log" || s.kind === "adapter_meta")?.executionRef ??
+    null;
   const metaSource = sources.find((s) => s.kind === "adapter_meta");
   if (!metaSource) {
     return { evidence: null, currentExecutionRef };
@@ -149,7 +148,8 @@ function readProcessEvidence(
       else if (typeof nested?.pid === "number") pid = nested.pid;
       else if (typeof meta.orchestratorPid === "number") pid = meta.orchestratorPid;
       if (typeof meta.executionRef === "string") executionRef = meta.executionRef;
-      else if (typeof meta.executionId === "string" && currentExecutionRef) executionRef = currentExecutionRef;
+      else if (typeof meta.executionId === "string" && currentExecutionRef)
+        executionRef = currentExecutionRef;
     } catch {
       // ignore
     }
@@ -177,13 +177,16 @@ function mapEvidenceStatus(status: string | undefined): RepairEvidence["items"][
 function plannedRoles(sources: TrustedSource[], adapterPath: string | null): RepairRole[] {
   const byKey = new Map<string, RepairRole>();
   // Default builder group when any builder source exists.
-  const hasBuilder = sources.some((s) => s.roleKey === "builder" || executionGroupForRole(s.roleKey) === "builder");
+  const hasBuilder = sources.some(
+    (s) => s.roleKey === "builder" || executionGroupForRole(s.roleKey) === "builder",
+  );
   if (hasBuilder) {
     byKey.set("builder", {
       roleKey: "builder",
       label: roleLabel("builder"),
       executionGroup: "builder",
-      executionRef: sources.find((s) => executionGroupForRole(s.roleKey) === "builder")?.executionRef ?? null,
+      executionRef:
+        sources.find((s) => executionGroupForRole(s.roleKey) === "builder")?.executionRef ?? null,
       planned: true,
       status: "unknown",
       requestedModel: null,
@@ -356,7 +359,9 @@ export function createRepairObservationService(options: ObservationServiceOption
           runId: input.runId,
           round,
           direction: "forward",
-          watermarks: [{ sourceId: source.sourceId, generation: read.generation, offset: read.nextOffset }],
+          watermarks: [
+            { sourceId: source.sourceId, generation: read.generation, offset: read.nextOffset },
+          ],
         }),
       });
       if (read.earlierOffset !== null) {
@@ -371,7 +376,8 @@ export function createRepairObservationService(options: ObservationServiceOption
     earlierCursor = encodeEarlierCursor(input.runId, round, earlierMarks);
 
     const { evidence, currentExecutionRef } = readProcessEvidence(resolved.sources);
-    const terminal = resolved.state?.businessResult !== null && resolved.state?.businessResult !== undefined;
+    const terminal =
+      resolved.state?.businessResult !== null && resolved.state?.businessResult !== undefined;
     const process = deriveProcessState({
       authoritativeTerminal: Boolean(terminal),
       currentExecutionRef,
@@ -398,7 +404,8 @@ export function createRepairObservationService(options: ObservationServiceOption
         continue;
       }
       const roleOps = upserts.filter(
-        (op) => op.roleKey === role.roleKey || executionGroupForRole(op.roleKey) === role.executionGroup,
+        (op) =>
+          op.roleKey === role.roleKey || executionGroupForRole(op.roleKey) === role.executionGroup,
       );
       role.status =
         (role.executionGroup === "builder" && process.state === "alive") ||
@@ -637,7 +644,8 @@ export function createRepairObservationService(options: ObservationServiceOption
         evidenceCandidateSha = raw.candidateSha ?? null;
         const rows = raw.items ?? raw.assertions ?? [];
         items = rows.map((item) => ({
-          assertionId: ("assertionId" in item && item.assertionId) || ("id" in item && item.id) || "assertion",
+          assertionId:
+            ("assertionId" in item && item.assertionId) || ("id" in item && item.id) || "assertion",
           label: ("label" in item && item.label) || ("title" in item && item.title) || "断言",
           status: mapEvidenceStatus("status" in item ? item.status : undefined),
           candidateSha: raw.candidateSha ?? null,

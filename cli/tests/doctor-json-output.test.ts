@@ -32,7 +32,9 @@ describe("doctor output when the Host is down", () => {
   }
 
   function hostDown(): void {
-    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("connect ECONNREFUSED 127.0.0.1:43127")));
+    vi.stubGlobal("fetch", () =>
+      Promise.reject(new TypeError("connect ECONNREFUSED 127.0.0.1:43127")),
+    );
   }
 
   it("prints only the diagnostic on stderr for a json sink", async () => {

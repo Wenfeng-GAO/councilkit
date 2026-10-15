@@ -1,5 +1,6 @@
 import { type Page, expect, test } from "@playwright/test";
 import { GOAL, PARENT_RUN_ID, TASK_ID_ROUND2 } from "./constants";
+import { shellCompleted, textProgress } from "./fixtures/cursor-events";
 import {
   advanceClock,
   appendHalfLine,
@@ -14,7 +15,6 @@ import {
   rotateSource,
   seedLine,
 } from "./helpers";
-import { shellCompleted, textProgress } from "./fixtures/cursor-events";
 
 test.describe.configure({ mode: "serial" });
 
@@ -32,9 +32,7 @@ test("[E40] @p0 large log initial window 200 with earlier page", async ({ page }
   const reset = await boot(page, "F9");
   expect(reset.operationCount).toBe(100_000);
   expect(reset.logBytes ?? 0).toBeGreaterThan(10 * 1024 * 1024);
-  const obsPromise = page.waitForResponse(
-    (r) => r.url().includes("/repair/observation") && r.ok(),
-  );
+  const obsPromise = page.waitForResponse((r) => r.url().includes("/repair/observation") && r.ok());
   await openRepairWorkspace(page);
   const obsRes = await obsPromise;
   const body = (await obsRes.json()) as {
@@ -55,7 +53,10 @@ test("[E41] @p0 bad/half/chinese lines", async ({ page }) => {
   await boot(page, "F8");
   await openRepairWorkspace(page);
   await appendRaw(page, "{not-json\n");
-  await appendHalfLine(page, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"中文半行`);
+  await appendHalfLine(
+    page,
+    `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"中文半行`,
+  );
   // Incomplete half-line must not advance past boundary — no garbled row yet for half
   await page.waitForTimeout(800);
   await appendHalfLine(page, `完整"}]}}`, true);
@@ -80,7 +81,9 @@ test("[E42] @p0 log rotate resets generation without id collision", async ({ pag
     timeout: 10_000,
   });
   const after = await fetchObservation(page);
-  const afterIds = ((after.data?.upserts as Array<{ eventId: string }>) ?? []).map((u) => u.eventId);
+  const afterIds = ((after.data?.upserts as Array<{ eventId: string }>) ?? []).map(
+    (u) => u.eventId,
+  );
   for (const id of afterIds) {
     if (beforeIds.has(id) && id.includes("gen-rotate")) {
       // new generation ids must not collide with old
@@ -115,7 +118,9 @@ test("[E44] @p0 late previous execution must not overwrite current", async ({ pa
   );
   const obs = await fetchObservation(page);
   const upserts = (obs.data?.upserts as Array<{ executionRef: string; status: string }>) ?? [];
-  const e2 = upserts.filter((u) => u.executionRef?.includes("e2") || !u.executionRef?.includes("e1"));
+  const e2 = upserts.filter(
+    (u) => u.executionRef?.includes("e2") || !u.executionRef?.includes("e1"),
+  );
   expect(e2.length).toBeGreaterThan(0);
   await expect(page.getByTestId("repair-activity-list")).toContainText("E1 late fail");
 });
@@ -142,7 +147,9 @@ test("[E59] @p0 legacy attempts=[] still observable", async ({ page }) => {
 test("[E63] @p0 legacy empty final report vs waiting first record", async ({ page }) => {
   await boot(page, "F-legacy-empty");
   await openRepairWorkspace(page);
-  await expect(page.getByTestId("repair-workspace").getByText("仅有最终报告", { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId("repair-workspace").getByText("仅有最终报告", { exact: true }),
+  ).toBeVisible();
   await expectGoalVisible(page).catch(async () => {
     await expect(page.getByText(GOAL)).toBeVisible();
   });
@@ -155,7 +162,11 @@ test("[E63] @p0 legacy empty final report vs waiting first record", async ({ pag
 
 test("[E65] @p0 partial source unreadable still shows other roles", async ({ page }) => {
   await boot(page, "F2");
-  await chmodSource(page, `squad-tasks/${TASK_ID_ROUND2}/adapter-runs/reviewer/events.jsonl`, 0o000);
+  await chmodSource(
+    page,
+    `squad-tasks/${TASK_ID_ROUND2}/adapter-runs/reviewer/events.jsonl`,
+    0o000,
+  );
   await openRepairWorkspace(page);
   await expect(page.getByTestId("repair-workspace")).toBeVisible();
   await expect(page.getByText(/受限|不可读|权限|部分/)).toBeVisible();

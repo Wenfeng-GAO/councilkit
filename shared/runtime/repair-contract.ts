@@ -264,8 +264,7 @@ export function interpretTestLog(
   const gtestNotRun =
     /^[ \t]*\[[ \t]+SKIPPED[ \t]+\][ \t]+[1-9]\d*[ \t]+tests?(?:\.[ \t]*|,[ \t]*listed below:[ \t]*)$/im.test(
       todoText,
-    ) ||
-    /^[ \t]*YOU HAVE[ \t]+[1-9]\d*[ \t]+DISABLED[ \t]+TESTS?[ \t]*$/im.test(todoText);
+    ) || /^[ \t]*YOU HAVE[ \t]+[1-9]\d*[ \t]+DISABLED[ \t]+TESTS?[ \t]*$/im.test(todoText);
   let rspecPending = false;
   let rspecRanNothing = false;
   let rspecFailed = false;

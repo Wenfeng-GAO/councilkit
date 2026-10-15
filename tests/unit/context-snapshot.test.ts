@@ -17,8 +17,8 @@ import {
   projectSharedContext,
 } from "@/orchestrator/context-snapshot";
 import { contextSnapshotSchema } from "@shared/runtime/schemas";
-import { renderTurn } from "../../runtime-host/scopes/snapshot-render.ts";
 import { describe, expect, it } from "vitest";
+import { renderTurn } from "../../runtime-host/scopes/snapshot-render.ts";
 
 /**
  * Deterministic Context Snapshot (U4): construction-order independence,

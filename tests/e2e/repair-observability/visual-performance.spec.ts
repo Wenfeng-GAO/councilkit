@@ -31,7 +31,9 @@ test("[E51] @p0 responsive layout viewports", async ({ page }) => {
   ]) {
     await page.setViewportSize(size);
     await openRepairWorkspace(page);
-    const overflowX = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    const overflowX = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1,
+    );
     expect(overflowX, `overflow at ${size.width}`).toBeFalsy();
     await expect(page.getByTestId("repair-role-list")).toBeVisible();
     await expect(page.getByTestId("repair-follow-toggle")).toBeVisible();
@@ -68,7 +70,9 @@ test("[E53] @p0 keyboard focus path", async ({ page }) => {
   await openRepairWorkspace(page);
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
-  const focused = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName);
+  const focused = await page.evaluate(
+    () => document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName,
+  );
   expect(focused).toBeTruthy();
   await page.locator("[data-testid^='repair-activity-row-']").first().focus();
   await page.keyboard.press("Enter");
@@ -175,7 +179,11 @@ test("[E61] @p0 production build has no demo chrome", async ({ page }) => {
   const external: string[] = [];
   page.on("request", (req) => {
     const url = req.url();
-    if (!url.startsWith("http://127.0.0.1:43837") && !url.startsWith("data:") && !url.startsWith("blob:")) {
+    if (
+      !url.startsWith("http://127.0.0.1:43837") &&
+      !url.startsWith("data:") &&
+      !url.startsWith("blob:")
+    ) {
       external.push(url);
     }
   });

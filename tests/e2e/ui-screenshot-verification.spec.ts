@@ -1,10 +1,10 @@
-import { expect, test } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { type Page, expect, test } from "@playwright/test";
 
 const ARTIFACTS = process.env.CK_ARTIFACTS_DIR;
 
-async function maybeScreenshot(page: any, name: string): Promise<void> {
+async function maybeScreenshot(page: Page, name: string): Promise<void> {
   if (!ARTIFACTS) return;
   mkdirSync(ARTIFACTS, { recursive: true });
   await page.screenshot({ path: join(ARTIFACTS, name), fullPage: true });

@@ -40,9 +40,7 @@ export function modelRoutes(services: HostServices): Route[] {
         makeError(
           runtimeCode,
           "prewarm",
-          error instanceof Error
-            ? clipUtf16(error.message, 256)
-            : "catalog handshake failed",
+          error instanceof Error ? clipUtf16(error.message, 256) : "catalog handshake failed",
         ),
       );
     }

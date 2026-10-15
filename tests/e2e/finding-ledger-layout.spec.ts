@@ -120,7 +120,8 @@ function caseFindings() {
       reviewer: "review-security",
       source: "unique",
       files: ["auth.go"],
-      title: "`auth.go:45` — SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中，攻击者可执行任意 SQL 命令。",
+      title:
+        "`auth.go:45` — SQL 注入漏洞：用户输入未经验证直接拼接到查询语句中，攻击者可执行任意 SQL 命令。",
     }),
     finding({
       id: "memory-leak-listener",
@@ -129,7 +130,8 @@ function caseFindings() {
       source: "consensus",
       status: "closed",
       files: ["components/EventEmitter.tsx"],
-      title: "`EventEmitter.tsx:123` — 内存泄漏：事件监听器未在组件卸载时清理，长时间运行会导致内存累积。",
+      title:
+        "`EventEmitter.tsx:123` — 内存泄漏：事件监听器未在组件卸载时清理，长时间运行会导致内存累积。",
     }),
     finding({
       id: "perf-optimization-memo",
@@ -138,7 +140,8 @@ function caseFindings() {
       source: "unique",
       status: "closed",
       files: ["hooks/useCalculation.ts"],
-      title: "`useCalculation.ts:234` — 性能优化：可以使用 useMemo 避免不必要的重新计算，当前每次渲染都会执行复杂计算。",
+      title:
+        "`useCalculation.ts:234` — 性能优化：可以使用 useMemo 避免不必要的重新计算，当前每次渲染都会执行复杂计算。",
     }),
     finding({
       id: "code-style-naming",

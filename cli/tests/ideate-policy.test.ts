@@ -8,8 +8,8 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -76,10 +76,19 @@ describe("ideate policy isolation", () => {
     mkdirSync(join(poisoned, ".kimi-code", "credentials"), { recursive: true });
     mkdirSync(join(poisoned, ".kimi-code", "oauth"), { recursive: true });
     mkdirSync(join(poisoned, ".grok"), { recursive: true });
-    writeFileSync(join(poisoned, ".kimi-code", "config.toml"), 'default_permission_mode = "auto"\n');
-    writeFileSync(join(poisoned, ".kimi-code", "server.token"), "kimi-secret-token\n", { mode: 0o600 });
-    writeFileSync(join(poisoned, ".kimi-code", "credentials", "token"), "kimi-cred\n", { mode: 0o600 });
-    writeFileSync(join(poisoned, ".grok", "auth.json"), '{"token":"grok-secret"}\n', { mode: 0o600 });
+    writeFileSync(
+      join(poisoned, ".kimi-code", "config.toml"),
+      'default_permission_mode = "auto"\n',
+    );
+    writeFileSync(join(poisoned, ".kimi-code", "server.token"), "kimi-secret-token\n", {
+      mode: 0o600,
+    });
+    writeFileSync(join(poisoned, ".kimi-code", "credentials", "token"), "kimi-cred\n", {
+      mode: 0o600,
+    });
+    writeFileSync(join(poisoned, ".grok", "auth.json"), '{"token":"grok-secret"}\n', {
+      mode: 0o600,
+    });
     writeFileSync(join(poisoned, ".grok", "config.toml"), 'permission_mode = "always-approve"\n');
     for (const name of ["cld", "kimi", "codex", "grok", "cursor-agent"]) {
       const p = join(tmp, name);
@@ -115,12 +124,12 @@ describe("ideate policy isolation", () => {
     expect(spec.envOverlay?.KIMI_CODE_HOME).toBeDefined();
     expect(spec.envOverlay?.KIMI_CODE_HOME?.startsWith(workspace)).toBe(false);
     expect(existsSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "server.token"))).toBe(true);
-    expect(readFileSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"), "utf8")).toContain(
-      "default_plan_mode = true",
-    );
-    expect(readFileSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"), "utf8")).not.toContain(
-      'default_permission_mode = "auto"',
-    );
+    expect(
+      readFileSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"), "utf8"),
+    ).toContain("default_plan_mode = true");
+    expect(
+      readFileSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"), "utf8"),
+    ).not.toContain('default_permission_mode = "auto"');
   });
 
   it("keeps the kimi model catalog but drops hooks and auto permission", () => {
@@ -151,7 +160,10 @@ describe("ideate policy isolation", () => {
       { attemptId: "proposal-seat1", workspace, prompt: "idea", env: env() },
     );
     homes.push(spec.ephemeralHome ?? "");
-    const isolated = readFileSync(join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"), "utf8");
+    const isolated = readFileSync(
+      join(spec.envOverlay?.KIMI_CODE_HOME ?? "", "config.toml"),
+      "utf8",
+    );
     expect(isolated).toContain("default_plan_mode = true");
     expect(isolated).toContain('[models."kimi-code/k3"]');
     expect(isolated).toContain('[providers."managed:kimi-code"]');
@@ -161,19 +173,24 @@ describe("ideate policy isolation", () => {
     const scopes = parseTomlAssignmentScopes(isolated);
     expect(scopes.topLevel.default_model).toBe('"kimi-code/k3"');
     expect(scopes.tables.tools?.default_model).toBeUndefined();
-    expect(readFileSync(join(workspace, "ideate-agent.md"), "utf8")).not.toContain("secret-should-stay-in-tmp");
+    expect(readFileSync(join(workspace, "ideate-agent.md"), "utf8")).not.toContain(
+      "secret-should-stay-in-tmp",
+    );
     expect(collectAuthHits(workspace)).toEqual([]);
   });
 
   it("does not copy grok auth into workspace even when isolateGrokHome runs", () => {
     const workspace = join(tmp, "ws-grok");
     mkdirSync(workspace, { recursive: true });
-    const spec = buildIdeateSpawnSpec(agent({ driverId: "grok-stream-json", options: {} }, "grok-4.6"), {
-      attemptId: "proposal-seat1",
-      workspace,
-      prompt: "idea",
-      env: env(),
-    });
+    const spec = buildIdeateSpawnSpec(
+      agent({ driverId: "grok-stream-json", options: {} }, "grok-4.6"),
+      {
+        attemptId: "proposal-seat1",
+        workspace,
+        prompt: "idea",
+        env: env(),
+      },
+    );
     homes.push(spec.ephemeralHome ?? "");
     const merged = {
       ...spawnEnvForDriver("grok-stream-json", workspace, env(), { localProxyPort: () => null }),
@@ -183,7 +200,9 @@ describe("ideate policy isolation", () => {
     expect(existsSync(join(workspace, ".grok-home", "auth.json"))).toBe(false);
     expect(merged.GROK_HOME).toBe(spec.ephemeralHome);
     expect(merged.GROK_HOME?.startsWith(workspace)).toBe(false);
-    expect(readFileSync(join(merged.GROK_HOME ?? "", "auth.json"), "utf8")).toContain("grok-secret");
+    expect(readFileSync(join(merged.GROK_HOME ?? "", "auth.json"), "utf8")).toContain(
+      "grok-secret",
+    );
     expect(readFileSync(join(merged.GROK_HOME ?? "", "config.toml"), "utf8")).toContain(
       'permission_mode = "plan"',
     );
@@ -242,12 +261,15 @@ describe("ideate policy isolation", () => {
   it("does not copy kimi auth when building a grok spec", () => {
     const workspace = join(tmp, "ws-grok-only");
     mkdirSync(workspace, { recursive: true });
-    const spec = buildIdeateSpawnSpec(agent({ driverId: "grok-stream-json", options: {} }, "grok-4.6"), {
-      attemptId: "proposal-seat1",
-      workspace,
-      prompt: "idea",
-      env: env(),
-    });
+    const spec = buildIdeateSpawnSpec(
+      agent({ driverId: "grok-stream-json", options: {} }, "grok-4.6"),
+      {
+        attemptId: "proposal-seat1",
+        workspace,
+        prompt: "idea",
+        env: env(),
+      },
+    );
     homes.push(spec.ephemeralHome ?? "");
     expect(spec.envOverlay?.KIMI_CODE_HOME).toBeUndefined();
     expect(collectAuthHits(workspace)).toEqual([]);
@@ -276,7 +298,19 @@ describe("ideate policy isolation", () => {
   it("rejects kimi --plan because local CLI cannot combine it with --prompt", () => {
     expect(() =>
       assertIdeateRestrictedArgv(
-        ["-m", "kimi-code/k3", "-p", "x", "--output-format", "stream-json", "--plan", "--agent-file", "a.md", "--skills-dir", "s"],
+        [
+          "-m",
+          "kimi-code/k3",
+          "-p",
+          "x",
+          "--output-format",
+          "stream-json",
+          "--plan",
+          "--agent-file",
+          "a.md",
+          "--skills-dir",
+          "s",
+        ],
         "kimi-stream-json",
       ),
     ).toThrow(/cannot combine --prompt with --plan/);
@@ -288,7 +322,18 @@ describe("ideate policy isolation", () => {
     ).toThrow(/missing required restriction/);
     expect(() =>
       assertIdeateRestrictedArgv(
-        ["-m", "kimi-code/k3", "-p", "x", "--output-format", "stream-json", "--agent-file", "a.md", "--skills-dir", "s"],
+        [
+          "-m",
+          "kimi-code/k3",
+          "-p",
+          "x",
+          "--output-format",
+          "stream-json",
+          "--agent-file",
+          "a.md",
+          "--skills-dir",
+          "s",
+        ],
         "kimi-stream-json",
       ),
     ).not.toThrow();
@@ -302,12 +347,11 @@ describe("ideate policy isolation", () => {
       ),
     ).toThrow(/missing required restriction/);
     for (const flag of IDEATE_FORBIDDEN_FLAGS) {
-      expect(
-        () =>
-          assertIdeateRestrictedArgv(
-            ["--permission-mode", "plan", "--sandbox", "ideate-readonly", flag],
-            "grok-stream-json",
-          ),
+      expect(() =>
+        assertIdeateRestrictedArgv(
+          ["--permission-mode", "plan", "--sandbox", "ideate-readonly", flag],
+          "grok-stream-json",
+        ),
       ).toThrow(/forbidden flag|missing required restriction|restricted policy refused/);
     }
   });
@@ -344,7 +388,9 @@ describe("local kimi CLI compatibility", () => {
         env: { ...process.env, ...spec.envOverlay },
       });
       expect(incompatible.status).not.toBe(0);
-      expect(`${incompatible.stderr}${incompatible.stdout}`).toMatch(/Cannot combine --prompt with --plan/);
+      expect(`${incompatible.stderr}${incompatible.stdout}`).toMatch(
+        /Cannot combine --prompt with --plan/,
+      );
 
       const restricted = spawnSync("kimi", spec.argv, {
         encoding: "utf8",
@@ -395,7 +441,7 @@ describe("local kimi CLI compatibility", () => {
     expect(scopes.tables.tools?.default_model).toBeUndefined();
     expect(scopes.tables.tools?.disabled).toContain("Bash");
     expect(scopes.tables['models."kimi-code/k3"']?.provider).toBe('"managed:kimi-code"');
-    expect(scopes.tables["hooks"]).toBeUndefined();
+    expect(scopes.tables.hooks).toBeUndefined();
   });
 
   it("does not copy commented hook headers or unknown tables after models", () => {
@@ -459,7 +505,10 @@ describe("local kimi CLI compatibility", () => {
 
 function isKimiCatalogHeader(line: string): boolean {
   const header = parseTomlTableHeader(line);
-  const first = header?.path.split(".")[0]?.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+  const first = header?.path
+    .split(".")[0]
+    ?.replace(/^"(.*)"$/, "$1")
+    .replace(/^'(.*)'$/, "$1");
   return first === "models" || first === "providers";
 }
 

@@ -1,5 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -172,9 +181,25 @@ describe("cursor repair runtime", () => {
     expect(contractPath.endsWith(".runtime-contract.json")).toBe(true);
     expect(contractPath.includes(`${started.taskId}/`)).toBe(false);
     const contract = JSON.parse(readFileSync(contractPath, "utf8")) as {
-      roles: Record<string, { runtime?: string; model?: string; mode?: string; sandbox?: string; permission_mode?: string }>;
+      roles: Record<
+        string,
+        {
+          runtime?: string;
+          model?: string;
+          mode?: string;
+          sandbox?: string;
+          permission_mode?: string;
+        }
+      >;
     };
-    for (const role of ["orchestrator", "planner_a", "planner_b", "coder", "reviewer", "verifier"]) {
+    for (const role of [
+      "orchestrator",
+      "planner_a",
+      "planner_b",
+      "coder",
+      "reviewer",
+      "verifier",
+    ]) {
       expect(contract.roles[role]?.runtime).toBe("cursor");
       expect(contract.roles[role]?.model).toBe(CURSOR_REPAIR_MODEL);
     }
@@ -251,7 +276,12 @@ describe("cursor repair runtime", () => {
     ).rejects.toThrow(/grok-4\.7-xhigh/);
     const identity = JSON.parse(
       readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-bridge.json"), "utf8"),
-    ) as { model: string; observedModel: string | null; executionStatus: string; orchestratorPid: number | null };
+    ) as {
+      model: string;
+      observedModel: string | null;
+      executionStatus: string;
+      orchestratorPid: number | null;
+    };
     if (identity.orchestratorPid) pids.add(identity.orchestratorPid);
     expect(identity.executionStatus).toBe("failed");
     expect(identity.model).toBe(CURSOR_REPAIR_MODEL);
@@ -391,13 +421,19 @@ describe("cursor repair runtime", () => {
       .split("\n")
       .find((line) => line.startsWith("init "));
     const parts = initLine?.split(" ") ?? [];
-    const contract = JSON.parse(readFileSync(parts[parts.indexOf("--contract") + 1] ?? "", "utf8")) as {
+    const contract = JSON.parse(
+      readFileSync(parts[parts.indexOf("--contract") + 1] ?? "", "utf8"),
+    ) as {
       roles: Record<string, { runtime?: string; model?: string; mode?: string }>;
     };
     expect(contract.roles.orchestrator?.model).toBe(CURSOR_REPAIR_MODEL);
     expect(contract.roles.coder?.model).toBe(CURSOR_REPAIR_MODEL);
     expect(contract.roles.coder?.mode).toBe("main-session");
-    expect(contract.roles.reviewer).toEqual({ runtime: "codex", model: "gpt-5.6-sol", sandbox: "read-only" });
+    expect(contract.roles.reviewer).toEqual({
+      runtime: "codex",
+      model: "gpt-5.6-sol",
+      sandbox: "read-only",
+    });
     expect(contract.roles.verifier?.model).toBe("composer-2.5");
     expect(contract.roles.verifier?.mode).toBeUndefined();
     expect(readFileSync(cursorArgv, "utf8")).toContain(`--model ${CURSOR_REPAIR_MODEL}`);
@@ -447,7 +483,12 @@ describe.skipIf(!existsSync(INSTALLED_SQUADCTL))("installed squadctl cursor cont
       { cwd: repo, env, encoding: "utf8" },
     );
     const payload = JSON.parse(shown) as {
-      contract: { roles: Record<string, { runtime?: string; model?: string; mode?: string; sandbox?: string }> };
+      contract: {
+        roles: Record<
+          string,
+          { runtime?: string; model?: string; mode?: string; sandbox?: string }
+        >;
+      };
     };
     expect(payload.contract.roles.orchestrator).toMatchObject({
       runtime: "cursor",
@@ -548,7 +589,12 @@ describe.skipIf(process.env.COUNCILKIT_CURSOR_SMOKE !== "1")("real cursor squad 
       model: CURSOR_REPAIR_MODEL,
       resumeSession: null,
     });
-    const first = await runCursor(cursor, firstArgv, repo, "Reply with exactly OK. Do not use tools or edit files.\n");
+    const first = await runCursor(
+      cursor,
+      firstArgv,
+      repo,
+      "Reply with exactly OK. Do not use tools or edit files.\n",
+    );
     expect(cursorRepairModelReceiptMatches(first.model ?? "")).toBe(true);
     expect(first.sessionId).toBeTruthy();
     const secondArgv = cursorOrchestratorArgv({
@@ -556,7 +602,12 @@ describe.skipIf(process.env.COUNCILKIT_CURSOR_SMOKE !== "1")("real cursor squad 
       model: CURSOR_REPAIR_MODEL,
       resumeSession: first.sessionId,
     });
-    const second = await runCursor(cursor, secondArgv, repo, "Reply with exactly OK. Do not use tools or edit files.\n");
+    const second = await runCursor(
+      cursor,
+      secondArgv,
+      repo,
+      "Reply with exactly OK. Do not use tools or edit files.\n",
+    );
     expect(second.sessionId).toBe(first.sessionId);
     expect(cursorRepairModelReceiptMatches(second.model ?? "")).toBe(true);
     const record = {

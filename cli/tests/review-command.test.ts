@@ -140,7 +140,10 @@ describe("cli review command — argument matrix", () => {
   }
 
   it("rejects --pr and --task together", async () => {
-    await expectUsage(["--agents", "[]", "--pr", "x", "--task", "y", "--no-require-spec"], "mutually exclusive");
+    await expectUsage(
+      ["--agents", "[]", "--pr", "x", "--task", "y", "--no-require-spec"],
+      "mutually exclusive",
+    );
   });
 
   it("rejects a concurrency flag past the safe integer range", async () => {
@@ -180,7 +183,17 @@ describe("cli review command — argument matrix", () => {
       driverSelection: ds,
     });
     await expectUsage(
-      ["--agents", `["A"]`, "--aggregator", "A", "--pr", "x", "--no-require-spec", "--timeout", "99999999h"],
+      [
+        "--agents",
+        `["A"]`,
+        "--aggregator",
+        "A",
+        "--pr",
+        "x",
+        "--no-require-spec",
+        "--timeout",
+        "99999999h",
+      ],
       "<= 2147483647ms",
     );
   });
@@ -205,11 +218,17 @@ describe("cli review command — argument matrix", () => {
   });
 
   it("rejects --council with --agents", async () => {
-    await expectUsage(["--council", "c", "--agents", "[]", "--pr", "x", "--no-require-spec"], "mutually exclusive");
+    await expectUsage(
+      ["--council", "c", "--agents", "[]", "--pr", "x", "--no-require-spec"],
+      "mutually exclusive",
+    );
   });
 
   it("rejects --council with --aggregator", async () => {
-    await expectUsage(["--council", "c", "--aggregator", "a", "--pr", "x", "--no-require-spec"], "mutually exclusive");
+    await expectUsage(
+      ["--council", "c", "--aggregator", "a", "--pr", "x", "--no-require-spec"],
+      "mutually exclusive",
+    );
   });
 
   it("rejects --aggregator not among --agents", async () => {
@@ -230,7 +249,10 @@ describe("cli review command — argument matrix", () => {
       driverSelection: ds,
     });
     // B exists (so it resolves) but is not in the --agents list.
-    await expectUsage(["--agents", `["A"]`, "--aggregator", "B", "--pr", "x", "--no-require-spec"], "among --agents");
+    await expectUsage(
+      ["--agents", `["A"]`, "--aggregator", "B", "--pr", "x", "--no-require-spec"],
+      "among --agents",
+    );
   });
 
   it("dispatch routes `review` to runReview (usage when no task)", async () => {
@@ -255,7 +277,8 @@ describe("cli review command — argument matrix", () => {
         "--aggregator",
         "A",
         "--task",
-        "x", "--no-require-spec",
+        "x",
+        "--no-require-spec",
         "--against",
         "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
       ],
@@ -274,11 +297,17 @@ describe("cli review command — argument matrix", () => {
       driverSelection: ds,
       enabled: false,
     });
-    await expectUsage(["--agents", `["Off"]`, "--aggregator", "Off", "--task", "x", "--no-require-spec"], "disabled");
+    await expectUsage(
+      ["--agents", `["Off"]`, "--aggregator", "Off", "--task", "x", "--no-require-spec"],
+      "disabled",
+    );
   });
 
   it("rejects blank --task (whitespace only)", async () => {
-    await expectUsage(["--agents", "[]", "--task", "   ", "--no-require-spec"], "empty or whitespace");
+    await expectUsage(
+      ["--agents", "[]", "--task", "   ", "--no-require-spec"],
+      "empty or whitespace",
+    );
   });
 
   it("PR review without --repo or a matching cwd clone is a usage error", async () => {
@@ -292,7 +321,15 @@ describe("cli review command — argument matrix", () => {
       driverSelection: ds,
     });
     await expectUsage(
-      ["--agents", `["A"]`, "--aggregator", "A", "--pr", "https://github.com/acme/other/pull/1", "--no-require-spec"],
+      [
+        "--agents",
+        `["A"]`,
+        "--aggregator",
+        "A",
+        "--pr",
+        "https://github.com/acme/other/pull/1",
+        "--no-require-spec",
+      ],
       "no local clone",
     );
   });
@@ -304,14 +341,36 @@ describe("cli review command — argument matrix", () => {
   it("rejects --run-id together with --resume", async () => {
     const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9";
     await expectUsage(
-      ["--agents", "[]", "--aggregator", "A", "--task", "x", "--no-require-spec", "--run-id", runId, "--resume", runId],
+      [
+        "--agents",
+        "[]",
+        "--aggregator",
+        "A",
+        "--task",
+        "x",
+        "--no-require-spec",
+        "--run-id",
+        runId,
+        "--resume",
+        runId,
+      ],
       "mutually exclusive",
     );
   });
 
   it("rejects --run-id that is not a ck-review-uuid", async () => {
     await expectUsage(
-      ["--agents", "[]", "--aggregator", "A", "--task", "x", "--no-require-spec", "--run-id", "not-a-run-id"],
+      [
+        "--agents",
+        "[]",
+        "--aggregator",
+        "A",
+        "--task",
+        "x",
+        "--no-require-spec",
+        "--run-id",
+        "not-a-run-id",
+      ],
       "ck-review-",
     );
   });
@@ -331,7 +390,17 @@ describe("cli review command — argument matrix", () => {
       driverSelection: ds,
     });
     await expectUsage(
-      ["--agents", `["A"]`, "--aggregator", "A", "--task", "x", "--no-require-spec", "--run-id", runId],
+      [
+        "--agents",
+        `["A"]`,
+        "--aggregator",
+        "A",
+        "--task",
+        "x",
+        "--no-require-spec",
+        "--run-id",
+        runId,
+      ],
       "already exists",
     );
   });
@@ -382,7 +451,13 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     const sink = makeSink();
     try {
       await runReview(
-        ["--task", "Review this task", "--no-require-spec", "--review-models", JSON.stringify(reviewModels)],
+        [
+          "--task",
+          "Review this task",
+          "--no-require-spec",
+          "--review-models",
+          JSON.stringify(reviewModels),
+        ],
         sink,
         {
           spawnImpl: async (input) => {
@@ -423,7 +498,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
       runReview(
         [
           "--task",
-          "Review this task", "--no-require-spec",
+          "Review this task",
+          "--no-require-spec",
           "--review-models",
           JSON.stringify(changed),
           "--resume",
@@ -620,7 +696,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
             "--aggregator",
             aggregatorName,
             "--pr",
-            "https://github.com/acme/repo/pull/9", "--no-require-spec",
+            "https://github.com/acme/repo/pull/9",
+            "--no-require-spec",
             "--repo",
             repo,
             "--against",
@@ -669,7 +746,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--pr",
-          "https://github.com/Wenfeng-GAO/councilkit/pull/1", "--no-require-spec",
+          "https://github.com/Wenfeng-GAO/councilkit/pull/1",
+          "--no-require-spec",
           "--repo",
           seedGitRepo(),
           "--out",
@@ -760,7 +838,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--task",
-          "x", "--no-require-spec",
+          "x",
+          "--no-require-spec",
           "--run-id",
           runId,
         ],
@@ -799,10 +878,14 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     const sink = makeSink();
     let exitCode = -1;
     try {
-      await runReview(["https://github.com/acme/repo/pull/9", "--repo", seedGitRepo(), "--no-require-spec"], sink, {
-        spawnImpl: fakeSpawn(),
-        worktreeRef: "HEAD",
-      });
+      await runReview(
+        ["https://github.com/acme/repo/pull/9", "--repo", seedGitRepo(), "--no-require-spec"],
+        sink,
+        {
+          spawnImpl: fakeSpawn(),
+          worktreeRef: "HEAD",
+        },
+      );
     } catch (e) {
       expect(e).toBeInstanceOf(ReviewExit);
       exitCode = (e as ReviewExit).exitCode;
@@ -874,7 +957,15 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     let exitCode = -1;
     try {
       await runReview(
-        ["--agents", JSON.stringify(agentIds), "--aggregator", aggregatorName, "--task", "x", "--no-require-spec"],
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--no-require-spec",
+        ],
         sink,
         { spawnImpl: spawn, abortController: ac },
       );
@@ -920,7 +1011,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--task",
-          "x", "--no-require-spec",
+          "x",
+          "--no-require-spec",
           "--out",
           badOut,
         ],
@@ -986,7 +1078,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--council",
           council.name,
           "--task",
-          "review the diff", "--no-require-spec",
+          "review the diff",
+          "--no-require-spec",
           "--timeout",
           "5m",
           "--concurrency",
@@ -1021,7 +1114,15 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     let exitCode = -1;
     try {
       await runReview(
-        ["--agents", JSON.stringify(agentIds), "--aggregator", aggregatorName, "--task", "x", "--no-require-spec"],
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--no-require-spec",
+        ],
         sink,
         { spawnImpl: failing },
       );
@@ -1067,7 +1168,15 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     let exitCode = -1;
     try {
       await runReview(
-        ["--agents", JSON.stringify(agentIds), "--aggregator", aggregatorName, "--task", "x", "--no-require-spec"],
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--no-require-spec",
+        ],
         sink,
         { spawnImpl: mixed },
       );
@@ -1166,7 +1275,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--pr",
-          "https://github.com/acme/repo/pull/9", "--no-require-spec",
+          "https://github.com/acme/repo/pull/9",
+          "--no-require-spec",
           "--repo",
           repo,
           "--against",
@@ -1209,7 +1319,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--pr",
-          "https://github.com/acme/repo/pull/9", "--no-require-spec",
+          "https://github.com/acme/repo/pull/9",
+          "--no-require-spec",
           "--repo",
           repo,
           "--against",
@@ -1255,7 +1366,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--task",
-          "freeze spec", "--no-require-spec",
+          "freeze spec",
+          "--no-require-spec",
         ],
         sink,
         { spawnImpl: fakeSpawn() },
@@ -1275,7 +1387,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--task",
-          "freeze spec", "--no-require-spec",
+          "freeze spec",
+          "--no-require-spec",
           "--resume",
           runId,
         ],
@@ -1307,9 +1420,13 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     });
     const sink = makeSink();
     try {
-      await runReview(["--task", "council freeze", "--no-require-spec", "--council", "pr-jury"], sink, {
-        spawnImpl: fakeSpawn(),
-      });
+      await runReview(
+        ["--task", "council freeze", "--no-require-spec", "--council", "pr-jury"],
+        sink,
+        {
+          spawnImpl: fakeSpawn(),
+        },
+      );
     } catch (error) {
       expect((error as ReviewExit).exitCode).toBe(0);
     }
@@ -1323,9 +1440,13 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     store.updateAgent(agentIds[0], { personaPrompt: "mutated persona" });
     const resumeSink = makeSink();
     try {
-      await runReview(["--task", "council freeze", "--no-require-spec", "--resume", runId], resumeSink, {
-        spawnImpl: fakeSpawn(),
-      });
+      await runReview(
+        ["--task", "council freeze", "--no-require-spec", "--resume", runId],
+        resumeSink,
+        {
+          spawnImpl: fakeSpawn(),
+        },
+      );
     } catch (error) {
       expect((error as ReviewExit).exitCode).toBe(0);
     }
@@ -1337,7 +1458,15 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     const sink = makeSink();
     try {
       await runReview(
-        ["--agents", JSON.stringify(agentIds), "--aggregator", aggregatorName, "--task", "x", "--no-require-spec"],
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "x",
+          "--no-require-spec",
+        ],
         sink,
         { spawnImpl: fakeSpawn() },
       );
@@ -1354,7 +1483,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--task",
-          "x", "--no-require-spec",
+          "x",
+          "--no-require-spec",
           "--resume",
           runId,
         ],
@@ -1404,7 +1534,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           kimi.id,
           "--pr",
-          "https://github.com/acme/repo/pull/9", "--no-require-spec",
+          "https://github.com/acme/repo/pull/9",
+          "--no-require-spec",
           "--repo",
           repo,
         ],
@@ -1444,7 +1575,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--pr",
-          "https://github.com/acme/repo/pull/9", "--no-require-spec",
+          "https://github.com/acme/repo/pull/9",
+          "--no-require-spec",
           "--repo",
           repo,
         ],
@@ -1473,7 +1605,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--pr",
-          "https://github.com/acme/repo/pull/9", "--no-require-spec",
+          "https://github.com/acme/repo/pull/9",
+          "--no-require-spec",
           "--repo",
           repo,
         ],
@@ -1540,7 +1673,8 @@ describe("cli review command — end-to-end (fake spawn)", () => {
           "--aggregator",
           aggregatorName,
           "--pr",
-          "https://github.com/acme/repo/pull/9", "--no-require-spec",
+          "https://github.com/acme/repo/pull/9",
+          "--no-require-spec",
           "--repo",
           repo,
           "--against",
@@ -1839,7 +1973,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       const sink = makeSink();
       let probes = 0;
       const exit = await runCapturing(
-        ["--agents", JSON.stringify([agent.id]), "--aggregator", agent.id, "--task", "probe retry", "--no-require-spec"],
+        [
+          "--agents",
+          JSON.stringify([agent.id]),
+          "--aggregator",
+          agent.id,
+          "--task",
+          "probe retry",
+          "--no-require-spec",
+        ],
         sink,
         {
           spawnImpl: async (input) => {
@@ -1906,7 +2048,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       return attemptEnvelope("Alice");
     };
     const exitCode = await runCapturing(
-      ["--agents", JSON.stringify([a.id, b.id]), "--aggregator", "Bob", "--task", "x", "--no-require-spec"],
+      [
+        "--agents",
+        JSON.stringify([a.id, b.id]),
+        "--aggregator",
+        "Bob",
+        "--task",
+        "x",
+        "--no-require-spec",
+      ],
       sink,
       { spawnImpl: spawn },
     );
@@ -1999,7 +2149,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       return attemptEnvelope(kind === "attempt:Alice" ? "Alice" : "Bob");
     };
     const exitCode = await runCapturing(
-      ["--agents", JSON.stringify([a.id, b.id, c.id]), "--aggregator", "Bob", "--task", "x", "--no-require-spec"],
+      [
+        "--agents",
+        JSON.stringify([a.id, b.id, c.id]),
+        "--aggregator",
+        "Bob",
+        "--task",
+        "x",
+        "--no-require-spec",
+      ],
       sink,
       { spawnImpl: spawn },
     );
@@ -2154,7 +2312,8 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
         "--aggregator",
         "Bob",
         "--task",
-        "original", "--no-require-spec",
+        "original",
+        "--no-require-spec",
         "--resume",
         runId,
       ],
@@ -2692,7 +2851,8 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
         "--aggregator",
         "Alice",
         "--task",
-        "t", "--no-require-spec",
+        "t",
+        "--no-require-spec",
         "--resume",
         runId,
       ],
@@ -2753,7 +2913,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       return attemptEnvelope("Alice");
     };
     const exitCode = await runCapturing(
-      ["--agents", JSON.stringify([a.id]), "--aggregator", "Alice", "--task", "x", "--no-require-spec"],
+      [
+        "--agents",
+        JSON.stringify([a.id]),
+        "--aggregator",
+        "Alice",
+        "--task",
+        "x",
+        "--no-require-spec",
+      ],
       sink,
       { spawnImpl: spawn, timers: fake.timers, heartbeatIntervalMs: 30_000 },
     );
@@ -2806,7 +2974,16 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       return attemptEnvelope("Alice");
     };
     const exitCode = await runCapturing(
-      ["--agents", JSON.stringify([a.id]), "--aggregator", "Alice", "--task", "x", "--no-require-spec", "--json"],
+      [
+        "--agents",
+        JSON.stringify([a.id]),
+        "--aggregator",
+        "Alice",
+        "--task",
+        "x",
+        "--no-require-spec",
+        "--json",
+      ],
       sink,
       { spawnImpl: spawn, timers: fake.timers, heartbeatIntervalMs: 30_000 },
     );
@@ -2904,7 +3081,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     };
     const sink = makeSink();
     const exitCode = await runCapturing(
-      ["--agents", JSON.stringify([alice.id, codex.id]), "--aggregator", "Codex", "--task", "x", "--no-require-spec"],
+      [
+        "--agents",
+        JSON.stringify([alice.id, codex.id]),
+        "--aggregator",
+        "Codex",
+        "--task",
+        "x",
+        "--no-require-spec",
+      ],
       sink,
       { spawnImpl: spawn },
     );
@@ -2987,7 +3172,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     };
     const sink = makeSink();
     const exitCode = await runCapturing(
-      ["--agents", JSON.stringify([a.id, b.id]), "--aggregator", "Bob", "--task", "x", "--no-require-spec"],
+      [
+        "--agents",
+        JSON.stringify([a.id, b.id]),
+        "--aggregator",
+        "Bob",
+        "--task",
+        "x",
+        "--no-require-spec",
+      ],
       sink,
       { spawnImpl: spawn },
     );
@@ -3034,7 +3227,8 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
         "--aggregator",
         "Carol",
         "--task",
-        "x", "--no-require-spec",
+        "x",
+        "--no-require-spec",
       ],
       sink,
       { spawnImpl: spawn, abortController: ac },
@@ -3077,7 +3271,15 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     const sink = makeSink();
     try {
       await runCapturing(
-        ["--agents", JSON.stringify([alice.id, bob.id]), "--aggregator", "Bob", "--task", "x", "--no-require-spec"],
+        [
+          "--agents",
+          JSON.stringify([alice.id, bob.id]),
+          "--aggregator",
+          "Bob",
+          "--task",
+          "x",
+          "--no-require-spec",
+        ],
         sink,
         { spawnImpl: spawn },
       );

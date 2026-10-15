@@ -1,11 +1,11 @@
-import { activityPresentation, goalPresentation, phaseName } from "./presentation";
-import { IconInfo, IconX } from "./icons";
 import { earlierControlCount, filterOperations } from "@shared/runtime/repair-observation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RepairActivity } from "./RepairActivity";
 import { RepairEventDrawer } from "./RepairEventDrawer";
 import { RepairEvidencePanel } from "./RepairEvidence";
 import { RepairRoles } from "./RepairRoles";
+import { IconInfo, IconX } from "./icons";
+import { activityPresentation, goalPresentation, phaseName } from "./presentation";
 import { buildRepairViewModel } from "./repairViewModel";
 import { useRepairObservation } from "./useRepairObservation";
 
