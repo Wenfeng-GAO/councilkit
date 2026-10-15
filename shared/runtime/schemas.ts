@@ -717,6 +717,23 @@ export const reviewModelSchema = z
   })
   .strict();
 export type ReviewModel = z.infer<typeof reviewModelSchema>;
+
+/**
+ * Identity of one review or ideate seat.
+ * Field order is driver id, options, then model id, so two selections with the
+ * same values match even when the driverSelection keys were built in a different order.
+ */
+export function modelConfigKey(model: {
+  driverSelection: { driverId: string; options: unknown };
+  modelId: string;
+}): string {
+  return JSON.stringify([
+    model.driverSelection.driverId,
+    model.driverSelection.options,
+    model.modelId,
+  ]);
+}
+
 export const reviewModelsSchema = z
   .object({
     models: z.array(reviewModelSchema).min(1).max(QUOTAS.maxParticipantsPerScope),
@@ -731,13 +748,7 @@ export const reviewModelsSchema = z
         message: "Aggregator must be a selected model",
       });
     }
-    const keys = value.models.map((model) =>
-      JSON.stringify([
-        model.driverSelection.driverId,
-        model.driverSelection.options,
-        model.modelId,
-      ]),
-    );
+    const keys = value.models.map((model) => modelConfigKey(model));
     if (new Set(keys).size !== keys.length) {
       ctx.addIssue({ code: "custom", path: ["models"], message: "Duplicate review model" });
     }
