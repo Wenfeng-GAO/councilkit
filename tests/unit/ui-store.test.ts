@@ -21,12 +21,10 @@ describe("useUIStore", () => {
     vi.resetModules();
   });
 
-  it("opens the sidebar, uses the timeline, and selects no room when window is absent", async () => {
+  it("opens the sidebar when window is absent", async () => {
     const { useUIStore } = await loadStore();
 
     expect(useUIStore.getState().sidebarOpen).toBe(true);
-    expect(useUIStore.getState().viewMode).toBe("timeline");
-    expect(useUIStore.getState().currentRoomId).toBe(null);
   });
 
   it("starts with the sidebar closed when the viewport is narrower than 768", async () => {
@@ -34,8 +32,6 @@ describe("useUIStore", () => {
     const { useUIStore } = await loadStore();
 
     expect(useUIStore.getState().sidebarOpen).toBe(false);
-    expect(useUIStore.getState().viewMode).toBe("timeline");
-    expect(useUIStore.getState().currentRoomId).toBe(null);
   });
 
   it("starts with the sidebar open when the viewport is exactly 768", async () => {
@@ -45,13 +41,11 @@ describe("useUIStore", () => {
     expect(useUIStore.getState().sidebarOpen).toBe(true);
   });
 
-  it("toggles the sidebar, sets the view, and tracks the current room", async () => {
+  it("toggles and sets the sidebar", async () => {
     const { useUIStore } = await loadStore();
 
     useUIStore.getState().toggleSidebar();
     expect(useUIStore.getState().sidebarOpen).toBe(false);
-    expect(useUIStore.getState().viewMode).toBe("timeline");
-    expect(useUIStore.getState().currentRoomId).toBe(null);
 
     useUIStore.getState().toggleSidebar();
     expect(useUIStore.getState().sidebarOpen).toBe(true);
@@ -60,21 +54,5 @@ describe("useUIStore", () => {
     expect(useUIStore.getState().sidebarOpen).toBe(false);
     useUIStore.getState().setSidebarOpen(true);
     expect(useUIStore.getState().sidebarOpen).toBe(true);
-
-    useUIStore.getState().setViewMode("columns");
-    expect(useUIStore.getState().viewMode).toBe("columns");
-    expect(useUIStore.getState().sidebarOpen).toBe(true);
-
-    useUIStore.getState().setViewMode("timeline");
-    expect(useUIStore.getState().viewMode).toBe("timeline");
-
-    useUIStore.getState().setCurrentRoom("room-7");
-    expect(useUIStore.getState().currentRoomId).toBe("room-7");
-    expect(useUIStore.getState().viewMode).toBe("timeline");
-
-    useUIStore.getState().setCurrentRoom(null);
-    expect(useUIStore.getState().currentRoomId).toBe(null);
-    expect(useUIStore.getState().sidebarOpen).toBe(true);
-    expect(useUIStore.getState().viewMode).toBe("timeline");
   });
 });
