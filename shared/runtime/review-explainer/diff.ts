@@ -97,8 +97,8 @@ function headerPath(raw: string): string | null {
  * `diff --git a/<old> b/<new>`.
  * Git quotes each side on its own, so one side may be quoted and the other not.
  * An unquoted name can contain spaces and ` b/`. The same name is the split
- * where both sides match. Renames differ and are corrected by `rename from` /
- * `rename to` or by the `---` / `+++` lines.
+ * where both sides match. A rename or copy differs. `rename from` / `rename to`,
+ * `copy from` / `copy to`, or the `---` / `+++` lines replace that guess.
  */
 function splitDiffGitPaths(header: string): { oldRaw: string; newRaw: string } {
   if (header.startsWith('"')) {
@@ -237,6 +237,13 @@ export function parseFrozenDiff(diff: string): { files: DiffFile[]; warnings: st
     }
     if (line.startsWith("rename to ")) {
       file.newPath = repoPath(unquote(line.slice(10)));
+      file.path = file.newPath;
+    }
+    if (line.startsWith("copy from ")) {
+      file.oldPath = repoPath(unquote(line.slice(10)));
+    }
+    if (line.startsWith("copy to ")) {
+      file.newPath = repoPath(unquote(line.slice(8)));
       file.path = file.newPath;
     }
     if (line.startsWith("Binary files ") || line === "GIT binary patch") {

@@ -29,6 +29,7 @@ interface DiffHunk {
 interface DiffFile {
   path: string;
   oldPath?: string | null;
+  newPath?: string | null;
   status: string;
   binary?: boolean;
   missing?: boolean;
@@ -210,6 +211,74 @@ describe("A01 parseFrozenDiff", () => {
       { path: "plain.txt", oldPath: 'quote"a.txt' },
       { path: 'quote"b.txt', oldPath: "other.txt" },
     ]);
+  });
+
+  it("keeps copy paths when git emits copy from and copy to without --- or +++", async () => {
+    const parseFrozenDiff = await parser();
+    const diff = [
+      "diff --git a/foo b/src.txt b/dest.txt",
+      "similarity index 100%",
+      "copy from foo b/src.txt",
+      "copy to dest.txt",
+      "diff --git a/foo b/src.txt b/bar b/dest.txt",
+      "similarity index 100%",
+      "copy from foo b/src.txt",
+      "copy to bar b/dest.txt",
+      'diff --git "a/quote\\"src.txt" b/copied quote.txt',
+      "similarity index 100%",
+      'copy from "quote\\"src.txt"',
+      "copy to copied quote.txt",
+      "diff --git a/foo b/src.txt b/partial.txt",
+      "similarity index 94%",
+      "copy from foo b/src.txt",
+      "copy to partial.txt",
+      "index 53af44e..888ca27 100644",
+      "--- a/foo b/src.txt\t",
+      "+++ b/partial.txt",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const parsed = parseFrozenDiff(diff);
+    expect(
+      parsed.files.map((file) => ({
+        path: file.path,
+        oldPath: file.oldPath,
+        newPath: file.newPath,
+        status: file.status,
+      })),
+    ).toEqual([
+      {
+        path: "dest.txt",
+        oldPath: "foo b/src.txt",
+        newPath: "dest.txt",
+        status: "modified",
+      },
+      {
+        path: "bar b/dest.txt",
+        oldPath: "foo b/src.txt",
+        newPath: "bar b/dest.txt",
+        status: "modified",
+      },
+      {
+        path: "copied quote.txt",
+        oldPath: 'quote"src.txt',
+        newPath: "copied quote.txt",
+        status: "modified",
+      },
+      {
+        path: "partial.txt",
+        oldPath: "foo b/src.txt",
+        newPath: "partial.txt",
+        status: "modified",
+      },
+    ]);
+    expect(parsed.files[0]?.hunks).toEqual([]);
+    const added = (parsed.files[3]?.hunks ?? [])
+      .flatMap((hunk) => hunk.lines)
+      .find((line) => line.type === "add");
+    expect(added?.text).toBe("new");
   });
 
   it("keeps a quotation mark that git C-quoted in the path", async () => {
