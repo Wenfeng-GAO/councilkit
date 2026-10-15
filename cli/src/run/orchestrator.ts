@@ -457,6 +457,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
             council: input.council,
             reporterName: input.reporter.snapshot.name,
             participantNames: input.agents.map((a) => a.snapshot.name),
+            demo: input.demo === true,
             onSuccess: (markdown: string) => {
               reporterSuccessMarkdown = markdown;
             },
@@ -587,6 +588,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
           council: input.council,
           reporterName: input.reporter.snapshot.name,
           participantNames: input.agents.map((a) => a.snapshot.name),
+          demo: input.demo === true,
           reporterOutput: reporterOutput ?? "",
         });
         assertNonEmptyMarkdown(reportMarkdown);
@@ -603,6 +605,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
           council: input.council,
           reporterName: input.reporter.snapshot.name,
           participantNames: input.agents.map((a) => a.snapshot.name),
+          demo: input.demo === true,
           reporterOutput: reporterOutput ?? "",
         });
         assertNonEmptyMarkdown(reportMarkdown);
@@ -620,6 +623,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         council: input.council,
         reporterName: input.reporter.snapshot.name,
         participantNames: input.agents.map((a) => a.snapshot.name),
+        demo: input.demo === true,
         completedTurns,
         failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
       });
@@ -707,6 +711,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         council: input.council,
         reporterName: input.reporter.snapshot.name,
         participantNames: input.agents.map((a) => a.snapshot.name),
+        demo: input.demo === true,
         completedTurns,
         failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
       });
@@ -988,6 +993,7 @@ function makeReporterPersist(
     council: RunInput["council"];
     reporterName: string;
     participantNames: ReadonlyArray<string>;
+    demo: boolean;
     onSuccess: (markdown: string) => void;
   },
 ): (evidence: TerminalEvidence) => Promise<void> {
@@ -1026,6 +1032,7 @@ function makeReporterPersist(
       council: reportCtx.council,
       reporterName: reportCtx.reporterName,
       participantNames: reportCtx.participantNames,
+      demo: reportCtx.demo,
       reporterOutput: evidence.output,
     });
     assertNonEmptyMarkdown(markdown);

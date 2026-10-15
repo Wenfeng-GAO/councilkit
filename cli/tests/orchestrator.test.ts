@@ -396,7 +396,27 @@ describe("cli orchestrator", () => {
     expect(JSON.parse(readFileSync(sentinel, "utf8"))).toEqual({ demo: true });
     const row = listCliRuns(env).find((run) => run.runId === runId);
     expect(row?.demo).toBe(true);
+    expect(row?.kind).toBe("discuss");
     expect(countRealRunsNeedingAttention(listCliRuns(env))).toBe(0);
+    // DM-04: report.md opens with the zh-only demo marker.
+    const report = readFileSync(paths.report(runId), "utf8");
+    expect(report.split("\n")[0]).toBe("> ⚠️ 示例数据：慢生成测试，非真实模型输出。");
+    expect(report.match(/示例数据：慢生成测试/g)).toHaveLength(1);
+    expect(report).not.toMatch(/SAMPLE DATA|COUNCILKIT_SLOW_GEN/);
+  });
+
+  it("B4 DM-04: a failed slow-gen run's partial report.md also opens with the marker", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    const env = { ...process.env, COUNCILKIT_HOME: home };
+    const runId = "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    const outcome = await runCouncil(
+      { ...input, runId, demo: true },
+      { host, paths, env, turnDriver: makeDriver({ decide: () => "failed" }, { count: 0 }) },
+    );
+    expect(outcome.status).not.toBe("completed");
+    const report = readFileSync(paths.report(runId), "utf8");
+    expect(report.split("\n")[0]).toBe("> ⚠️ 示例数据：慢生成测试，非真实模型输出。");
   });
 
   it("B4 #279: an ordinary run writes no demo.json", async () => {
@@ -410,6 +430,7 @@ describe("cli orchestrator", () => {
     );
     expect(existsSync(join(paths.runDir(runId), "demo.json"))).toBe(false);
     expect(listCliRuns(env).find((run) => run.runId === runId)?.demo).toBe(false);
+    expect(readFileSync(paths.report(runId), "utf8")).not.toContain("示例数据");
   });
 
   it("a mid-run ordinary-turn failure stops the Run, retains transcript, partial report, exit 4", async () => {

@@ -136,6 +136,7 @@ describe("slow-gen driver (fake timers, product values)", () => {
     expect(terminal?.type).toBe("completed");
     if (terminal?.type !== "completed") throw new Error("unreachable");
     expect(terminal.output).toContain("示例");
+    expect(terminal.output).not.toContain("COUNCILKIT_SLOW_GEN");
     expect(terminal.output).toMatch(/收敛建议：是$/);
   });
 
@@ -237,7 +238,9 @@ describe("slow-gen driver (fake timers, product values)", () => {
     expect(terminal?.type).toBe("completed");
     if (terminal?.type !== "completed") throw new Error("unreachable");
     expect(turn.events.filter((e) => e.type === "output.delta")).toHaveLength(5);
-    expect(terminal.output).toContain("示例数据");
+    // #295: current language only, no env var name in the body.
+    expect(terminal.output.split("\n")[0]).toBe("> ⚠️ 示例数据：慢生成测试，非真实模型输出。");
+    expect(terminal.output).not.toMatch(/SAMPLE DATA|COUNCILKIT_SLOW_GEN/);
     for (const heading of REPORT_SECTION_HEADINGS) expect(terminal.output).toContain(heading);
   });
 

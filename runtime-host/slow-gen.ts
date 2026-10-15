@@ -10,6 +10,7 @@ import { REPORT_SECTION_HEADINGS } from "@shared/runtime/report-sections";
 import {
   SLOW_GEN_CHUNKS,
   SLOW_GEN_CRASH_AT_MS,
+  SLOW_GEN_DEMO_MARKER,
   SLOW_GEN_PATH_PREFIX,
   type SlowGenConfig,
 } from "@shared/runtime/slow-gen";
@@ -87,15 +88,15 @@ export function isReportPrompt(prompt: string): boolean {
   return prompt.includes(REPORT_SECTION_HEADINGS.join("\n"));
 }
 
-function demoReport(mode: SlowGenConfig["mode"], chunks: number): string {
+function demoReport(chunks: number): string {
   const body = REPORT_SECTION_HEADINGS.map(
     (heading) => `${heading}\n\n示例内容：慢生成测试（${chunks} 段输出后完成），非真实模型输出。`,
   ).join("\n\n");
-  return `> ⚠️ 示例数据 / SAMPLE DATA — COUNCILKIT_SLOW_GEN=${mode}，非真实模型输出。\n\n${body}\n`;
+  return `${SLOW_GEN_DEMO_MARKER}\n\n${body}\n`;
 }
 
 function discussionReply(prompt: string): string {
-  const base = "示例发言（COUNCILKIT_SLOW_GEN 测试模式，非真实模型输出）。";
+  const base = "示例发言：慢生成测试，非真实模型输出。";
   return prompt.includes("收敛建议") ? `${base}\n收敛建议：是` : base;
 }
 
@@ -183,7 +184,7 @@ export function createSlowGenDriverFactory(
         }
         if (config.mode === "buffered") {
           ticker = setTimeout(() => {
-            const report = demoReport(config.mode, 1);
+            const report = demoReport(1);
             emit({ type: "output.delta", text: report });
             settle(() => complete(input, emit, report));
           }, config.intervalMs);
@@ -194,7 +195,7 @@ export function createSlowGenDriverFactory(
           emit({ type: "output.delta", text: `慢生成片段 ${chunks}/${SLOW_GEN_CHUNKS}\n` });
           watchdog.output();
           if (chunks >= SLOW_GEN_CHUNKS) {
-            settle(() => complete(input, emit, demoReport(config.mode, chunks)));
+            settle(() => complete(input, emit, demoReport(chunks)));
             return;
           }
           ticker = setTimeout(tick, config.intervalMs);

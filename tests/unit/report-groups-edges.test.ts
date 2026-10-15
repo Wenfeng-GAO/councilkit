@@ -45,7 +45,8 @@ describe("report group edges", () => {
     expect(isWorkspaceRun({ kind: "squad" })).toBe(true);
     expect(isWorkspaceRun({ kind: "repair" })).toBe(true);
     expect(isWorkspaceRun({ kind: "ideate" })).toBe(false);
-    expect(isWorkspaceRun({ kind: "discuss" })).toBe(false);
+    // B4 DM-03: discussion runs (incl. slow-gen 示例) are listed in /reports.
+    expect(isWorkspaceRun({ kind: "discuss" })).toBe(true);
     expect(isWorkspaceRun({ kind: "unknown" })).toBe(false);
   });
 

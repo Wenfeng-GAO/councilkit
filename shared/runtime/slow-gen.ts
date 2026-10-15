@@ -31,6 +31,10 @@ export interface SlowGenConfig {
   intervalMs: number;
 }
 
+/** Demo marker for slow-gen reports: report.md first line (DM-04) and the
+ * fake report body. Current language only (#295), no env var name. */
+export const SLOW_GEN_DEMO_MARKER = "> ⚠️ 示例数据：慢生成测试，非真实模型输出。";
+
 /** Fixed, documented second at which `crash` mode exits mid-report. */
 export const SLOW_GEN_CRASH_AT_MS = 5_000;
 export const SLOW_GEN_DEFAULT_INTERVAL_MS = 30_000;
