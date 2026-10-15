@@ -1,5 +1,6 @@
 import type { AggregatorVerdict } from "./aggregator-verdict";
 import { type LedgerFinding, isFindingVerifiedClosed } from "./cli-ledger";
+import { CLI_RUN_PROGRESS_PHASES, type CliRunProgressPhase } from "./cli-run-phases";
 import {
   type AdjudicationProjection,
   type GateAcceptanceView,
@@ -9,15 +10,12 @@ import { type VerificationAsset, evaluateVerificationAsset } from "./repair-cont
 import { type RepairIdentityFacts, isKnown } from "./repair-identity";
 import { expectedGatePolicyHash, policyHashMatches } from "./repair-policy";
 
-export const REPAIR_PROGRESS_PHASES = [
-  "repair-preparing",
-  "repair-squad-repair",
-  "repair-squad-verify",
-  "repair-publishing",
-  "repair-reviewing",
-  "repair-diagnosing",
-  "repair-finalizing",
-] as const;
+type RepairPhaseName = Extract<CliRunProgressPhase, `repair-${string}`>;
+
+/** The `repair-*` progress phases, in the shared list's order. */
+export const REPAIR_PROGRESS_PHASES = CLI_RUN_PROGRESS_PHASES.filter(
+  (phase): phase is RepairPhaseName => phase.startsWith("repair-"),
+);
 export type RepairProgressPhase = (typeof REPAIR_PROGRESS_PHASES)[number];
 
 export const REPAIR_BUSINESS_RESULTS = ["approved", "needs_attention", "stopped"] as const;
