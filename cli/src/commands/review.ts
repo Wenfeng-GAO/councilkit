@@ -73,7 +73,11 @@ import {
 import { runDriverProbe } from "../auto/driver-probe";
 import { redactDriverDiagnostic } from "../auto/driver-terminal";
 import { formatDurationMs } from "../auto/duration";
-import { addDetachedWorktree, resolveLocalPrSha } from "../auto/git-worktree";
+import {
+  addDetachedWorktree,
+  prepareIsolatedSource,
+  resolveLocalPrSha,
+} from "../auto/git-worktree";
 import {
   type ExecutionRevision,
   type InvocationManifest,
@@ -1305,8 +1309,16 @@ export async function runReview(
             // Pinned candidate: freeze against the local parent without touching origin.
             targetRef = "HEAD~1";
           }
-          const sha = await resolveLocalPrSha({
+          // SAFE-05 (#273): every fetch, rev-parse, diff and seat checkout
+          // below reads from a per-run isolated source, never the user's .git.
+          const sourceRepo = await prepareIsolatedSource({
             repo: localRepo.path,
+            runDir,
+            runCommand,
+            env,
+          });
+          const sha = await resolveLocalPrSha({
+            repo: sourceRepo,
             branch,
             pinnedRef: pinnedRef ?? frozenManifest?.reviewedSha ?? undefined,
             expectedSha: expectedHeadSha,
@@ -1337,7 +1349,7 @@ export async function runReview(
           out.progress(`  worktree ${sha.slice(0, 12)}`);
           if (targetRef) {
             const frozen = await freezeReviewContext({
-              repo: localRepo.path,
+              repo: sourceRepo,
               headSha: sha,
               sourceRef: branch,
               targetRef,
@@ -1371,10 +1383,10 @@ export async function runReview(
           }
           createWorkspace(join(runDir, "workspaces"));
           for (const spec of runnableSpecs) {
-            spec.sourceRepo = localRepo.path;
+            spec.sourceRepo = sourceRepo;
             spec.sourceSha = sha;
             await addDetachedWorktree({
-              repo: localRepo.path,
+              repo: sourceRepo,
               dest: spec.cwd,
               sha,
               runDir,
