@@ -1,14 +1,8 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, sep } from "node:path";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
+import { readPrivateText } from "@shared/runtime/durable-write";
 import { errors } from "../errors";
 import { ensureHome, resolvePaths } from "../store/paths";
 
@@ -59,8 +53,8 @@ export function readRepairHandoff(input: {
   const home = ensureHome();
   const dir = input.directory ?? join(home, "handoff");
   const file = join(dir, `${input.runId}-c${input.cycle}.json`);
-  if (!existsSync(file)) return null;
-  const payload = readFileSync(file, "utf8");
+  const payload = readPrivateText(file);
+  if (payload === null) return null;
   return {
     path: file,
     sha256: createHash("sha256").update(payload).digest("hex"),

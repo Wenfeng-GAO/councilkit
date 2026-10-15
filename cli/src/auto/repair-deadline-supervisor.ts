@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
+import { appendPrivateFile } from "@shared/runtime/durable-write";
 import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairExecution,
@@ -83,7 +83,11 @@ export function spawnDeadlineSupervisor(input: {
     if (typeof child.pid !== "number" || child.pid <= 0) {
       return { skipped: true, reason: "deadline supervisor pid missing" };
     }
-    writeFileSync(input.logPath, `supervisor pid=${child.pid}\n`, { encoding: "utf8", flag: "a" });
+    try {
+      appendPrivateFile(input.logPath, `supervisor pid=${child.pid}\n`);
+    } catch {
+      // A symlink or unwritable log must not follow the link or hide the pid.
+    }
     return { pid: child.pid };
   } catch (error) {
     return {

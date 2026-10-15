@@ -522,7 +522,7 @@ function copyGrokCredentials(srcDir: string, dstDir: string, opts?: { overwrite?
         }
         const fd = openSync(
           dest,
-          constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC,
+          constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
           0o600,
         );
         try {
@@ -532,7 +532,11 @@ function copyGrokCredentials(srcDir: string, dstDir: string, opts?: { overwrite?
         }
         continue;
       }
-      const fd = openSync(dest, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+      const fd = openSync(
+        dest,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+        0o600,
+      );
       try {
         writeSync(fd, data);
       } finally {
@@ -555,7 +559,11 @@ function writeIsolatedGrokConfig(isolated: string, contents: string = ISOLATED_G
 function writeIsolatedTextFile(path: string, contents: string): void {
   const data = Buffer.from(contents, "utf8");
   try {
-    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    const fd = openSync(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
     try {
       writeSync(fd, data);
     } finally {
@@ -570,7 +578,7 @@ function writeIsolatedTextFile(path: string, contents: string): void {
     if (st.isSymbolicLink()) return;
     const existing = readFileSync(path);
     if (existing.equals(data)) return;
-    const fd = openSync(path, constants.O_WRONLY | constants.O_TRUNC, 0o600);
+    const fd = openSync(path, constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
     try {
       writeSync(fd, data);
     } finally {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { type Stats, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   FULL_COMMIT_SHA,
@@ -13,6 +13,7 @@ import {
   withLiveHeartbeats,
 } from "@shared/runtime/cli-run-progress";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import { skipListForPr } from "@shared/runtime/review-explainer/pr-decisions";
 import {
@@ -2257,10 +2258,7 @@ async function runAssessmentCorrections(
       originalBlocks.length > 0
         ? originalBlocks.map((block) => `\`\`\`councilkit-findings\n${block}\n\`\`\``).join("\n\n")
         : result.output;
-    writeFileSync(join(result.workspace, artifactName), `${originalAssessment}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    replacePrivateFile(join(result.workspace, artifactName), `${originalAssessment}\n`);
     pending.push({ result, agent, findingIds, errorPaths, correctionId, originalAssessment });
   }
   const spawnedRows = await Promise.all(

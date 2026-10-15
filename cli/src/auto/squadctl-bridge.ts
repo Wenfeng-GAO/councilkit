@@ -1,7 +1,8 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { openNoFollowAppend, replacePrivateFile } from "@shared/runtime/durable-write";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { assertSquadPipelineIsolation } from "@shared/runtime/repair-isolation";
 import {
@@ -248,17 +249,10 @@ export class SquadctlBridge implements SquadBridge {
     });
     if (!owned.ok) throw errors.runFailed(owned.reason);
     const envelopePath = join(identity.taskDir, "councilkit-history-envelope.json");
-    writeFileSync(envelopePath, `${JSON.stringify(envelope)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    writeFileSync(
+    replacePrivateFile(envelopePath, `${JSON.stringify(envelope)}\n`);
+    replacePrivateFile(
       join(identity.taskDir, "councilkit-history.json"),
       `${JSON.stringify(envelope.history)}\n`,
-      {
-        encoding: "utf8",
-        mode: 0o600,
-      },
     );
     return { envelope, hash: historyEnvelopeHash(envelope), historyPath: envelopePath };
   }
@@ -1155,7 +1149,7 @@ export class SquadctlBridge implements SquadBridge {
   private writePlanningDocuments(taskDir: string, packagePath: string): void {
     const briefPath = join(taskDir, "brief.md");
     const planPath = join(taskDir, "plan.md");
-    if (existsSync(briefPath) && existsSync(planPath)) return;
+    if (regularFileExists(briefPath) && regularFileExists(planPath)) return;
     let summary = "CouncilKit repair task";
     try {
       const raw = JSON.parse(readFileText(packagePath) ?? "{}") as {
@@ -1177,11 +1171,11 @@ export class SquadctlBridge implements SquadBridge {
     } catch {
       // bounded fallback
     }
-    if (!existsSync(briefPath)) {
-      writeFileSync(briefPath, `${summary}\n`, { encoding: "utf8", mode: 0o600 });
+    if (!regularFileExists(briefPath)) {
+      replacePrivateFile(briefPath, `${summary}\n`);
     }
-    if (!existsSync(planPath)) {
-      writeFileSync(
+    if (!regularFileExists(planPath)) {
+      replacePrivateFile(
         planPath,
         [
           "# Repair plan",
@@ -1191,7 +1185,6 @@ export class SquadctlBridge implements SquadBridge {
           "3. Stop after independent review and verify bind the same SHA.",
           "",
         ].join("\n"),
-        { encoding: "utf8", mode: 0o600 },
       );
     }
   }
@@ -1313,10 +1306,7 @@ export class SquadctlBridge implements SquadBridge {
       }
       const envelope = loaded.envelope;
       const historyObjectPath = join(taskDir, "councilkit-history-import.json");
-      writeFileSync(historyObjectPath, `${JSON.stringify(envelope.history)}\n`, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      replacePrivateFile(historyObjectPath, `${JSON.stringify(envelope.history)}\n`);
       argv.push(
         "--history",
         historyObjectPath,
@@ -1429,7 +1419,7 @@ export class SquadctlBridge implements SquadBridge {
     if (!resolved.ok) throw errors.runFailed(resolved.reason);
     if (!resolved.emitContract) return null;
     const contractPath = join(dirname(taskDir), `${basename(taskDir)}.runtime-contract.json`);
-    writeFileSync(
+    replacePrivateFile(
       contractPath,
       `${JSON.stringify(
         buildRepairContract({
@@ -1440,7 +1430,6 @@ export class SquadctlBridge implements SquadBridge {
         null,
         2,
       )}\n`,
-      { encoding: "utf8", mode: 0o600 },
     );
     return contractPath;
   }
@@ -1521,20 +1510,16 @@ export class SquadctlBridge implements SquadBridge {
       authorityRef: delivery.grantHash,
     });
     this.writeProfile(taskDir, profile);
-    writeFileSync(
+    replacePrivateFile(
       join(taskDir, AUTHORITY_FILE),
       `${JSON.stringify(deliveryAuthorityFromProfile(profile), null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 },
     );
     return profile;
   }
 
   private writeProfile(taskDir: string, profile: SquadPrProfile): string {
     const path = join(taskDir, PROFILE_FILE);
-    writeFileSync(path, `${JSON.stringify(profile, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    replacePrivateFile(path, `${JSON.stringify(profile, null, 2)}\n`);
     return path;
   }
 
@@ -1714,7 +1699,7 @@ function defaultSpawnOrchestrator(input: SpawnOrchestratorInput): {
   stdoutBuf: { text: string };
 } {
   mkdirSync(dirname(input.logPath), { recursive: true });
-  const out = createWriteStream(input.logPath, { flags: "a" });
+  const out = createWriteStream(input.logPath, { fd: openNoFollowAppend(input.logPath) });
   out.on("error", () => {
     // log path may disappear after tests tear down the temp home
   });
@@ -1892,8 +1877,16 @@ function writeOrchestratorPrompt(identity: BridgeIdentity, probe: SquadBridgePro
     "Do NOT run git push, squadctl integrate, or any remote update. CouncilKit will publish after you stop.",
     "Stop when candidate.status=completed, independent Review/Verify passed on the same SHA, and phase=integrating. Then wait; do not keep mutating.",
   ].join("\n");
-  writeFileSync(path, `${body}\n`, { encoding: "utf8", mode: 0o600 });
+  replacePrivateFile(path, `${body}\n`);
   return path;
+}
+
+function regularFileExists(path: string): boolean {
+  try {
+    return lstatSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 const SQUAD_TASK_ID_RE = /^[0-9]{8}-[a-z0-9][a-z0-9-]{0,47}-[a-z0-9]{4}$/;

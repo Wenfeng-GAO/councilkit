@@ -2,7 +2,7 @@
  * Incremental driver-stdout → AttemptLiveEvent collector and sidecar writer.
  * Observational only: IO errors are swallowed and never fail a review.
  */
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -12,6 +12,7 @@ import {
   LIVE_SUMMARY_MAX,
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
+import { appendPrivateFile, readPrivateText } from "@shared/runtime/durable-write";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { asText, parseJsonLine, stripProxyPrefix } from "./driver-commands";
 
@@ -323,7 +324,8 @@ export class LiveEventWriter {
 
   private hydrateFromDisk(attemptId: string, state: AttemptWriteState): void {
     try {
-      const text = readFileSync(this.filePath(attemptId), "utf8");
+      const text = readPrivateText(this.filePath(attemptId));
+      if (text === null) return;
       state.bytes = Buffer.byteLength(text, "utf8");
       let maxSeq = 0;
       for (const line of text.split("\n")) {
@@ -408,7 +410,7 @@ export class LiveEventWriter {
   private writeLine(attemptId: string, line: string, size: number): void {
     const state = this.state(attemptId);
     this.ensureDir();
-    appendFileSync(this.filePath(attemptId), line);
+    appendPrivateFile(this.filePath(attemptId), line);
     state.bytes += size;
     state.nextSeq += 1;
   }

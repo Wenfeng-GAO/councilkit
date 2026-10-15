@@ -7,17 +7,16 @@
 import { randomUUID } from "node:crypto";
 import {
   type Stats,
-  appendFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
+import { appendPrivateFile, replacePrivateFile } from "@shared/runtime/durable-write";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import {
   type RunCommand,
@@ -365,27 +364,17 @@ export async function runApply(
     const checked = await checkoutPullRequest(pr, workspace, runCommand, env);
     outcomeBase.branch = checked.branch;
     excludeApplyArtifacts(workspace);
-    writeFileSync(join(workspace, APPLY_REPORT_FILENAME), report, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    replacePrivateFile(join(workspace, APPLY_REPORT_FILENAME), report);
     let planFile: string | undefined;
     if (target.cluster && lock) {
-      writeFileSync(
+      replacePrivateFile(
         join(workspace, APPLY_PLAN_FILENAME),
         buildClusterPlanMarkdown(lock, target.cluster),
-        {
-          encoding: "utf8",
-          mode: 0o600,
-        },
       );
       planFile = APPLY_PLAN_FILENAME;
       out.progress(`  using locked cluster ${target.cluster.id}`);
     } else if (planMarkdown.trim().length > 0) {
-      writeFileSync(join(workspace, APPLY_PLAN_FILENAME), planMarkdown, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
+      replacePrivateFile(join(workspace, APPLY_PLAN_FILENAME), planMarkdown);
       planFile = APPLY_PLAN_FILENAME;
       out.progress("  using consensus plan.md");
     }
@@ -704,12 +693,9 @@ function excludeApplyArtifacts(workspace: string): void {
   const excludePath = join(workspace, ".git", "info", "exclude");
   try {
     mkdirSync(dirname(excludePath), { recursive: true, mode: 0o700 });
-    appendFileSync(
+    appendPrivateFile(
       excludePath,
       `\n${APPLY_REPORT_FILENAME}\n${APPLY_PLAN_FILENAME}\n${GROK_LEADER_SOCK}\n`,
-      {
-        encoding: "utf8",
-      },
     );
   } catch {
     // Best effort: the prompt also forbids committing the report/plan files.

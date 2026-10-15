@@ -3,8 +3,9 @@
  * each re-fetch or guess CLI flags; the snapshot is hashed once.
  */
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, linkSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import { errors } from "../errors";
 import { type RunCommand, defaultRunCommand } from "./checkout-pr";
 import { fetchRefExclusive, gitRevParse } from "./git-worktree";
@@ -163,14 +164,8 @@ export async function freezeReviewContext(opts: {
 }
 
 export function persistFrozenContext(runDir: string, ctx: FrozenReviewContext): void {
-  writeFileSync(join(runDir, REVIEW_CONTEXT_MD), formatFrozenContextMarkdown(ctx), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  writeFileSync(join(runDir, REVIEW_CONTEXT_DIFF), ctx.colorlessDiff, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  replacePrivateFile(join(runDir, REVIEW_CONTEXT_MD), formatFrozenContextMarkdown(ctx));
+  replacePrivateFile(join(runDir, REVIEW_CONTEXT_DIFF), ctx.colorlessDiff);
 }
 
 export function copyFrozenContextIntoWorkspace(runDir: string, workspace: string): void {
@@ -178,17 +173,21 @@ export function copyFrozenContextIntoWorkspace(runDir: string, workspace: string
   for (const name of [REVIEW_CONTEXT_MD, REVIEW_CONTEXT_DIFF]) {
     const src = join(runDir, name);
     const dest = join(workspace, name);
-    if (existsSync(dest)) {
-      try {
-        unlinkSync(dest);
-      } catch {
-        /* replace below */
-      }
-    }
+    removeReplacableLeaf(dest);
     try {
       linkSync(src, dest);
     } catch {
-      copyFileSync(src, dest);
+      replacePrivateFile(dest, readFileSync(src));
     }
+  }
+}
+
+function removeReplacableLeaf(path: string): void {
+  try {
+    const st = lstatSync(path);
+    if (st.isSymbolicLink() || st.isFile()) unlinkSync(path);
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return;
+    throw error;
   }
 }
