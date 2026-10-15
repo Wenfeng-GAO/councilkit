@@ -4,6 +4,7 @@ import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { makeError } from "@shared/runtime/errors";
+import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
@@ -108,10 +109,9 @@ export function parseCursorJsonResult(stdout: string): CursorJsonResult | null {
     if (parsed !== null) last = parsed;
   }
   if (last !== null) return last;
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  return parseCursorResultObject(trimmed.slice(start, end + 1));
+  const embedded = jsonParseEmbedded(trimmed);
+  if (embedded === null || typeof embedded !== "object" || Array.isArray(embedded)) return null;
+  return cursorResultFromRecord(embedded as Record<string, unknown>);
 }
 
 function parseCursorResultObject(raw: string): CursorJsonResult | null {
@@ -121,8 +121,11 @@ function parseCursorResultObject(raw: string): CursorJsonResult | null {
   } catch {
     return null;
   }
-  if (obj === null || typeof obj !== "object") return null;
-  const rec = obj as Record<string, unknown>;
+  if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return null;
+  return cursorResultFromRecord(obj as Record<string, unknown>);
+}
+
+function cursorResultFromRecord(rec: Record<string, unknown>): CursorJsonResult | null {
   if (rec.type !== "result") return null;
   if (rec.subtype !== undefined && rec.subtype !== "success") return null;
   if (rec.is_error === true) return null;

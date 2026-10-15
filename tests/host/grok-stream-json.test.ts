@@ -181,6 +181,14 @@ describe("grok protocol parsers", () => {
     expect(parsed?.effectiveModel).toBe("grok-4.6-build");
     expect(grokModelVerdict("grok-4.6", "grok-4.6-build")).toBe("match");
   });
+
+  it("keeps grok json when a later note contains a brace", () => {
+    const parsed = parseGrokJsonResult(
+      `${JSON.stringify({ text: "COUNCILKIT_OK", sessionId: "sid-1" })}\nsee {docs}`,
+    );
+    expect(parsed?.text).toBe("COUNCILKIT_OK");
+    expect(parsed?.sessionId).toBe("sid-1");
+  });
 });
 
 describe("grok-stream-json driver", () => {

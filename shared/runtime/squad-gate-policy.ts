@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { canonicalJson } from "./digest";
+import { jsonParseEmbedded } from "./json-parse";
 import { isFrozenPolicyHash } from "./repair-policy";
 
 const POLICY_HASH = /^[a-f0-9]{64}$/;
@@ -361,16 +362,9 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
     return asRecord(JSON.parse(trimmed));
   } catch {
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      try {
-        return asRecord(JSON.parse(trimmed.slice(start, end + 1)));
-      } catch {
-        return null;
-      }
-    }
-    return null;
+    const value = jsonParseEmbedded(trimmed);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+    return asRecord(value);
   }
 }
 

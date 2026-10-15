@@ -40,7 +40,7 @@ import { StringDecoder } from "node:string_decoder";
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
 import { mkdirPrivate } from "@shared/runtime/durable-write";
-import { jsonParse } from "@shared/runtime/json-parse";
+import { jsonParse, jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 import {
@@ -1244,10 +1244,9 @@ function extractGrok(stdout: string): string | null {
   };
   const direct = tryParse(trimmed);
   if (direct !== null) return direct;
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  return tryParse(trimmed.slice(start, end + 1));
+  const embedded = jsonParseEmbedded(trimmed);
+  if (embedded === null || typeof embedded !== "object" || Array.isArray(embedded)) return null;
+  return asText((embedded as { text?: unknown }).text);
 }
 
 /** Usable grok `{"type":"result"}` text. An error frame is not a deliverable,

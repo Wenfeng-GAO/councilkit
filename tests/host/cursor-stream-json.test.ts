@@ -193,6 +193,23 @@ describe("cursor protocol parsers", () => {
     expect(parsed?.sessionId).toBe("sid-1");
     expect(cursorModelVerdict("auto", "Composer 2.5")).toBe("match");
   });
+
+  it("keeps a pretty-printed result when noise around it contains braces", () => {
+    const body = JSON.stringify(
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "COUNCILKIT_OK",
+        session_id: "sid-1",
+      },
+      null,
+      2,
+    );
+    const parsed = parseCursorJsonResult(`note {not-json}\n${body}\nsee }`);
+    expect(parsed?.text).toBe("COUNCILKIT_OK");
+    expect(parsed?.sessionId).toBe("sid-1");
+  });
 });
 
 describe("cursor-stream-json driver", () => {
