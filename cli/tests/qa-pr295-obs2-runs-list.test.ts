@@ -11,7 +11,7 @@ import { runRuns } from "../src/commands/runs";
 
 const RUN_ID = "ck-review-188cdfd8-2e7e-482a-af6e-87141ce17a91";
 const FIXTURE = join(__dirname, "../../tests/fixtures/qa-pr295-task-run");
-const EXPECTED = { needsAttention: 6, blocking: 4 };
+const EXPECTED = { needsAttention: 6, blocking: 0 };
 
 describe("QA-PR295-OBS2 runs list shows the shared 需要处理 count", () => {
   let home: string;

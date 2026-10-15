@@ -19,6 +19,7 @@ import {
   seatProgress,
 } from "@/lib/report-groups";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import { formatAttentionLabel } from "@shared/runtime/attention-counts";
 import { isDemoRun } from "@shared/runtime/demo-report";
 import { summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
@@ -307,7 +308,13 @@ function CaseCard({
             {caseHasDemo(view) ? <span className="ck-demo-tag">示例</span> : null}
           </p>
         </div>
-        <StatusPill tone={pill.tone} text={pill.text} />
+        <div className="ck-case-status">
+          <StatusPill tone={pill.tone} text={pill.text} />
+          {latest.attention ? (
+            // #304: same shared count as the report page and `runs list`.
+            <span className="ck-case-counts">{formatAttentionLabel(latest.attention)}</span>
+          ) : null}
+        </div>
       </div>
       {summary.prUrl && !runs.every((run) => isDemoRun(run)) ? (
         <p className="ck-case-next">下一步：{summary.nextAction}</p>

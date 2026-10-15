@@ -630,7 +630,7 @@ export const runAttentionCountsSchema = z
     findings: z.number().int().nonnegative(),
     needsAttention: z.number().int().nonnegative(),
     blocking: z.number().int().nonnegative(),
-    blockingSource: z.enum(["aggregator", "ledger"]),
+    aggregatorBlocking: z.number().int().nonnegative().nullable(),
   })
   .strict();
 
