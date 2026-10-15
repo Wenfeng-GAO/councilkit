@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 describe("resolveHostPort", () => {
   it("keeps the canonical port by default and under an empty override", () => {
     expect(resolveHostPort({})).toBe(CANONICAL_PORT);
-    expect(resolveHostPort({ COUNCILKIT_PORT: "" })).toBe(CANONICAL_PORT);
+    expect(resolveHostPort({ COUNCILKIT_PORT: "" })).toBe(CANONICAL_PORT + 1); // #317 red-proof: deliberately broken, never merge
     expect(loadConfig({}).port).toBe(CANONICAL_PORT);
     expect(loadConfig({}).hostHeader).toBe(CANONICAL_HOST_HEADER);
   });
