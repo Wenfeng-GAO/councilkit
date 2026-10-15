@@ -99,6 +99,25 @@ describe("replacePrivateFile", () => {
     );
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
   });
+
+  it("does not write through an ancestor symlink when the child directory already exists", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    const nested = join(outside, "nested");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "keep.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(() => replacePrivateFile(join(link, "nested", "new.txt"), "NEW\n")).toThrow(
+      expect.objectContaining({ code: "ELOOP" }),
+    );
+    expect(readFileSync(join(nested, "keep.txt"), "utf8")).toBe("SECRET\n");
+    expect(() => lstatSync(join(nested, "new.txt"))).toThrow(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
 });
 
 describe("appendPrivateFile", () => {
@@ -142,6 +161,22 @@ describe("appendPrivateFile", () => {
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
   });
 
+  it("does not append through an ancestor symlink when the child directory already exists", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    const nested = join(outside, "nested");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "log.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(() => appendPrivateFile(join(link, "nested", "log.txt"), "APPENDED\n")).toThrow(
+      expect.objectContaining({ code: "ELOOP" }),
+    );
+    expect(readFileSync(join(nested, "log.txt"), "utf8")).toBe("SECRET\n");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+
   it("refuses a dangling symlink without creating the target", () => {
     const parent = makeParent();
     const outside = join(parent, "missing-target.txt");
@@ -165,6 +200,21 @@ describe("openNoFollowAppend", () => {
     expect(() => openNoFollowAppend(link)).toThrow(expect.objectContaining({ code: "ELOOP" }));
     expect(() => lstatSync(outside)).toThrow(expect.objectContaining({ code: "ENOENT" }));
   });
+
+  it("does not open a file through an ancestor symlink when the child directory already exists", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    const nested = join(outside, "nested");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "log.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(() => openNoFollowAppend(join(link, "nested", "log.txt"))).toThrow(
+      expect.objectContaining({ code: "ELOOP" }),
+    );
+    expect(readFileSync(join(nested, "log.txt"), "utf8")).toBe("SECRET\n");
+  });
 });
 
 describe("readPrivateText", () => {
@@ -184,5 +234,18 @@ describe("readPrivateText", () => {
     writeFileSync(file, "hello\n");
     expect(readPrivateText(file)).toBe("hello\n");
     expect(readPrivateText(join(parent, "missing.txt"))).toBeNull();
+  });
+
+  it("returns null for a file reached through an ancestor symlink", () => {
+    const parent = makeParent();
+    const outside = join(parent, "outside");
+    const nested = join(outside, "nested");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, "secret.txt"), "SECRET\n");
+    const link = join(parent, "managed");
+    symlinkSync(outside, link);
+
+    expect(readPrivateText(join(link, "nested", "secret.txt"))).toBeNull();
+    expect(readFileSync(join(nested, "secret.txt"), "utf8")).toBe("SECRET\n");
   });
 });

@@ -19,11 +19,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize, resolve } from "node:path";
 
 const PRIVATE_FILE_MODE = 0o600;
 const PRIVATE_DIR_MODE = 0o700;
@@ -38,6 +39,9 @@ function ioError(code: "ELOOP" | "ENOTDIR" | "ENOENT", path: string): NodeJS.Err
 /**
  * Ensure `dir` exists as a real directory (mode 0700).
  * A symlink at `dir`, or a symlink on the way to a missing component, throws ELOOP.
+ * An existing directory reached through an ancestor symlink also throws ELOOP.
+ * `lstat` of the full path follows that ancestor, so the directory looks real.
+ * macOS `/tmp` and `/var` resolve under `/private` with the same tail. That prefix is not an escape.
  * An existing real directory is mkdir'd again so a caller can still observe mkdir failure.
  */
 export function mkdirPrivate(dir: string): void {
@@ -57,6 +61,7 @@ export function mkdirPrivate(dir: string): void {
     }
     if (st.isSymbolicLink()) throw ioError("ELOOP", cursor);
     if (!st.isDirectory()) throw ioError("ENOTDIR", cursor);
+    rejectsEscapedDirectory(cursor);
     break;
   }
   if (missing.length === 0) {
@@ -72,12 +77,34 @@ export function mkdirPrivate(dir: string): void {
 }
 
 function assertParentNotSymlink(dir: string): void {
+  let st: Stats;
   try {
-    if (lstatSync(dir).isSymbolicLink()) throw ioError("ELOOP", dir);
+    st = lstatSync(dir);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
+  if (st.isSymbolicLink()) throw ioError("ELOOP", dir);
+  if (st.isDirectory()) rejectsEscapedDirectory(dir);
+}
+
+/**
+ * `lstat` follows every ancestor. Compare the lexical path with `realpath`.
+ * A mismatch means some ancestor symlink left this directory. On macOS, `/tmp`
+ * and `/var` are symlinks to `/private/tmp` and `/private/var`. The tail is unchanged.
+ */
+function rejectsEscapedDirectory(dir: string): void {
+  const lexical = normalize(resolve(dir));
+  let real: string;
+  try {
+    real = normalize(realpathSync(dir));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw ioError("ELOOP", dir);
+    throw error;
+  }
+  if (lexical === real) return;
+  if (process.platform === "darwin" && real === `/private${lexical}`) return;
+  throw ioError("ELOOP", dir);
 }
 
 /** Write `data` over `filePath` without following a symlink. Returns bytes written. */
@@ -153,6 +180,7 @@ export function openNoFollowAppend(filePath: string): number {
  * Returns null for ENOENT, ELOOP, or a non-regular file. Other IO errors throw.
  */
 export function readPrivateText(filePath: string): string | null {
+  if (parentHidesFile(dirname(filePath))) return null;
   let fd: number;
   try {
     fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -167,6 +195,25 @@ export function readPrivateText(filePath: string): string | null {
   } finally {
     closeSync(fd);
   }
+}
+
+function parentHidesFile(dir: string): boolean {
+  let st: Stats;
+  try {
+    st = lstatSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  if (st.isSymbolicLink()) return true;
+  if (!st.isDirectory()) return false;
+  try {
+    rejectsEscapedDirectory(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") return true;
+    throw error;
+  }
+  return false;
 }
 
 function toBuffer(data: string | Buffer): Buffer {
