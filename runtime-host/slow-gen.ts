@@ -88,7 +88,7 @@ export function isReportPrompt(prompt: string): boolean {
   return prompt.includes(REPORT_SECTION_HEADINGS.join("\n"));
 }
 
-function demoReport(chunks: number): string {
+export function slowGenDemoReport(chunks: number): string {
   const body = REPORT_SECTION_HEADINGS.map(
     (heading) => `${heading}\n\n示例内容：慢生成测试（${chunks} 段输出后完成），非真实模型输出。`,
   ).join("\n\n");
@@ -184,7 +184,7 @@ export function createSlowGenDriverFactory(
         }
         if (config.mode === "buffered") {
           ticker = setTimeout(() => {
-            const report = demoReport(1);
+            const report = slowGenDemoReport(1);
             emit({ type: "output.delta", text: report });
             settle(() => complete(input, emit, report));
           }, config.intervalMs);
@@ -195,7 +195,7 @@ export function createSlowGenDriverFactory(
           emit({ type: "output.delta", text: `慢生成片段 ${chunks}/${SLOW_GEN_CHUNKS}\n` });
           watchdog.output();
           if (chunks >= SLOW_GEN_CHUNKS) {
-            settle(() => complete(input, emit, demoReport(chunks)));
+            settle(() => complete(input, emit, slowGenDemoReport(chunks)));
             return;
           }
           ticker = setTimeout(tick, config.intervalMs);

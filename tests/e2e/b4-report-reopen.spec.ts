@@ -314,3 +314,25 @@ test.describe("B4 #339 Host restarted or disconnected mid-report", () => {
     await resumeDrivers(page);
   });
 });
+
+test.describe("B4 discussion demo report page", () => {
+  test("slow-gen discussion report: discussion banner, zh-only marker", async () => {
+    test.skip(
+      process.env.COUNCILKIT_E2E_DISCUSS_DEMO !== "1",
+      "needs the opt-in slow-gen discussion fixture (COUNCILKIT_E2E_DISCUSS_DEMO=1)",
+    );
+    await page.goto("/reports/ck-run-00000000-0000-4000-8000-0000000000e3");
+    const banner = page.locator(".ck-demo-banner");
+    await expect(banner).toBeVisible({ timeout: 15_000 });
+    await expect(banner.getByText("◆ 示例数据")).toBeVisible();
+    await expect(banner.getByText("只读审查")).toHaveCount(0);
+    await expect(banner.getByText("这是示例讨论报告。")).toBeVisible();
+    await expect(banner.getByRole("link", { name: "接入真实 AI，发起一场讨论 →" })).toHaveAttribute(
+      "href",
+      "/rooms/new",
+    );
+    await expect(page.getByText("示例数据：慢生成测试，非真实模型输出。").first()).toBeVisible();
+    await expect(page.getByText(/SAMPLE DATA|COUNCILKIT_SLOW_GEN/)).toHaveCount(0);
+    await shot(page, "discuss-01-report-banner");
+  });
+});

@@ -52,6 +52,7 @@ import type { ModelVerdict } from "@shared/runtime/events";
 import { generationRule, generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
 import type { InstallationDto } from "@shared/runtime/schemas";
 import { z } from "zod";
+import { renderSuccessReport } from "../../cli/src/report/render";
 import { loadConfig } from "../../runtime-host/config";
 import type {
   Emit,
@@ -80,6 +81,7 @@ import { createScopeManager } from "../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../runtime-host/scopes/session-reconciler";
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
+import { slowGenDemoReport } from "../../runtime-host/slow-gen";
 import { seedReportCaseFixtures } from "./cli-run-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
@@ -90,6 +92,7 @@ process.env.COUNCILKIT_MODE = "production";
  * developer's real ~/.config/councilkit. Honored only when COUNCILKIT_E2E=1
  * (playwright webServer). */
 export const E2E_CLI_RUN_ID = "ck-review-00000000-0000-4000-8000-0000000000e2";
+export const E2E_DISCUSS_DEMO_RUN_ID = "ck-run-00000000-0000-4000-8000-0000000000e3";
 export const E2E_IDEATE_RUN_ID = "ck-ideate-00000000-0000-4000-8000-0000000000e2";
 if (process.env.COUNCILKIT_E2E === "1") {
   const home = mkdtempSync(join(tmpdir(), "ck-e2e-cli-"));
@@ -163,6 +166,56 @@ if (process.env.COUNCILKIT_E2E === "1") {
       ],
     }),
   );
+  // B4: opt-in slow-gen discussion run (report page banner screenshots), so
+  // the default /reports fixtures and their counts stay unchanged. The
+  // report.md comes from the real CLI renderer + the real slow-gen body.
+  if (process.env.COUNCILKIT_E2E_DISCUSS_DEMO === "1") {
+    const runDir = join(home, "runs", E2E_DISCUSS_DEMO_RUN_ID);
+    mkdirSync(runDir, { recursive: true });
+    const council = {
+      id: "c-slow",
+      name: "slow-gen",
+      topic: "慢生成测试：要不要把支付服务拆出来",
+      background: "",
+      targetOutput: "决策报告",
+      rounds: 1,
+      reporterAgentId: "a",
+      agentIds: ["a"],
+    };
+    writeFileSync(
+      join(runDir, "transcript.jsonl"),
+      `${[
+        {
+          kind: "run.started",
+          runId: E2E_DISCUSS_DEMO_RUN_ID,
+          startedAt: "2026-10-16T05:00:00.000Z",
+          council,
+        },
+        {
+          kind: "run.finished",
+          status: "completed",
+          endedAt: "2026-10-16T05:02:30.000Z",
+          incomplete: false,
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n")}\n`,
+    );
+    writeFileSync(join(runDir, "demo.json"), JSON.stringify({ demo: true }));
+    writeFileSync(
+      join(runDir, "report.md"),
+      renderSuccessReport({
+        runId: E2E_DISCUSS_DEMO_RUN_ID,
+        startedAt: "2026-10-16T05:00:00.000Z",
+        endedAt: "2026-10-16T05:02:30.000Z",
+        council,
+        reporterName: "A",
+        participantNames: ["A"],
+        reporterOutput: slowGenDemoReport(5),
+        demo: true,
+      }),
+    );
+  }
   writeFileSync(
     join(home, "councils.json"),
     `${JSON.stringify({
