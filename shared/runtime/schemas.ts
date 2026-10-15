@@ -7,6 +7,7 @@
  */
 import { z } from "zod";
 import { landingRecordSchema, ledgerFindingSchema, planLockFileSchema } from "./cli-ledger";
+import { CLI_RUN_PIPELINE_PHASES, CLI_RUN_PROGRESS_PHASES } from "./cli-run-phases";
 import {
   ACK_DISPOSITIONS,
   ACK_STATES,
@@ -575,33 +576,7 @@ export const cliRunAttemptProgressSchema = z
 
 export const cliRunProgressSchema = z
   .object({
-    phase: z.enum([
-      "preflight",
-      "attempts",
-      "aggregating",
-      "done",
-      "planning",
-      "plan-review",
-      "plan-aggregating",
-      "applying",
-      "re-reviewing",
-      "briefing",
-      "implementing",
-      "reviewing",
-      "auditing",
-      "snapshotting",
-      "fixing",
-      "integrating",
-      "proposing",
-      "debating",
-      "repair-preparing",
-      "repair-squad-repair",
-      "repair-squad-verify",
-      "repair-publishing",
-      "repair-reviewing",
-      "repair-diagnosing",
-      "repair-finalizing",
-    ]),
+    phase: z.enum(CLI_RUN_PROGRESS_PHASES),
     attempts: z.array(cliRunAttemptProgressSchema),
     updatedAt: z.string().nullable(),
   })
@@ -609,14 +584,7 @@ export const cliRunProgressSchema = z
 
 export const cliRunPipelineSchema = z
   .object({
-    phase: z.enum([
-      "planning",
-      "plan-review",
-      "plan-aggregating",
-      "applying",
-      "re-reviewing",
-      "done",
-    ]),
+    phase: z.enum(CLI_RUN_PIPELINE_PHASES),
     round: z.number().int().nonnegative(),
     maxRounds: z.number().int().positive(),
     planVerdict: z.enum(["approve", "changes-requested", "comment"]).nullable(),

@@ -4,52 +4,27 @@
  * without parsing Attempt output payloads.
  */
 import { clipUtf16 } from "../text/clip-utf16";
+import {
+  CLI_RUN_PIPELINE_PHASES,
+  CLI_RUN_PROGRESS_PHASES,
+  type CliRunPipelinePhase,
+  type CliRunProgressPhase,
+} from "./cli-run-phases";
 import { type CliRunHandoffDto, cliRunHandoffSchema } from "./schemas";
 import { type CliRunAttemptResult, clipSeatSummary, summarizeSeatOutput } from "./seat-result";
+
+export {
+  CLI_RUN_PIPELINE_PHASES,
+  CLI_RUN_PROGRESS_PHASES,
+  type CliRunPipelinePhase,
+  type CliRunProgressPhase,
+};
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
 export const STALE_RUNNING_MS = 5 * 60 * 1000;
 
-export const CLI_RUN_PROGRESS_PHASES = [
-  "preflight",
-  "attempts",
-  "aggregating",
-  "done",
-  "planning",
-  "plan-review",
-  "plan-aggregating",
-  "applying",
-  "re-reviewing",
-  "briefing",
-  "implementing",
-  "reviewing",
-  "auditing",
-  "snapshotting",
-  "fixing",
-  "integrating",
-  "proposing",
-  "debating",
-  "repair-preparing",
-  "repair-squad-repair",
-  "repair-squad-verify",
-  "repair-publishing",
-  "repair-reviewing",
-  "repair-diagnosing",
-  "repair-finalizing",
-] as const;
-
-export type CliRunProgressPhase = (typeof CLI_RUN_PROGRESS_PHASES)[number];
-
 const PROGRESS_PHASE_SET = new Set<string>(CLI_RUN_PROGRESS_PHASES);
-
-export type CliRunPipelinePhase =
-  | "planning"
-  | "plan-review"
-  | "plan-aggregating"
-  | "applying"
-  | "re-reviewing"
-  | "done";
 
 export type CliRunPlanVerdict = "approve" | "changes-requested" | "comment";
 

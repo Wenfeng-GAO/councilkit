@@ -1,3 +1,4 @@
+import type { CliRunProgressPhase } from "@shared/runtime/cli-run-phases";
 import type { CliRunStatusDto, CliRunSummaryDto } from "@shared/runtime/schemas";
 
 const PHASE_LABEL = {
@@ -26,7 +27,7 @@ const PHASE_LABEL = {
   "repair-reviewing": "CouncilKit 复审中",
   "repair-diagnosing": "根因诊断中",
   "repair-finalizing": "最终核对",
-} as const;
+} as const satisfies Record<CliRunProgressPhase, string>;
 
 const SQUAD_PHASE_LABEL = {
   ...PHASE_LABEL,
