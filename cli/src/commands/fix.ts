@@ -196,6 +196,22 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   let followUpRunId: string | null = null;
   let summary = "";
 
+  const releaseCommandResources = (): void => {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    if (leaseKey) {
+      try {
+        releaseWriterLease({
+          repo: leaseKey.repo,
+          sourceBranch: leaseKey.sourceBranch,
+          holderRunId: runId,
+        });
+      } catch {
+        // keep the lease if extra writer pids are still alive
+      }
+    }
+  };
+
   const persist = (
     status: CliRunLiveState["status"],
     phase: CliRunPipelinePhase,
@@ -241,19 +257,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
     failure: FixOutcome["failure"];
     extra?: Partial<FixOutcome>;
   }): Promise<never> => {
-    process.removeListener("SIGINT", onSignal);
-    process.removeListener("SIGTERM", onSignal);
-    if (leaseKey) {
-      try {
-        releaseWriterLease({
-          repo: leaseKey.repo,
-          sourceBranch: leaseKey.sourceBranch,
-          holderRunId: runId,
-        });
-      } catch {
-        // keep the lease if extra writer pids are still alive
-      }
-    }
+    releaseCommandResources();
     const outcome: FixOutcome = {
       status: partial.status,
       exitCode: partial.exitCode,
@@ -786,6 +790,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
       exitCode: EXIT.runFailed,
       failure: { phase: "fix", code: "FIX_FAILED", message },
     });
+  } finally {
+    releaseCommandResources();
   }
 }
 
