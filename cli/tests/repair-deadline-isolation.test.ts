@@ -2,7 +2,11 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createExecutionIntent, markExecutionStarted } from "@shared/runtime/repair-execution";
+import {
+  certifyDeadlineEnforced,
+  createExecutionIntent,
+  markExecutionStarted,
+} from "@shared/runtime/repair-execution";
 import { probeIsolationCapability } from "@shared/runtime/repair-isolation";
 import { describe, expect, it } from "vitest";
 import {
@@ -141,6 +145,31 @@ describe("deadline supervisor", () => {
       { pid: 1, signal: "SIGTERM" },
       { pid: 1, signal: "SIGKILL" },
     ]);
+  });
+
+  it("does not let a stale start overwrite a terminal execution record", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-exec-terminal-"));
+    const path = join(dir, "exec.json");
+    const started = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-stale-start",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [42],
+      1,
+    );
+    writeExecutionRecord(path, started);
+    const enforced = certifyDeadlineEnforced(started, 10);
+    writeExecutionRecord(path, enforced);
+    // bindExecutionPids holds the pre-deadline snapshot and calls markExecutionStarted.
+    writeExecutionRecord(path, markExecutionStarted(started, [99], 80));
+    expect(JSON.parse(readFileSync(path, "utf8")).state).toBe("deadline_enforced");
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("persists an execution record for later takeover", () => {

@@ -7,6 +7,7 @@ import {
   type RepairExecution,
   certifyDeadlineEnforced,
   enforceDeadline,
+  isTerminalRepairExecution,
   markUnknownWriter,
   repairExecutionSchema,
 } from "@shared/runtime/repair-execution";
@@ -25,6 +26,8 @@ export function readExecutionRecord(path: string): RepairExecution | null {
 }
 
 export function writeExecutionRecord(path: string, execution: RepairExecution): void {
+  const existing = readExecutionRecord(path);
+  if (existing !== null && isTerminalRepairExecution(existing.state)) return;
   atomicWriteJson(path, execution);
 }
 
@@ -111,14 +114,8 @@ export async function runDeadlineSupervisorLoop(input: {
     if (execution === null) throw errors.io("execution record missing");
     const next = superviseDeadlineOnce({ execution, nowMs: nowMs(), kill });
     if (next !== execution) writeExecutionRecord(input.executionPath, next);
-    if (
-      next.state === "completed" ||
-      next.state === "failed" ||
-      next.state === "cancelled" ||
-      next.state === "deadline_enforced"
-    ) {
-      return next;
-    }
+    const persisted = readExecutionRecord(input.executionPath) ?? next;
+    if (isTerminalRepairExecution(persisted.state)) return persisted;
     const remaining = Math.max(20, next.deadlineAtMs - nowMs());
     await sleep(Math.min(remaining, 1_000));
   }
