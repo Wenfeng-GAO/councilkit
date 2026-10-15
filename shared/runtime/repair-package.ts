@@ -7,6 +7,7 @@ import {
   isFindingVerifiedClosed,
 } from "./cli-ledger";
 import { type FindingGroupsFile, resolveRootCause, validateFindingGroups } from "./finding-groups";
+import { shellSingleQuote } from "./shell-quote";
 
 const text = z
   .string()
@@ -226,6 +227,7 @@ function unique(values: string[]): string[] {
 }
 
 export function repairExportCommand(runId: string, clusterId?: string): string {
-  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-  return `councilkit repair export --run ${quote(runId)} --out ${quote(`repair-${runId}.json`)}${clusterId ? ` --cluster ${quote(clusterId)}` : ""}`;
+  const out = shellSingleQuote(`repair-${runId}.json`);
+  const cluster = clusterId ? ` --cluster ${shellSingleQuote(clusterId)}` : "";
+  return `councilkit repair export --run ${shellSingleQuote(runId)} --out ${out}${cluster}`;
 }
