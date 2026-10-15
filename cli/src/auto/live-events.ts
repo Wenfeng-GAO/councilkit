@@ -13,7 +13,7 @@ import {
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
 import { clipUtf16 } from "@shared/text/clip-utf16";
-import { stripProxyPrefix } from "./driver-commands";
+import { asText, parseJsonLine, stripProxyPrefix } from "./driver-commands";
 
 export type RawLiveEvent = Exclude<AttemptLiveEventPayload, { type: "truncated" }>;
 
@@ -424,34 +424,9 @@ export class LiveEventWriter {
   }
 }
 
-function parseJsonLine(line: string): Record<string, unknown> | null {
-  try {
-    const v = JSON.parse(line);
-    return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
-}
-
-function asText(value: unknown): string | null {
-  if (typeof value === "string") return value.length > 0 ? value : null;
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((b) =>
-        typeof b === "string"
-          ? b
-          : ((b as { text?: string })?.text ?? (b as { content?: string })?.content ?? ""),
-      )
-      .filter((p) => p.length > 0);
-    const joined = parts.join("\n");
-    return joined.length > 0 ? joined : null;
-  }
-  return null;
 }
 
 function toolName(item: Record<string, unknown>, fallback: string): string {

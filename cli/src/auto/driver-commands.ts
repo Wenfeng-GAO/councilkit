@@ -39,6 +39,7 @@ import { delimiter, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
+import { jsonParse } from "@shared/runtime/json-parse";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 import {
@@ -1285,18 +1286,15 @@ function splitLines(s: string): string[] {
   return s.split("\n").filter((l) => l.trim().length > 0);
 }
 
-function parseJsonLine(line: string): Record<string, unknown> | null {
-  try {
-    const v = JSON.parse(line);
-    return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+/** Object or array JSON. Scalars, JSON null, and invalid text are null. */
+export function parseJsonLine(line: string): Record<string, unknown> | null {
+  const value = jsonParse(line);
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 /** Coerce a stream-json content field (string OR array of content blocks) to a
  * single string. Null/empty → null. */
-function asText(value: unknown): string | null {
+export function asText(value: unknown): string | null {
   if (typeof value === "string") return value.length > 0 ? value : null;
   if (Array.isArray(value)) {
     const parts = value
