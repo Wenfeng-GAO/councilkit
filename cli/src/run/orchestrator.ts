@@ -32,6 +32,7 @@
  * same via the `persist` hook on each TurnRequest.
  */
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { CREDENTIAL_MODE, QUOTAS } from "@shared/runtime/contracts";
 import type { AckDisposition, DispatchState, ToolState } from "@shared/runtime/contracts";
 import type { ModelVerdict, Usage } from "@shared/runtime/events";
@@ -63,7 +64,7 @@ import {
   writeCanonicalReport,
   writeReportCopy,
 } from "../report/render";
-import { atomicWriteFile } from "../store/atomic-write";
+import { atomicWriteFile, atomicWriteJson } from "../store/atomic-write";
 import { type StorePaths, ensureRunDir } from "../store/paths";
 import {
   type RunFinishedRecord,
@@ -221,7 +222,9 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
 
   try {
     // --- create run dir + write run.started ----------------------------------
-    ensureRunDir(runId, deps.env);
+    const runDir = ensureRunDir(runId, deps.env);
+    // B4 #279: a slow-gen (fake model) run is a demo run, marked before any turn.
+    if (input.demo === true) atomicWriteJson(join(runDir, "demo.json"), { demo: true });
     const startedRec: RunStartedRecord = {
       kind: "run.started",
       version: TRANSCRIPT_VERSION,

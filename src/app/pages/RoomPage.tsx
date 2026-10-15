@@ -3,7 +3,12 @@ import { ControlBanner } from "@/components/room/ControlBanner";
 import { DiscussionStream } from "@/components/room/DiscussionStream";
 import { ErrorBanner } from "@/components/room/ErrorBanner";
 import { PausedPanel } from "@/components/room/PausedPanel";
-import { ReportFailureBanner, ReportProgress, ReportView } from "@/components/room/ReportView";
+import {
+  ReportFailureBanner,
+  ReportProgress,
+  ReportView,
+  reportFailureCopy,
+} from "@/components/room/ReportView";
 import { RoomHeader } from "@/components/room/RoomHeader";
 import { UserInputBar } from "@/components/room/UserInputBar";
 import { isFailedExecution, resolveSpeaker } from "@/components/room/round-timeline";
@@ -442,6 +447,8 @@ export function RoomPage() {
   const liveReportExecution = findLiveReportExecution(roomExecutions);
   const failedReportExecution =
     !report && !liveReportExecution ? findFailedReportExecution(roomExecutions) : undefined;
+  const reportInterrupted =
+    failedReportExecution !== undefined && reportFailureCopy(failedReportExecution).interrupted;
   const hasCompletedRound = (rounds ?? []).some((round) => round.phase === "completed");
   // room may be undefined before the empty-guard; default to "open" so the
   // derivation stays a pure expression read after the guard narrows room.
@@ -703,6 +710,8 @@ export function RoomPage() {
             <>
               {!hasActiveRound ? (
                 <Button
+                  // B4: while an interrupted report waits, 「重新生成报告」 is the primary action.
+                  variant={reportInterrupted ? "ghost" : "primary"}
                   onClick={() => intents.startRound.mutate()}
                   disabled={!controlling || concluding || intents.startRound.isPending}
                   title={controlHint}

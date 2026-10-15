@@ -146,6 +146,7 @@ interface ReportFailureBannerProps {
 const REPORT_INTERRUPTION_CODES: ReadonlySet<string> = new Set([
   "INTERRUPTED_UNKNOWN",
   "SAFE_INTERRUPTION",
+  "STREAM_IDLE_TIMEOUT",
 ]);
 
 export interface ReportFailureCopy {
@@ -153,7 +154,22 @@ export interface ReportFailureCopy {
   action: string;
   /** Small print under the button; null when retrying is not a new model call. */
   note: string | null;
+  /** True when the run was cut off: regenerating is then the room's main action. */
+  interrupted: boolean;
+  /** Chinese explanation shown in 「详情」 instead of the raw Host message, if known. */
+  detail: string | null;
 }
+
+/** B4 designer copy for the 「详情」 line; the raw code stays as small print. */
+const REPORT_INTERRUPTION_DETAIL: Readonly<Record<string, string>> = {
+  INTERRUPTED_UNKNOWN: "刷新后找不到这次生成的结果。",
+  SAFE_INTERRUPTION: "刷新后找不到这次生成的结果。",
+  STREAM_IDLE_TIMEOUT: "模型超过 2 分钟没有任何输出。",
+};
+
+const REPORT_INTERRUPTION_TITLE: Readonly<Record<string, string>> = {
+  STREAM_IDLE_TIMEOUT: "报告生成被中断（模型 2 分钟没有输出）",
+};
 
 /** B4-05: designer-approved copy. The raw code only appears in the small
  * 「详情」 disclosure, never as the headline. */
@@ -161,9 +177,22 @@ export function reportFailureCopy(execution: ModelExecution): ReportFailureCopy 
   const interrupted =
     execution.state === "interrupted" || REPORT_INTERRUPTION_CODES.has(execution.error?.code ?? "");
   if (interrupted) {
-    return { title: "报告生成已中断", action: "重新生成报告", note: "将重新调用模型" };
+    const code = execution.error?.code ?? "";
+    return {
+      title: REPORT_INTERRUPTION_TITLE[code] ?? "报告生成被中断（可能关闭了页面）",
+      action: "重新生成报告",
+      note: "将重新调用模型",
+      interrupted: true,
+      detail: REPORT_INTERRUPTION_DETAIL[code] ?? REPORT_INTERRUPTION_DETAIL.INTERRUPTED_UNKNOWN,
+    };
   }
-  return { title: "报告生成失败", action: "重试生成报告", note: "将重新调用模型" };
+  return {
+    title: "报告生成失败",
+    action: "重试生成报告",
+    note: "将重新调用模型",
+    interrupted: false,
+    detail: null,
+  };
 }
 
 export function ReportFailureBanner({
@@ -175,7 +204,7 @@ export function ReportFailureBanner({
 }: ReportFailureBannerProps) {
   const copy = reportFailureCopy(execution);
   const code = execution.error?.code ?? null;
-  const message = execution.error?.message ?? null;
+  const message = copy.detail ?? execution.error?.message ?? null;
   return (
     <div
       data-testid="report-failure"
@@ -188,14 +217,14 @@ export function ReportFailureBanner({
             <details className="text-xs text-muted" data-testid="report-failure-detail">
               <summary className="cursor-pointer select-none">详情</summary>
               {/* Untrusted detail rendered as plain text (SafeMarkdown/ExecutionFailureRecord discipline). */}
-              {code ? <span className="block">{code}</span> : null}
               {message ? <span className="block">{message}</span> : null}
+              {code ? <span className="block font-mono text-[10px] opacity-80">{code}</span> : null}
             </details>
           ) : null}
         </div>
         <div className="flex flex-col items-end gap-0.5">
           <Button
-            variant="ghost"
+            variant={copy.interrupted ? "primary" : "ghost"}
             onClick={onRetry}
             disabled={retryDisabled || retryPending}
             title={retryDisabled ? disabledHint : undefined}

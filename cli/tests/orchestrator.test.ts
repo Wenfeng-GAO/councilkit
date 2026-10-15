@@ -17,6 +17,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { listCliRuns } from "@shared/runtime/cli-runs-index";
+import { countRealRunsNeedingAttention } from "@shared/runtime/demo-report";
 import type {
   CloseScopeResponse,
   CreateScopeResponse,
@@ -378,6 +380,36 @@ describe("cli orchestrator", () => {
     expect(lines).toHaveLength(7);
     // transcript never carries canary/cookie footprints
     expect(lines.join("\n")).not.toContain("councilkit_session");
+  });
+
+  it("B4 #279: a slow-gen run writes demo.json and lists as 示例 (DM-03/DM-07)", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    const env = { ...process.env, COUNCILKIT_HOME: home };
+    const outcome = await runCouncil(
+      { ...input, runId: "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1", demo: true },
+      { host, paths, env, turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }) },
+    );
+    expect(outcome.status).toBe("completed");
+    const runId = "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+    const sentinel = join(paths.runDir(runId), "demo.json");
+    expect(JSON.parse(readFileSync(sentinel, "utf8"))).toEqual({ demo: true });
+    const row = listCliRuns(env).find((run) => run.runId === runId);
+    expect(row?.demo).toBe(true);
+    expect(countRealRunsNeedingAttention(listCliRuns(env))).toBe(0);
+  });
+
+  it("B4 #279: an ordinary run writes no demo.json", async () => {
+    const host = makeFakeHost();
+    const { input, paths } = buildInput(home);
+    const env = { ...process.env, COUNCILKIT_HOME: home };
+    const runId = "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    await runCouncil(
+      { ...input, runId },
+      { host, paths, env, turnDriver: makeDriver({ decide: () => "completed" }, { count: 0 }) },
+    );
+    expect(existsSync(join(paths.runDir(runId), "demo.json"))).toBe(false);
+    expect(listCliRuns(env).find((run) => run.runId === runId)?.demo).toBe(false);
   });
 
   it("a mid-run ordinary-turn failure stops the Run, retains transcript, partial report, exit 4", async () => {

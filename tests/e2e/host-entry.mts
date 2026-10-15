@@ -41,6 +41,7 @@ import {
   type DriverId,
   INSTALLATION_STATES,
   type InstallationState,
+  TIMEOUTS,
   type ToolState,
 } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
@@ -269,6 +270,12 @@ export interface DriverBehavior {
   /** With pauseAfterEvents: no 300ms fallback; hold until /__test__/resume or
    * cancel (B4: a report still in flight while the tab is closed). */
   holdUntilResume?: boolean;
+  /** B4: emit nothing; the no-progress window ends the turn with
+   * STREAM_IDLE_TIMEOUT (like the real drivers) unless cancelled first. */
+  slowSilent?: boolean;
+  /** B4: idle window for slowSilent (defaults to COUNCILKIT_STREAM_IDLE_MS,
+   * then TIMEOUTS.streamIdleMs) so CI does not wait 2 minutes. */
+  slowSilentIdleMs?: number;
 }
 
 interface DriverCounters {
@@ -433,6 +440,46 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
           retryable: failWith.retryable,
         });
         return Promise.resolve();
+      }
+      if (behavior().slowSilent) {
+        emit({ type: "started", requestedModel: input.modelId });
+        const idleMs = (() => {
+          const own = behavior().slowSilentIdleMs;
+          if (typeof own === "number" && own > 0) return own;
+          const override = Number(process.env.COUNCILKIT_STREAM_IDLE_MS);
+          return Number.isFinite(override) && override > 0 ? override : TIMEOUTS.streamIdleMs;
+        })();
+        return new Promise<void>((resolveHang) => {
+          const idleTimer = setTimeout(() => {
+            if (rig.pendingCancel !== onCancel) return;
+            rig.pendingCancel = null;
+            emit({
+              type: "failed",
+              error: makeError(
+                "STREAM_IDLE_TIMEOUT",
+                "stream",
+                "No protocol frames within the idle limit.",
+                { retryable: false },
+              ),
+              dispatchState: "accepted",
+              toolState: "none",
+              retryable: false,
+            });
+            resolveHang();
+          }, idleMs);
+          const onCancel = () => {
+            clearTimeout(idleTimer);
+            rig.pendingCancel = null;
+            emit({
+              type: "interrupted",
+              reason: "user_cancelled",
+              dispatchState: "accepted",
+              toolState: "none",
+            });
+            resolveHang();
+          };
+          rig.pendingCancel = onCancel;
+        });
       }
       if (behavior().hangUntilCancel) {
         emit({ type: "started", requestedModel: input.modelId });

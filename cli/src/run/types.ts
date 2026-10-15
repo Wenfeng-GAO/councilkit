@@ -122,6 +122,9 @@ export interface RunInput {
   rounds: number;
   /** Optional user --out path for a report copy. */
   outPath?: string;
+  /** Test-only COUNCILKIT_SLOW_GEN run: write `demo.json` so the run is 示例
+   * everywhere and stays out of real counts (DM-03/DM-07). */
+  demo?: boolean;
 }
 
 /** Re-export so the orchestrator's turn driver can shape results uniformly. */

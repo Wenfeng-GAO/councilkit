@@ -182,7 +182,11 @@ vi.mock("@/components/room/ErrorBanner", async () => {
 
 vi.mock("@/components/room/ReportView", async () => {
   const { createElement: h } = await import("react");
+  const actual = await vi.importActual<typeof import("@/components/room/ReportView")>(
+    "@/components/room/ReportView",
+  );
   return {
+    reportFailureCopy: actual.reportFailureCopy,
     ReportProgress: (props: { previewText: string; speakerName: string; speakerColor: string }) =>
       h("p", null, `progress:${props.speakerName}:${props.speakerColor}:${props.previewText}`),
     ReportFailureBanner: (props: { execution: { executionId: string }; onRetry: () => void }) =>

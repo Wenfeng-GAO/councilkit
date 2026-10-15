@@ -529,12 +529,42 @@ describe("B4 report failure display (#279)", () => {
           error: { code, phase: "stream", message: "x", retryable: false },
         }),
       );
-      expect(copy).toEqual({
-        title: "报告生成已中断",
+      expect(copy).toMatchObject({
+        title: "报告生成被中断（可能关闭了页面）",
         action: "重新生成报告",
         note: "将重新调用模型",
+        interrupted: true,
       });
+      // 「详情」 is Chinese; the raw English Host message never reaches the UI.
+      expect(copy.detail).toMatch(/[\u4e00-\u9fff]/);
+      expect(copy.detail).not.toMatch(/outcome|reload/);
     }
+    expect(
+      reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "interrupted",
+          error: { code: "INTERRUPTED_UNKNOWN", phase: "stream", message: "x", retryable: false },
+        }),
+      ).detail,
+    ).toBe("刷新后找不到这次生成的结果。");
+    const idle = reportFailureCopy(
+      execution({
+        resultKind: "report",
+        state: "failed",
+        error: {
+          code: "STREAM_IDLE_TIMEOUT",
+          phase: "stream",
+          message: "No protocol frames within the idle limit.",
+          retryable: false,
+        },
+      }),
+    );
+    expect(idle).toMatchObject({
+      title: "报告生成被中断（模型 2 分钟没有输出）",
+      interrupted: true,
+      detail: "模型超过 2 分钟没有任何输出。",
+    });
     const failed = reportFailureCopy(
       execution({
         resultKind: "report",
@@ -543,6 +573,8 @@ describe("B4 report failure display (#279)", () => {
       }),
     );
     expect(failed.title).toBe("报告生成失败");
+    expect(failed.interrupted).toBe(false);
+    expect(failed.detail).toBeNull();
     expect(failed.title).not.toContain("MODEL_UNAVAILABLE");
   });
 });

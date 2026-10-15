@@ -421,18 +421,37 @@ describe("kimi-stream-json driver", () => {
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
   });
 
-  it("silent turn (final-only protocol) -> turnMs timeout, NOT stream-idle", async () => {
-    // The kimi protocol emits NO frames during generation: a long generation
-    // must not be killed by a per-frame idle watchdog. The only bound is the
-    // turnMs absolute timer (interruptTurn "timeout" + session invalidation).
-    const driver = await createDriver({ hang: true }, { ...BASE_TIMEOUTS, turnMs: 3000 });
+  it("B4 #279: silent turn -> STREAM_IDLE_TIMEOUT after streamIdleMs, before turnMs", async () => {
+    // Product rule: the one user-visible generating timeout is no-progress.
+    // The final-only kimi CLI emits nothing, so the idle window fires first;
+    // turnMs is only a far-away ceiling.
+    const driver = await createDriver(
+      { hang: true },
+      { ...BASE_TIMEOUTS, streamIdleMs: 1000, turnMs: 15000 },
+    );
+    const startedAt = Date.now();
     const run = executeCollecting(driver, execInput("exec-1", "Hang."));
     await run.done;
     const terminal = terminalOf(run.events);
-    expect(terminal.type).toBe("interrupted");
-    if (terminal.type !== "interrupted") throw new Error("unreachable");
-    expect(terminal.reason).toBe("timeout");
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("STREAM_IDLE_TIMEOUT");
+    expect(Date.now() - startedAt).toBeLessThan(8000);
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+  });
+
+  it("B4 #279: output keeps arriving past the idle window -> completes, not cut", async () => {
+    // 6 chunks 400ms apart = 2.4s of generation against a 1s idle window.
+    const driver = await createDriver(
+      { dripMs: 400, dripCount: 6, reply: "Long report." },
+      { ...BASE_TIMEOUTS, streamIdleMs: 1000, turnMs: 15000 },
+    );
+    const run = executeCollecting(driver, execInput("exec-1", "Drip."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    expect(terminal.output).toBe("Long report.");
   });
 
   it("malformed JSON line is off-protocol: turn completes with toolState=unknown (discardable, F6)", async () => {
@@ -687,11 +706,14 @@ describe("kimi-stream-json driver", () => {
 
   it("F3: a successful first turn establishes a sid; a resume turn that hangs times out and the NEXT turn is a full coldStart with no -S", async () => {
     // Turn 1 succeeds and captures a resume hint (clean, toolState=none).
-    // Turn 2 is a resume turn that emits nothing and hangs (turnMs timeout —
-    // the final-only protocol has no per-frame idle watchdog). It must be
+    // Turn 2 is a resume turn that emits nothing and hangs (turnMs timeout;
+    // the idle window is pushed out so this pins the turnMs path). It must be
     // interrupted AND the sessionEpoch must bump synchronously so turn 3 is a
     // cold rebase (full prompt, no -S) rather than an incremental resume.
-    const driver = await createDriver({ reply: "First cold." }, { ...BASE_TIMEOUTS, turnMs: 3000 });
+    const driver = await createDriver(
+      { reply: "First cold." },
+      { ...BASE_TIMEOUTS, streamIdleMs: 60_000, turnMs: 3000 },
+    );
     const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
     await run1.done;
     expect(terminalOf(run1.events).type).toBe("completed");

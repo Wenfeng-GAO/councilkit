@@ -105,7 +105,10 @@ function makeInstallation(): InstallationRecord {
   };
 }
 
-async function createDriver(config: Record<string, unknown> = {}): Promise<ParticipantDriver> {
+async function createDriver(
+  config: Record<string, unknown> = {},
+  timeouts: DriverTimeouts = BASE_TIMEOUTS,
+): Promise<ParticipantDriver> {
   const participantId = "p-1";
   const config2: HostConfig = {
     mode: "production",
@@ -122,7 +125,7 @@ async function createDriver(config: Record<string, unknown> = {}): Promise<Parti
   const deps: DriverDeps = {
     supervisor,
     logger,
-    timeouts: BASE_TIMEOUTS,
+    timeouts,
     workRoot: join(tempRoot, "work"),
   };
   const driver = createGrokStreamJsonDriver(deps)(participantId);
@@ -307,5 +310,46 @@ describe("grok-stream-json driver", () => {
         installation: makeInstallation(),
       }),
     ).rejects.toMatchObject({ runtimeCode: "AUTH_REQUIRED" });
+  });
+
+  it("B4 #279: silent turn -> STREAM_IDLE_TIMEOUT after streamIdleMs, before turnMs", async () => {
+    const driver = await createDriver({}, { ...BASE_TIMEOUTS, streamIdleMs: 1000, turnMs: 15000 });
+    // Prewarm ran `models`; only the turn hangs.
+    await writeFile(
+      join(tempRoot, "work", "p-1", "fake-driver-config.json"),
+      JSON.stringify({ hang: true }),
+    );
+    const startedAt = Date.now();
+    const run = executeCollecting(driver, {
+      executionId: "exec-1",
+      prompt: "Hang.",
+      modelId: MODEL,
+      coldStart: true,
+    });
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("STREAM_IDLE_TIMEOUT");
+    expect(Date.now() - startedAt).toBeLessThan(8000);
+  });
+
+  it("B4 #279: output keeps arriving past the idle window -> completes, not cut", async () => {
+    // 6 chunks 400ms apart = 2.4s of generation against a 1s idle window.
+    const driver = await createDriver(
+      { dripMs: 400, dripCount: 6, reply: "Long report." },
+      { ...BASE_TIMEOUTS, streamIdleMs: 1000, turnMs: 15000 },
+    );
+    const run = executeCollecting(driver, {
+      executionId: "exec-1",
+      prompt: "Drip.",
+      modelId: MODEL,
+      coldStart: true,
+    });
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    expect(terminal.output).toBe("Long report.");
   });
 });

@@ -24,6 +24,9 @@ const DEFAULTS = {
   rotateSessionId: false,
   hang: false,
   delayMs: 0,
+  // B4: write a blank line every dripMs, dripCount times, before the result.
+  dripMs: 0,
+  dripCount: 0,
   statsPath: null,
 };
 
@@ -116,6 +119,19 @@ if (cfg.hang) {
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.exit(0);
   };
-  if (cfg.delayMs > 0) setTimeout(emit, cfg.delayMs);
-  else emit();
+  const afterDrip = () => {
+    if (cfg.delayMs > 0) setTimeout(emit, cfg.delayMs);
+    else emit();
+  };
+  if (cfg.dripMs > 0 && cfg.dripCount > 0) {
+    let dripped = 0;
+    const timer = setInterval(() => {
+      process.stdout.write("\n");
+      dripped += 1;
+      if (dripped >= cfg.dripCount) {
+        clearInterval(timer);
+        afterDrip();
+      }
+    }, cfg.dripMs);
+  } else afterDrip();
 }

@@ -111,8 +111,8 @@ describe("runtime contract constants (compatibility pins)", () => {
     expect(TIMEOUTS).toEqual({
       handshakeMs: 15_000,
       dispatchAckMs: 5_000,
-      streamIdleMs: 60_000,
-      turnMs: 600_000,
+      streamIdleMs: 120_000,
+      turnMs: 3_600_000,
       interruptGraceMs: 5_000,
       shutdownGraceMs: 10_000,
       reapAfterHostDeathMs: 5_000,

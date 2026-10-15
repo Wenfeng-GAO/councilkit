@@ -9,6 +9,7 @@ import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime"
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
+import { type IdleWatchdog, startIdleWatchdog } from "./idle-watchdog";
 import { withDeadline } from "./ndjson";
 import { deadlineMaySettle } from "./turn-deadline";
 import type {
@@ -74,6 +75,8 @@ interface ActiveTurn {
   cancelling: boolean;
   settled: boolean;
   turnTimer?: NodeJS.Timeout;
+  /** B4: no-progress watchdog (streamIdleMs), reset on every stdout chunk. */
+  idle?: IdleWatchdog;
   resolve: () => void;
 }
 
@@ -188,6 +191,8 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
         clearTimeout(turn.turnTimer);
         turn.turnTimer = undefined;
       }
+      turn.idle?.clear();
+      turn.idle = undefined;
     }
 
     function invalidateSession(reason: string): void {
@@ -574,6 +579,7 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
               const next = turn.stdout + chunk.toString("utf8");
               turn.stdout = next.length > STDOUT_CAP ? clipUtf16Tail(next, STDOUT_CAP) : next;
               if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
+              turn.idle?.touch();
             });
             spawned.stdout.on("end", () => {
               drain.stdoutEnded = true;
@@ -605,6 +611,26 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
                   }),
                 );
               }
+            });
+            // B4 (#279): the user-visible bound is no-progress, not wall-clock.
+            // Any stdout chunk restarts the window; turnMs is only a ceiling.
+            turn.idle = startIdleWatchdog(timeouts.streamIdleMs, () => {
+              if (!deadlineMaySettle(turn, activeTurn === turn)) return;
+              invalidateSession("stream_idle");
+              failTurn(
+                turn,
+                makeError(
+                  "STREAM_IDLE_TIMEOUT",
+                  "stream",
+                  "No model output within the idle limit.",
+                  {
+                    driverId: "cursor-stream-json",
+                    executionId: turn.executionId,
+                    participantId,
+                  },
+                ),
+              );
+              void reapActiveProcess();
             });
             turn.turnTimer = setTimeout(() => {
               if (deadlineMaySettle(turn, activeTurn === turn)) {

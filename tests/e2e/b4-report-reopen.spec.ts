@@ -15,10 +15,18 @@ import {
   startRound,
 } from "./helpers";
 
-/** Set B4_SHOTS=<dir> to save the designer-review screenshots. */
+/** Set B4_SHOTS=<dir> to save the designer-review screenshots, and
+ * B4_SHOT_WIDTH=390 for the phone width. The room is set up at the default
+ * desktop width (setup clicks a sidebar item that is hidden at 390) and the
+ * viewport is resized just before each shot. */
 const SHOTS = process.env.B4_SHOTS;
+const SHOT_WIDTH = Number(process.env.B4_SHOT_WIDTH) === 390 ? 390 : 1280;
+const SHOT_HEIGHT = SHOT_WIDTH === 390 ? 844 : 800;
 async function shot(target: Page, name: string) {
-  if (SHOTS) await target.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
+  if (!SHOTS) return;
+  await target.setViewportSize({ width: SHOT_WIDTH, height: SHOT_HEIGHT });
+  await target.waitForTimeout(300);
+  await target.screenshot({ path: `${SHOTS}/b4-${SHOT_WIDTH}-${name}.png`, fullPage: true });
 }
 
 let context: BrowserContext;
@@ -77,11 +85,24 @@ async function expectInterruptedCard(reopened: Page, startedAt: number) {
   expect(Date.now() - startedAt).toBeLessThan(11_000);
   await expect(reopened.getByText("正在生成决策报告")).toHaveCount(0);
   // B4-05: designer copy; the raw code only lives in the collapsed 「详情」.
-  await expect(card.getByText("报告生成已中断", { exact: true })).toBeVisible();
+  await expect(card.getByText("报告生成被中断（可能关闭了页面）", { exact: true })).toBeVisible();
   await expect(card.getByRole("button", { name: "重新生成报告" })).toBeVisible();
   await expect(card.getByText("将重新调用模型", { exact: true })).toBeVisible();
   await expect(card.getByText("INTERRUPTED_UNKNOWN")).toBeHidden();
   await expect(reopened.getByText("INTERRUPTED_UNKNOWN")).toBeHidden();
+  // B4 design: regenerating is the primary action; 「开始新一轮」 steps down to ghost.
+  await expect(card.getByRole("button", { name: "重新生成报告" })).toHaveAttribute(
+    "data-variant",
+    "primary",
+  );
+  await expect(reopened.getByRole("button", { name: "开始新一轮" })).toHaveAttribute(
+    "data-variant",
+    "ghost",
+  );
+  await card.getByText("详情").click();
+  await expect(card.getByText("刷新后找不到这次生成的结果。", { exact: true })).toBeVisible();
+  await expect(card.getByText(/outcome is unknown/)).toHaveCount(0);
+  await card.getByText("详情").click();
   return card;
 }
 
@@ -123,9 +144,9 @@ test.describe("B4 report generation survives a closed tab", () => {
     const reopened = await context.newPage();
     await reopened.goto(`/rooms/${roomId}`);
     const card = await expectInterruptedCard(reopened, Date.now());
-    await shot(reopened, "b4-after-01-interrupted-card");
+    await shot(reopened, "close-01-interrupted-card");
     await card.getByText("详情").click();
-    await shot(reopened, "b4-after-02-detail-expanded");
+    await shot(reopened, "close-02-detail-expanded");
     await setDriverBehavior(reopened, claudePid, {
       pauseAfterEvents: undefined,
       holdUntilResume: false,
@@ -137,7 +158,7 @@ test.describe("B4 report generation survives a closed tab", () => {
     await reopened.reload();
     await expect(reportView(reopened)).toBeVisible({ timeout: 20_000 });
     await expect(reopened.getByText("已中断")).toHaveCount(0);
-    await shot(reopened, "b4-after-03-regenerated-after-reload");
+    await shot(reopened, "close-03-regenerated-after-reload");
     await expect(reopened.getByText("INTERRUPTED_UNKNOWN")).toHaveCount(0);
     const reports = (await roomExecutions(reopened, roomId)).filter(
       (execution) => (execution as { resultKind?: string }).resultKind === "report",
@@ -146,5 +167,38 @@ test.describe("B4 report generation survives a closed tab", () => {
       "committed",
       "interrupted",
     ]);
+  });
+
+  test("B4 #279 report model silent past the idle window: idle variant of the card", async () => {
+    test.setTimeout(120_000);
+    const fixture = await setupRoomWithTwoAgents(page, "B4 无进展超时");
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    // The report turn (claude seat) emits nothing; production waits 120s, the
+    // fake waits 1.5s and fails it with STREAM_IDLE_TIMEOUT like a real driver.
+    await setDriverBehavior(page, fixture.claudePid, { slowSilent: true, slowSilentIdleMs: 1500 });
+    await concludeRoomViaButton(page);
+    const card = page.getByTestId("report-failure");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("正在生成决策报告")).toHaveCount(0);
+    await expect(
+      card.getByText("报告生成被中断（模型 2 分钟没有输出）", { exact: true }),
+    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "重新生成报告" })).toHaveAttribute(
+      "data-variant",
+      "primary",
+    );
+    await expect(card.getByText("将重新调用模型", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "开始新一轮" })).toHaveAttribute(
+      "data-variant",
+      "ghost",
+    );
+    await expect(card.getByText("STREAM_IDLE_TIMEOUT")).toBeHidden();
+    await shot(page, "idle-01-interrupted-card");
+    await card.getByText("详情").click();
+    await expect(card.getByText("模型超过 2 分钟没有任何输出。", { exact: true })).toBeVisible();
+    await expect(card.getByText("STREAM_IDLE_TIMEOUT")).toBeVisible();
+    await expect(card.getByText(/idle limit/)).toHaveCount(0);
+    await shot(page, "idle-02-detail-expanded");
   });
 });

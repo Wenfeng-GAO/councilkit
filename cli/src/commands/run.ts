@@ -12,6 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { QUOTAS } from "@shared/runtime/contracts";
+import { isSlowGenExecutablePath, slowGenFromEnv } from "@shared/runtime/slow-gen";
 import { z } from "zod";
 import { errors } from "../errors";
 import { HostClient } from "../host/client";
@@ -126,6 +127,7 @@ export async function runRun(argv: string[], out: OutputSink): Promise<void> {
     reporter,
     rounds,
     outPath: values.out as string | undefined,
+    demo: slowGenRun(installations, agents),
   };
 
   // SIGINT/SIGTERM → bounded cleanup inside the orchestrator, then exit 130.
@@ -153,6 +155,22 @@ export async function runRun(argv: string[], out: OutputSink): Promise<void> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
   }
+}
+
+/** Test-only COUNCILKIT_SLOW_GEN: the CLI env or a Host serving the synthetic
+ * slow-gen installations both make this a demo (示例) run. */
+export function slowGenRun(
+  installations: {
+    installations: ReadonlyArray<{ installationId: string; executablePath: string | null }>;
+  },
+  agents: ReadonlyArray<{ installationId: string }>,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (slowGenFromEnv(env) !== null) return true;
+  const used = new Set(agents.map((agent) => agent.installationId));
+  return installations.installations.some(
+    (dto) => used.has(dto.installationId) && isSlowGenExecutablePath(dto.executablePath),
+  );
 }
 
 /** Sentinel carrying the orchestrator's exit code up to main(). */

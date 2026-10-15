@@ -7,6 +7,7 @@ import {
   type DriverId,
   TIMEOUTS,
 } from "@shared/runtime/contracts";
+import { slowGenFromEnv } from "@shared/runtime/slow-gen";
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "./drivers/codex-app-server";
@@ -33,6 +34,7 @@ import { createScopeManager } from "./scopes/scope-manager";
 import { createSessionReconciler } from "./scopes/session-reconciler";
 import { createSessionCapability } from "./security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "./server";
+import { createSlowGenDriverFactory, slowGenDiscovery, slowGenValidate } from "./slow-gen";
 
 /**
  * CouncilKit Runtime Host entry point.
@@ -86,42 +88,63 @@ async function main(): Promise<void> {
   const hostInstanceId = randomUUID();
 
   const supervisor = createProcessSupervisor({ config, logger });
-  const installations = createInstallationRegistry({ logger });
+  // Test-only QA switch (B4 #279): synthetic trusted installations + fake
+  // drivers that slow down only the report turn. Never in --help or the UI.
+  const slowGen = slowGenFromEnv();
+  if (slowGen) {
+    logger.warn("host.slow_gen", { mode: slowGen.mode, intervalMs: slowGen.intervalMs });
+    process.stderr.write(
+      `[councilkit] COUNCILKIT_SLOW_GEN=${slowGen.mode} (${slowGen.intervalMs}ms): test-only fake models, every run is 示例/demo\n`,
+    );
+  }
+  const installations = createInstallationRegistry(
+    slowGen ? { logger, discover: slowGenDiscovery, validate: slowGenValidate } : { logger },
+  );
   const executions = createExecutionRegistry({ logger });
   const reconciler = createSessionReconciler();
 
+  // Test-only: shrink the no-progress window (e2e screenshots, QA dry runs).
+  const idleOverride = Number(process.env.COUNCILKIT_STREAM_IDLE_MS);
+  const timeouts = {
+    ...TIMEOUTS,
+    ...(Number.isFinite(idleOverride) && idleOverride > 0 ? { streamIdleMs: idleOverride } : {}),
+  };
   const driverDeps: DriverDeps = {
     supervisor,
     logger,
-    timeouts: TIMEOUTS,
+    timeouts,
     workRoot: config.driverWorkRoot,
   };
   const capabilityByDriver = new Map<DriverId, DriverCapabilityState>();
+  const pick = (
+    driverId: DriverId,
+    real: (deps: DriverDeps) => (participantId: string) => ParticipantDriver,
+  ) => (slowGen ? createSlowGenDriverFactory(driverId, slowGen, timeouts) : real(driverDeps));
   const driverFactories = {
     "claude-stream-json": withCapabilityTracking(
       capabilityByDriver,
       "claude-stream-json",
-      createClaudeStreamJsonDriver(driverDeps),
+      pick("claude-stream-json", createClaudeStreamJsonDriver),
     ),
     "codex-app-server": withCapabilityTracking(
       capabilityByDriver,
       "codex-app-server",
-      createCodexAppServerDriver(driverDeps),
+      pick("codex-app-server", createCodexAppServerDriver),
     ),
     "kimi-stream-json": withCapabilityTracking(
       capabilityByDriver,
       "kimi-stream-json",
-      createKimiStreamJsonDriver(driverDeps),
+      pick("kimi-stream-json", createKimiStreamJsonDriver),
     ),
     "grok-stream-json": withCapabilityTracking(
       capabilityByDriver,
       "grok-stream-json",
-      createGrokStreamJsonDriver(driverDeps),
+      pick("grok-stream-json", createGrokStreamJsonDriver),
     ),
     "cursor-stream-json": withCapabilityTracking(
       capabilityByDriver,
       "cursor-stream-json",
-      createCursorStreamJsonDriver(driverDeps),
+      pick("cursor-stream-json", createCursorStreamJsonDriver),
     ),
   };
 

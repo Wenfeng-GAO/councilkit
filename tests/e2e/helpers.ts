@@ -36,6 +36,9 @@ export interface DriverBehaviorInput {
   hangUntilCancel?: boolean;
   pauseAfterEvents?: number;
   holdUntilResume?: boolean;
+  /** B4: emit nothing until the idle window fails the turn (STREAM_IDLE_TIMEOUT). */
+  slowSilent?: boolean;
+  slowSilentIdleMs?: number;
 }
 
 export interface DriverCounters {
