@@ -112,6 +112,7 @@ describe("runtime contract constants (compatibility pins)", () => {
       handshakeMs: 15_000,
       dispatchAckMs: 5_000,
       streamIdleMs: 120_000,
+      oneshotMs: 600_000,
       turnMs: 3_600_000,
       interruptGraceMs: 5_000,
       shutdownGraceMs: 10_000,
