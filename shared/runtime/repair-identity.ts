@@ -16,7 +16,8 @@ export function isKnown<T>(fact: Fact<T>): fact is KnownFact<T> {
   return fact.status === "known";
 }
 
-export function fullSha(value: string | null | undefined): string | null {
+/** A 40-hex commit in lowercase, or null when the value is not one. */
+export function fullSha(value: unknown): string | null {
   return typeof value === "string" && FULL_SHA.test(value) ? value.toLowerCase() : null;
 }
 

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildInvocationManifest,
   fingerprintExecutable,
   matchExecutionRevision,
   overlayFrozenAgent,
@@ -155,5 +156,33 @@ describe("invocation fingerprint drift", () => {
     const overlaid = overlayFrozenAgent(live, frozen);
     expect(overlaid.personaPrompt).toBe("frozen persona");
     expect(overlaid.modelId).toBe("grok-4.6");
+  });
+
+  it("stores reviewedSha as lowercase 40-hex or null", () => {
+    const sha = "ab".repeat(20);
+    const agent: AgentRecord = {
+      id: "agent-a",
+      name: "A",
+      personaPrompt: "persona",
+      modelId: "grok-4.6",
+      color: "#123456",
+      enabled: true,
+      driverSelection: { driverId: "grok-stream-json", options: {} },
+    };
+    const base = {
+      runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+      task: { task: "same task" },
+      repoRealpath: null,
+      timeoutMs: 1000,
+      concurrency: 1,
+      agents: [agent],
+      aggregator: agent,
+      tools: [],
+    };
+    expect(buildInvocationManifest({ ...base, reviewedSha: sha.toUpperCase() }).reviewedSha).toBe(
+      sha,
+    );
+    expect(buildInvocationManifest({ ...base, reviewedSha: null }).reviewedSha).toBeNull();
+    expect(buildInvocationManifest({ ...base, reviewedSha: "nope" }).reviewedSha).toBeNull();
   });
 });
