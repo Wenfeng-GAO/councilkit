@@ -4,6 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { firstNonBlank } from "@shared/runtime/non-blank";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
 import { clipUtf16, clipUtf16Tail } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
@@ -470,10 +471,14 @@ export async function commitLeftoverChanges(
   if (diff.exitCode === 0) return false;
   const commitEnv: NodeJS.ProcessEnv = {
     ...env,
-    GIT_AUTHOR_NAME: env.GIT_AUTHOR_NAME || "councilkit",
-    GIT_AUTHOR_EMAIL: env.GIT_AUTHOR_EMAIL || "councilkit@localhost",
-    GIT_COMMITTER_NAME: env.GIT_COMMITTER_NAME || env.GIT_AUTHOR_NAME || "councilkit",
-    GIT_COMMITTER_EMAIL: env.GIT_COMMITTER_EMAIL || env.GIT_AUTHOR_EMAIL || "councilkit@localhost",
+    GIT_AUTHOR_NAME: firstNonBlank(env.GIT_AUTHOR_NAME, "councilkit"),
+    GIT_AUTHOR_EMAIL: firstNonBlank(env.GIT_AUTHOR_EMAIL, "councilkit@localhost"),
+    GIT_COMMITTER_NAME: firstNonBlank(env.GIT_COMMITTER_NAME, env.GIT_AUTHOR_NAME, "councilkit"),
+    GIT_COMMITTER_EMAIL: firstNonBlank(
+      env.GIT_COMMITTER_EMAIL,
+      env.GIT_AUTHOR_EMAIL,
+      "councilkit@localhost",
+    ),
   };
   const commit = await runCommand({
     executable: "git",

@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "./cli-home";
 import { DEFAULT_MODEL_ALIASES } from "./default-model-alias";
 import { mkdirPrivate } from "./durable-write";
+import { firstNonBlank } from "./non-blank";
 
 export const CURSOR_REPAIR_MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]";
 
@@ -84,6 +85,22 @@ export function cursorRepairModelPin(
   configured: string | undefined,
 ): { ok: true; model: string } | { ok: false; reason: string } {
   return canonicalizeRepairModel(configured);
+}
+
+/** Env wins when it has text. A blank env keeps the squad-bridge.json value. */
+export function preferredCursorModel(
+  env: NodeJS.ProcessEnv,
+  fileModel: string | undefined,
+): string | undefined {
+  return firstNonBlank(env.COUNCILKIT_CURSOR_MODEL, fileModel);
+}
+
+/** Env wins when it has text. A blank env keeps the squad-bridge.json value. */
+export function preferredOrchestratorRuntime(
+  env: NodeJS.ProcessEnv,
+  fileRuntime: string | undefined,
+): string | undefined {
+  return firstNonBlank(env.COUNCILKIT_ORCHESTRATOR_RUNTIME, fileRuntime)?.toLowerCase();
 }
 
 /** Empty means the Cursor default. Any other explicit id is kept as itself. */

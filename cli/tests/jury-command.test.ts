@@ -159,4 +159,11 @@ describe("default jury configuration", () => {
     );
     expect(configuredCodexModel({ CODEX_HOME: home })).toBe("gpt-6-astra");
   });
+
+  it("treats a blank CODEX_HOME as unset and trims a padded path", () => {
+    writeFileSync(join(home, "config.toml"), 'model = "gpt-6-astra"\n');
+    expect(configuredCodexModel({ CODEX_HOME: `  ${home}  ` })).toBe("gpt-6-astra");
+    expect(configuredCodexModel({ CODEX_HOME: "" })).toBe(configuredCodexModel({}));
+    expect(configuredCodexModel({ CODEX_HOME: " \t " })).toBe(configuredCodexModel({}));
+  });
 });

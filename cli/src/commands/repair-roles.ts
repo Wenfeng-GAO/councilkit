@@ -4,6 +4,7 @@ import {
   type RepairSeat,
   REPAIR_ROLE_SWAP_LIMIT,
   applyRepairRoleUpdates,
+  preferredCursorModel,
   readSquadBridgeFile,
   readSquadBridgeObject,
   resolveRepairRoles,
@@ -37,7 +38,7 @@ async function showRepairRoles(out: OutputSink): Promise<void> {
   if (loaded.reason) throw errors.usage(loaded.reason);
   const resolved = resolveRepairRoles({
     orchestratorRuntime: loaded.file.orchestratorRuntime,
-    cursorModel: process.env.COUNCILKIT_CURSOR_MODEL ?? loaded.file.model,
+    cursorModel: preferredCursorModel(process.env, loaded.file.model),
     roles: loaded.file.roles,
   });
   if (!resolved.ok) throw errors.usage(resolved.reason);

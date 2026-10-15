@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { nonBlank } from "@shared/runtime/non-blank";
 import {
   type ReviewJuryResponse,
   reviewJuryResponseSchema,
@@ -15,7 +16,7 @@ import { parseFlags, parseJsonFlag } from "./parse";
 /** Top-level `model = "..."` from Codex config, before the first table. */
 export function configuredCodexModel(env: NodeJS.ProcessEnv = process.env): string | null {
   try {
-    const path = join(env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
+    const path = join(nonBlank(env.CODEX_HOME) ?? join(homedir(), ".codex"), "config.toml");
     if (statSync(path).size > 256 * 1024) return null;
     const head = (readFileSync(path, "utf8").split(/^\[/m)[0] ?? "").trim();
     const match = head.match(/^\s*model\s*=\s*["']([^"']+)["']/m);
@@ -33,7 +34,7 @@ export function discoverCodexModel(env: NodeJS.ProcessEnv = process.env): string
 
 export function cachedCodexModels(env: NodeJS.ProcessEnv = process.env): string[] {
   try {
-    const path = join(env.CODEX_HOME || join(homedir(), ".codex"), "models_cache.json");
+    const path = join(nonBlank(env.CODEX_HOME) ?? join(homedir(), ".codex"), "models_cache.json");
     if (statSync(path).size > 8 * 1024 * 1024) return [];
     const data = JSON.parse(readFileSync(path, "utf8")) as { models?: unknown };
     if (!Array.isArray(data.models)) return [];

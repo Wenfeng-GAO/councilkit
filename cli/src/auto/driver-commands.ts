@@ -41,6 +41,7 @@ import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
 import { mkdirPrivate } from "@shared/runtime/durable-write";
 import { jsonParse, jsonParseEmbedded } from "@shared/runtime/json-parse";
+import { firstNonBlank, nonBlank } from "@shared/runtime/non-blank";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 import {
@@ -303,13 +304,13 @@ const LOCAL_HTTP_PROXY_PORTS = [7897, 7890];
 const DEFAULT_NO_PROXY = "localhost,127.0.0.1,.alipay.com,.local";
 
 export function envHasProxy(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(
-    env.HTTPS_PROXY ||
-      env.https_proxy ||
-      env.ALL_PROXY ||
-      env.all_proxy ||
-      env.HTTP_PROXY ||
-      env.http_proxy,
+  return (
+    nonBlank(env.HTTPS_PROXY) !== undefined ||
+    nonBlank(env.https_proxy) !== undefined ||
+    nonBlank(env.ALL_PROXY) !== undefined ||
+    nonBlank(env.all_proxy) !== undefined ||
+    nonBlank(env.HTTP_PROXY) !== undefined ||
+    nonBlank(env.http_proxy) !== undefined
   );
 }
 
@@ -324,7 +325,7 @@ export function withLocalHttpProxy(
   const port = detectPort();
   if (port === null) return env;
   const url = `http://127.0.0.1:${port}`;
-  const noProxy = env.NO_PROXY ?? env.no_proxy ?? DEFAULT_NO_PROXY;
+  const noProxy = firstNonBlank(env.NO_PROXY, env.no_proxy, DEFAULT_NO_PROXY) ?? DEFAULT_NO_PROXY;
   return {
     ...env,
     HTTPS_PROXY: url,

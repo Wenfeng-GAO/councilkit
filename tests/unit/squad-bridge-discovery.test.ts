@@ -193,12 +193,79 @@ describe("squad bridge discovery", () => {
     );
     expect(probe.available).toBe(true);
     expect(probe.orchestrator?.model).toBe("grok-4.7-xhigh");
+    const blankModel = probeSquadBridge(
+      isolatedEnv({
+        HOME: home,
+        PATH: bin,
+        COUNCILKIT_HOME: ckHome,
+        COUNCILKIT_CURSOR_MODEL: "",
+      }),
+    );
+    expect(blankModel.available).toBe(true);
+    expect(blankModel.orchestrator?.model).toBe("grok-4.7-xhigh");
+    const paddedModel = probeSquadBridge(
+      isolatedEnv({
+        HOME: home,
+        PATH: bin,
+        COUNCILKIT_HOME: ckHome,
+        COUNCILKIT_CURSOR_MODEL: "   ",
+      }),
+    );
+    expect(paddedModel.orchestrator?.model).toBe("grok-4.7-xhigh");
     writeFileSync(join(ckHome, "squad-bridge.json"), `${JSON.stringify({ model: "auto" })}\n`);
     const refused = probeSquadBridge(
       isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }),
     );
     expect(refused.available).toBe(false);
     expect(refused.reason).toMatch(/auto|拒绝/);
+  });
+
+  it("keeps a file runtime when the runtime env is blank and cursor-agent also exists", () => {
+    const home = tempDir("ck-blank-runtime-");
+    seedSkill(join(home, ".codex"));
+    const bin = join(home, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeExecutable(join(bin, "cursor-agent"), "#!/bin/sh\necho cursor\n");
+    const grokb = seedGrokb(bin);
+    const ckHome = join(home, "ck");
+    mkdirSync(ckHome, { recursive: true });
+    writeFileSync(
+      join(ckHome, "squad-bridge.json"),
+      `${JSON.stringify({ orchestratorRuntime: "grokb", model: "composer-2.5" })}\n`,
+    );
+    const probe = probeSquadBridge(
+      isolatedEnv({
+        HOME: home,
+        PATH: bin,
+        COUNCILKIT_HOME: ckHome,
+        COUNCILKIT_ORCHESTRATOR_RUNTIME: "",
+        COUNCILKIT_CURSOR_MODEL: " ",
+      }),
+    );
+    expect(probe.available).toBe(true);
+    expect(probe.orchestrator?.requestedRuntime).toBe("grokb");
+    expect(probe.orchestrator?.executable).toBe(grokb);
+    expect(probe.orchestrator?.model).toBe("grok-4.6");
+  });
+
+  it("trims a padded explicit squadctl path instead of treating the spaces as part of it", () => {
+    const root = tempDir("ck-padded-squadctl-");
+    const skillDir = seedSkill(root);
+    const squadctl = join(skillDir, "scripts", "squadctl");
+    const grokb = seedGrokb(join(root, "bin"));
+    const probe = probeSquadBridge(
+      isolatedEnv({
+        PATH: join(root, "empty-path"),
+        COUNCILKIT_SQUADCTL: `  ${squadctl}  `,
+        COUNCILKIT_SQUAD_SKILL: ` ${skillDir} `,
+        COUNCILKIT_GROKB: `\t${grokb}\t`,
+        COUNCILKIT_ORCHESTRATOR_RUNTIME: "grokb",
+      }),
+    );
+    expect(probe.available).toBe(true);
+    expect(probe.executable).toBe(squadctl);
+    expect(probe.skillDir).toBe(skillDir);
+    expect(probe.orchestrator?.executable).toBe(grokb);
   });
 
   it("honors COUNCILKIT_SQUADCTL and COUNCILKIT_SQUAD_SKILL without a personal path constant", () => {

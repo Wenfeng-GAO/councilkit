@@ -1,10 +1,13 @@
 import { constants, accessSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { userCliBinDirs, vendorDriverBinDirs, vendorHome } from "./driver-bins";
+import { firstNonBlank } from "./non-blank";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "./squad-bridge-contract";
 import {
   type SquadBridgeFile,
   type SquadOrchestratorRuntime,
+  preferredCursorModel,
+  preferredOrchestratorRuntime,
   readSquadBridgeFile,
   resolveRepairRoles,
   runtimeOfExecutable,
@@ -210,7 +213,7 @@ function selectOrchestrator(
   }
   const resolved = resolveRepairRoles({
     orchestratorRuntime: runtime,
-    cursorModel: env.COUNCILKIT_CURSOR_MODEL ?? config.model,
+    cursorModel: preferredCursorModel(env, config.model),
     roles: config.roles,
   });
   if (!resolved.ok) return resolved;
@@ -224,7 +227,7 @@ function configuredRuntime(
   env: NodeJS.ProcessEnv,
   config: BridgeConfig,
 ): SquadOrchestratorRuntime | "invalid" | null {
-  const raw = (env.COUNCILKIT_ORCHESTRATOR_RUNTIME ?? config.orchestratorRuntime)?.trim().toLowerCase();
+  const raw = preferredOrchestratorRuntime(env, config.orchestratorRuntime);
   if (!raw) return null;
   if (raw === "cursor" || raw === "grokb" || raw === "grok") return raw;
   return "invalid";
@@ -360,9 +363,6 @@ function locateSquadctl(
 }
 
 function firstPath(values: Array<string | undefined>): string | null {
-  for (const value of values) {
-    if (!value || value.trim().length === 0) continue;
-    return resolvePath(value);
-  }
-  return null;
+  const picked = firstNonBlank(...values);
+  return picked === undefined ? null : resolvePath(picked);
 }

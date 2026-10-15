@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runRepair } from "../src/commands/repair";
+import { runRepairRoles } from "../src/commands/repair-roles";
 import type { OutputSink } from "../src/output";
 
 const homes: string[] = [];
@@ -136,5 +137,31 @@ describe("repair roles", () => {
     await runRepair(["roles", "show"], out);
     const shown = out.last() as { roles: { reviewer: { model: string } } };
     expect(shown.roles.reviewer.model).toBe("composer-2.5");
+  });
+
+  it("keeps the saved cursor model when COUNCILKIT_CURSOR_MODEL is blank", async () => {
+    const home = homeDir();
+    writeFileSync(
+      join(home, "squad-bridge.json"),
+      `${JSON.stringify({ model: "composer-2.5", orchestratorRuntime: "cursor" })}\n`,
+    );
+    const previous = process.env.COUNCILKIT_CURSOR_MODEL;
+    process.env.COUNCILKIT_CURSOR_MODEL = "  ";
+    try {
+      const out = sink();
+      await runRepairRoles(["show"], out);
+      expect(out.last()).toMatchObject({
+        orchestratorModel: "composer-2.5",
+        roles: {
+          orchestrator: { model: "composer-2.5" },
+          reviewer: { model: "composer-2.5" },
+        },
+      });
+    } finally {
+      if (previous === undefined) {
+        // biome-ignore lint/performance/noDelete: restore an unset env var
+        delete process.env.COUNCILKIT_CURSOR_MODEL;
+      } else process.env.COUNCILKIT_CURSOR_MODEL = previous;
+    }
   });
 });
