@@ -1,5 +1,5 @@
 import type { ReviewJurySeat } from "@shared/runtime/review-jury";
-import type { IdeateModels, ReviewModel } from "@shared/runtime/schemas";
+import { type IdeateModels, modelConfigKey } from "@shared/runtime/schemas";
 
 export const IDEATE_ROLE_LABELS: Record<string, string> = {
   "ideate-product": "产品席",
@@ -9,10 +9,6 @@ export const IDEATE_ROLE_LABELS: Record<string, string> = {
 
 export function ideateRoleLabel(name: string): string {
   return IDEATE_ROLE_LABELS[name] ?? name;
-}
-
-export function modelConfigKey(model: ReviewModel): string {
-  return JSON.stringify([model.driverSelection.driverId, model.driverSelection.options, model.modelId]);
 }
 
 export function rosterToIdeateModels(

@@ -7,9 +7,9 @@ import {
   liveStateFromRecords,
   withLiveHeartbeats,
 } from "@shared/runtime/cli-run-progress";
-import { ideateModelsSchema } from "@shared/runtime/schemas";
+import { ideateModelsSchema, modelConfigKey } from "@shared/runtime/schemas";
 import { z } from "zod";
-import { ideateModelAgents, modelConfigKey } from "../auto/ideate-models";
+import { ideateModelAgents } from "../auto/ideate-models";
 import {
   renderIdeateReport,
   writeIdeateReport,

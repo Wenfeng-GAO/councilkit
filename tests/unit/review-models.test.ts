@@ -1,10 +1,19 @@
-import { reviewModelsSchema } from "@shared/runtime/schemas";
+import { modelConfigKey, reviewModelsSchema } from "@shared/runtime/schemas";
 import { describe, expect, it } from "vitest";
 const model = {
   modelId: "gpt-6-astra",
   driverSelection: { driverId: "codex-app-server", options: {} },
 };
 describe("per-run review models", () => {
+  it("identifies a seat by driver id, options, then model id", () => {
+    const reversed = {
+      modelId: model.modelId,
+      driverSelection: { options: {}, driverId: "codex-app-server" },
+    };
+    const key = JSON.stringify(["codex-app-server", {}, "gpt-6-astra"]);
+    expect(modelConfigKey(model)).toBe(key);
+    expect(modelConfigKey(reversed)).toBe(key);
+  });
   it("allows models not yet in the discovery catalog for CLI probing", () => {
     expect(
       reviewModelsSchema.parse({ models: [model], aggregatorIndex: 0 }).models[0]?.modelId,

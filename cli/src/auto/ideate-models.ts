@@ -20,10 +20,3 @@ export function ideateModelAgents(config: IdeateModels): AgentRecord[] {
     personaPrompt: PERSONAS[index] ?? PERSONAS[2],
   }));
 }
-
-export function modelConfigKey(input: {
-  driverSelection: { driverId: string; options: unknown };
-  modelId: string;
-}): string {
-  return JSON.stringify([input.driverSelection.driverId, input.driverSelection.options, input.modelId]);
-}
