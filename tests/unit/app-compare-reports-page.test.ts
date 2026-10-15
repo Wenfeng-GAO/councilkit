@@ -151,7 +151,7 @@ describe("CompareReportsPage", () => {
     );
     mounted.push(view);
     await waitForText(view.container, HOST_DOWN_TITLE);
-    expect(view.container.textContent).toContain(HOST_DOWN_HINT);
+    expect(view.container.textContent).toContain(HOST_DOWN_HINT.replace(/`/g, ""));
   });
 
   it("explains a generic miss when a run is missing", async () => {

@@ -40,7 +40,7 @@ const scene = vi.hoisted(() => ({
     drivers: Array<{ driverId: string; status: string }>;
     onRevalidate: (id: string) => void;
     onShowRequirements: () => void;
-    onRecheckDrivers: () => void;
+    onRecheckDriver: (driverId: DriverId) => void;
     onRediscover: () => void;
     onShowDiagnostics: (driverId: DriverId) => void;
   },
@@ -189,7 +189,7 @@ describe("SettingsPage", () => {
     mounted.push(view);
     expect(view.container.textContent).toContain("host:null:idle");
     const recheck = [...view.container.querySelectorAll("button")].find(
-      (button) => button.textContent === "重新检查",
+      (button) => button.textContent === "全部重新检查",
     );
     expect(recheck instanceof HTMLButtonElement && recheck.disabled).toBe(true);
 
@@ -223,9 +223,11 @@ describe("SettingsPage", () => {
     await clickButton(view.container, "关闭");
     scene.host?.onShowRestartHelp();
     await waitForText(view.container, "重启本地执行服务");
+    // #318: commands render as <code>, never as literal backticks.
     expect(view.container.textContent).toContain(
-      "开发模式运行 `pnpm dev`；或先 `pnpm build` 后以 `pnpm start` 运行生产模式。",
+      "开发模式运行 pnpm dev；或先 pnpm build 后以 pnpm start 运行生产模式。",
     );
+    expect(view.container.textContent).not.toContain("`pnpm");
     await clickButton(view.container, "关闭");
     scene.installations?.onShowDiagnostics("claude-stream-json");
     await waitForText(view.container, "诊断 / 更新 CLI");
@@ -365,10 +367,10 @@ describe("SettingsPage", () => {
       };
     });
     client.modelCatalog.mockRejectedValue(new Error("catalog down"));
-    await clickButton(view.container, "重新检查");
+    await clickButton(view.container, "全部重新检查");
     await settle();
     await settle();
-    expect(view.container.textContent).toContain("重新检查");
+    expect(view.container.textContent).toContain("全部重新检查");
     expect(view.client.getQueryData(["host", "profile-readiness", "p-claude", 1, "glm-x"])).toEqual(
       {
         readiness: { state: "ready", detail: "fresh" },
@@ -429,9 +431,13 @@ describe("SettingsPage", () => {
     scene.installations?.onRediscover();
     await settle();
     expect(client.refreshInstallations.mock.calls).toEqual([[]]);
-    scene.installations?.onRecheckDrivers();
+    const healthCallsBefore = client.health.mock.calls.length;
+    scene.installations?.onRecheckDriver("grok-stream-json");
     await settle();
-    expect(client.health.mock.calls.length).toBe(2);
+    // #321: a row's 「重新检查」 re-probes only that driver.
+    expect(client.health.mock.calls.slice(healthCallsBefore)).toEqual([
+      [{ refresh: true, driverId: "grok-stream-json" }],
+    ]);
     document.createElement = originalCreate;
   });
 

@@ -30,20 +30,25 @@ export interface InstallationsSectionProps {
   isLoading: boolean;
   /** Installation id currently being revalidated (disables its button). */
   revalidatingId: string | null;
+  /** 「全部重新检查」 in flight (every row is being re-probed). */
   driversRechecking: boolean;
+  /** Rows whose own 「重新检查」 is in flight (#321: only that row). */
+  recheckingDriverIds?: ReadonlySet<DriverId>;
   onRevalidate: (installationId: string) => void;
   onShowRequirements: () => void;
-  onRecheckDrivers: () => void;
+  onRecheckDriver: (driverId: DriverId) => void;
   onShowDiagnostics: (driverId: DriverId) => void;
   rediscovering?: boolean;
   onRediscover?: () => void;
 }
 
+/** A copyable command. Never wraps mid-command (#318); a command wider than
+ * the row scrolls inside its chip instead. */
 function Copyable({ text }: { text: string }) {
   return (
     <button
       type="button"
-      className="cursor-pointer rounded bg-surface-2 px-1 font-mono text-[13px] text-fg"
+      className="inline-block max-w-full cursor-pointer overflow-x-auto whitespace-nowrap rounded bg-surface-2 px-1 align-bottom font-mono text-[13px] text-fg"
       title="复制"
       onClick={() => {
         void navigator.clipboard?.writeText(text);
@@ -129,9 +134,10 @@ export function InstallationsSection({
   isLoading,
   revalidatingId,
   driversRechecking,
+  recheckingDriverIds,
   onRevalidate,
   onShowRequirements,
-  onRecheckDrivers,
+  onRecheckDriver,
   onShowDiagnostics,
   rediscovering = false,
   onRediscover,
@@ -189,6 +195,8 @@ export function InstallationsSection({
               const view = cliStateView(row.cliState);
               const action = aiToolActionLabel(row.cliState);
               const checking = row.cliState === "checking";
+              const rowRechecking =
+                driversRechecking || (recheckingDriverIds?.has(row.driverId) ?? false);
               return (
                 <li
                   key={row.driverId}
@@ -196,13 +204,13 @@ export function InstallationsSection({
                   className="flex flex-col gap-2 rounded border border-edge bg-surface px-4 py-3"
                 >
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                    <div className="w-48 shrink-0 text-[15px] font-semibold text-fg">
+                    <div className="w-44 shrink-0 text-[15px] font-semibold text-fg">
                       {AI_TOOL_SHORT_NAMES[row.driverId]}{" "}
                       <span className="text-sm font-normal text-muted">
                         {AI_TOOL_BINS[row.driverId]}
                       </span>
                     </div>
-                    <div className="w-28 shrink-0">
+                    <div className="w-24 shrink-0" data-cli-state-pill>
                       <StatusPill tone={view.tone} text={view.label} />
                     </div>
                     <div className="min-w-0 flex-1 text-[13px] text-muted">
@@ -223,10 +231,10 @@ export function InstallationsSection({
                       ) : (
                         <Button
                           variant="ghost"
-                          disabled={checking || driversRechecking}
-                          onClick={onRecheckDrivers}
+                          disabled={checking || rowRechecking}
+                          onClick={() => onRecheckDriver(row.driverId)}
                         >
-                          {driversRechecking && !checking ? "正在重新检查…" : action}
+                          {rowRechecking && !checking ? "正在重新检查…" : action}
                         </Button>
                       )}
                     </div>

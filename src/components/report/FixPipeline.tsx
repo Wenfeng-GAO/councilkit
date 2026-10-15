@@ -254,7 +254,7 @@ export function formatCliActionError(error: unknown): string {
   if (error instanceof RuntimeClientError) {
     if (error.status === 409) return "这条 run 已有进行中的修复或审查。";
     if (error.status === 404 || error.status === 405) {
-      return "Host 还没有加载修复接口。请重启 `pnpm dev` / `pnpm start` 后再点内置修复。";
+      return "Host 还没有加载修复接口。请重启 Host（pnpm dev 或 pnpm start）后再点内置修复。";
     }
     if (error.status === 403) return `没有权限启动修复（${error.message}）。`;
     if (error.status === 500) {

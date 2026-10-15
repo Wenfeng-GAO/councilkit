@@ -13,7 +13,8 @@ const SEATS = [
   {
     area: "ck-seat-n",
     name: "安全",
-    driver: "cld · Claude",
+    // #323: no cld on the external home page (week-1 item 5).
+    driver: "本机 CLI",
     color: "#f74f6e",
     id: "review-security",
   },
@@ -145,9 +146,10 @@ export function Landing() {
         <ol className="mt-4 flex flex-col gap-3">
           <HowToStep index="01" title="发现本机 CLI，写下默认陪审团">
             <p>
-              扫描 PATH 上的 <code className="font-command">cld</code> /{" "}
+              扫描 PATH 上的 <code className="font-command">grok</code> /{" "}
               <code className="font-command">kimi</code> /{" "}
-              <code className="font-command">grok</code>
+              <code className="font-command">codex</code> /{" "}
+              <code className="font-command">cursor-agent</code>
               ，写入安全、正确性、可维护、对抗席。正确性席默认 Grok。Aggregator 默认是 Grok 对抗席。
             </p>
             <CommandCopy value={INIT_CMD} />

@@ -1,4 +1,4 @@
-import { CSRF_HEADER_NAME } from "@shared/runtime/contracts";
+import { CSRF_HEADER_NAME, type DriverId } from "@shared/runtime/contracts";
 import {
   type AckRequest,
   type AckResponse,
@@ -145,8 +145,11 @@ export class RuntimeClient {
     return options.schema.parse(envelope.data);
   }
 
-  health(options?: { refresh?: boolean }): Promise<HealthResponse> {
-    const query = options?.refresh ? "?refresh=1" : "";
+  /** `refresh` re-probes every CLI row; with `driverId`, only that row (#321). */
+  health(options?: { refresh?: boolean; driverId?: DriverId }): Promise<HealthResponse> {
+    const query = options?.refresh
+      ? `?refresh=1${options.driverId ? `&driver=${encodeURIComponent(options.driverId)}` : ""}`
+      : "";
     return this.call("GET", `/api/v1/health${query}`, {
       schema: healthResponseSchema,
       auth: "session",
