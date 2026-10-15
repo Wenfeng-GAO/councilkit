@@ -5,7 +5,7 @@ import { reviewSeatTitle } from "@/lib/seat-label";
 import { WorkbenchProcessView } from "./WorkbenchProcessView";
 import { CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 import { seatReportView } from "./seatDetailModel";
-import type { SeatViewTab, WorkbenchAttempt } from "./selection";
+import { SEAT_STATUS_TEXT, type SeatViewTab, type WorkbenchAttempt } from "./selection";
 import { useAttemptResult } from "./useAttemptResult";
 import { useWorkbenchProcess } from "./useWorkbenchProcess";
 
@@ -40,10 +40,10 @@ export function SeatDetailView({
   const StatusIcon = STATUS_ICONS[attempt.status] ?? CircleHelpIcon;
   const statusText =
     view.kind === "failure"
-      ? "执行失败"
+      ? SEAT_STATUS_TEXT.failure
       : view.kind === "cancelled"
-        ? "已取消"
-        : (STATUS_TEXT[attempt.status] ?? "状态未知");
+        ? SEAT_STATUS_TEXT.cancelled
+        : (SEAT_STATUS_TEXT[attempt.status] ?? "状态未知");
   const model = attempt.observedModelId ?? attempt.requestedModelId ?? attempt.modelId;
 
   return (
@@ -85,15 +85,6 @@ export function SeatDetailView({
     </article>
   );
 }
-
-const STATUS_TEXT: Record<WorkbenchAttempt["status"], string> = {
-  pending: "等待启动",
-  queued: "排队中",
-  running: "执行中",
-  success: "执行完成",
-  failure: "执行失败",
-  cancelled: "已取消",
-};
 
 function SeatReportBody({
   view,

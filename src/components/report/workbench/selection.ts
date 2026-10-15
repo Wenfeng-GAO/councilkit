@@ -7,6 +7,16 @@ import { createStore, useStore } from "zustand";
  */
 export type WorkbenchAttempt = NonNullable<CliRunDetailResponse["progress"]>["attempts"][number];
 
+/** 执行状态 → 状态文字（DETAIL-SPEC §4：中性表述，执行完成绝不暗示审查通过）。 */
+export const SEAT_STATUS_TEXT: Record<WorkbenchAttempt["status"], string> = {
+  pending: "等待启动",
+  queued: "排队中",
+  running: "执行中",
+  success: "执行完成",
+  failure: "执行失败",
+  cancelled: "已取消",
+};
+
 /**
  * 工作台唯一选择器（WORKSPACE-STATES §1）。
  * 模型只有三种取值："overview"（本轮总览）| "repair"（当前修复；kind=review 即可达——
