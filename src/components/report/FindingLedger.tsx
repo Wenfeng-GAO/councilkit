@@ -83,7 +83,7 @@ export function FindingLedger({
       : { status: "none" as const };
   const countNote = formatFindingCountNote(projection);
   const comparisonNote = formatLedgerComparison(comparison);
-  const summary = formatProblemSummary(projection, nextCluster?.id ?? null);
+  const summary = formatProblemSummary(projection, nextCluster?.id ?? null, run.attention ?? null);
   const againstId = run.reviewEvidence?.againstRunId ?? null;
   const prUrl = run.reviewEvidence?.prUrl ?? null;
 
@@ -318,6 +318,7 @@ function MemberEvidence({
 function formatProblemSummary(
   projection: ReturnType<typeof projectFindingList>,
   nextClusterId: string | null,
+  attention: CliRunDetailResponse["attention"] = null,
 ): string {
   const parts: string[] = [`${projection.displayCount} 个问题`];
   const statuses = new Map<string, number>();
@@ -330,7 +331,9 @@ function formatProblemSummary(
     if (n === 0) continue;
     parts.push(`${n} ${severityLabel(severity)}`);
   }
-  parts.push(`${projection.blockingCount} 阻塞`);
+  // #289: 需要处理 / 阻塞 come from the shared count the list and `runs list` use.
+  if (attention) parts.push(`${attention.needsAttention} 需要处理`);
+  parts.push(`${attention?.blocking ?? projection.blockingCount} 阻塞`);
   if (nextClusterId) parts.push(`下一刀 ${nextClusterId}`);
   return parts.join(" · ");
 }

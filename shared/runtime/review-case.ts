@@ -70,6 +70,7 @@ export interface ReviewCaseRun {
   status: string;
   startedAt: string | null;
   reviewEvidence?: ReviewEvidence | null;
+  attention?: { needsAttention: number } | null;
 }
 
 export function isCompleteReviewRun(run: ReviewCaseRun | null | undefined): boolean {
