@@ -45,7 +45,12 @@ async function waitForFile(path: string): Promise<void> {
  * The trap is installed before the ready file exists. A SIGTERM in the same
  * turn as spawn kills Node before `process.on` runs, so callers must wait.
  */
-function writeTrap(root: string, readyFile: string, grandchild: boolean): string {
+function writeTrap(
+  root: string,
+  readyFile: string,
+  grandchild: boolean,
+  leaderTraps = true,
+): string {
   const scriptPath = join(root, "trap.js");
   let grandSpawn = "";
   if (grandchild) {
@@ -65,11 +70,11 @@ const grand = spawn(process.execPath, [${JSON.stringify(grandPath)}], { stdio: "
 fs.writeFileSync(${JSON.stringify(grandPid)}, String(grand.pid));
 `;
   }
+  const leaderTrap = leaderTraps ? `process.on("SIGTERM", () => {});\n` : "";
   writeFileSync(
     scriptPath,
     `const fs = require("node:fs");
-process.on("SIGTERM", () => {});
-${grandSpawn}fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");
+${leaderTrap}${grandSpawn}fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");
 setInterval(() => {}, 1e9);
 `,
   );
@@ -79,11 +84,12 @@ setInterval(() => {}, 1e9);
 async function armedChild(
   detached: boolean,
   grandchild: boolean,
+  leaderTraps = true,
 ): Promise<{ child: ChildProcess; pid: number; grandchildPid: number | null }> {
   const root = mkdtempSync(join(tmpdir(), "ck-reap-child-"));
   dirs.push(root);
   const readyFile = join(root, "ready");
-  const child = spawn(process.execPath, [writeTrap(root, readyFile, grandchild)], {
+  const child = spawn(process.execPath, [writeTrap(root, readyFile, grandchild, leaderTraps)], {
     detached,
     stdio: "ignore",
   });
@@ -177,6 +183,33 @@ describe("terminateChild", () => {
     terminateChild(child, { graceMs: 200, group: true });
     await expect(diesWithin(pid, 2_000)).resolves.toBe(true);
     await expect(diesWithin(grandchildPid, 2_000)).resolves.toBe(true);
+  });
+
+  it("SIGKILLs a detached grandchild that ignores SIGTERM after the leader exits", async () => {
+    const { child, pid, grandchildPid } = await armedChild(true, true, false);
+    if (grandchildPid === null) throw new Error("missing grandchild");
+    terminateChild(child, { graceMs: 200, group: true });
+    await expect(diesWithin(pid, 2_000)).resolves.toBe(true);
+    await expect(diesWithin(grandchildPid, 2_000)).resolves.toBe(true);
+  });
+
+  it("does not SIGKILL a detached group after its leader exits with no descendants", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9);"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    if (child.pid === undefined) throw new Error("child has no pid");
+    const pid = child.pid;
+    leakedPids.push(pid);
+    const group = recordGroupSignals(pid);
+    try {
+      terminateChild(child, { graceMs: 200, group: true });
+      await expect(diesWithin(pid, 2_000)).resolves.toBe(true);
+      await sleep(400);
+    } finally {
+      group.restore();
+    }
+    expect(group.signals.filter((signal) => signal !== "0")).toEqual(["SIGTERM"]);
   });
 
   it("falls back to the child handle when the pid is not a process group", async () => {

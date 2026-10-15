@@ -39,7 +39,12 @@ const driverStderrOut = new net.Socket({ fd: 4, readable: false, writable: true 
 /** @type {import("node:child_process").ChildProcess | null} */
 let driver = null;
 let driverPid = null;
+/** Process group to escalate. Kept after the leader exits so descendants can be SIGKILLed. */
+let groupPid = null;
 let reaping = false;
+let reapFinished = false;
+let reapTimer = null;
+let reapReason = null;
 
 function send(message) {
   try {
@@ -51,35 +56,89 @@ function send(message) {
   }
 }
 
-function killGroup(signal) {
-  if (driverPid === null) return;
-  try {
-    process.kill(-driverPid, signal);
-  } catch {
-    // Group already gone (ESRCH) — nothing to do.
-  }
-}
-
 function exitSoon(code, delayMs = 25) {
   setTimeout(() => process.exit(code), delayMs).unref();
 }
 
+function signalTargetsLiveProcess(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+// Same rule as terminateChild. A live leader pid was reused; an empty group
+// must not be signaled. This file is copied alone into dist-host, so the
+// predicate stays inline instead of importing the TypeScript helper.
+function groupOccupiedByOriginalMembers(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (signalTargetsLiveProcess(pid)) return false;
+  return signalTargetsLiveProcess(-pid);
+}
+
+function killGroup(signal) {
+  if (groupPid === null) return false;
+  try {
+    process.kill(-groupPid, signal);
+    return true;
+  } catch {
+    // Group already gone (ESRCH) — nothing to do.
+    return false;
+  }
+}
+
+/**
+ * End a reap. SIGKILL only while the leader is still running or original
+ * group members remain. "reaped" means that SIGKILL, or a shutdown with no
+ * driver. The host counts the frame as escalation, so an empty group after a
+ * cooperative SIGTERM does not send it.
+ */
+function finishReap() {
+  if (reapFinished) return;
+  reapFinished = true;
+  if (reapTimer !== null) {
+    clearTimeout(reapTimer);
+    reapTimer = null;
+  }
+  const pid = groupPid;
+  const leaderAlive = driver !== null && driver.exitCode === null && driver.signalCode === null;
+  let escalated = false;
+  if (pid !== null && (leaderAlive || groupOccupiedByOriginalMembers(pid))) {
+    try {
+      process.kill(-pid, "SIGKILL");
+      escalated = true;
+    } catch {
+      escalated = false;
+    }
+  }
+  groupPid = null;
+  driverPid = null;
+  if (escalated || driver === null) {
+    send({ type: "reaped", reason: reapReason ?? "reaped" });
+  }
+  exitSoon(0);
+}
+
 /**
  * Reap the entire process group: SIGTERM first, SIGKILL after the grace
- * window, then the watchdog exits. Idempotent.
+ * window, then the watchdog exits. Idempotent. The grace timer stays
+ * referenced so a leader that exits cannot drop the loop before descendants
+ * are SIGKILLed (exitSoon is unref'd).
  */
 function reap(reason, graceMs = REAP_GRACE_MS) {
   if (reaping) return;
   reaping = true;
+  reapReason = reason;
   killGroup("SIGTERM");
-  setTimeout(
+  reapTimer = setTimeout(
     () => {
-      killGroup("SIGKILL");
-      send({ type: "reaped", reason });
-      exitSoon(0);
+      reapTimer = null;
+      finishReap();
     },
     Math.max(0, graceMs),
-  ).unref();
+  );
 }
 
 function handleSpawn(message) {
@@ -108,16 +167,32 @@ function handleSpawn(message) {
 
   driver = child;
   driverPid = child.pid ?? null;
+  groupPid = driverPid;
+  const reportedPid = driverPid;
 
   hostStdin.pipe(child.stdin);
   child.stdout.pipe(hostStdout);
   child.stderr.pipe(driverStderrOut);
 
   child.on("exit", (code, signal) => {
-    send({ type: "exit", pid: driverPid, code, signal });
+    send({ type: "exit", pid: reportedPid, code, signal });
     driverPid = null;
-    // Our supervised process is gone; nothing left to guard.
-    exitSoon(reaping ? 0 : code === 0 ? 0 : 1);
+    if (!reaping) {
+      groupPid = null;
+      exitSoon(code === 0 ? 0 : 1);
+      return;
+    }
+    if (reapFinished) return;
+    // Descendants that ignored SIGTERM still hold the group. Keep the grace
+    // timer; do not exit the watchdog out from under it.
+    if (groupPid !== null && groupOccupiedByOriginalMembers(groupPid)) return;
+    if (reapTimer !== null) {
+      clearTimeout(reapTimer);
+      reapTimer = null;
+    }
+    reapFinished = true;
+    groupPid = null;
+    exitSoon(0);
   });
 
   send({

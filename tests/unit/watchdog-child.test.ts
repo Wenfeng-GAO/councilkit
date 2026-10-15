@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -408,8 +408,79 @@ describe("watchdog control protocol", () => {
       signal: "SIGKILL",
     });
     await delay(80);
-    expect(session.exits).toEqual([0, 0]);
+    expect(session.exits).toEqual([0]);
     expect(pidAlive(supervised.pid)).toBe(false);
+  });
+
+  it("SIGKILLs a grandchild that ignores SIGTERM after the leader exits", async () => {
+    const readyFile = join(tempRoot, "grand.ready");
+    const grand = join(tempRoot, "grand.mjs");
+    const leader = join(tempRoot, "leader.mjs");
+    await writeFile(
+      grand,
+      `import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(process.argv[2], "ready");
+setInterval(() => {}, 1e9);
+`,
+    );
+    const grandArg = JSON.stringify(grand);
+    const readyArg = JSON.stringify(readyFile);
+    await writeFile(
+      leader,
+      `import { spawn } from "node:child_process";
+const grand = spawn(process.execPath, [${grandArg}, ${readyArg}], {
+  stdio: "ignore",
+});
+process.stdout.write("GRAND " + grand.pid + "\\n");
+setInterval(() => {}, 1e9);
+`,
+    );
+    const session = await loadWatchdog();
+    const lines = new LineReader(session.stdout);
+    feed(session.control, {
+      type: "spawn",
+      executable: process.execPath,
+      argv: [leader],
+      cwd: tempRoot,
+      env: { PATH: process.env.PATH },
+    });
+    const supervised = (await session.control.nextMessage()) as { pid: number };
+    track(supervised.pid);
+    const grandLine = await lines.next();
+    const grandchildPid = Number(grandLine.slice("GRAND ".length));
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+    track(grandchildPid);
+    const readyDeadline = Date.now() + 2_000;
+    let ready = false;
+    while (Date.now() < readyDeadline) {
+      try {
+        await access(readyFile);
+        ready = true;
+        break;
+      } catch {
+        await delay(20);
+      }
+    }
+    expect(ready).toBe(true);
+    feed(session.control, { type: "shutdown", graceMs: 150 });
+    expect(await session.control.nextMessage()).toEqual({
+      type: "exit",
+      pid: supervised.pid,
+      code: null,
+      signal: "SIGTERM",
+    });
+    // The mocked process.exit must not count as leaving while the grandchild lives.
+    await delay(40);
+    expect(pidAlive(grandchildPid)).toBe(true);
+    expect(session.exits).toEqual([]);
+    expect(await session.control.nextMessage()).toEqual({
+      type: "reaped",
+      reason: "host-shutdown",
+    });
+    await delay(50);
+    expect(pidAlive(grandchildPid)).toBe(false);
+    expect(session.exits).toEqual([0]);
   });
 
   it("lets a cooperative driver exit on SIGTERM before the grace window", async () => {
@@ -428,16 +499,15 @@ describe("watchdog control protocol", () => {
     expect(await lines.next()).toBe("PONG");
     feed(session.control, { type: "shutdown", graceMs: 300 });
     expect(await lines.next()).toBe("SIGTERM-SEEN");
-    const messages = [await session.control.nextMessage(), await session.control.nextMessage()];
-    expect(messages).toContainEqual({
+    expect(await session.control.nextMessage()).toEqual({
       type: "exit",
       pid: supervised.pid,
       code: 0,
       signal: null,
     });
-    expect(messages).toContainEqual({ type: "reaped", reason: "host-shutdown" });
-    await delay(80);
-    expect(session.exits).toEqual([0, 0]);
+    await delay(400);
+    expect(session.exits).toEqual([0]);
+    await expect(session.control.nextMessage(50)).rejects.toThrow(/timed out/);
   });
 
   it("reaps immediately when grace is zero or negative and no driver exists", async () => {
