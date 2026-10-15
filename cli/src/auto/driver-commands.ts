@@ -12,8 +12,10 @@
  *  - kimi: `kimi -m <modelId> -p <prompt> --output-format stream-json` (no
  *    --auto/-y; full autonomy comes from config). prompt → argv. Extract last
  *    `{"role":"assistant"}.content`, skipping `role:"meta"` resume lines.
- *  - codex: `codex exec -s workspace-write --dangerously-bypass-approvals-and-sandbox
- *    --skip-git-repo-check -m <modelId> -o <workspace>/.last-message.md -`.
+ *  - codex: `codex exec -s read-only --skip-git-repo-check -m <modelId>
+ *    -o <workspace>/.last-message.md -` (write access: `-s workspace-write
+ *    --dangerously-bypass-approvals-and-sandbox`).
+ *  - Seat access (#273): every seat is read-only by default; see `SeatAccess`.
  *    prompt → stdin; read the last-message file, fall back to stdout.
  */
 import { Buffer } from "node:buffer";
@@ -679,6 +681,30 @@ interface DriverInvocation {
   lastMessageFile?: string;
 }
 
+/**
+ * What a spawned seat may do to the workspace (SAFE-01..04, #273).
+ * - "read-only" (default for every review / plan-jury seat): no
+ *   permission-skip flags; each CLI runs in its own plan / ask / read-only
+ *   sandbox mode and write tools are denied.
+ * - "write": explicit opt-in (`apply`, or `review --allow-write`); restores the
+ *   autonomous flags (`--dangerously-skip-permissions`, `--always-approve`,
+ *   codex bypass, cursor `--force`).
+ */
+export type SeatAccess = "read-only" | "write";
+
+/** Flags that skip a CLI's own permission prompts. Never in a read-only argv. */
+export const PERMISSION_SKIP_FLAGS = [
+  "--dangerously-skip-permissions",
+  "--allow-dangerously-skip-permissions",
+  "--dangerously-bypass-approvals-and-sandbox",
+  "--always-approve",
+  "--force",
+  "--yolo",
+] as const;
+
+/** Tools a read-only seat may never use (claude --disallowedTools / grok --deny). */
+const READ_ONLY_DENIED_TOOLS = ["Bash", "Edit", "Write"] as const;
+
 /** Shared argv builder for the review spawn AND the health probe. The two share
  * the executable, route/model handling, prompt delivery channel and output
  * format — but the probe never inherits review-specific permission flags
@@ -686,11 +712,12 @@ interface DriverInvocation {
  * probe exercises the driver backend, not the review's escalation path. */
 function buildInvocation(
   agent: AgentRecord,
-  opts: { prompt: string; workspace?: string; probe: boolean },
+  opts: { prompt: string; workspace?: string; probe: boolean; access?: SeatAccess },
 ): DriverInvocation {
   const sel = agent.driverSelection;
   const driverId = sel.driverId;
   const { prompt } = opts;
+  const write = opts.access === "write";
   switch (driverId) {
     case "claude-stream-json": {
       if (sel.options.route !== "cfuse") {
@@ -700,7 +727,9 @@ function buildInvocation(
       }
       const argv = ["cfuse", "--print", "--verbose", "--output-format", "stream-json"];
       if (!opts.probe) {
-        argv.push("--include-partial-messages", "--dangerously-skip-permissions");
+        argv.push("--include-partial-messages");
+        if (write) argv.push("--dangerously-skip-permissions");
+        else argv.push("--permission-mode", "plan", "--disallowedTools", ...READ_ONLY_DENIED_TOOLS);
       }
       return { argv, promptStdin: true };
     }
@@ -726,7 +755,13 @@ function buildInvocation(
       } else {
         argv.push("--output-format", "streaming-messages-json", "--include-partial-messages");
       }
-      argv.push("-p", prompt, "--disable-web-search", "--no-subagents", "--always-approve");
+      argv.push("-p", prompt, "--disable-web-search", "--no-subagents");
+      if (write) {
+        argv.push("--always-approve");
+      } else {
+        argv.push("--permission-mode", "plan");
+        for (const tool of READ_ONLY_DENIED_TOOLS) argv.push("--deny", tool);
+      }
       if (opts.probe) argv.push("--max-turns", "1", "--reasoning-effort", "low");
       if (opts.workspace) {
         argv.push("--cwd", opts.workspace, "--leader-socket", grokLeaderSocket(opts.workspace));
@@ -742,7 +777,9 @@ function buildInvocation(
       if (opts.probe) {
         argv.push("json", "--mode", "ask", "--trust");
       } else {
-        argv.push("stream-json", "--stream-partial-output", "--force", "--trust");
+        argv.push("stream-json", "--stream-partial-output");
+        if (write) argv.push("--force", "--trust");
+        else argv.push("--mode", "ask", "--trust");
       }
       if (!isDefaultModelAlias(agent.modelId)) {
         argv.push("--model", agent.modelId);
@@ -771,8 +808,9 @@ function buildInvocation(
         argv: [
           "exec",
           "-s",
-          "workspace-write",
-          "--dangerously-bypass-approvals-and-sandbox",
+          ...(write
+            ? ["workspace-write", "--dangerously-bypass-approvals-and-sandbox"]
+            : ["read-only"]),
           "--skip-git-repo-check",
           "--json",
           "-m",
@@ -978,7 +1016,14 @@ export function buildIdeateSpawnSpec(
  * error on: unknown driver, claude non-cfuse route, or missing executable. */
 export function buildSpawnSpec(
   agent: AgentRecord,
-  opts: { attemptId: string; workspace: string; prompt: string; env?: NodeJS.ProcessEnv },
+  opts: {
+    attemptId: string;
+    workspace: string;
+    prompt: string;
+    env?: NodeJS.ProcessEnv;
+    /** Defaults to "read-only" (SAFE-01). Only `apply` / `--allow-write` pass "write". */
+    access?: SeatAccess;
+  },
 ): AttemptSpec {
   const { attemptId, workspace, prompt } = opts;
   const env = opts.env ?? process.env;
@@ -988,7 +1033,12 @@ export function buildSpawnSpec(
     throw errors.usage(`unsupported driver "${driverId}" for review`);
   }
   const executable = resolveExecutable(exeName, env);
-  const invocation = buildInvocation(agent, { prompt, workspace, probe: false });
+  const invocation = buildInvocation(agent, {
+    prompt,
+    workspace,
+    probe: false,
+    access: opts.access ?? "read-only",
+  });
   return {
     attemptId,
     agentId: agent.id,

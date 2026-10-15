@@ -250,6 +250,7 @@ export async function runReview(
         spec: { type: "string" },
         "require-spec": { type: "boolean" },
         "no-require-spec": { type: "boolean" },
+        "allow-write": { type: "boolean" },
       },
       allowPositionals: 1,
     },
@@ -294,6 +295,8 @@ export async function runReview(
   // Default true: force contract review. `--no-require-spec` opts into unbound legacy mode.
   const requireSpec = values["no-require-spec"] !== true;
   task.requireSpec = requireSpec;
+  // SAFE-01/04: seats are read-only unless the user explicitly opts in.
+  task.seatAccess = values["allow-write"] === true ? "write" : "read-only";
   // Snapshot CLI identity before any freeze overlay. Resume must reject a
   // mismatched --pr/--task/--focus even when execution later binds the frozen
   // spec (P1-6). Spec is resolved after local-repo / PR body are available
@@ -564,6 +567,8 @@ export async function runReview(
       throw errors.usage("--no-require-spec must match the resumed run (was require-spec)");
     }
     task.requireSpec = frozenManifest.requireSpec !== false;
+    // Resume keeps the original run's seat access (older manifests: read-only).
+    task.seatAccess = frozenManifest.seatAccess ?? "read-only";
   } else {
     task.requireSpec = requireSpec;
   }
@@ -799,7 +804,7 @@ export async function runReview(
         task,
         workspaceMode: localRepo !== null ? "worktree" : "empty",
       });
-      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt });
+      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt, access: task.seatAccess });
       spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
       rerunSpecs.push(spec);
       rerunAgents.push(a);
@@ -869,6 +874,7 @@ export async function runReview(
         timeoutMs,
         concurrency: concurrency ?? null,
         requireSpec: task.requireSpec !== false,
+        seatAccess: task.seatAccess ?? "read-only",
         agents: attemptAgents,
         aggregator: aggregatorAgent,
         tools: frozenTools,
@@ -1681,6 +1687,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     attemptId: "aggregator",
     workspace: p.aggregatorWorkspace,
     prompt: aggregatePrompt,
+    access: p.task.seatAccess,
   });
 
   p.out.progress(`  aggregator ${p.aggregatorAgent.name} synthesizing`);
@@ -2268,6 +2275,7 @@ async function runAssessmentCorrections(
       const spec = buildSpawnSpec(item.agent, {
         attemptId: `corr-${item.result.attemptId}`,
         workspace: item.result.workspace,
+        access: p.task.seatAccess,
         prompt: buildCorrectionPrompt({
           agentName: item.result.agentName,
           requestedFindingIds: item.findingIds,
@@ -2411,6 +2419,7 @@ function rebuildAttemptSpecs(
       attemptId: spec.attemptId,
       workspace: spec.cwd,
       prompt,
+      access: task.seatAccess,
     });
     spec.prompt = rebuilt.prompt;
     spec.argv = rebuilt.argv;

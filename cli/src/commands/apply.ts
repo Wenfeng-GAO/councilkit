@@ -400,6 +400,8 @@ export async function runApply(
       attemptId: `apply-${randomUUID()}`,
       workspace,
       prompt,
+      // apply edits and pushes by definition; the user invoked it explicitly.
+      access: "write",
     });
     out.progress(`  spawning ${agent.name} in ${workspace}`);
     const result: AttemptResult = await spawnOnce(spec, {
