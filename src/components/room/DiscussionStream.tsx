@@ -4,7 +4,7 @@ import { SummaryBlock } from "@/components/room/SummaryBlock";
 import { UsageBadge, type UsageTotals, aggregateUsageByRound } from "@/components/room/UsageBadge";
 import {
   USER_SPEAKER,
-  isFailedExecution,
+  isRoundFailureRecord,
   resolveSpeaker,
   roundPhaseLabel,
   roundPhaseTone,
@@ -152,7 +152,7 @@ function RoundSectionBody({
   );
 
   const failed = (executions ?? [])
-    .filter(isFailedExecution)
+    .filter(isRoundFailureRecord)
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const activeExecution = activeExecutionId
     ? (executions ?? []).find((execution) => execution.executionId === activeExecutionId)

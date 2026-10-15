@@ -1,9 +1,11 @@
+import { reportFailureCopy } from "@/components/room/ReportView";
 import { PAUSE_REASON_COPY, pauseReasonCopy } from "@/components/room/pause-reasons";
 import {
   USER_SPEAKER,
   failureRecordDisplay,
   isFailedExecution,
   isNeedsRebasePause,
+  isRoundFailureRecord,
   isSkippedFailure,
   pausedPanelBranch,
   resolveSpeaker,
@@ -500,5 +502,47 @@ describe("isSkippedFailure (S3)", () => {
       resultKind: "summary",
     });
     expect(isSkippedFailure(summaryExec, [r], [summaryExec])).toBe(false);
+  });
+});
+
+describe("B4 report failure display (#279)", () => {
+  it("B4-02 a failed report execution is not listed as a Round failure record", () => {
+    const report = execution({
+      resultKind: "report",
+      state: "interrupted",
+      error: { code: "INTERRUPTED_UNKNOWN", phase: "stream", message: "x", retryable: false },
+    });
+    expect(isFailedExecution(report)).toBe(true);
+    expect(isRoundFailureRecord(report)).toBe(false);
+    expect(isRoundFailureRecord(execution({ resultKind: "message", state: "interrupted" }))).toBe(
+      true,
+    );
+    expect(isRoundFailureRecord(execution({ resultKind: "summary", state: "failed" }))).toBe(true);
+  });
+
+  it("B4-05 an interrupted report gets the designer copy, never the raw code as the title", () => {
+    for (const code of ["INTERRUPTED_UNKNOWN", "SAFE_INTERRUPTION"]) {
+      const copy = reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "interrupted",
+          error: { code, phase: "stream", message: "x", retryable: false },
+        }),
+      );
+      expect(copy).toEqual({
+        title: "报告生成已中断",
+        action: "重新生成报告",
+        note: "将重新调用模型",
+      });
+    }
+    const failed = reportFailureCopy(
+      execution({
+        resultKind: "report",
+        state: "failed",
+        error: { code: "MODEL_UNAVAILABLE", phase: "stream", message: "x", retryable: false },
+      }),
+    );
+    expect(failed.title).toBe("报告生成失败");
+    expect(failed.title).not.toContain("MODEL_UNAVAILABLE");
   });
 });

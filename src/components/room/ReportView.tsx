@@ -141,6 +141,31 @@ interface ReportFailureBannerProps {
   disabledHint?: string;
 }
 
+/** Codes that mean "the report run was cut off" (tab closed, Host restarted,
+ * outcome lost) rather than "the model returned an error" (B4 / #279). */
+const REPORT_INTERRUPTION_CODES: ReadonlySet<string> = new Set([
+  "INTERRUPTED_UNKNOWN",
+  "SAFE_INTERRUPTION",
+]);
+
+export interface ReportFailureCopy {
+  title: string;
+  action: string;
+  /** Small print under the button; null when retrying is not a new model call. */
+  note: string | null;
+}
+
+/** B4-05: designer-approved copy. The raw code only appears in the small
+ * 「详情」 disclosure, never as the headline. */
+export function reportFailureCopy(execution: ModelExecution): ReportFailureCopy {
+  const interrupted =
+    execution.state === "interrupted" || REPORT_INTERRUPTION_CODES.has(execution.error?.code ?? "");
+  if (interrupted) {
+    return { title: "报告生成已中断", action: "重新生成报告", note: "将重新调用模型" };
+  }
+  return { title: "报告生成失败", action: "重试生成报告", note: "将重新调用模型" };
+}
+
 export function ReportFailureBanner({
   execution,
   onRetry,
@@ -148,7 +173,8 @@ export function ReportFailureBanner({
   retryDisabled,
   disabledHint,
 }: ReportFailureBannerProps) {
-  const code = execution.error?.code ?? "执行失败";
+  const copy = reportFailureCopy(execution);
+  const code = execution.error?.code ?? null;
   const message = execution.error?.message ?? null;
   return (
     <div
@@ -157,19 +183,27 @@ export function ReportFailureBanner({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="text-sm font-medium text-error">报告生成失败</span>
-          {/* Untrusted detail rendered as plain text (SafeMarkdown/ExecutionFailureRecord discipline). */}
-          <span className="text-xs text-error">{code}</span>
-          {message ? <span className="text-xs text-muted">{message}</span> : null}
+          <span className="text-sm font-medium text-error">{copy.title}</span>
+          {code || message ? (
+            <details className="text-xs text-muted" data-testid="report-failure-detail">
+              <summary className="cursor-pointer select-none">详情</summary>
+              {/* Untrusted detail rendered as plain text (SafeMarkdown/ExecutionFailureRecord discipline). */}
+              {code ? <span className="block">{code}</span> : null}
+              {message ? <span className="block">{message}</span> : null}
+            </details>
+          ) : null}
         </div>
-        <Button
-          variant="ghost"
-          onClick={onRetry}
-          disabled={retryDisabled || retryPending}
-          title={retryDisabled ? disabledHint : undefined}
-        >
-          {retryPending ? "正在重试…" : "重试生成报告"}
-        </Button>
+        <div className="flex flex-col items-end gap-0.5">
+          <Button
+            variant="ghost"
+            onClick={onRetry}
+            disabled={retryDisabled || retryPending}
+            title={retryDisabled ? disabledHint : undefined}
+          >
+            {retryPending ? "正在重试…" : copy.action}
+          </Button>
+          {copy.note ? <span className="text-xs text-muted">{copy.note}</span> : null}
+        </div>
       </div>
     </div>
   );

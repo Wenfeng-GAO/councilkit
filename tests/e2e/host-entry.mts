@@ -266,6 +266,9 @@ export interface DriverBehavior {
   hangUntilCancel?: boolean;
   /** execute holds after emitting N events until /__test__/resume or 300ms. */
   pauseAfterEvents?: number;
+  /** With pauseAfterEvents: no 300ms fallback; hold until /__test__/resume or
+   * cancel (B4: a report still in flight while the tab is closed). */
+  holdUntilResume?: boolean;
 }
 
 interface DriverCounters {
@@ -368,10 +371,12 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
         // Hold so a test can drop the SSE connection mid-stream; released by
         // POST /api/v1/__test__/resume or a bounded 300ms fallback timer.
         await new Promise<void>((resolveHold) => {
-          const timer = setTimeout(() => {
-            rig.holds.delete(release);
-            resolveHold();
-          }, 300);
+          const timer = behavior().holdUntilResume
+            ? undefined
+            : setTimeout(() => {
+                rig.holds.delete(release);
+                resolveHold();
+              }, 300);
           const release = () => {
             clearTimeout(timer);
             rig.holds.delete(release);

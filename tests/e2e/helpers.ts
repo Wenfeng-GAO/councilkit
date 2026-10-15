@@ -35,6 +35,7 @@ export interface DriverBehaviorInput {
   } | null;
   hangUntilCancel?: boolean;
   pauseAfterEvents?: number;
+  holdUntilResume?: boolean;
 }
 
 export interface DriverCounters {

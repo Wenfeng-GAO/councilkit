@@ -211,6 +211,8 @@ class FakeHost {
   ackBehavior: "ok" | "fail-network" | "drop-response" = "ok";
   ackStateProbe: ((executionId: string) => Promise<string | null>) | null = null;
   onCreateScope: (() => Promise<void>) | null = null;
+  /** B4: hold GET execution status so a takeover can land mid-audit. */
+  onExecutionStatus: (() => Promise<void>) | null = null;
 
   executeCalls: ExecuteCall[] = [];
   ackCalls: AckCall[] = [];
@@ -270,6 +272,7 @@ class FakeHost {
     this.cancelFault = "ok";
     this.ackBehavior = "ok";
     this.onCreateScope = null;
+    this.onExecutionStatus = null;
   }
 
   failNextEventStreams(count: number): void {
@@ -505,6 +508,7 @@ class FakeHost {
     const executionId = segments[5];
     if (!executionId) return errorResponse(404, "NOT_FOUND", "unknown route");
     if (method === "GET" && segments.length === 6) {
+      if (this.onExecutionStatus) await this.onExecutionStatus();
       return this.handleExecutionStatus(scopeId, executionId);
     }
     if (method === "GET" && segments.length === 7 && segments[6] === "events") {
@@ -2247,6 +2251,54 @@ describe("discussion orchestrator (U5)", () => {
     // C must be cancelled, or the participant stays busy after reload.
     expect(host.cancelCalls).toEqual([{ scopeId: "scope-audit-3", executionId: c.executionId }]);
     expect(host.executionState(c.executionId)).toBe("interrupted");
+  });
+
+  it("B4-01 reopen: audit and controller takeover race; the orphan is cancelled and settled, never left running", async () => {
+    const seeded = await seedInFlightTurn();
+    const binding = await db.runtimeBindings.get(seeded.bindingId);
+    const scopeId = binding?.executionScopeId as string;
+    const participantId = (await db.modelExecutions.get(seeded.executionId))
+      ?.participantId as string;
+    host.registerExecution({
+      executionId: seeded.executionId,
+      participantId,
+      scopeId,
+      state: "running",
+    });
+    // The reopened page: one orchestrator runs the bootstrap audit while the
+    // Room page takes control (the page already holds the Room lock, so the
+    // audit is not gated). The audit's status read is held so the takeover
+    // lands after the audit read the controller pair: the window QA hit.
+    const page = makeOrchestrator();
+    let releaseStatus: () => void = () => {};
+    const statusHeld = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    let statusSeen = false;
+    host.onExecutionStatus = async () => {
+      statusSeen = true;
+      await statusHeld;
+    };
+    const audit = page.orchestrator.startupAudit();
+    await vi.waitFor(() => {
+      expect(statusSeen).toBe(true);
+    });
+    const takeover = page.orchestrator.controlRoom(seeded.roomId);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releaseStatus();
+    await audit;
+    const handle2 = await takeover;
+    handle2?.release();
+
+    const execution = await db.modelExecutions.get(seeded.executionId);
+    // Settled locally (the card can render) instead of staying `running`.
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("INTERRUPTED_UNKNOWN");
+    // B4-03: the cancel reached the Host with a current pair (no 409).
+    expect(host.cancelCalls).toEqual([
+      expect.objectContaining({ executionId: seeded.executionId }),
+    ]);
+    expect(host.executionState(seeded.executionId)).toBe("interrupted");
   });
 
   it("10. hands control to a second client with a higher epoch; the old token is rejected", async () => {
