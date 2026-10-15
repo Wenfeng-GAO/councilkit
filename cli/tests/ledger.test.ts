@@ -930,6 +930,30 @@ describe("independent finding verification", () => {
     });
     expect(isFindingVerifiedClosed(row, CANDIDATE_SHA)).toBe(true);
   });
+  it("does not close a finding on a bare colon-number location", () => {
+    for (const location of ["12:30", "超时阈值:30"]) {
+      const row = verify([
+        assessment({
+          method: "code_trace",
+          command: undefined,
+          locations: [location],
+        }),
+      ]);
+      expect(row.status).toBe("open");
+      expect(row.verification).toBeUndefined();
+      expect(isFindingVerifiedClosed(row, CANDIDATE_SHA)).toBe(false);
+      expect(isFindingBlocking(row, CANDIDATE_SHA)).toBe(true);
+    }
+    const traced = verify([
+      assessment({
+        method: "code_trace",
+        command: undefined,
+        locations: ["pkg/runtime/retry.go:30"],
+      }),
+    ]);
+    expect(traced.status).toBe("closed");
+    expect(isFindingVerifiedClosed(traced, CANDIDATE_SHA)).toBe(true);
+  });
   it("accepts an explicit source trace and records not_evaluated without closing", () => {
     expect(
       isFindingVerifiedClosed(
