@@ -1013,6 +1013,14 @@ describe("cli auto driver-commands", () => {
       expect(extractFinalOutput("grok-stream-json", stdout)).toBe("COUNCILKIT_OK");
     });
 
+    it("grok: legacy json text survives a brace in the surrounding note", () => {
+      const stdout = [
+        JSON.stringify({ text: "COUNCILKIT_OK", sessionId: "s1" }, null, 2),
+        "see {docs}",
+      ].join("\n");
+      expect(extractFinalOutput("grok-stream-json", stdout)).toBe("COUNCILKIT_OK");
+    });
+
     it("grok: streaming-messages-json result frame is the deliverable", () => {
       const stdout = [
         JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
