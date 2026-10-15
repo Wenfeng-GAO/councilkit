@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { shellSingleQuote } from "@shared/runtime/shell-quote";
 import { z } from "zod";
 import { errors } from "../errors";
 import { atomicWriteJson } from "../store/atomic-write";
@@ -448,10 +449,6 @@ export function formatResumeCommand(argv: string[]): string {
       return shellSingleQuote(token);
     }),
   ].join(" ");
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function fingerprintsFromSpecs(

@@ -22,6 +22,7 @@ import {
   extractAssessmentBlocks,
 } from "@shared/runtime/reviewer-assessment";
 import { reviewModelsSchema } from "@shared/runtime/schemas";
+import { shellSingleQuote } from "@shared/runtime/shell-quote";
 /**
  * `councilkit review` — N fully-autonomous agents independently review the same
  * task in isolated workspaces, then one of them (the Aggregator) synthesizes a
@@ -2430,10 +2431,6 @@ function buildResumeCommand(runId: string, task: ReviewTask, runDir?: string): s
     return `councilkit review --resume ${shellSingleQuote(runId)} --task ${shellSingleQuote(task.task.trim())}`;
   }
   return `councilkit review --resume ${shellSingleQuote(runId)}`;
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 const LIVE_STATUS_MIN_INTERVAL_MS = 2000;
