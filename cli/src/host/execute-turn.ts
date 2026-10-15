@@ -35,6 +35,12 @@ import {
   type FollowOutcome,
   followExecutionEvents,
 } from "@/runtime/event-stream";
+import {
+  CLEANUP_BUDGET_MS,
+  type CleanupBudget,
+  prepareCleanupBudget,
+  startCleanupBudget,
+} from "@shared/runtime/cleanup-budget";
 import type { AckDisposition, DispatchState, ToolState } from "@shared/runtime/contracts";
 import type {
   CompletedEvent,
@@ -133,39 +139,12 @@ export interface ExecuteTurnInput {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Shared bounded cleanup budget for cancel → observe → ACK-discard. */
-const CLEANUP_BUDGET_MS = 10_000;
-
 const ACK_FAILED_ERROR: TurnError = {
   phase: "ack",
   code: "ACK_FAILED",
   message: "ACK did not reach the acknowledged state",
   retryable: true,
 };
-
-// ---------------------------------------------------------------------------
-// Internal shared-cleanup controller
-// ---------------------------------------------------------------------------
-
-interface SharedCleanup {
-  signal: AbortSignal;
-  dispose: () => void;
-}
-
-function newSharedCleanup(): SharedCleanup {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort("cleanup-deadline"), CLEANUP_BUDGET_MS);
-  if (typeof timer === "object" && typeof (timer as { unref?: () => void }).unref === "function") {
-    (timer as { unref: () => void }).unref();
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      clearTimeout(timer);
-      if (!controller.signal.aborted) controller.abort("cleanup-disposed");
-    },
-  };
-}
 
 /**
  * Run-level shared cleanup budget (F3). The orchestrator owns ONE of these per
@@ -185,26 +164,7 @@ export interface RunCleanup {
 }
 
 export function createRunCleanup(budgetMs: number = CLEANUP_BUDGET_MS): RunCleanup {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return {
-    signal: controller.signal,
-    arm() {
-      if (timer !== null) return;
-      timer = setTimeout(() => controller.abort("cleanup-deadline"), budgetMs);
-      if (
-        typeof timer === "object" &&
-        typeof (timer as { unref?: () => void }).unref === "function"
-      ) {
-        (timer as { unref: () => void }).unref();
-      }
-    },
-    dispose() {
-      if (timer !== null) clearTimeout(timer);
-      timer = null;
-      if (!controller.signal.aborted) controller.abort("cleanup-disposed");
-    },
-  };
+  return prepareCleanupBudget(budgetMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +226,7 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
         }
       : { phase: "cleanup", code: "CANCELLED", message: "cancelled by caller", retryable: false };
 
-  const cleanupHolder: { current: SharedCleanup | null } = { current: null };
+  const cleanupHolder: { current: CleanupBudget | null } = { current: null };
   const cleanupOf = (): AbortSignal => {
     // F3: when the run shares a cleanup budget, draw from it (arming the ≤10s
     // timer on first use) instead of a private controller, so cancel → observe →
@@ -275,7 +235,7 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
       params.sharedCleanup.arm();
       return params.sharedCleanup.signal;
     }
-    if (!cleanupHolder.current) cleanupHolder.current = newSharedCleanup();
+    if (!cleanupHolder.current) cleanupHolder.current = startCleanupBudget();
     return cleanupHolder.current.signal;
   };
 
