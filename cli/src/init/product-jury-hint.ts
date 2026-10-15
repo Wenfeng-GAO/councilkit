@@ -50,7 +50,7 @@ export function productJuryNeedsTwoMessage(
       : "Product ideation needs at least two AI CLIs; found none. Install and log in to any two of grok, kimi, or codex, then run `councilkit init`.";
   }
   if (found.length === 1) {
-    const only = found[0]!;
+    const only = found[0] ?? "kimi";
     if (zh) {
       const alt = others.join(" 或 ");
       return `产品创意需要至少两个 AI 工具，现在只找到 ${only}。再装好并登录 ${alt} 中的一个，然后运行 \`councilkit init\`。`;
