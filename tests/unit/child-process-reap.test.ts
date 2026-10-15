@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import { terminateChild } from "@shared/runtime/terminate-child";
 import { afterEach, describe, expect, it } from "vitest";
@@ -45,7 +46,12 @@ async function waitForFile(path: string): Promise<void> {
  * The trap is installed before the ready file exists. A SIGTERM in the same
  * turn as spawn kills Node before `process.on` runs, so callers must wait.
  */
-function writeTrap(root: string, readyFile: string, grandchild: boolean): string {
+function writeTrap(
+  root: string,
+  readyFile: string,
+  grandchild: boolean,
+  leaderTraps = true,
+): string {
   const scriptPath = join(root, "trap.js");
   let grandSpawn = "";
   if (grandchild) {
@@ -65,11 +71,11 @@ const grand = spawn(process.execPath, [${JSON.stringify(grandPath)}], { stdio: "
 fs.writeFileSync(${JSON.stringify(grandPid)}, String(grand.pid));
 `;
   }
+  const leaderTrap = leaderTraps ? `process.on("SIGTERM", () => {});\n` : "";
   writeFileSync(
     scriptPath,
     `const fs = require("node:fs");
-process.on("SIGTERM", () => {});
-${grandSpawn}fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");
+${leaderTrap}${grandSpawn}fs.writeFileSync(${JSON.stringify(readyFile)}, "ready");
 setInterval(() => {}, 1e9);
 `,
   );
@@ -79,11 +85,12 @@ setInterval(() => {}, 1e9);
 async function armedChild(
   detached: boolean,
   grandchild: boolean,
+  leaderTraps = true,
 ): Promise<{ child: ChildProcess; pid: number; grandchildPid: number | null }> {
   const root = mkdtempSync(join(tmpdir(), "ck-reap-child-"));
   dirs.push(root);
   const readyFile = join(root, "ready");
-  const child = spawn(process.execPath, [writeTrap(root, readyFile, grandchild)], {
+  const child = spawn(process.execPath, [writeTrap(root, readyFile, grandchild, leaderTraps)], {
     detached,
     stdio: "ignore",
   });
@@ -177,6 +184,90 @@ describe("terminateChild", () => {
     terminateChild(child, { graceMs: 200, group: true });
     await expect(diesWithin(pid, 2_000)).resolves.toBe(true);
     await expect(diesWithin(grandchildPid, 2_000)).resolves.toBe(true);
+  });
+
+  it("SIGKILLs a detached grandchild that ignores SIGTERM after the leader exits", async () => {
+    const { child, pid, grandchildPid } = await armedChild(true, true, false);
+    if (grandchildPid === null) throw new Error("missing grandchild");
+    terminateChild(child, { graceMs: 200, group: true });
+    await expect(diesWithin(pid, 2_000)).resolves.toBe(true);
+    await expect(diesWithin(grandchildPid, 2_000)).resolves.toBe(true);
+  });
+
+  it("does not SIGKILL a detached group after its leader exits with no descendants", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9);"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    if (child.pid === undefined) throw new Error("child has no pid");
+    const pid = child.pid;
+    leakedPids.push(pid);
+    const group = recordGroupSignals(pid);
+    try {
+      terminateChild(child, { graceMs: 200, group: true });
+      await expect(diesWithin(pid, 2_000)).resolves.toBe(true);
+      await sleep(400);
+    } finally {
+      group.restore();
+    }
+    expect(group.signals.filter((signal) => signal !== "0")).toEqual(["SIGTERM"]);
+  });
+
+  it("releases group escalation when a grandchild exits during the grace window", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-reap-drain-"));
+    dirs.push(root);
+    const graceMs = 3_000;
+    const holdMs = 200;
+    const runner = fileURLToPath(new URL("../fixtures/group-drain-runner.ts", import.meta.url));
+    const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+    const proc = spawn(
+      process.execPath,
+      ["--import", "tsx", runner, root, String(graceMs), String(holdMs)],
+      { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    proc.stderr?.setEncoding("utf8");
+    proc.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    let code: number | null = null;
+    try {
+      code = await new Promise<number | null>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          proc.kill("SIGKILL");
+          reject(new Error(`drain runner still alive after 4s\n${stderr}`));
+        }, 4_000);
+        proc.once("exit", (exitCode) => {
+          clearTimeout(timer);
+          resolve(exitCode);
+        });
+        proc.once("error", (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
+    } finally {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // runner already exited
+      }
+      for (const name of ["leader.pid", "grand.pid"]) {
+        try {
+          const pid = Number(readFileSync(join(root, name), "utf8"));
+          if (pid > 0) leakedPids.push(pid);
+        } catch {
+          // pid file was not written
+        }
+      }
+    }
+    if (code !== 0) throw new Error(`drain runner exited ${String(code)}: ${stderr}`);
+    const stamp = Number(readFileSync(join(root, "stamp"), "utf8"));
+    const signals = JSON.parse(readFileSync(join(root, "signals.json"), "utf8")) as string[];
+    const grandchildPid = Number(readFileSync(join(root, "grand.pid"), "utf8"));
+    expect(Date.now() - stamp).toBeLessThan(1_500);
+    expect(signals.filter((signal) => signal !== "0")).toEqual(["SIGTERM"]);
+    expect(isPidAlive(grandchildPid)).toBe(false);
   });
 
   it("falls back to the child handle when the pid is not a process group", async () => {
