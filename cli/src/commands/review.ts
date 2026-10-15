@@ -612,6 +612,7 @@ export async function runReview(
     env,
     out,
     softMissing: true,
+    requireSpec,
   });
   requestedSpecSource = task.specSource;
   // Keep requireSpec on the task (resume may have overlaid it from the manifest).
@@ -2655,6 +2656,12 @@ async function ensureSpecContractBound(input: {
   out: OutputSink;
   /** When true, unbound contract returns without throwing SPEC_REQUIRED. */
   softMissing?: boolean;
+  /**
+   * `--no-require-spec` passes false. An auto-detected document with no
+   * acceptance IDs is then not a contract: continue unbound instead of
+   * refusing with SPEC_VERIFY_UNBOUND (#303). Explicit `--spec` still refuses.
+   */
+  requireSpec?: boolean;
 }): Promise<void> {
   const { task, out } = input;
   if (input.explicitSpec !== undefined && input.explicitSpec.trim().length === 0) {
@@ -2728,6 +2735,12 @@ async function ensureSpecContractBound(input: {
     specText: detected.text,
   });
   if (!verify) {
+    if (detected.origin === "auto-detect" && input.requireSpec === false) {
+      out.progress(
+        `  spec: 找到 ${detected.source}，但没有验收 ID，按非合同模式审查 (--no-require-spec)`,
+      );
+      return;
+    }
     throw errors.usage(SPEC_VERIFY_UNBOUND_MESSAGE, {
       specSource: detected.source,
       code: "SPEC_VERIFY_UNBOUND",
