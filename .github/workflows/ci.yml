@@ -56,6 +56,51 @@ jobs:
           grep -q '"ok":true' health.json
           grep -q "\"major\":${{ matrix.node }}" health.json
 
+  # NPX-03 / NPX-03b (#282): on a real Node 20 the CLI entry, the npx path and
+  # the Host print the designer's zh + en lines on stderr, exit 1, no help.
+  old-node-refused:
+    name: Node 20 refused (NPX-03)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: CLI entry, npx and Host refuse Node 20
+        run: |
+          set -u
+          V="$(node --version)"
+          case "$V" in v20.*) ;; *) echo "expected Node 20, got $V"; exit 1;; esac
+          printf '%s\n' \
+            "CouncilKit 需要 Node.js 22 或更新版本，你现在用的是 ${V}。升级方法：\`nvm install --lts && nvm use --lts\`，或者从 nodejs.org 下载 LTS 版本。" \
+            "CouncilKit needs Node.js 22 or newer (you have ${V}). Upgrade with \`nvm install --lts && nvm use --lts\`, or get the LTS from nodejs.org." > "$RUNNER_TEMP/expected.txt"
+          check() {
+            name="$1"; shift
+            set +e; "$@" > out.txt 2> err.txt; code=$?; set -e
+            echo "== $name exit=$code"; cat err.txt
+            test "$code" = 1
+            test ! -s out.txt
+            grep -v '^npm WARN' err.txt | diff "$RUNNER_TEMP/expected.txt" -
+          }
+          set -e
+          check "cli --help" node cli/bin/councilkit.mjs --help
+          check "cli review --help" node cli/bin/councilkit.mjs review --help
+          # npx from outside the repo (the repo .npmrc is engine-strict, which
+          # makes npm refuse before our entry runs).
+          CLI_DIR="$PWD/cli"
+          mkdir -p "$RUNNER_TEMP/npx03" && pushd "$RUNNER_TEMP/npx03" > /dev/null
+          check "npx" npx --yes "$CLI_DIR" --help
+          popd > /dev/null
+          check "host" node dist-host/main.mjs
+
   # CI-03: macOS, brand-new HOME, no agent CLI, no tokens: install from scratch
   # and walk the demo path (scripts/ci-smoke.sh).
   demo-path-clean-home:

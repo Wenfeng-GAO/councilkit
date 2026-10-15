@@ -1,6 +1,7 @@
 import { createServer, request } from "node:http";
 import { checkNodeVersion } from "@host/config";
 import { CANONICAL_HOST_HEADER, CANONICAL_PORT } from "@shared/runtime/contracts";
+import { unsupportedNodeMessage } from "@shared/runtime/node-gate";
 import { afterEach, describe, expect, it } from "vitest";
 import { type TestHost, authedHeaders, createTestHost } from "./helpers";
 
@@ -51,6 +52,14 @@ function rawGet(
 }
 
 describe("Node.js version gate", () => {
+  it("#282 NPX-03 Host uses the one shared unsupported-Node copy", () => {
+    const result = checkNodeVersion("v20.19.2");
+    expect(result.error?.message).toBe(unsupportedNodeMessage("v20.19.2"));
+    expect(result.error?.message).toBe(
+      "CouncilKit 需要 Node.js 22 或更新版本，你现在用的是 v20.19.2。升级方法：`nvm install --lts && nvm use --lts`，或者从 nodejs.org 下载 LTS 版本。\nCouncilKit needs Node.js 22 or newer (you have v20.19.2). Upgrade with `nvm install --lts && nvm use --lts`, or get the LTS from nodejs.org.",
+    );
+  });
+
   it("#282 accepts Node.js 22 and every newer major (24 / 26 run in CI)", () => {
     for (const [version, major] of [
       ["v22.17.0", 22],
@@ -68,14 +77,15 @@ describe("Node.js version gate", () => {
     expect(checkNodeVersion(process.version).ok).toBe(true);
   });
 
-  it("#282 rejects Node.js < 22 with a structured error and a copyable fix", () => {
+  it("#282 rejects Node.js < 22 with a structured error and the NPX-03 copy", () => {
     for (const version of ["v20.19.2", "v21.7.3", "garbage"]) {
       const result = checkNodeVersion(version);
       expect(result.ok, version).toBe(false);
       expect(result.error?.code).toBe("UNSUPPORTED_NODE");
       expect(result.error?.phase).toBe("bootstrap");
+      expect(result.error?.message).toContain("Node.js 22 或更新版本");
       expect(result.error?.message).toContain("Node.js 22 or newer");
-      expect(result.error?.message).toContain("nvm install 22 && nvm use 22");
+      expect(result.error?.message).toContain("nvm install --lts && nvm use --lts");
     }
   });
 });

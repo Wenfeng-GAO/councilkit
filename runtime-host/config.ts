@@ -1,11 +1,8 @@
 import { fileURLToPath } from "node:url";
-import {
-  CANONICAL_HOST_HEADER,
-  CANONICAL_PORT,
-  SUPPORTED_NODE_MAJOR,
-} from "@shared/runtime/contracts";
+import { CANONICAL_HOST_HEADER, CANONICAL_PORT } from "@shared/runtime/contracts";
 import { parseCanonicalInt } from "@shared/runtime/decimal-int";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
+import { isSupportedNode, nodeMajor, unsupportedNodeMessage } from "@shared/runtime/node-gate";
 import { DEFAULT_IDLE_SCOPE_TTL_MS } from "./scopes/scope-manager";
 
 export type HostMode = "development" | "production";
@@ -103,8 +100,8 @@ export interface NodeCheckResult {
  * (24, 26) are exercised in CI.
  */
 export function checkNodeVersion(version: string = process.version): NodeCheckResult {
-  const major = Number.parseInt(version.replace(/^v/, "").split(".")[0] ?? "0", 10);
-  if (Number.isFinite(major) && major >= SUPPORTED_NODE_MAJOR) {
+  const major = nodeMajor(version);
+  if (isSupportedNode(version)) {
     return { ok: true, version, major };
   }
   return {
@@ -114,7 +111,8 @@ export function checkNodeVersion(version: string = process.version): NodeCheckRe
     error: makeError(
       "UNSUPPORTED_NODE",
       "bootstrap",
-      `CouncilKit Runtime Host requires Node.js ${SUPPORTED_NODE_MAJOR} or newer (current: ${version}). Fix: nvm install ${SUPPORTED_NODE_MAJOR} && nvm use ${SUPPORTED_NODE_MAJOR}`,
+      // NPX-03: the one designer copy shared with the CLI launcher and npx path.
+      unsupportedNodeMessage(version),
       { retryable: false },
     ),
   };
