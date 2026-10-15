@@ -938,6 +938,11 @@ export function createClaudeStreamJsonDriver(
         // provably never happened (tools are verified empty, so a pre-dispatch
         // retry has no side effects).
         let attempt = 0;
+        // A driver that was already closed before this execute began cannot
+        // retry: surface attempt 1's failure as-is (DRIVER_CRASH, not_dispatched)
+        // instead of swallowing it and reporting a user cancel that never
+        // happened. Close DURING the retry gap still reads as a stop (#211).
+        const closedAtEntry = isClosingOrClosed();
         const stopLatched = (): boolean =>
           cancellingExecutions.has(input.executionId) || isClosingOrClosed();
         const emitStoppedBeforeRetry = (): void => {
@@ -965,7 +970,8 @@ export function createClaudeStreamJsonDriver(
                 event.type === "failed" &&
                 event.dispatchState === "not_dispatched" &&
                 event.retryable &&
-                attempt === 1
+                attempt === 1 &&
+                !closedAtEntry
               ) {
                 failedRetryable = true;
                 return; // swallow first-attempt safe failure; retry below

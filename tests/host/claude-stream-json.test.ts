@@ -1196,6 +1196,36 @@ describe("claude-stream-json driver CK-ROT-001 cancel during respawn", () => {
     expect(pgrepCount("fake-cld[.]mjs")).toBe(0);
   });
 
+  it("HOST-CI-01 execute after close() fails DRIVER_CRASH not_dispatched, not a fake user cancel", async () => {
+    const participantId = "p-1";
+    const events = new EventEmitter();
+    const stdin: string[] = [];
+    const proc = makeHandshakingProcess(participantId, events, stdin);
+    let spawnImplCalls = 0;
+    const spawnImpl = (): Promise<DriverProcess> => {
+      spawnImplCalls += 1;
+      return Promise.resolve(proc);
+    };
+    const { driver } = await buildSeamDriver(proc, () => {}, spawnImpl);
+    await driver.prewarm({
+      participantId,
+      spec: makeSpec(participantId),
+      installation: makeInstallation(),
+    });
+    await driver.close();
+
+    const run = executeCollecting(driver, execInput("exec-after-close", "Too late."));
+    await run.done;
+
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("DRIVER_CRASH");
+    expect(terminal.dispatchState).toBe("not_dispatched");
+    expect(run.events.some((event) => event.type === "interrupted")).toBe(false);
+    expect(spawnImplCalls).toBe(1); // no respawn after close
+  });
+
   it("close during safe-retry respawn is user_cancelled, not a spawn failure", async () => {
     const participantId = "p-1";
     const firstEvents = new EventEmitter();
