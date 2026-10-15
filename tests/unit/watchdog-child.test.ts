@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duplex, PassThrough, type Readable } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { childEnvFromLine } from "../helpers/os-injected-env";
 
 /**
  * The watchdog is a separate program the host spawns with control on fd 3 and
@@ -652,17 +653,29 @@ setInterval(() => {}, 1e9);
     const script = join(tempRoot, "print-env.mjs");
     await writeFile(
       script,
-      `#!${process.execPath}\nprocess.stdout.write("ARGV " + JSON.stringify(process.argv.slice(1)) + "\\n");\nconst { __CF_USER_TEXT_ENCODING: _osInjected, ...env } = process.env;\nprocess.stdout.write("ENV " + JSON.stringify(env) + "\\n");\nprocess.exit(0);\n`,
+      `#!${process.execPath}\nprocess.stdout.write("ARGV " + JSON.stringify(process.argv.slice(1)) + "\\n");\nprocess.stdout.write("ENV " + JSON.stringify(process.env) + "\\n");\nprocess.exit(0);\n`,
     );
     await chmod(script, 0o755);
-    const empty = await loadWatchdog();
+    // Canary in the parent env: an omitted env must give the child NOTHING
+    // from the parent (secrets included); only OS-injected keys are tolerated.
+    const previousCanary = process.env.CK_QA_CANARY;
+    process.env.CK_QA_CANARY = "1";
+    let empty: Awaited<ReturnType<typeof loadWatchdog>>;
+    try {
+      empty = await loadWatchdog();
+    } finally {
+      if (previousCanary === undefined) delete process.env.CK_QA_CANARY;
+      else process.env.CK_QA_CANARY = previousCanary;
+    }
     const lines = new LineReader(empty.stdout);
     const spawnMessage = { type: "spawn", executable: script, cwd: tempRoot };
     feed(empty.control, spawnMessage);
     const supervised = (await empty.control.nextMessage()) as { pid: number };
     track(supervised.pid);
     expect(await lines.next()).toBe(`ARGV ${JSON.stringify([script])}`);
-    expect(await lines.next()).toBe("ENV {}");
+    const childEnv = childEnvFromLine(await lines.next());
+    expect(childEnv).not.toHaveProperty("CK_QA_CANARY");
+    expect(childEnv).toEqual({});
     expect(await empty.control.nextMessage()).toEqual({
       type: "exit",
       pid: supervised.pid,

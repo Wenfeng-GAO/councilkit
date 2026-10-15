@@ -6,7 +6,7 @@
  *   PING             -> "PONG"
  *   SPAWN-GRANDCHILD -> spawns `node -e "setInterval(()=>{},1000)"` in the
  *                       same process group and prints "GRANDCHILD <pid>"
- *   ENV              -> "ENV <JSON.stringify(envWithoutOsInjected())>"
+ *   ENV              -> "ENV <JSON.stringify(process.env)>"
  *   SLEEP <ms>       -> sleeps, prints nothing
  *   STUBBORN         -> prints "STUBBORN-OK"; from now on SIGTERM is ignored
  *   QUIT             -> exits 0
@@ -70,11 +70,3 @@ rl.on("line", (line) => {
     // Keep the fixture alive no matter what a test throws at it.
   }
 });
-
-// macOS injects __CF_USER_TEXT_ENCODING into every exec'd process even when
-// the parent passes an empty env, so it is not something the supervisor
-// leaked. Drop it so env pass-through assertions hold on darwin (CI-01).
-function envWithoutOsInjected() {
-  const { __CF_USER_TEXT_ENCODING: _osInjected, ...rest } = process.env;
-  return rest;
-}
