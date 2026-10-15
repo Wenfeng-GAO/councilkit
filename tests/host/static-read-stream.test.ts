@@ -27,7 +27,8 @@ function fdTargets(needle: string): string[] {
       .filter((target) => target.includes(needle));
   }
   const command = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((path) => existsSync(path)) ?? "lsof";
-  const result = spawnSync(command, ["-nP", "-p", String(process.pid)], {
+  // -F n prints the full path. A tty-width table can truncate it before the file name.
+  const result = spawnSync(command, ["-nP", "-F", "n", "-p", String(process.pid)], {
     encoding: "utf8",
     timeout: 5_000,
     maxBuffer: 8 * 1024 * 1024,
