@@ -1,11 +1,16 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createExecutionIntent, markExecutionStarted } from "@shared/runtime/repair-execution";
+import {
+  certifyDeadlineEnforced,
+  createExecutionIntent,
+  markExecutionStarted,
+} from "@shared/runtime/repair-execution";
 import { probeIsolationCapability } from "@shared/runtime/repair-isolation";
 import { describe, expect, it } from "vitest";
 import {
+  setExecutionRecordCommitGate,
   superviseDeadlineOnce,
   writeExecutionRecord,
 } from "../src/auto/repair-deadline-supervisor";
@@ -141,6 +146,114 @@ describe("deadline supervisor", () => {
       { pid: 1, signal: "SIGTERM" },
       { pid: 1, signal: "SIGKILL" },
     ]);
+  });
+
+  it("does not let a stale start overwrite a terminal execution record", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-exec-terminal-"));
+    const path = join(dir, "exec.json");
+    const started = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-stale-start",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [42],
+      1,
+    );
+    writeExecutionRecord(path, started);
+    const enforced = certifyDeadlineEnforced(started, 10);
+    writeExecutionRecord(path, enforced);
+    writeExecutionRecord(path, markExecutionStarted(started, [99], 80));
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(enforced);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a concurrent deadline when a stale start has already passed the terminal check", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-exec-race-"));
+    const recordPath = join(dir, "exec.json");
+    const started = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-race",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 10,
+      }),
+      [42],
+      1,
+    );
+    writeExecutionRecord(recordPath, started);
+    const enforced = certifyDeadlineEnforced(started, 10);
+    const payloadPath = join(dir, "enforced.json");
+    const enteredPath = join(dir, "entered");
+    const donePath = join(dir, "done");
+    writeFileSync(payloadPath, JSON.stringify(enforced));
+    const supervisor = join(process.cwd(), "cli/src/auto/repair-deadline-supervisor.ts");
+    const scriptPath = join(dir, "write-enforced.mts");
+    writeFileSync(
+      scriptPath,
+      `import { readFileSync, writeFileSync } from "node:fs";
+import { writeExecutionRecord } from ${JSON.stringify(supervisor)};
+const entered = process.env.CK_RACE_ENTERED;
+const done = process.env.CK_RACE_DONE;
+const record = process.env.CK_RACE_RECORD;
+const payload = process.env.CK_RACE_PAYLOAD;
+if (!entered || !done || !record || !payload) {
+  process.stderr.write("missing race env\\n");
+  process.exit(1);
+}
+writeFileSync(entered, "1");
+try {
+  writeExecutionRecord(record, JSON.parse(readFileSync(payload, "utf8")));
+  writeFileSync(done, "ok");
+} catch (error) {
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  writeFileSync(done, message);
+  process.stderr.write(message + "\\n");
+  process.exit(1);
+}
+`,
+    );
+    let child: ChildProcess | undefined;
+    let stderr = "";
+    setExecutionRecordCommitGate(() => {
+      child = spawn(process.execPath, ["--import", "tsx", scriptPath], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CK_RACE_ENTERED: enteredPath,
+          CK_RACE_DONE: donePath,
+          CK_RACE_RECORD: recordPath,
+          CK_RACE_PAYLOAD: payloadPath,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      if (!waitForPath(enteredPath, 8_000)) {
+        throw new Error(`deadline writer did not start: ${stderr}`);
+      }
+      waitForPath(donePath, 1_000);
+    });
+    try {
+      writeExecutionRecord(recordPath, markExecutionStarted(started, [99], 80));
+      if (!waitForPath(donePath, 8_000)) {
+        throw new Error(`deadline writer did not finish: ${stderr}`);
+      }
+      expect(readFileSync(donePath, "utf8")).toBe("ok");
+      expect(JSON.parse(readFileSync(recordPath, "utf8"))).toEqual(enforced);
+    } finally {
+      setExecutionRecordCommitGate(null);
+      if (child && child.exitCode === null) child.kill("SIGKILL");
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("persists an execution record for later takeover", () => {
@@ -449,3 +562,14 @@ echo DONE
     expect(result.stdout).not.toContain("DUMMY_ACCEPTANCE_SENTINEL");
   });
 });
+
+const racePause = new Int32Array(new SharedArrayBuffer(4));
+
+function waitForPath(path: string, timeoutMs: number): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(racePause, 0, 0, 10);
+  }
+  return true;
+}
