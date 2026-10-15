@@ -521,7 +521,10 @@ describe("B4 report failure display (#279)", () => {
   });
 
   it("B4-05 an interrupted report gets the designer copy, never the raw code as the title", () => {
-    for (const code of ["INTERRUPTED_UNKNOWN", "SAFE_INTERRUPTION"]) {
+    for (const [code, title] of [
+      ["INTERRUPTED_UNKNOWN", "报告生成被中断（可能关闭了页面）"],
+      ["SAFE_INTERRUPTION", "报告生成被中断（本地执行服务重启或断开）"],
+    ] as const) {
       const copy = reportFailureCopy(
         execution({
           resultKind: "report",
@@ -530,7 +533,7 @@ describe("B4 report failure display (#279)", () => {
         }),
       );
       expect(copy).toMatchObject({
-        title: "报告生成被中断（可能关闭了页面）",
+        title,
         action: "重新生成报告",
         note: "将重新调用模型",
         interrupted: true,
@@ -564,6 +567,42 @@ describe("B4 report failure display (#279)", () => {
       title: "报告生成被中断（模型 2 分钟没有输出）",
       interrupted: true,
       detail: "模型超过 2 分钟没有任何输出。",
+    });
+    // B4 #339: one-shot limit and crash; the tool comes from the error, else
+    // from the reporter seat's driver; durations follow limitMs.
+    expect(
+      reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "failed",
+          error: {
+            code: "ONESHOT_TIMEOUT",
+            phase: "stream",
+            message: "x",
+            retryable: false,
+            driverId: "grok-stream-json",
+            limitMs: 60_000,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      title: "报告生成被中断（模型 1 分钟没有写完）",
+      interrupted: true,
+      detail: "Grok 超过 1 分钟没有返回结果。",
+    });
+    expect(
+      reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "failed",
+          error: { code: "DRIVER_CRASH", phase: "stream", message: "x", retryable: false },
+        }),
+        "cursor-stream-json",
+      ),
+    ).toMatchObject({
+      title: "报告生成被中断（模型进程意外退出）",
+      interrupted: true,
+      detail: "Cursor 在写完报告前退出了。",
     });
     const failed = reportFailureCopy(
       execution({

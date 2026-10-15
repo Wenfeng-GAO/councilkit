@@ -39,6 +39,8 @@ export interface DriverBehaviorInput {
   /** B4: emit nothing until the idle window fails the turn (STREAM_IDLE_TIMEOUT). */
   slowSilent?: boolean;
   slowSilentIdleMs?: number;
+  /** B4: with slowSilent, fail with DRIVER_CRASH after this many ms. */
+  crashAfterMs?: number;
 }
 
 export interface DriverCounters {
@@ -154,6 +156,12 @@ export async function driverCounters(page: Page): Promise<Record<string, DriverC
 /** Cleanly end all open SSE event streams; the app reconnects via afterSeq. */
 export async function dropEventStreams(page: Page): Promise<number> {
   const { dropped } = await controlPost<{ dropped: number }>(page, "/drop-events");
+  return dropped;
+}
+
+/** B4: the Host forgets its executions and drops the streams (≈ restart). */
+export async function forgetHostExecutions(page: Page): Promise<number> {
+  const { dropped } = await controlPost<{ dropped: number }>(page, "/forget-executions");
   return dropped;
 }
 

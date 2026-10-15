@@ -1202,6 +1202,8 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
               phase: event.error.phase,
               message: event.error.message,
               retryable: event.retryable,
+              ...(event.error.driverId ? { driverId: event.error.driverId } : {}),
+              ...(event.error.limitMs ? { limitMs: event.error.limitMs } : {}),
             }
           : errorOf("INTERRUPTED", `interrupted (${event.reason})`),
       kind: event.type === "failed" ? "failed" : "interrupted",

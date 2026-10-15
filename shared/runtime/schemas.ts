@@ -45,6 +45,15 @@ export const healthResponseSchema = z
     hostInstanceId: z.string().min(1),
     node: z.object({ version: z.string(), major: z.number().int() }).strict(),
     drivers: z.array(driverDescriptorSchema),
+    /** B4: the generation limits this Host enforces (after test-only env
+     * overrides), so the UI copy can show the real threshold. */
+    generationTimeouts: z
+      .object({
+        streamIdleMs: z.number().int().positive(),
+        oneshotMs: z.number().int().positive(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

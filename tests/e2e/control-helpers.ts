@@ -27,6 +27,10 @@ const CLAUDE_MODEL = "e2e-claude-model";
 const CODEX_MODEL = "e2e-codex-model";
 const CLAUDE_INSTALLATION = "claude-e2e-fake01";
 const CODEX_INSTALLATION = "codex-e2e-fake001";
+const KIMI_PROFILE = "Kimi 主持";
+const KIMI_AGENT = "绿方主持";
+const KIMI_MODEL = "kimi-code/k3";
+const KIMI_INSTALLATION = "kimi-e2e-fake001";
 
 export interface TwoAgentRoom {
   roomId: string;
@@ -72,6 +76,55 @@ export async function setupRoomWithTwoAgents(page: Page, topic: string): Promise
   expect(claude, "claude participant should exist").toBeTruthy();
   expect(codex, "codex participant should exist").toBeTruthy();
   return { roomId, claudePid: claude?.id as string, codexPid: codex?.id as string };
+}
+
+export interface KimiReporterRoom {
+  roomId: string;
+  claudePid: string;
+  kimiPid: string;
+}
+
+/** B4 #339: Claude + Kimi; Kimi facilitates, so the report runs on a one-shot seat. */
+export async function setupRoomWithKimiReporter(
+  page: Page,
+  topic: string,
+): Promise<KimiReporterRoom> {
+  await createProfile(page, {
+    name: CLAUDE_PROFILE,
+    driverId: "claude-stream-json",
+    installationId: CLAUDE_INSTALLATION,
+    route: "ant-glm5.2",
+  });
+  await createProfile(page, {
+    name: KIMI_PROFILE,
+    driverId: "kimi-stream-json",
+    installationId: KIMI_INSTALLATION,
+  });
+  await createAgent(page, {
+    name: CLAUDE_AGENT,
+    persona: "冷静的蓝方评审，擅长结构化分析。",
+    profileName: CLAUDE_PROFILE,
+    modelId: CLAUDE_MODEL,
+    color: "#4f6ef7",
+  });
+  await createAgent(page, {
+    name: KIMI_AGENT,
+    persona: "务实的主持人，负责汇总决策报告。",
+    profileName: KIMI_PROFILE,
+    modelId: KIMI_MODEL,
+    color: "#4ff76e",
+  });
+  const roomId = await createRoom(page, {
+    topic,
+    agentNames: [CLAUDE_AGENT, KIMI_AGENT],
+    facilitatorName: KIMI_AGENT,
+  });
+  const participants = await roomParticipants(page, roomId);
+  const claude = participants.find((participant) => participant.modelId === CLAUDE_MODEL);
+  const kimi = participants.find((participant) => participant.modelId === KIMI_MODEL);
+  expect(claude, "claude participant should exist").toBeTruthy();
+  expect(kimi, "kimi participant should exist").toBeTruthy();
+  return { roomId, claudePid: claude?.id as string, kimiPid: kimi?.id as string };
 }
 
 // ---------------------------------------------------------------------------

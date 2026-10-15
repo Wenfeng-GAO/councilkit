@@ -7,6 +7,7 @@ import {
   type DriverId,
   TIMEOUTS,
 } from "@shared/runtime/contracts";
+import { generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
 import { slowGenFromEnv } from "@shared/runtime/slow-gen";
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
@@ -91,10 +92,15 @@ async function main(): Promise<void> {
   // Test-only QA switch (B4 #279): synthetic trusted installations + fake
   // drivers that slow down only the report turn. Never in --help or the UI.
   const slowGen = slowGenFromEnv();
+  const generationTimeouts = generationTimeoutsFromEnv(process.env);
   if (slowGen) {
-    logger.warn("host.slow_gen", { mode: slowGen.mode, intervalMs: slowGen.intervalMs });
+    logger.warn("host.slow_gen", {
+      mode: slowGen.mode,
+      intervalMs: slowGen.intervalMs,
+      ...generationTimeouts,
+    });
     process.stderr.write(
-      `[councilkit] COUNCILKIT_SLOW_GEN=${slowGen.mode} (${slowGen.intervalMs}ms): test-only fake models, every run is 示例/demo\n`,
+      `[councilkit] COUNCILKIT_SLOW_GEN=${slowGen.mode} (${slowGen.intervalMs}ms; streamIdle ${generationTimeouts.streamIdleMs}ms, one-shot ${generationTimeouts.oneshotMs}ms): test-only fake models, every run is 示例/demo\n`,
     );
   }
   const installations = createInstallationRegistry(
@@ -103,12 +109,9 @@ async function main(): Promise<void> {
   const executions = createExecutionRegistry({ logger });
   const reconciler = createSessionReconciler();
 
-  // Test-only: shrink the no-progress window (e2e screenshots, QA dry runs).
-  const idleOverride = Number(process.env.COUNCILKIT_STREAM_IDLE_MS);
-  const timeouts = {
-    ...TIMEOUTS,
-    ...(Number.isFinite(idleOverride) && idleOverride > 0 ? { streamIdleMs: idleOverride } : {}),
-  };
+  // Test-only: COUNCILKIT_STREAM_IDLE_MS / COUNCILKIT_ONESHOT_TIMEOUT_MS shrink
+  // the generation limits (e2e screenshots, QA dry runs). Same rule as the CLI.
+  const timeouts = { ...TIMEOUTS, ...generationTimeouts };
   const driverDeps: DriverDeps = {
     supervisor,
     logger,
@@ -167,6 +170,7 @@ async function main(): Promise<void> {
     session,
     hostInstanceId,
     startedAt: new Date().toISOString(),
+    generationTimeouts,
     installationRegistry: installations,
     executionRegistry: executions,
     scopeManager,

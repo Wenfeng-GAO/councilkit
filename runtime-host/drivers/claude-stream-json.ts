@@ -262,6 +262,7 @@ export function createClaudeStreamJsonDriver(
             driverId: "claude-stream-json",
             executionId: turn.executionId,
             participantId,
+            limitMs: timeouts.streamIdleMs,
           }),
         );
       }, timeouts.streamIdleMs);

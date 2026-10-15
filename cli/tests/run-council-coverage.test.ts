@@ -6,6 +6,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { reportInterruptionLine } from "@shared/runtime/interruption-copy";
 import type {
   CreateScopeRequest,
   CreateScopeResponse,
@@ -124,6 +125,7 @@ function expectedPartial(
   failure: { phase: string; code: string; message: string },
   speeches: string[],
   endedAt = NOW,
+  interruption: string | null = null,
 ): string {
   return [
     "# Council Report",
@@ -142,6 +144,7 @@ function expectedPartial(
     ...speeches,
     "## Failure",
     "",
+    ...(interruption ? [`- ${interruption}`] : []),
     `- Phase: ${failure.phase}`,
     `- Code: ${failure.code}`,
     `- Message: ${failure.message}`,
@@ -796,7 +799,7 @@ describe("run council coverage", () => {
     const failure = { phase: "terminal", code: "DRIVER_CRASH", message: "DRIVER_CRASH boom" };
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.artifactIoFailure).toBeNull();
     expect(outcome.incomplete).toBe(true);
     expect(outcome.turns).toEqual([
@@ -846,7 +849,7 @@ describe("run council coverage", () => {
     });
     const failure = { phase: "turn", code: "TURN_NOT_COMPLETED", message: "turn verdict failed" };
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, NO_SPEECHES));
   });
 
@@ -862,7 +865,7 @@ describe("run council coverage", () => {
     });
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "terminal",
       code: "CANCELLED",
       message: "cancelled by caller",
@@ -880,7 +883,7 @@ describe("run council coverage", () => {
     };
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, NO_SPEECHES));
   });
 
@@ -896,7 +899,7 @@ describe("run council coverage", () => {
     });
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "deadline",
       code: "TURN_TIMEOUT",
       message: "turn deadline exceeded",
@@ -914,7 +917,7 @@ describe("run council coverage", () => {
         }),
     });
     expect(limited.outcome.exitCode).toBe(EXIT.quota);
-    expect(limited.outcome.failure).toEqual({
+    expect(limited.outcome.failure).toMatchObject({
       phase: "terminal",
       code: "RESOURCE_LIMIT",
       message: "over quota",
@@ -929,7 +932,7 @@ describe("run council coverage", () => {
         }),
     });
     expect(rated.outcome.exitCode).toBe(EXIT.quota);
-    expect(rated.outcome.failure).toEqual({
+    expect(rated.outcome.failure).toMatchObject({
       phase: "dispatch",
       code: "RATE_LIMITED",
       message: "slow down",
@@ -952,7 +955,7 @@ describe("run council coverage", () => {
     };
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, NO_SPEECHES));
   });
 
@@ -974,7 +977,7 @@ describe("run council coverage", () => {
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
     expect(outcome.turns.map((turn) => turn.role)).toEqual(["message"]);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, ONE_SPEECH));
   });
 
@@ -995,7 +998,13 @@ describe("run council coverage", () => {
       ["message", "completed"],
       ["report", "failed"],
     ]);
-    expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, ONE_SPEECH));
+    // B4 #339: the report turn's crash carries the shared interruption wording.
+    expect(outcome.failure).toMatchObject({ ...failure, role: "report" });
+    const interruption = reportInterruptionLine(outcome.failure ?? failure);
+    expect(interruption).toMatch(/^报告生成被中断（模型进程意外退出）：.+在写完报告前退出了。$/);
+    expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(
+      expectedPartial(failure, ONE_SPEECH, NOW, interruption),
+    );
   });
 
   it("uses REPORTER_NOT_COMPLETED when the reporter returns no error", async () => {
@@ -1008,7 +1017,7 @@ describe("run council coverage", () => {
         return failedTurn(req.executionId, "failed", null);
       },
     });
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "reporter",
       code: "REPORTER_NOT_COMPLETED",
       message: "reporter verdict failed",
@@ -1029,7 +1038,11 @@ describe("run council coverage", () => {
       },
     });
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({ phase: "ack", code: "ACK_FAILED", message: "ack conflict" });
+    expect(outcome.failure).toMatchObject({
+      phase: "ack",
+      code: "ACK_FAILED",
+      message: "ack conflict",
+    });
     expect(readJsonl(paths.transcript(RUN_ID))).toEqual([
       startedRecord(),
       {
@@ -1066,7 +1079,7 @@ describe("run council coverage", () => {
     const { outcome, paths, box } = await runAt(home, { host: { close: "throw" } });
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "cleanup",
       code: "CLOSE_FAILED",
       message: "close rejected",
@@ -1095,7 +1108,7 @@ describe("run council coverage", () => {
     const { outcome } = await runAt(home, { host: { status: "active" } });
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "cleanup",
       code: "CLOSE_FAILED",
       message: "scope did not reach closed (state=active)",
@@ -1109,7 +1122,7 @@ describe("run council coverage", () => {
     const failure = { phase: "scope", code: "SCOPE_CREATE_FAILED", message: "host gone" };
     expect(outcome.turns).toEqual([]);
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(box.closeCalls).toBe(0);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, NO_SPEECHES));
   });
@@ -1131,7 +1144,7 @@ describe("run council coverage", () => {
     expect(box.create).toHaveLength(3);
     expect(box.closeCalls).toBe(1);
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "scope",
       code: "SCOPE_CREATE_FAILED",
       message: "fetch failed again",
@@ -1146,7 +1159,7 @@ describe("run council coverage", () => {
       },
     });
     expect(box.closeCalls).toBe(1);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "scope",
       code: "SCOPE_CREATE_FAILED",
       message: "fetch failed again",
@@ -1165,7 +1178,7 @@ describe("run council coverage", () => {
     });
     expect(box.create).toHaveLength(3);
     expect(box.closeCalls).toBe(0);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "scope",
       code: "SCOPE_CREATE_FAILED",
       message: "fetch failed again",
@@ -1177,7 +1190,11 @@ describe("run council coverage", () => {
     (error as Error & { code: string }).code = "RESOURCE_LIMIT";
     const { outcome } = await runAt(home, { host: { createErrors: [error] } });
     expect(outcome.exitCode).toBe(EXIT.quota);
-    expect(outcome.failure).toEqual({ phase: "scope", code: "RESOURCE_LIMIT", message: "limited" });
+    expect(outcome.failure).toMatchObject({
+      phase: "scope",
+      code: "RESOURCE_LIMIT",
+      message: "limited",
+    });
   });
 
   it("maps UNAUTHENTICATED during create to exit 4", async () => {
@@ -1188,7 +1205,7 @@ describe("run council coverage", () => {
       signal: new AbortController().signal,
     });
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "scope",
       code: "UNAUTHENTICATED",
       message: "sign in",
@@ -1201,7 +1218,7 @@ describe("run council coverage", () => {
     const { outcome, box } = await runAt(home, { signal: controller.signal, cleanupBudgetMs: 200 });
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "signal",
       code: "INTERRUPTED",
       message: "interrupted by signal (SIGINT/SIGTERM)",
@@ -1217,7 +1234,7 @@ describe("run council coverage", () => {
     const { outcome, box } = await runAt(home, { host: { activate: "throw" } });
     expect(box.activateCalls).toBe(1);
     expect(box.closeCalls).toBe(1);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "scope",
       code: "SCOPE_CREATE_FAILED",
       message: "activate down",
@@ -1254,7 +1271,7 @@ describe("run council coverage", () => {
     };
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.turns).toEqual([]);
     expect(box.activateCalls).toBe(1);
     expect(box.closeCalls).toBe(1);
@@ -1265,7 +1282,7 @@ describe("run council coverage", () => {
     const { outcome } = await runAt(home, { host: { close: "hang" }, cleanupBudgetMs: 30 });
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "cleanup",
       code: "CLOSE_FAILED",
       message: "close aborted",
@@ -1282,7 +1299,7 @@ describe("run council coverage", () => {
     expect(box.closeCalls).toBe(1);
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "signal",
       code: "INTERRUPTED",
       message: "interrupted by signal (SIGINT/SIGTERM)",
@@ -1306,7 +1323,7 @@ describe("run council coverage", () => {
     };
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.io);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.turns).toEqual([]);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, NO_SPEECHES));
   });
@@ -1328,7 +1345,7 @@ describe("run council coverage", () => {
     }) as typeof original);
     const { outcome, events } = await runAt(home, {});
     expect(outcome.exitCode).toBe(EXIT.io);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "io",
       code: "TRANSCRIPT_DURATION",
       message: "failed to write transcript: Error",
@@ -1374,7 +1391,7 @@ describe("run council coverage", () => {
     }) as typeof original);
     const { outcome } = await runAt(home, {});
     expect(outcome.exitCode).toBe(EXIT.io);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "io",
       code: "TRANSCRIPT_DURATION",
       message: "failed to write transcript: Error",
@@ -1394,7 +1411,7 @@ describe("run council coverage", () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.io);
     expect(outcome.incomplete).toBe(true);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.artifactIoFailure).toEqual(failure);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, ONE_SPEECH));
   });
@@ -1419,7 +1436,7 @@ describe("run council coverage", () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.io);
     expect(outcome.incomplete).toBe(true);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.artifactIoFailure).toEqual(failure);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, ONE_SPEECH));
     const onDisk = readJsonl(paths.transcript(RUN_ID));
@@ -1480,7 +1497,7 @@ describe("run council coverage", () => {
     });
     const failure = { phase: "run", code: "RUN_ERROR", message: "driver exploded" };
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.turns).toEqual([]);
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(expectedPartial(failure, NO_SPEECHES));
   });
@@ -1491,7 +1508,11 @@ describe("run council coverage", () => {
         throw "driver-string";
       },
     });
-    expect(outcome.failure).toEqual({ phase: "run", code: "RUN_ERROR", message: "driver-string" });
+    expect(outcome.failure).toMatchObject({
+      phase: "run",
+      code: "RUN_ERROR",
+      message: "driver-string",
+    });
     expect(clipFailureMessage(12)).toBe("12");
     expect(clipFailureMessage(new Error("boom"))).toBe("boom");
   });
@@ -1520,7 +1541,7 @@ describe("run council coverage", () => {
     const { outcome } = await runAt(home, { driver: "real", cleanupBudgetMs: 200 });
     expect(outcome.status).toBe("failed");
     expect(outcome.exitCode).toBe(EXIT.runFailed);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "dispatch",
       code: "DISPATCH_FAILED",
       message: "Cannot read properties of null (reading 'execute')",
@@ -1557,7 +1578,7 @@ describe("run council coverage", () => {
     });
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.turns).toEqual([
       {
         role: "message",
@@ -1593,7 +1614,7 @@ describe("run council coverage", () => {
     });
     expect(outcome.status).toBe("interrupted");
     expect(outcome.exitCode).toBe(EXIT.interrupted);
-    expect(outcome.failure).toEqual(failure);
+    expect(outcome.failure).toMatchObject(failure);
     expect(outcome.turns.map((turn) => [turn.role, turn.verdict])).toEqual([
       ["message", "completed"],
       ["report", "failed"],
@@ -1686,7 +1707,7 @@ describe("run council coverage", () => {
       driver: async (req) => failedTurn(req.executionId),
     });
     expect(outcome.exitCode).toBe(EXIT.io);
-    expect(outcome.failure).toEqual({
+    expect(outcome.failure).toMatchObject({
       phase: "terminal",
       code: "DRIVER_CRASH",
       message: "DRIVER_CRASH boom",

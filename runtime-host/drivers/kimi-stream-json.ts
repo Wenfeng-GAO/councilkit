@@ -3,9 +3,13 @@ import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
+import {
+  type GenerationWatchdog,
+  generationRule,
+  startGenerationWatchdog,
+} from "@shared/runtime/generation-timeouts";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
-import { type IdleWatchdog, startIdleWatchdog } from "./idle-watchdog";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
 import { deadlineMaySettle } from "./turn-deadline";
 import type {
@@ -151,8 +155,9 @@ interface ActiveTurn {
   cancelling: boolean;
   settled: boolean;
   turnTimer?: NodeJS.Timeout;
-  /** B4: no-progress watchdog (streamIdleMs), reset on every stdout chunk. */
-  idle?: IdleWatchdog;
+  /** B4/#339: one-shot "not finished" deadline (oneshotMs). The CLI prints
+   * the answer only at the end, so stdout is not progress here. */
+  deadline?: GenerationWatchdog;
   resolve(): void;
 }
 
@@ -196,8 +201,8 @@ export function createKimiStreamJsonDriver(
 
     function clearTurnTimers(turn: ActiveTurn) {
       if (turn.turnTimer) clearTimeout(turn.turnTimer);
-      turn.idle?.clear();
-      turn.idle = undefined;
+      turn.deadline?.clear();
+      turn.deadline = undefined;
     }
 
     function emitTerminal(turn: ActiveTurn, event: DriverEvent) {
@@ -734,8 +739,6 @@ export function createKimiStreamJsonDriver(
               drain.stderrEnded = true;
               trySettle("stderr");
             });
-            // B4: any stdout byte is progress for the no-progress watchdog.
-            spawned.stdout.on("data", () => turn.idle?.touch());
             attachNdjsonSplitter(spawned.stdout, {
               onLine(line) {
                 let message: Record<string, unknown>;
@@ -814,28 +817,24 @@ export function createKimiStreamJsonDriver(
             // until the assistant frame arrives.
             if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
 
-            // B4 (#279): the user-visible bound is no-progress, not wall-clock.
-            // The kimi CLI is final-only (no deltas), so for a long silent
-            // generation this window is effectively the turn bound; any stdout
-            // chunk restarts it. turnMs (armed after spawn so a never-supervised
-            // spawn still times out) is only a far-away safety ceiling.
-            turn.idle = startIdleWatchdog(timeouts.streamIdleMs, () => {
+            // B4/#339: one-shot drivers get no idle window (silence is normal
+            // until the final answer). Not finished within oneshotMs →
+            // ONESHOT_TIMEOUT; an early exit fails at once via the exit handler.
+            // turnMs (1h) stays only as a safety ceiling.
+            const rule = generationRule("kimi-stream-json", timeouts);
+            turn.deadline = startGenerationWatchdog(rule, () => {
               if (!deadlineMaySettle(turn, activeTurn === turn)) return;
-              invalidateSession("stream_idle");
+              invalidateSession("oneshot_timeout");
               failTurn(
                 turn,
-                makeError(
-                  "STREAM_IDLE_TIMEOUT",
-                  "stream",
-                  "No model output within the idle limit.",
-                  {
-                    driverId: "kimi-stream-json",
-                    executionId: turn.executionId,
-                    participantId,
-                  },
-                ),
+                makeError(rule.code, "stream", rule.message, {
+                  driverId: "kimi-stream-json",
+                  executionId: turn.executionId,
+                  participantId,
+                  limitMs: rule.limitMs,
+                }),
               );
-              void reapActiveProcess("stream_idle");
+              void reapActiveProcess("oneshot_timeout");
             });
             turn.turnTimer = setTimeout(() => {
               // CK-RS-002: a turnMs armed after a pending spawn (or a callback

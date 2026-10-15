@@ -3,10 +3,17 @@
  * reopening the room, must not leave the page stuck in 「正在生成决策报告…」.
  */
 import { type BrowserContext, type Page, expect, test } from "@playwright/test";
-import { setupRoomWithTwoAgents, waitRoundPhase } from "./control-helpers";
+import { formatLimitZh, generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
+import { oneShotGeneratingNote } from "@shared/runtime/interruption-copy";
+import {
+  setupRoomWithKimiReporter,
+  setupRoomWithTwoAgents,
+  waitRoundPhase,
+} from "./control-helpers";
 import {
   concludeRoomViaButton,
   driverCounters,
+  forgetHostExecutions,
   reportView,
   resetDriverState,
   resumeDrivers,
@@ -200,5 +207,110 @@ test.describe("B4 report generation survives a closed tab", () => {
     await expect(card.getByText("STREAM_IDLE_TIMEOUT")).toBeVisible();
     await expect(card.getByText(/idle limit/)).toHaveCount(0);
     await shot(page, "idle-02-detail-expanded");
+  });
+});
+
+/** The Host this spec talks to was started with the same env, so its limits
+ * (and the copy that follows them) are computed the same way here. Run with
+ * COUNCILKIT_ONESHOT_TIMEOUT_MS=60000 to check the number changes (「1 分钟」). */
+const LIMITS = generationTimeoutsFromEnv(process.env);
+const ONESHOT = formatLimitZh(LIMITS.oneshotMs);
+const ONESHOT_TAG = LIMITS.oneshotMs === 600_000 ? "" : `-${Math.round(LIMITS.oneshotMs / 1000)}s`;
+
+test.describe("B4 #339 report on a one-shot seat (kimi/grok/cursor)", () => {
+  test("not finished within the one-shot limit: grey line while generating, then the card", async () => {
+    test.setTimeout(120_000);
+    const fixture = await setupRoomWithKimiReporter(page, "B4 一次性模型未写完");
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    // Production waits oneshotMs (10 min); the fake fires after 4s and still
+    // reports the Host's configured limit, like the real kimi driver.
+    await setDriverBehavior(page, fixture.kimiPid, { slowSilent: true, slowSilentIdleMs: 4000 });
+    await concludeRoomViaButton(page);
+    const note = page.getByTestId("report-oneshot-note");
+    await expect(note).toBeVisible({ timeout: 15_000 });
+    await expect(note).toHaveText(oneShotGeneratingNote("kimi-stream-json", LIMITS.oneshotMs));
+    await shot(page, `oneshot${ONESHOT_TAG}-01-generating`);
+    const card = page.getByTestId("report-failure");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("report-oneshot-note")).toHaveCount(0);
+    await expect(
+      card.getByText(`报告生成被中断（模型 ${ONESHOT}没有写完）`, { exact: true }),
+    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "重新生成报告" })).toHaveAttribute(
+      "data-variant",
+      "primary",
+    );
+    await expect(card.getByText("将重新调用模型", { exact: true })).toBeVisible();
+    await expect(card.getByText("ONESHOT_TIMEOUT")).toBeHidden();
+    await shot(page, `oneshot${ONESHOT_TAG}-02-interrupted-card`);
+    await card.getByText("详情").click();
+    await expect(
+      card.getByText(`Kimi 超过 ${ONESHOT}没有返回结果。`, { exact: true }),
+    ).toBeVisible();
+    await expect(card.getByText("ONESHOT_TIMEOUT")).toBeVisible();
+    await shot(page, `oneshot${ONESHOT_TAG}-03-detail-expanded`);
+  });
+
+  test("model process exits mid-report: the 「进程意外退出」 card at once", async () => {
+    test.setTimeout(120_000);
+    const fixture = await setupRoomWithKimiReporter(page, "B4 模型进程退出");
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    await setDriverBehavior(page, fixture.kimiPid, { slowSilent: true, crashAfterMs: 800 });
+    await concludeRoomViaButton(page);
+    const card = page.getByTestId("report-failure");
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await expect(
+      card.getByText("报告生成被中断（模型进程意外退出）", { exact: true }),
+    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "重新生成报告" })).toHaveAttribute(
+      "data-variant",
+      "primary",
+    );
+    await shot(page, "crash-01-interrupted-card");
+    await card.getByText("详情").click();
+    await expect(card.getByText("Kimi 在写完报告前退出了。", { exact: true })).toBeVisible();
+    await expect(card.getByText("DRIVER_CRASH")).toBeVisible();
+    await shot(page, "crash-02-detail-expanded");
+  });
+});
+
+test.describe("B4 #339 Host restarted or disconnected mid-report", () => {
+  test("the Host forgets the running report: 「本地执行服务重启或断开」 card", async () => {
+    test.setTimeout(120_000);
+    const fixture = await setupRoomWithTwoAgents(page, "B4 执行服务重启");
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    await setDriverBehavior(page, fixture.claudePid, {
+      pauseAfterEvents: 2,
+      holdUntilResume: true,
+    });
+    await concludeRoomViaButton(page);
+    await expect(page.getByText("正在生成决策报告")).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => (await driverCounters(page))[fixture.claudePid]?.executeCount ?? 0)
+      .toBe(4);
+    // What the page sees when the Host restarts: the stream drops and the
+    // new Host has no record of the execution (404).
+    await forgetHostExecutions(page);
+    const card = page.getByTestId("report-failure");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(
+      card.getByText("报告生成被中断（本地执行服务重启或断开）", { exact: true }),
+    ).toBeVisible();
+    await expect(card.getByRole("button", { name: "重新生成报告" })).toHaveAttribute(
+      "data-variant",
+      "primary",
+    );
+    await expect(card.getByText("将重新调用模型", { exact: true })).toBeVisible();
+    await shot(page, "restart-01-interrupted-card");
+    await card.getByText("详情").click();
+    await expect(
+      card.getByText("和本地执行服务的连接断了，这次生成没有完成。", { exact: true }),
+    ).toBeVisible();
+    await expect(card.getByText("SAFE_INTERRUPTION")).toBeVisible();
+    await shot(page, "restart-02-detail-expanded");
+    await resumeDrivers(page);
   });
 });

@@ -1,3 +1,4 @@
+import { reportInterruptionLine } from "@shared/runtime/interruption-copy";
 import { errors } from "../errors";
 import type { CompletedTurn, CouncilSnapshot, RunFailure } from "../run/types";
 /**
@@ -125,6 +126,7 @@ export function renderPartialReport(input: PartialReportInput): string {
   lines.push(
     "## Failure",
     "",
+    ...interruptionLines(input.failure),
     `- Phase: ${input.failure.phase}`,
     `- Code: ${input.failure.code}`,
     `- Message: ${input.failure.message}`,
@@ -169,4 +171,10 @@ export function writeReportCopy(outPath: string, markdown: string): void {
 function ioName(cause: unknown): string {
   if (cause instanceof Error) return cause.name;
   return "IOFailure";
+}
+
+/** B4: the same interruption wording as the browser card, when it applies. */
+function interruptionLines(failure: RunFailure): string[] {
+  const line = reportInterruptionLine(failure);
+  return line ? [`- ${line}`] : [];
 }

@@ -45,6 +45,7 @@ const TIMEOUTS = {
   dispatchAckMs: 800,
   streamIdleMs: 2_000,
   turnMs: 10_000,
+  oneshotMs: 600_000,
   interruptGraceMs: 600,
   shutdownGraceMs: 1_000,
 };

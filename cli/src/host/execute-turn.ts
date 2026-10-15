@@ -41,7 +41,12 @@ import {
   prepareCleanupBudget,
   startCleanupBudget,
 } from "@shared/runtime/cleanup-budget";
-import type { AckDisposition, DispatchState, ToolState } from "@shared/runtime/contracts";
+import {
+  type AckDisposition,
+  type DispatchState,
+  TIMEOUTS,
+  type ToolState,
+} from "@shared/runtime/contracts";
 import type {
   CompletedEvent,
   FailedEvent,
@@ -51,6 +56,11 @@ import type {
   Usage,
 } from "@shared/runtime/events";
 import { decideFollowAfterClose } from "@shared/runtime/follow-reconnect";
+import {
+  GENERATION_CLIENT_GRACE_MS,
+  type GenerationRule,
+  startGenerationWatchdog,
+} from "@shared/runtime/generation-timeouts";
 import type { ContextSnapshot, ControllerRequest } from "@shared/runtime/schemas";
 import { CliError, EXIT } from "../errors";
 
@@ -78,6 +88,8 @@ export interface TurnError {
   code: string;
   message: string;
   retryable: boolean;
+  /** B4: the generation limit that fired (STREAM_IDLE_TIMEOUT / ONESHOT_TIMEOUT). */
+  limitMs?: number;
 }
 
 export interface TerminalEvidence {
@@ -115,8 +127,16 @@ export interface ExecuteTurnInput {
   snapshot: ContextSnapshot;
   /** Distinguishes ordinary turns from the Reporter turn (for metadata). */
   role: "message" | "report";
-  /** Per-turn deadline covering execute + SSE + terminal ACK. */
-  timeoutMs: number;
+  /** Legacy fixed per-turn deadline (tests). The orchestrator passes
+   * `generation` instead; without either, TIMEOUTS.turnMs (1h) applies. */
+  timeoutMs?: number;
+  /** B4/#339: the seat's shared generation rule (generation-timeouts.ts). The
+   * Host enforces it and fails the turn with its own code; this client-side
+   * backstop fires GENERATION_CLIENT_GRACE_MS later in case the Host never
+   * delivers a terminal. Streaming: reset on every event; one-shot: not. */
+  generation?: Pick<GenerationRule, "mode" | "limitMs" | "code">;
+  /** Backstop delay after the rule's limit (tests shrink it). */
+  generationGraceMs?: number;
   /** External abort (e.g. SIGINT / run-level cancel). */
   signal?: AbortSignal;
   /** Persist the authoritative completed output BEFORE the committed ACK. If it
@@ -209,21 +229,42 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
   } else {
     signal?.addEventListener("abort", onExternalAbort, { once: true });
   }
-  const timeoutTimer = setTimeout(() => {
+  const fireDeadline = () => {
     if (abortSource === null) abortSource = "deadline";
     timeoutController.abort("timeout");
-  }, timeoutMs);
+  };
+  const generation = params.generation;
+  const watchdog = generation
+    ? startGenerationWatchdog(
+        {
+          mode: generation.mode,
+          limitMs: generation.limitMs + (params.generationGraceMs ?? GENERATION_CLIENT_GRACE_MS),
+        },
+        fireDeadline,
+      )
+    : null;
+  const timeoutTimer = watchdog
+    ? undefined
+    : setTimeout(fireDeadline, timeoutMs ?? TIMEOUTS.turnMs);
   const deadline = timeoutController.signal;
   const abortVerdict = (): "timeout" | "cancelled" =>
     abortSource === "deadline" ? "timeout" : "cancelled";
   const abortError = (): TurnError =>
     abortSource === "deadline"
-      ? {
-          phase: "deadline",
-          code: "TURN_TIMEOUT",
-          message: "turn deadline exceeded",
-          retryable: true,
-        }
+      ? generation
+        ? {
+            phase: "deadline",
+            code: generation.code,
+            message: "generation limit exceeded (client backstop)",
+            retryable: false,
+            limitMs: generation.limitMs,
+          }
+        : {
+            phase: "deadline",
+            code: "TURN_TIMEOUT",
+            message: "turn deadline exceeded",
+            retryable: true,
+          }
       : { phase: "cleanup", code: "CANCELLED", message: "cancelled by caller", retryable: false };
 
   const cleanupHolder: { current: CleanupBudget | null } = { current: null };
@@ -376,7 +417,8 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
       participantId,
       follow,
       deadlineSignal: deadline,
-      onEvent: () => {},
+      // Any Host event is model progress for a streaming seat.
+      onEvent: () => watchdog?.output(),
     });
 
     if (terminal.kind === "aborted") {
@@ -513,7 +555,8 @@ async function runInternal(params: RunParams): Promise<TurnResult> {
     }
     return result;
   } finally {
-    clearTimeout(timeoutTimer);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    watchdog?.clear();
     signal?.removeEventListener("abort", onExternalAbort);
     // F1: the abort downgrade (ackDone/ackAborted) is applied at each terminal
     // `return` site via remapIfAborted — NOT here, because a `finally`-block
@@ -733,8 +776,10 @@ function classifyTerminalError(error: {
   code: string;
   message: string;
   retryable: boolean;
+  limitMs?: number;
 }): TurnError {
-  return hostErrorToTurn(error.code, error.message, "terminal", error.retryable);
+  const turnError = hostErrorToTurn(error.code, error.message, "terminal", error.retryable);
+  return error.limitMs ? { ...turnError, limitMs: error.limitMs } : turnError;
 }
 
 function classifyInterrupt(event: InterruptedEvent): TurnError {

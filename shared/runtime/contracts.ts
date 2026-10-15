@@ -50,6 +50,9 @@ export const TIMEOUTS = {
    * streamIdleMs only; long reports that keep emitting must not stop at 10 min.
    * Raised so continuous output is not cut by wall-clock. */
   turnMs: 3_600_000,
+  /** One-shot drivers (kimi/grok/cursor print the report only at the end):
+   * not finished within this → ONESHOT_TIMEOUT. See generation-timeouts.ts. */
+  oneshotMs: 600_000,
   interruptGraceMs: 5_000,
   shutdownGraceMs: 10_000,
   reapAfterHostDeathMs: 5_000,

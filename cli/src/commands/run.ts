@@ -12,6 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { QUOTAS } from "@shared/runtime/contracts";
+import { reportInterruptionLine } from "@shared/runtime/interruption-copy";
 import { isSlowGenExecutablePath, slowGenFromEnv } from "@shared/runtime/slow-gen";
 import { z } from "zod";
 import { errors } from "../errors";
@@ -225,8 +226,11 @@ function renderHuman(o: import("../run/types").RunOutcome): string {
   lines.push(`  report: ${o.reportPath}`);
   lines.push(`  transcript: ${o.transcriptPath}`);
   lines.push(`  turns: ${o.turns.length}`);
-  if (o.failure)
+  if (o.failure) {
+    const interruption = reportInterruptionLine(o.failure);
+    if (interruption) lines.push(`  ${interruption}`);
     lines.push(`  failure: [${o.failure.phase}] ${o.failure.code} — ${o.failure.message}`);
+  }
   if (o.artifactIoFailure)
     lines.push(
       `  artifact IO: [${o.artifactIoFailure.phase}] ${o.artifactIoFailure.code} — ${o.artifactIoFailure.message}`,

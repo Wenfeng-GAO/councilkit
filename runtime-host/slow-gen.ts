@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
 import type { DriverId } from "@shared/runtime/contracts";
 import { makeError } from "@shared/runtime/errors";
+import {
+  type GenerationTimeouts,
+  generationRule,
+  startGenerationWatchdog,
+} from "@shared/runtime/generation-timeouts";
 import { REPORT_SECTION_HEADINGS } from "@shared/runtime/report-sections";
 import {
   SLOW_GEN_CHUNKS,
+  SLOW_GEN_CRASH_AT_MS,
   SLOW_GEN_PATH_PREFIX,
   type SlowGenConfig,
 } from "@shared/runtime/slow-gen";
-import { startIdleWatchdog } from "./drivers/idle-watchdog";
 import type {
-  DriverTimeouts,
   Emit,
   ExecuteInput,
   ParticipantDriver,
@@ -98,7 +102,7 @@ function discussionReply(prompt: string): string {
 export function createSlowGenDriverFactory(
   driverId: DriverId,
   config: SlowGenConfig,
-  timeouts: Pick<DriverTimeouts, "streamIdleMs">,
+  timeouts: GenerationTimeouts,
 ): (participantId: string) => ParticipantDriver {
   return (participantId: string): ParticipantDriver => {
     let cancelActive: (() => void) | null = null;
@@ -120,7 +124,7 @@ export function createSlowGenDriverFactory(
     function slowReport(input: ExecuteInput, emit: Emit): Promise<void> {
       return new Promise<void>((resolve) => {
         let chunks = 0;
-        let ticker: NodeJS.Timeout | undefined;
+        let ticker: ReturnType<typeof setTimeout> | undefined;
         let settled = false;
         const settle = (finish: () => void) => {
           if (settled) return;
@@ -131,20 +135,25 @@ export function createSlowGenDriverFactory(
           finish();
           resolve();
         };
-        // Same watchdog the real drivers use: silent mode never touches it.
-        const watchdog = startIdleWatchdog(timeouts.streamIdleMs, () =>
+        const fail = (error: ReturnType<typeof makeError>) =>
           settle(() =>
             emit({
               type: "failed",
-              error: makeError(
-                "STREAM_IDLE_TIMEOUT",
-                "stream",
-                "No model output within the idle limit.",
-                { driverId, executionId: input.executionId, participantId },
-              ),
+              error,
               dispatchState: "accepted",
               toolState: "none",
               retryable: false,
+            }),
+          );
+        // Same rule (and watchdog) the real driver for this seat uses.
+        const rule = generationRule(driverId, timeouts);
+        const watchdog = startGenerationWatchdog(rule, () =>
+          fail(
+            makeError(rule.code, "stream", rule.message, {
+              driverId,
+              executionId: input.executionId,
+              participantId,
+              limitMs: rule.limitMs,
             }),
           ),
         );
@@ -158,10 +167,32 @@ export function createSlowGenDriverFactory(
             }),
           );
         if (config.mode === "silent") return;
+        if (config.mode === "crash") {
+          ticker = setTimeout(
+            () =>
+              fail(
+                makeError("DRIVER_CRASH", "stream", "slow-gen: model process exited mid-report.", {
+                  driverId,
+                  executionId: input.executionId,
+                  participantId,
+                }),
+              ),
+            SLOW_GEN_CRASH_AT_MS,
+          );
+          return;
+        }
+        if (config.mode === "buffered") {
+          ticker = setTimeout(() => {
+            const report = demoReport(config.mode, 1);
+            emit({ type: "output.delta", text: report });
+            settle(() => complete(input, emit, report));
+          }, config.intervalMs);
+          return;
+        }
         const tick = () => {
           chunks += 1;
           emit({ type: "output.delta", text: `慢生成片段 ${chunks}/${SLOW_GEN_CHUNKS}\n` });
-          watchdog.touch();
+          watchdog.output();
           if (chunks >= SLOW_GEN_CHUNKS) {
             settle(() => complete(input, emit, demoReport(config.mode, chunks)));
             return;

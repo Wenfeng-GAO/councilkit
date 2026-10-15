@@ -26,6 +26,9 @@
  *                                        followExecutionEvents resolves
  *                                        "closed" and the afterSeq reconnect
  *                                        path runs.
+ *   POST /api/v1/__test__/forget-executions — B4: forget every execution and
+ *                                        drop the event streams (what the page
+ *                                        sees when the Host restarts).
  *   POST /api/v1/__test__/resume       — release all held fake drivers
  *                                        (pauseAfterEvents holds).
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
@@ -46,6 +49,7 @@ import {
 } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
 import type { ModelVerdict } from "@shared/runtime/events";
+import { generationRule, generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
 import type { InstallationDto } from "@shared/runtime/schemas";
 import { z } from "zod";
 import { loadConfig } from "../../runtime-host/config";
@@ -273,9 +277,13 @@ export interface DriverBehavior {
   /** B4: emit nothing; the no-progress window ends the turn with
    * STREAM_IDLE_TIMEOUT (like the real drivers) unless cancelled first. */
   slowSilent?: boolean;
-  /** B4: idle window for slowSilent (defaults to COUNCILKIT_STREAM_IDLE_MS,
-   * then TIMEOUTS.streamIdleMs) so CI does not wait 2 minutes. */
+  /** B4: fire slowSilent's limit after this many ms instead (CI does not wait
+   * 2 or 10 minutes); the error still carries the seat's configured limit
+   * (COUNCILKIT_STREAM_IDLE_MS / COUNCILKIT_ONESHOT_TIMEOUT_MS or defaults). */
   slowSilentIdleMs?: number;
+  /** B4: with slowSilent, the model process "exits" after this many ms →
+   * DRIVER_CRASH (the 「进程意外退出」 card). */
+  crashAfterMs?: number;
 }
 
 interface DriverCounters {
@@ -443,30 +451,43 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
       }
       if (behavior().slowSilent) {
         emit({ type: "started", requestedModel: input.modelId });
-        const idleMs = (() => {
-          const own = behavior().slowSilentIdleMs;
-          if (typeof own === "number" && own > 0) return own;
-          const override = Number(process.env.COUNCILKIT_STREAM_IDLE_MS);
-          return Number.isFinite(override) && override > 0 ? override : TIMEOUTS.streamIdleMs;
-        })();
+        // Same rule as the real driver for this seat (generation-timeouts):
+        // streaming → STREAM_IDLE_TIMEOUT, one-shot → ONESHOT_TIMEOUT.
+        const rule = generationRule(driverId, generationTimeoutsFromEnv(process.env));
+        // slowSilentIdleMs only fires the limit early so CI does not wait; the
+        // error still reports the Host's configured limit, like a real driver.
+        const own = behavior().slowSilentIdleMs;
+        const fireMs = typeof own === "number" && own > 0 ? own : rule.limitMs;
+        const limitMs = rule.limitMs;
+        const crashAfterMs = behavior().crashAfterMs;
         return new Promise<void>((resolveHang) => {
-          const idleTimer = setTimeout(() => {
-            if (rig.pendingCancel !== onCancel) return;
-            rig.pendingCancel = null;
-            emit({
-              type: "failed",
-              error: makeError(
-                "STREAM_IDLE_TIMEOUT",
-                "stream",
-                "No protocol frames within the idle limit.",
-                { retryable: false },
-              ),
-              dispatchState: "accepted",
-              toolState: "none",
-              retryable: false,
-            });
-            resolveHang();
-          }, idleMs);
+          const idleTimer = setTimeout(
+            () => {
+              if (rig.pendingCancel !== onCancel) return;
+              rig.pendingCancel = null;
+              emit({
+                type: "failed",
+                error:
+                  typeof crashAfterMs === "number"
+                    ? makeError("DRIVER_CRASH", "stream", "fake model process exited.", {
+                        driverId,
+                        participantId,
+                        retryable: false,
+                      })
+                    : makeError(rule.code, "stream", rule.message, {
+                        driverId,
+                        participantId,
+                        limitMs,
+                        retryable: false,
+                      }),
+                dispatchState: "accepted",
+                toolState: "none",
+                retryable: false,
+              });
+              resolveHang();
+            },
+            typeof crashAfterMs === "number" ? crashAfterMs : fireMs,
+          );
           const onCancel = () => {
             clearTimeout(idleTimer);
             rig.pendingCancel = null;
@@ -736,6 +757,18 @@ function testRoutes(
       handler: () => ({ dropped: dropOpenEventStreams() }),
     },
     {
+      // B4: a Host restart mid-generation as the page sees it. The executions
+      // are forgotten (a fresh Host has none) and the open event streams drop,
+      // so the page's reconnect finds 404 → SAFE_INTERRUPTION.
+      method: "POST",
+      pattern: `${TEST_BASE}/forget-executions`,
+      auth: "session",
+      handler: () => {
+        executions.reset();
+        return { dropped: dropOpenEventStreams() };
+      },
+    },
+    {
       method: "POST",
       pattern: `${TEST_BASE}/resume`,
       auth: "session",
@@ -871,6 +904,7 @@ async function main(): Promise<void> {
     session,
     hostInstanceId,
     startedAt: new Date().toISOString(),
+    generationTimeouts: generationTimeoutsFromEnv(process.env),
     installationRegistry: fakeInstallationRegistry,
     executionRegistry: executions,
     scopeManager,

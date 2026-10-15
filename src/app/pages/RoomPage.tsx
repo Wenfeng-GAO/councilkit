@@ -21,6 +21,7 @@ import type { DiscussionRoom, RoomStatus } from "@/models/discussion/entities";
 import type { ModelExecution, ModelExecutionState } from "@/models/discussion/model-execution";
 import type { ControlState } from "@/orchestrator/discussion-orchestrator";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import { useHostGenerationTimeouts } from "@/stores/host-generation-timeouts";
 import { useRuntimeDiscussionStore } from "@/stores/runtime-discussion";
 import { useControlState, useRoomIntents } from "@/stores/runtime-intents";
 import {
@@ -293,6 +294,8 @@ export function RoomPage() {
   const { data: participants } = useParticipants(roomId, tick);
   const { data: agents } = useAgents();
   const { data: profiles } = useExecutionProfiles();
+  // B4: the Host's real generation limits (test-only env may shorten them).
+  const hostGenerationTimeouts = useHostGenerationTimeouts();
 
   const controlState = useControlState(roomId ?? "");
   const intents = useRoomIntents(roomId ?? "");
@@ -447,8 +450,20 @@ export function RoomPage() {
   const liveReportExecution = findLiveReportExecution(roomExecutions);
   const failedReportExecution =
     !report && !liveReportExecution ? findFailedReportExecution(roomExecutions) : undefined;
+  // B4: the reporter seat's driver names the tool in the interruption copy
+  // and decides whether the one-shot 「一次性给出」 line shows.
+  const reporterParticipantId =
+    liveReportExecution?.participantId ??
+    failedReportExecution?.participantId ??
+    room?.facilitatorParticipantId;
+  const reporterProfileId = participants?.find(
+    (participant) => participant.id === reporterParticipantId,
+  )?.executionProfileId;
+  const reporterDriverId =
+    profiles?.find((profile) => profile.id === reporterProfileId)?.driverId ?? null;
   const reportInterrupted =
-    failedReportExecution !== undefined && reportFailureCopy(failedReportExecution).interrupted;
+    failedReportExecution !== undefined &&
+    reportFailureCopy(failedReportExecution, reporterDriverId).interrupted;
   const hasCompletedRound = (rounds ?? []).some((round) => round.phase === "completed");
   // room may be undefined before the empty-guard; default to "open" so the
   // derivation stays a pure expression read after the guard narrows room.
@@ -705,6 +720,8 @@ export function RoomPage() {
               previewText={reportPreviewText ?? ""}
               speakerName={facilitatorSpeaker?.name ?? "主持人"}
               speakerColor={facilitatorSpeaker?.color ?? "#8b919a"}
+              driverId={reporterDriverId}
+              oneshotLimitMs={hostGenerationTimeouts?.oneshotMs ?? null}
             />
           ) : (
             <>
@@ -774,6 +791,7 @@ export function RoomPage() {
             retryPending={intents.concludeRoom.isPending}
             retryDisabled={!canConclude}
             disabledHint={concludeDisabledReason}
+            driverId={reporterDriverId}
           />
         </div>
       ) : null}

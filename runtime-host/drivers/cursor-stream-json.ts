@@ -4,12 +4,16 @@ import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { makeError } from "@shared/runtime/errors";
+import {
+  type GenerationWatchdog,
+  generationRule,
+  startGenerationWatchdog,
+} from "@shared/runtime/generation-timeouts";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
-import { type IdleWatchdog, startIdleWatchdog } from "./idle-watchdog";
 import { withDeadline } from "./ndjson";
 import { deadlineMaySettle } from "./turn-deadline";
 import type {
@@ -75,8 +79,9 @@ interface ActiveTurn {
   cancelling: boolean;
   settled: boolean;
   turnTimer?: NodeJS.Timeout;
-  /** B4: no-progress watchdog (streamIdleMs), reset on every stdout chunk. */
-  idle?: IdleWatchdog;
+  /** B4/#339: one-shot "not finished" deadline (oneshotMs). The CLI prints
+   * the answer only at the end, so stdout is not progress here. */
+  deadline?: GenerationWatchdog;
   resolve: () => void;
 }
 
@@ -191,8 +196,8 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
         clearTimeout(turn.turnTimer);
         turn.turnTimer = undefined;
       }
-      turn.idle?.clear();
-      turn.idle = undefined;
+      turn.deadline?.clear();
+      turn.deadline = undefined;
     }
 
     function invalidateSession(reason: string): void {
@@ -579,7 +584,6 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
               const next = turn.stdout + chunk.toString("utf8");
               turn.stdout = next.length > STDOUT_CAP ? clipUtf16Tail(next, STDOUT_CAP) : next;
               if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
-              turn.idle?.touch();
             });
             spawned.stdout.on("end", () => {
               drain.stdoutEnded = true;
@@ -612,23 +616,22 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
                 );
               }
             });
-            // B4 (#279): the user-visible bound is no-progress, not wall-clock.
-            // Any stdout chunk restarts the window; turnMs is only a ceiling.
-            turn.idle = startIdleWatchdog(timeouts.streamIdleMs, () => {
+            // B4/#339: one-shot drivers get no idle window (silence is normal
+            // until the final answer). Not finished within oneshotMs →
+            // ONESHOT_TIMEOUT; an early exit fails at once via the exit handler.
+            // turnMs (1h) stays only as a safety ceiling.
+            const rule = generationRule("cursor-stream-json", timeouts);
+            turn.deadline = startGenerationWatchdog(rule, () => {
               if (!deadlineMaySettle(turn, activeTurn === turn)) return;
-              invalidateSession("stream_idle");
+              invalidateSession("oneshot_timeout");
               failTurn(
                 turn,
-                makeError(
-                  "STREAM_IDLE_TIMEOUT",
-                  "stream",
-                  "No model output within the idle limit.",
-                  {
-                    driverId: "cursor-stream-json",
-                    executionId: turn.executionId,
-                    participantId,
-                  },
-                ),
+                makeError(rule.code, "stream", rule.message, {
+                  driverId: "cursor-stream-json",
+                  executionId: turn.executionId,
+                  participantId,
+                  limitMs: rule.limitMs,
+                }),
               );
               void reapActiveProcess();
             });
