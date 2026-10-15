@@ -16,6 +16,7 @@ import {
   type FollowOutcome,
   followExecutionEvents,
 } from "@/runtime/event-stream";
+import { type CleanupBudget, startCleanupBudget } from "@shared/runtime/cleanup-budget";
 import type { ToolState } from "@shared/runtime/contracts";
 import type {
   CompletedEvent,
@@ -126,40 +127,6 @@ interface RunParams {
   follow: typeof followExecutionEvents;
 }
 
-/** Short bounded ceiling for the SHARED cleanup budget (plan-a §3 risk 4 / F2).
- * The cleanup chain (cancel → observe → ACK → close) MUST share ONE remaining
- * budget rather than resetting 10s per request (reviewer G3): otherwise the
- * helper can hang ~30-40s after the 60s main deadline. G3: one controller per
- * run covers the whole chain. */
-const CLEANUP_BUDGET_MS = 10_000;
-
-/** A shared, per-run cleanup controller (G3): cancel → observe → ACK(cancel-path)
- * → close all draw from the same bounded budget, so the cleanup chain cannot
- * stretch past CLEANUP_BUDGET_MS in aggregate. The timer is cleared when the
- * holder disposes it via `dispose()` after the chain ends. */
-interface SharedCleanup {
-  signal: AbortSignal;
-  dispose: () => void;
-}
-
-function newSharedCleanup(): SharedCleanup {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort("cleanup-deadline"), CLEANUP_BUDGET_MS);
-  // In Node, unref the timer so it cannot keep the event loop alive on its own
-  // (the caller still awaits the cleanup request synchronously). In the browser
-  // setTimeout returns a number and there is nothing to unref.
-  if (typeof timer === "object" && typeof (timer as { unref?: () => void }).unref === "function") {
-    (timer as { unref: () => void }).unref();
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      clearTimeout(timer);
-      if (!controller.signal.aborted) controller.abort("cleanup-disposed");
-    },
-  };
-}
-
 async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
   const { client, profile, modelId, persona, externalSignal, timeoutMs, ids, now, follow } = params;
   const startedAtMs = now();
@@ -218,18 +185,20 @@ async function runInternal(params: RunParams): Promise<AgentRealCallResult> {
   });
   const snapshot = buildProbeSnapshot({ participantId, persona });
   // G3: one SHARED cleanup controller per run covers the whole cleanup chain
-  // (cancel → observe terminal → ACK(cancel-path) → close). It is created
-  // lazily on first cleanup use (abort/cleanup paths) and disposed at the end
+  // (cancel → observe terminal → ACK(cancel-path) → close). One shared ceiling,
+  // not a fresh 10s per request, so the chain cannot hang ~30-40s past the
+  // main deadline. It is created lazily on first cleanup use (abort/cleanup
+  // paths) and disposed at the end
   // of runInternal's finally. The happy-path terminal ACK does NOT consume the
   // cleanup budget — it runs under the main deadline (G5). A holder object is
   // used so closure-assigned mutations are not narrowed to the initial value.
-  const cleanupHolder: { current: SharedCleanup | null } = { current: null };
+  const cleanupHolder: { current: CleanupBudget | null } = { current: null };
   /** G3/G6/handleAbort: lazily materialize the shared cleanup controller so
    * happy-path runs (no abort, clean close) never start a timer. On the
    * happy path `finally` still closes the scope, but on the happy path the
    * main deadline has budget remaining and is used directly for the close. */
   const cleanupOf = (): AbortSignal => {
-    if (!cleanupHolder.current) cleanupHolder.current = newSharedCleanup();
+    if (!cleanupHolder.current) cleanupHolder.current = startCleanupBudget();
     return cleanupHolder.current.signal;
   };
   /** G5: a terminal ACK on the HAPPY path (completed/interrupted/failed during
@@ -836,7 +805,7 @@ async function handleAbort(input: {
   const chainSignal: AbortSignal = cleanupSignal
     ? cleanupSignal
     : (() => {
-        const c = newSharedCleanup();
+        const c = startCleanupBudget();
         ownDispose = c.dispose;
         return c.signal;
       })();
@@ -1103,7 +1072,7 @@ async function recoverAndClose(input: {
   const cleanup: AbortSignal =
     input.signal ??
     (() => {
-      const c = newSharedCleanup();
+      const c = startCleanupBudget();
       ownDispose = c.dispose;
       return c.signal;
     })();
