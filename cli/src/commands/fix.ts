@@ -3,7 +3,7 @@
  * until consensus (or max rounds), apply that plan, then optionally start a
  * follow-up PR jury. The Host may spawn this command; agents still bypass Host.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import {
@@ -16,6 +16,7 @@ import {
   type CliRunPlanVerdict,
   type CliRunProgressPhase,
 } from "@shared/runtime/cli-run-progress";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
@@ -441,15 +442,9 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
 
         const planWorkspace = join(runDir, "workspaces", `plan-draft-${round}`);
         mkdirSync(planWorkspace, { recursive: true, mode: 0o700 });
-        writeFileSync(join(planWorkspace, PLAN_REVIEW_FILE), report, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        replacePrivateFile(join(planWorkspace, PLAN_REVIEW_FILE), report);
         if (draft.length > 0) {
-          writeFileSync(join(planWorkspace, PLAN_WORKSPACE_FILE), draft, {
-            encoding: "utf8",
-            mode: 0o600,
-          });
+          replacePrivateFile(join(planWorkspace, PLAN_WORKSPACE_FILE), draft);
         }
         const plannerPrompt = buildPlanDraftPrompt({
           agentName: planner.name,
@@ -503,8 +498,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         for (const [index, agent] of activeJury.entries()) {
           const cwd = join(reviewWorkspaceRoot, `attempt-${index}`);
           mkdirSync(cwd, { recursive: true, mode: 0o700 });
-          writeFileSync(join(cwd, PLAN_REVIEW_FILE), report, { encoding: "utf8", mode: 0o600 });
-          writeFileSync(join(cwd, PLAN_WORKSPACE_FILE), draft, { encoding: "utf8", mode: 0o600 });
+          replacePrivateFile(join(cwd, PLAN_REVIEW_FILE), report);
+          replacePrivateFile(join(cwd, PLAN_WORKSPACE_FILE), draft);
           const spec = buildSpawnSpec(agent, {
             attemptId: `plan-${round}-attempt-${index}`,
             workspace: cwd,
@@ -948,7 +943,7 @@ async function probeAgent(
 }
 
 function writePlan(path: string, body: string): void {
-  writeFileSync(path, `${body.trim()}\n`, { encoding: "utf8", mode: 0o600 });
+  replacePrivateFile(path, `${body.trim()}\n`);
 }
 
 function readRequired(path: string, label: string): string {

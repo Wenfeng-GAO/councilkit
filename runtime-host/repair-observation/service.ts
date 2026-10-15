@@ -4,10 +4,11 @@
  * Failures never affect repair execution.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import {
   REPAIR_OBS_DETAIL_CHUNK,
   REPAIR_OBS_PAGE_LIMIT,
@@ -102,8 +103,7 @@ function parseRound(raw: string | null): number | "current" {
 function tryWriteCache(env: NodeJS.ProcessEnv, key: string, value: unknown): void {
   try {
     const root = join(resolveCouncilkitHome(env), "observation-cache");
-    mkdirSync(root, { recursive: true, mode: 0o700 });
-    writeFileSync(join(root, `${key}.json`), JSON.stringify(value), { mode: 0o600 });
+    replacePrivateFile(join(root, `${key}.json`), JSON.stringify(value));
   } catch {
     // Cache failure must not affect observation correctness or repair execution.
   }

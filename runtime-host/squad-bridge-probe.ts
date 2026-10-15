@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
+import { readPrivateText, replacePrivateFile } from "@shared/runtime/durable-write";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import type { SquadBridgeProbe } from "@shared/runtime/squad-bridge-discovery";
 import { resolveCouncilkitSpawn } from "./cli-launcher";
@@ -69,7 +69,9 @@ function diagnosisPath(env: NodeJS.ProcessEnv): string {
 
 function readDiagnosis(env: NodeJS.ProcessEnv): { at: number; probe: SquadBridgeProbe } | null {
   try {
-    const parsed = JSON.parse(readFileSync(diagnosisPath(env), "utf8")) as {
+    const text = readPrivateText(diagnosisPath(env));
+    if (text === null) return null;
+    const parsed = JSON.parse(text) as {
       at?: number;
       probe?: SquadBridgeProbe;
     };
@@ -81,13 +83,11 @@ function readDiagnosis(env: NodeJS.ProcessEnv): { at: number; probe: SquadBridge
 }
 
 function writeDiagnosis(env: NodeJS.ProcessEnv, probe: SquadBridgeProbe): void {
-  const path = diagnosisPath(env);
   try {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, `${JSON.stringify({ at: Date.now(), probe }, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    replacePrivateFile(
+      diagnosisPath(env),
+      `${JSON.stringify({ at: Date.now(), probe }, null, 2)}\n`,
+    );
   } catch {
     // cache is optional
   }

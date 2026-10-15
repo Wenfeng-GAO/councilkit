@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonicalJson } from "@shared/runtime/digest";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import {
   type OfficialDeliveryAuthority,
   type OfficialGatePolicyFile,
@@ -82,7 +83,7 @@ export function writePolicyIntent(
   mkdirSync(taskDir, { recursive: true, mode: 0o700 });
   const policyFile = join(taskDir, "councilkit-gate-policy.json");
   const body = `${JSON.stringify(policy, null, 2)}\n`;
-  writeFileSync(policyFile, body, { encoding: "utf8", mode: 0o600 });
+  replacePrivateFile(policyFile, body);
   const policyFileHash = hashOfficialGatePolicyFile(policy);
   atomicWriteJson(join(taskDir, CK_POLICY_INTENT_FILE), {
     taskId: extra?.taskId ?? null,

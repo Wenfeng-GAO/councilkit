@@ -5,12 +5,13 @@
  * never spawns Host.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, existsSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
 import { isPidAlive } from "@shared/runtime/cli-run-progress";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
+import { openNoFollowAppend } from "@shared/runtime/durable-write";
 import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
 import { terminateChild } from "@shared/runtime/terminate-child";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
@@ -102,7 +103,7 @@ export function defaultCliRunLauncher(): CliRunLauncher {
       // Inherit real fds, not a shared WriteStream: Node refuses (or silently
       // drops) the same stream on both stdout and stderr for a detached child,
       // which left an empty pipeline.log and no pid after 「立即修复」.
-      const logFd = openSync(input.logPath, "a");
+      const logFd = openNoFollowAppend(input.logPath);
       try {
         const child = spawn(spawnSpec.execPath, [...spawnSpec.argvPrefix, ...args], {
           detached: true,

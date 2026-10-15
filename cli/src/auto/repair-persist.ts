@@ -9,6 +9,7 @@ import {
 } from "@shared/runtime/cli-run-progress";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
+import { appendPrivateFile } from "@shared/runtime/durable-write";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
@@ -254,5 +255,5 @@ function ensureEmptyJournal(runDir: string): void {
 export function appendRepairJournal(runDir: string, record: Record<string, unknown>): void {
   const path = join(runDir, REPAIR_JOURNAL_FILE);
   ensureEmptyJournal(runDir);
-  writeFileSync(path, `${JSON.stringify(record)}\n`, { encoding: "utf8", flag: "a", mode: 0o600 });
+  appendPrivateFile(path, `${JSON.stringify(record)}\n`);
 }

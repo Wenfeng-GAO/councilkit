@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import {
   type IsolationCapability,
   type IsolationMode,
@@ -66,7 +67,7 @@ export function wrapIsolatedSpawn(input: {
     credentialHome: input.credentialHome,
   });
   const profilePath = join(input.tmpDir, "sandbox.sb");
-  writeFileSync(profilePath, profile, { encoding: "utf8", mode: 0o600 });
+  replacePrivateFile(profilePath, profile);
   return {
     executable: sandboxExecBin(),
     argv: ["-f", profilePath, input.executable, ...input.argv],

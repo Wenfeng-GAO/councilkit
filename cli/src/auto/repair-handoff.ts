@@ -1,14 +1,8 @@
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { join, sep } from "node:path";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
+import { mkdirPrivate, readPrivateText } from "@shared/runtime/durable-write";
 import { errors } from "../errors";
 import { ensureHome, resolvePaths } from "../store/paths";
 
@@ -59,8 +53,8 @@ export function readRepairHandoff(input: {
   const home = ensureHome();
   const dir = input.directory ?? join(home, "handoff");
   const file = join(dir, `${input.runId}-c${input.cycle}.json`);
-  if (!existsSync(file)) return null;
-  const payload = readFileSync(file, "utf8");
+  const payload = readPrivateText(file);
+  if (payload === null) return null;
   return {
     path: file,
     sha256: createHash("sha256").update(payload).digest("hex"),
@@ -80,19 +74,14 @@ export function ensureRepairHandoff(input: {
 }
 
 function assertSafeHandoffDir(dir: string, runsRoot: string): string {
-  mkdirSync(dirname(dir), { recursive: true, mode: 0o700 });
   try {
-    const st = lstatSync(dir);
-    if (st.isSymbolicLink()) {
+    mkdirPrivate(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "ENOTDIR") {
       throw errors.usage("repair handoff directory must not be a symlink");
     }
-  } catch (error) {
-    if (error instanceof Error && error.name === "CliError") throw error;
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  const after = lstatSync(dir);
-  if (after.isSymbolicLink()) {
-    throw errors.usage("repair handoff directory must not be a symlink");
+    throw error;
   }
   const real = realpathSync(dir);
   const realRuns = realpathSync(runsRoot);

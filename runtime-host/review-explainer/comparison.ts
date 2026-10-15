@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { mkdirPrivate, replacePrivateFile } from "@shared/runtime/durable-write";
 import type {
   ReviewComparison,
   ReviewComparisonMode,
@@ -96,11 +97,11 @@ export function reviewComparison(runId: string, mode: ReviewComparisonMode): Rev
     // Own metadata prevents repository info/attributes, shallow markers, grafts and
     // diff configuration from changing the meaning of the two frozen object IDs.
     gitDir = mkdtempSync(join(tmpdir(), "ck-review-comparison-"));
-    mkdirSync(join(gitDir, "objects"), { mode: 0o700 });
-    mkdirSync(join(gitDir, "refs", "heads"), { recursive: true, mode: 0o700 });
-    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/frozen\n", { mode: 0o600 });
-    writeFileSync(join(gitDir, "config"), "[core]\n bare = true\n", { mode: 0o600 });
-    writeFileSync(join(gitDir, "refs", "heads", "frozen"), `${toSha}\n`, { mode: 0o600 });
+    mkdirPrivate(join(gitDir, "objects"));
+    mkdirPrivate(join(gitDir, "refs", "heads"));
+    replacePrivateFile(join(gitDir, "HEAD"), "ref: refs/heads/frozen\n");
+    replacePrivateFile(join(gitDir, "config"), "[core]\n bare = true\n");
+    replacePrivateFile(join(gitDir, "refs", "heads", "frozen"), `${toSha}\n`);
     try {
       if (git(["cat-file", "-t", toSha]).trim() !== "commit") throw new Error("invalid head");
     } catch {

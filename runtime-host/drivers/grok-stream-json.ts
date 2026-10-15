@@ -1,7 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { LIMITS } from "@shared/runtime/contracts";
-import type { ToolState } from "@shared/runtime/contracts";
+import { LIMITS, type ToolState } from "@shared/runtime/contracts";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
@@ -458,7 +458,7 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
           : input.coldStart
             ? `${DISCUSSION_CONTRACT}\n\n${input.prompt}`
             : input.prompt;
-      await writeFile(join(cwd, PROMPT_FILE), renderedPrompt, "utf8");
+      replacePrivateFile(join(cwd, PROMPT_FILE), renderedPrompt);
 
       state = "busy";
       emit({ type: "started", requestedModel: input.modelId } as DriverEvent);

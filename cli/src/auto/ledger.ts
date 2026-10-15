@@ -7,7 +7,7 @@
  * that ledger instead of rediscovering the whole PR vs master.
  */
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ReviewFinding, parseReviewReport } from "@/lib/review-report";
 import { markdownLines } from "@shared/runtime/aggregator-verdict";
@@ -36,6 +36,7 @@ import {
   planLockFileSchema,
   sortLedgerFindings,
 } from "@shared/runtime/cli-ledger";
+import { appendPrivateFile } from "@shared/runtime/durable-write";
 import type { DecisionsFile } from "@shared/runtime/review-explainer/contracts";
 import {
   ASSESSMENT_DIAGNOSTICS_FILE,
@@ -455,10 +456,7 @@ export function writePlanLock(runDir: string, file: PlanLockFile): void {
 export function appendLanding(runDir: string, record: LandingRecord): void {
   const path = join(runDir, CLI_RUN_LANDINGS_FILE);
   assertRegularOrMissing(path);
-  appendFileSync(path, `${JSON.stringify(record)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  appendPrivateFile(path, `${JSON.stringify(record)}\n`);
 }
 
 function mergeFindingEvidence(stronger: boolean, evidence: string, summary: string): string {
