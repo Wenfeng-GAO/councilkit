@@ -1,8 +1,14 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cachedCodexModels, configuredCodexModel, readJury, readReviewJury, runJury } from "../src/commands/jury";
+import {
+  cachedCodexModels,
+  configuredCodexModel,
+  readJury,
+  readReviewJury,
+  runJury,
+} from "../src/commands/jury";
 import type { OutputSink } from "../src/output";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
@@ -163,7 +169,51 @@ describe("default jury configuration", () => {
   it("treats a blank CODEX_HOME as unset and trims a padded path", () => {
     writeFileSync(join(home, "config.toml"), 'model = "gpt-6-astra"\n');
     expect(configuredCodexModel({ CODEX_HOME: `  ${home}  ` })).toBe("gpt-6-astra");
-    expect(configuredCodexModel({ CODEX_HOME: "" })).toBe(configuredCodexModel({}));
-    expect(configuredCodexModel({ CODEX_HOME: " \t " })).toBe(configuredCodexModel({}));
+
+    const userHome = join(home, "user");
+    mkdirSync(join(userHome, ".codex"), { recursive: true });
+    writeFileSync(join(userHome, ".codex", "config.toml"), 'model = "gpt-6-from-home"\n');
+    const previous = process.env.HOME;
+    process.env.HOME = userHome;
+    try {
+      expect(configuredCodexModel({ CODEX_HOME: "" })).toBe("gpt-6-from-home");
+      expect(configuredCodexModel({ CODEX_HOME: " \t " })).toBe("gpt-6-from-home");
+      expect(configuredCodexModel({})).toBe("gpt-6-from-home");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "HOME");
+      else process.env.HOME = previous;
+    }
+  });
+
+  it("treats a blank CODEX_HOME as unset when reading the model cache", () => {
+    const userHome = join(home, "user");
+    const codex = join(userHome, ".codex");
+    mkdirSync(codex, { recursive: true });
+    writeFileSync(
+      join(codex, "models_cache.json"),
+      `${JSON.stringify({
+        models: [
+          { slug: "gpt-6.1-sol", visibility: "list" },
+          { slug: "hidden", visibility: "hide" },
+        ],
+      })}\n`,
+    );
+    const padded = join(home, "padded-codex");
+    mkdirSync(padded, { recursive: true });
+    writeFileSync(
+      join(padded, "models_cache.json"),
+      `${JSON.stringify({ models: [{ slug: "padded-slug", visibility: "list" }] })}\n`,
+    );
+    const previous = process.env.HOME;
+    process.env.HOME = userHome;
+    try {
+      expect(cachedCodexModels({ CODEX_HOME: "" })).toEqual(["gpt-6.1-sol"]);
+      expect(cachedCodexModels({ CODEX_HOME: " \t " })).toEqual(["gpt-6.1-sol"]);
+      expect(cachedCodexModels({})).toEqual(["gpt-6.1-sol"]);
+      expect(cachedCodexModels({ CODEX_HOME: `  ${padded}  ` })).toEqual(["padded-slug"]);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "HOME");
+      else process.env.HOME = previous;
+    }
   });
 });

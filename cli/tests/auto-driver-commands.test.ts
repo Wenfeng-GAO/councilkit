@@ -526,6 +526,20 @@ describe("cli auto driver-commands", () => {
       expect(existsSync(join(cwd, GROK_ISOLATED_HOME_DIR))).toBe(false);
     });
 
+    it("copies grok credentials from a padded GROK_HOME", () => {
+      const orig = mkdtempSync(join(tmpdir(), "ck-grok-padded-"));
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-padded-cwd-"));
+      writeFileSync(join(orig, "auth.json"), '{"token":"padded"}\n', { mode: 0o600 });
+      const env = spawnEnvForDriver(
+        "grok-stream-json",
+        cwd,
+        { PATH: "/bin", GROK_HOME: `  ${orig}  ` },
+        { localProxyPort: () => null },
+      );
+      expect(readFileSync(join(env.GROK_HOME ?? "", "auth.json"), "utf8")).toContain("padded");
+      disposeIsolatedGrokHome(cwd);
+    });
+
     it("grok isolated config replaces a stale skills=true file", () => {
       const cwd = mkdtempSync(join(tmpdir(), "ck-grok-stale-"));
       const first = spawnEnvForDriver(
@@ -633,7 +647,14 @@ describe("cli auto driver-commands", () => {
           },
         },
       );
-      for (const k of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]) {
+      for (const k of [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+      ]) {
         expect(env[k]).toBeUndefined();
       }
       expect(env.NO_PROXY).toBe("*");
@@ -643,7 +664,12 @@ describe("cli auto driver-commands", () => {
 
     it("claude/cursor spawn env is parent env + PWD (no proxy injection)", () => {
       for (const id of ["claude-stream-json", "cursor-stream-json"]) {
-        const env = spawnEnvForDriver(id, "/tmp/x", { PATH: "/bin" }, { localProxyPort: () => 7897 });
+        const env = spawnEnvForDriver(
+          id,
+          "/tmp/x",
+          { PATH: "/bin" },
+          { localProxyPort: () => 7897 },
+        );
         expect(env).toEqual({ PATH: "/bin", PWD: "/tmp/x" });
       }
     });

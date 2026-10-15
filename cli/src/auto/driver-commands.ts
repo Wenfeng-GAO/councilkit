@@ -368,7 +368,8 @@ export function spawnEnvForDriver(
       GROK_CURSOR_SKILLS_ENABLED: _cursorSkills,
       ...rest
     } = base;
-    const isolated = isolateGrokHome(cwd, origHome, { warm: opts?.warmGrokHome === true });
+    const grokSource = nonBlank(origHome);
+    const isolated = isolateGrokHome(cwd, grokSource, { warm: opts?.warmGrokHome === true });
     const next: NodeJS.ProcessEnv = {
       ...rest,
       PWD: cwd,
@@ -376,8 +377,8 @@ export function spawnEnvForDriver(
       GROK_CURSOR_SKILLS_ENABLED: "false",
       ...(isolated !== null
         ? { GROK_HOME: isolated }
-        : origHome !== undefined
-          ? { GROK_HOME: origHome }
+        : grokSource !== undefined
+          ? { GROK_HOME: grokSource }
           : {}),
     };
     return withLocalHttpProxy(next, opts?.localProxyPort ?? detectListeningLocalProxy);
@@ -473,8 +474,7 @@ export function ensureWarmGrokHome(origHome: string | undefined): string | null 
 }
 
 function refreshWarmGrokHome(dir: string, origHome: string | undefined): void {
-  const src =
-    origHome !== undefined && origHome.trim().length > 0 ? origHome : join(homedir(), ".grok");
+  const src = nonBlank(origHome) ?? join(homedir(), ".grok");
   copyGrokCredentials(src, dir, { overwrite: true });
   writeIsolatedGrokConfig(dir, ISOLATED_GROK_CONFIG);
 }
@@ -495,8 +495,7 @@ function isolateGrokHome(
   }
   const ideate = existsSync(join(cwd, IDEATE_POLICY_MARKER));
   if (!ideate) {
-    const src =
-      origHome !== undefined && origHome.trim().length > 0 ? origHome : join(homedir(), ".grok");
+    const src = nonBlank(origHome) ?? join(homedir(), ".grok");
     copyGrokCredentials(src, isolated);
   }
   writeIsolatedGrokConfig(isolated, ideate ? IDEATE_GROK_CONFIG : ISOLATED_GROK_CONFIG);

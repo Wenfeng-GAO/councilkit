@@ -36,6 +36,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { mkdirPrivate, replacePrivateFile } from "@shared/runtime/durable-write";
+import { nonBlank } from "@shared/runtime/non-blank";
 import { errors } from "../errors";
 
 export const IDEATE_POLICY_MARKER = ".councilkit-ideate-policy";
@@ -667,9 +668,7 @@ function writeRestrictedFile(path: string, contents: string): void {
 }
 
 function kimiSourceHome(env: NodeJS.ProcessEnv): string {
-  return typeof env.KIMI_CODE_HOME === "string" && env.KIMI_CODE_HOME.trim().length > 0
-    ? env.KIMI_CODE_HOME
-    : join(env.HOME && env.HOME.trim().length > 0 ? env.HOME : homedir(), ".kimi-code");
+  return nonBlank(env.KIMI_CODE_HOME) ?? join(nonBlank(env.HOME) ?? homedir(), ".kimi-code");
 }
 
 function readKimiSourceConfig(env: NodeJS.ProcessEnv): string {
@@ -689,10 +688,7 @@ function copyKimiAuth(destHome: string, env: NodeJS.ProcessEnv): void {
 }
 
 function copyGrokAuth(destHome: string, env: NodeJS.ProcessEnv): void {
-  const srcHome =
-    typeof env.GROK_HOME === "string" && env.GROK_HOME.trim().length > 0
-      ? env.GROK_HOME
-      : join(env.HOME && env.HOME.trim().length > 0 ? env.HOME : homedir(), ".grok");
+  const srcHome = nonBlank(env.GROK_HOME) ?? join(nonBlank(env.HOME) ?? homedir(), ".grok");
   for (const name of ["auth.json", "credentials.json"] as const) {
     copyAuthTree(join(srcHome, name), join(destHome, name));
   }

@@ -188,9 +188,7 @@ describe("squad bridge discovery", () => {
         roles: { reviewer: { runtime: "codex", model: "gpt-5.6-sol" } },
       })}\n`,
     );
-    const probe = probeSquadBridge(
-      isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }),
-    );
+    const probe = probeSquadBridge(isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }));
     expect(probe.available).toBe(true);
     expect(probe.orchestrator?.model).toBe("grok-4.7-xhigh");
     const blankModel = probeSquadBridge(
@@ -246,6 +244,25 @@ describe("squad bridge discovery", () => {
     expect(probe.orchestrator?.requestedRuntime).toBe("grokb");
     expect(probe.orchestrator?.executable).toBe(grokb);
     expect(probe.orchestrator?.model).toBe("grok-4.6");
+  });
+
+  it("trims a padded CODEX_HOME that is not the default under HOME", () => {
+    const root = tempDir("ck-padded-codex-");
+    const codex = join(root, "codex");
+    const skillDir = seedSkill(codex);
+    const grokb = seedGrokb(join(root, "bin"));
+    const probe = probeSquadBridge(
+      isolatedEnv({
+        HOME: join(root, "empty-home"),
+        PATH: join(root, "empty-path"),
+        CODEX_HOME: `  ${codex}  `,
+        COUNCILKIT_GROKB: grokb,
+        COUNCILKIT_ORCHESTRATOR_RUNTIME: "grokb",
+      }),
+    );
+    expect(probe.available).toBe(true);
+    expect(probe.executable).toBe(join(skillDir, "scripts", "squadctl"));
+    expect(probe.skillDir).toBe(skillDir);
   });
 
   it("trims a padded explicit squadctl path instead of treating the spaces as part of it", () => {
@@ -363,7 +380,9 @@ describe("squad bridge discovery", () => {
     expect(probe.orchestrator).toBeNull();
     expect(readFileSync(configPath, "utf8")).toBe("{not json\n");
     chmodSync(configPath, 0o000);
-    const denied = probeSquadBridge(isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }));
+    const denied = probeSquadBridge(
+      isolatedEnv({ HOME: home, PATH: bin, COUNCILKIT_HOME: ckHome }),
+    );
     expect(denied.available).toBe(false);
     expect(denied.reason).toMatch(/无法读取/);
     chmodSync(configPath, 0o600);

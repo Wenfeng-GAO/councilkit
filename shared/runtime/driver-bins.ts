@@ -6,11 +6,10 @@
  */
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { nonBlank } from "./non-blank";
 
 export function vendorHome(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.HOME;
-  if (home !== undefined && home.trim().length > 0) return home;
-  return homedir();
+  return nonBlank(env.HOME) ?? homedir();
 }
 
 /** kimi-code and grok TUI install under their data dirs, not always on PATH. */

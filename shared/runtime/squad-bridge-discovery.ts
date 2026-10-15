@@ -1,7 +1,7 @@
 import { constants, accessSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { userCliBinDirs, vendorDriverBinDirs, vendorHome } from "./driver-bins";
-import { firstNonBlank } from "./non-blank";
+import { firstNonBlank, nonBlank } from "./non-blank";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "./squad-bridge-contract";
 import {
   type SquadBridgeFile,
@@ -240,8 +240,9 @@ function namedSkill(path: string): boolean {
 function namedSkillDirs(env: NodeJS.ProcessEnv, home: string, configSkillDir?: string): string[] {
   const roots: string[] = [];
   const addRoot = (value: string | undefined): void => {
-    if (!value || value.trim().length === 0) return;
-    const resolved = resolvePath(value);
+    const picked = nonBlank(value);
+    if (picked === undefined) return;
+    const resolved = resolvePath(picked);
     if (isSkillDir(resolved) && namedSkill(resolved) && !roots.includes(resolved)) {
       roots.push(resolved);
     }

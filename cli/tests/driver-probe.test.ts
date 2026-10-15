@@ -486,4 +486,14 @@ describe("driver-probe cache + lightweight", () => {
     );
     expect(reviewEnv.GROK_HOME).toBe(join(reviewCwd, GROK_ISOLATED_HOME_DIR));
   });
+
+  it("copies warm grok credentials from a padded GROK_HOME", () => {
+    resetWarmGrokHomeForTests();
+    const orig = mkdtempSync(join(tmpdir(), "ck-grok-warm-padded-"));
+    writeFileSync(join(orig, "auth.json"), '{"token":"warm-padded"}\n', { mode: 0o600 });
+    const first = ensureWarmGrokHome(`  ${orig}  `);
+    expect(first).not.toBeNull();
+    expect(readFileSync(join(first ?? "", "auth.json"), "utf8")).toContain("warm-padded");
+    resetWarmGrokHomeForTests();
+  });
 });
