@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "./cli-home";
+import { DEFAULT_MODEL_ALIASES } from "./default-model-alias";
 
 export const CURSOR_REPAIR_MODEL = "grok-4.7[context=500k,reasoning_effort=xhigh,fast=false]";
 
@@ -71,7 +72,7 @@ const BUILDER_SEATS: readonly RepairSeat[] = ["orchestrator", "planner_a", "code
 
 const INDEPENDENT_SEATS: readonly RepairSeat[] = ["planner_b", "reviewer", "verifier"];
 
-const UNPINNED_MODELS = new Set(["auto", "default", "configured", "current"]);
+const UNPINNED_MODELS = new Set<string>([...DEFAULT_MODEL_ALIASES, "current"]);
 
 const BUILDER_MISMATCH =
   "连续 Builder（planner_a 与 coder）必须和 Orchestrator 使用同一 runtime/model，并续接同一 native session。独立 Builder 必须是显式 fresh session；当前控制器不实现该模式，已拒绝，避免把另一次会话伪装成连续 Builder。请同时保持这三席一致，或只改 orchestrator（planner_a 与 coder 会跟着走）。";

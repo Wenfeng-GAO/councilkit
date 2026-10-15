@@ -37,6 +37,7 @@ import {
 import { homedir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
 import { errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
@@ -109,11 +110,6 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
 
 export function executableForDriver(driverId: string): string | undefined {
   return EXECUTABLE_BY_DRIVER[driverId];
-}
-
-export function isCursorDefaultModel(modelId: string): boolean {
-  const id = modelId.trim().toLowerCase();
-  return id === "auto" || id === "default" || id === "configured";
 }
 
 function codexEffortArgv(agent: AgentRecord): string[] {
@@ -728,7 +724,7 @@ function buildInvocation(
       } else {
         argv.push("stream-json", "--stream-partial-output", "--force", "--trust");
       }
-      if (!isCursorDefaultModel(agent.modelId)) {
+      if (!isDefaultModelAlias(agent.modelId)) {
         argv.push("--model", agent.modelId);
       }
       if (opts.workspace) argv.push("--workspace", opts.workspace);
@@ -880,7 +876,7 @@ function buildIdeateInvocation(
         "--trust",
       ];
       if (!probe) argv.splice(3, 0, "--stream-partial-output");
-      if (!isCursorDefaultModel(agent.modelId)) argv.push("--model", agent.modelId);
+      if (!isDefaultModelAlias(agent.modelId)) argv.push("--model", agent.modelId);
       argv.push("--workspace", workspace);
       return { argv, promptStdin: true };
     }
@@ -894,7 +890,7 @@ function buildIdeateInvocation(
         "--skip-git-repo-check",
         "--json",
       ];
-      if (!isCodexDefaultModel(agent.modelId)) argv.push("-m", agent.modelId);
+      if (!isDefaultModelAlias(agent.modelId)) argv.push("-m", agent.modelId);
       argv.push(...codexEffortArgv(agent), "-o", lastMessageFile, "-");
       return { argv, promptStdin: true, lastMessageFile };
     }
@@ -904,11 +900,6 @@ function buildIdeateInvocation(
       );
     }
   }
-}
-
-export function isCodexDefaultModel(modelId: string): boolean {
-  const id = modelId.trim().toLowerCase();
-  return id === "default" || id === "auto" || id === "configured";
 }
 
 /** Restricted discussion spawn: real plan/sandbox/deny-tools + isolated config. */
