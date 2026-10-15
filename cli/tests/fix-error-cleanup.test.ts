@@ -21,6 +21,8 @@ import { Store } from "../src/store/store";
 const applyState = vi.hoisted(() => ({
   failMessage: null as string | null,
   calls: 0,
+  exitCode: null as number | null,
+  onCall: null as (() => void) | null,
 }));
 
 vi.mock("../src/commands/apply", async () => {
@@ -30,9 +32,13 @@ vi.mock("../src/commands/apply", async () => {
     ...actual,
     runApply: async () => {
       applyState.calls += 1;
+      applyState.onCall?.();
       if (applyState.failMessage !== null) {
         const { errors } = await import("../src/errors");
         throw errors.io(applyState.failMessage);
+      }
+      if (applyState.exitCode !== null) {
+        throw new actual.ApplyExit(applyState.exitCode);
       }
       throw new Error("unexpected runApply");
     },
@@ -45,7 +51,7 @@ const REPO = "github.com/acme/repo";
 const BRANCH = "feat-x";
 const FOREIGN_RUN = "ck-repair-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee3";
 
-function makeSink() {
+function makeSink(onFinish?: () => void) {
   return {
     json: false,
     lines: [] as string[],
@@ -56,6 +62,7 @@ function makeSink() {
     diag() {},
     finish(data: unknown) {
       this.finished = data;
+      onFinish?.();
       return Promise.resolve();
     },
   };
@@ -70,6 +77,8 @@ describe("fix command error cleanup", () => {
   beforeEach(() => {
     applyState.failMessage = null;
     applyState.calls = 0;
+    applyState.exitCode = null;
+    applyState.onCall = null;
     home = mkdtempSync(join(tmpdir(), "ck-fix-cleanup-"));
     bin = join(home, "bin");
     mkdirSync(bin, { recursive: true });
@@ -290,6 +299,88 @@ describe("fix command error cleanup", () => {
     expect(applyState.calls).toBe(0);
     expect(process.listenerCount("SIGINT")).toBe(sigint);
     expect(process.listenerCount("SIGTERM")).toBe(sigterm);
+    expect(existsSync(leaseFile())).toBe(false);
+  });
+
+  it("keeps a lease granted during stdout drain after the fix release returns", async () => {
+    seedRoster();
+    seedReview();
+    seedApprovedPlan();
+    applyState.exitCode = 0;
+    let grantedDuringDrain = false;
+    const sink = makeSink(() => {
+      acquireWriterLease({
+        repo: REPO,
+        sourceBranch: BRANCH,
+        holderKind: "apply",
+        holderRunId: RUN_ID,
+        pid: process.pid,
+      });
+      grantedDuringDrain = existsSync(leaseFile());
+    });
+
+    try {
+      await runFix(["--run", RUN_ID, "--no-re-review"], sink, {
+        spawnImpl: refuseSpawn,
+        runCommand: ghView(),
+      });
+      throw new Error("expected FixExit");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FixExit);
+      expect((error as FixExit).exitCode).toBe(0);
+    }
+
+    const left = existsSync(leaseFile()) ? readFileSync(leaseFile(), "utf8") : "";
+    expect({
+      calls: applyState.calls,
+      grantedDuringDrain,
+      holderKind: left.includes('"holderKind": "apply"'),
+      holderRunId: left.includes(RUN_ID),
+    }).toEqual({
+      calls: 1,
+      grantedDuringDrain: true,
+      holderKind: true,
+      holderRunId: true,
+    });
+    expect(() =>
+      acquireWriterLease({
+        repo: REPO,
+        sourceBranch: BRANCH,
+        holderKind: "repair",
+        holderRunId: FOREIGN_RUN,
+        pid: process.pid,
+      }),
+    ).toThrow(/writer already holds/i);
+  });
+
+  it("retries a blocked lease release from finally once the extra writer pid is gone", async () => {
+    seedRoster();
+    seedReview();
+    seedApprovedPlan();
+    applyState.exitCode = 0;
+    applyState.onCall = () => {
+      const lease = JSON.parse(readFileSync(leaseFile(), "utf8")) as { writerPids?: number[] };
+      lease.writerPids = [process.pid];
+      writeFileSync(leaseFile(), `${JSON.stringify(lease, null, 2)}\n`);
+    };
+    const sink = makeSink(() => {
+      const lease = JSON.parse(readFileSync(leaseFile(), "utf8")) as { writerPids?: number[] };
+      delete lease.writerPids;
+      writeFileSync(leaseFile(), `${JSON.stringify(lease, null, 2)}\n`);
+    });
+
+    try {
+      await runFix(["--run", RUN_ID, "--no-re-review"], sink, {
+        spawnImpl: refuseSpawn,
+        runCommand: ghView(),
+      });
+      throw new Error("expected FixExit");
+    } catch (error) {
+      expect(error).toBeInstanceOf(FixExit);
+      expect((error as FixExit).exitCode).toBe(0);
+    }
+
+    expect(applyState.calls).toBe(1);
     expect(existsSync(leaseFile())).toBe(false);
   });
 });
