@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   activityPresentation,
   goalPresentation,
@@ -6,6 +5,7 @@ import {
   roleName,
 } from "@/components/report/repair-workspace/presentation";
 import type { RepairOperation } from "@shared/runtime/repair-observation";
+import { describe, expect, it } from "vitest";
 const op = (patch: Partial<RepairOperation>): RepairOperation => ({
   eventId: "event",
   sourceId: "source",

@@ -28,7 +28,9 @@ export function IdeateIntegrityCard({ integrity }: { integrity: IdeateIntegrityD
           型号配置 <strong>{integrity.successfulModels}</strong> / {integrity.configuredModels}
         </li>
       </ul>
-      {integrity.contextTruncated ? <p className="ck-ideate-integrity-note">上下文曾被截断。</p> : null}
+      {integrity.contextTruncated ? (
+        <p className="ck-ideate-integrity-note">上下文曾被截断。</p>
+      ) : null}
       {integrity.failedSeats.length > 0 ? (
         <ul className="ck-ideate-integrity-failures">
           {integrity.failedSeats.map((seat) => (
@@ -37,9 +39,7 @@ export function IdeateIntegrityCard({ integrity }: { integrity: IdeateIntegrityD
                 {ideateStageLabel(seat.stage)} · {seat.agentName}
               </span>
               <code>{seat.code}</code>
-              {seat.message.trim().length > 0 ? (
-                <p>{oneLineIdeateMessage(seat.message)}</p>
-              ) : null}
+              {seat.message.trim().length > 0 ? <p>{oneLineIdeateMessage(seat.message)}</p> : null}
             </li>
           ))}
         </ul>

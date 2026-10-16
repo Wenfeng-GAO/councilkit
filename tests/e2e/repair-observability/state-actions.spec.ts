@@ -1,5 +1,6 @@
 import { type Page, expect, test } from "@playwright/test";
 import { PARENT_RUN_ID } from "./constants";
+import { textProgress } from "./fixtures/cursor-events";
 import {
   advanceClock,
   appendLines,
@@ -14,7 +15,6 @@ import {
   resetFixture,
   seedLine,
 } from "./helpers";
-import { textProgress } from "./fixtures/cursor-events";
 
 test.describe.configure({ mode: "default" });
 

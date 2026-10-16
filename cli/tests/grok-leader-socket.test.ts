@@ -299,7 +299,6 @@ describe("grokLeaderSocket AF_UNIX path", () => {
     } finally {
       if (prev === undefined) {
         // process.env.TMPDIR = undefined becomes the string "undefined".
-        // biome-ignore lint/performance/noDelete: restore an unset env var
         delete process.env.TMPDIR;
       } else process.env.TMPDIR = prev;
     }

@@ -344,9 +344,7 @@ function readRepairProjection(
       reasonCode: typeof rec.reasonCode === "string" ? rec.reasonCode : null,
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : null,
       lastError:
-        typeof rec.lastError === "string"
-          ? clipUtf16(rec.lastError, CLI_RUN_LAST_ERROR_MAX)
-          : null,
+        typeof rec.lastError === "string" ? clipUtf16(rec.lastError, CLI_RUN_LAST_ERROR_MAX) : null,
       outerUsed,
       outerMax,
       resumeEligible:

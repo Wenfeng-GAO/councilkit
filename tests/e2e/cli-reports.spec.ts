@@ -139,7 +139,9 @@ test("review 总览「复制」按钮复制短清单而非完整报告", async (
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
 
   // Wait for the page to load
-  const overview = page.locator("text=本轮总览").or(page.getByRole("heading", { name: "本轮总览" }));
+  const overview = page
+    .locator("text=本轮总览")
+    .or(page.getByRole("heading", { name: "本轮总览" }));
   await expect(overview).toBeVisible({ timeout: 10000 });
 
   // Check that we're on the overview (not a seat detail)
@@ -183,7 +185,9 @@ test("review 总览有「复制完整报告」按钮作为次要选项", async (
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
 
   // Wait for the page to load
-  const overview = page.locator("text=本轮总览").or(page.getByRole("heading", { name: "本轮总览" }));
+  const overview = page
+    .locator("text=本轮总览")
+    .or(page.getByRole("heading", { name: "本轮总览" }));
   await expect(overview).toBeVisible({ timeout: 10000 });
 
   // Check for the secondary "copy full report" button

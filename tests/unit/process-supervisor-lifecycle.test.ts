@@ -12,6 +12,7 @@ import {
   type ProcessSupervisor,
   createProcessSupervisor,
 } from "../../runtime-host/process/process-supervisor";
+import { childEnvFromLine } from "../helpers/os-injected-env";
 
 const WATCHDOG_PROGRAM = new URL("../../runtime-host/process/watchdog-child.mjs", import.meta.url)
   .pathname;
@@ -331,7 +332,9 @@ describe("driver lifecycle", () => {
       CANARY_SECRET_TOKEN: process.env.CANARY_SECRET_TOKEN,
       NODE_OPTIONS: process.env.NODE_OPTIONS,
       ALLOWED_CANARY: process.env.ALLOWED_CANARY,
+      CK_QA_CANARY: process.env.CK_QA_CANARY,
     };
+    process.env.CK_QA_CANARY = "1";
     process.env.CANARY_SECRET_TOKEN = "canary-secret-value";
     process.env.NODE_OPTIONS = "--inspect=0.0.0.0:9229";
     process.env.ALLOWED_CANARY = "allowed-value";
@@ -347,14 +350,15 @@ describe("driver lifecycle", () => {
       remember(driver);
       const lines = new LineReader(driver.stdout);
       driver.stdin.write("ENV\n");
-      const line = await lines.next();
-      expect(line).toBe(
-        `ENV ${JSON.stringify({
-          PATH: process.env.PATH,
-          ALLOWED_CANARY: "allowed-value",
-          DRIVER_DECLARED: "yes",
-        })}`,
-      );
+      // Exactly {inherited by name} ∪ {envSet}; only OS-injected keys tolerated.
+      const childEnv = childEnvFromLine(await lines.next());
+      expect(childEnv).not.toHaveProperty("CK_QA_CANARY");
+      expect(childEnv).not.toHaveProperty("CANARY_SECRET_TOKEN");
+      expect(childEnv).toEqual({
+        PATH: process.env.PATH,
+        ALLOWED_CANARY: "allowed-value",
+        DRIVER_DECLARED: "yes",
+      });
     } finally {
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name];

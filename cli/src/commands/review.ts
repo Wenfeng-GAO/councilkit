@@ -105,14 +105,6 @@ import {
   repairPackageHash,
 } from "../auto/repair-acceptance";
 import {
-  SPEC_VERIFY_UNBOUND_MESSAGE,
-  applySpecToTask,
-  bindVerifyFromSpec,
-  fetchPrSpecSearchText,
-  formatSpecRefusal,
-  resolveSpecContract,
-} from "../auto/spec-detect";
-import {
   copyFrozenContextIntoWorkspace,
   freezeReviewContext,
   persistFrozenContext,
@@ -127,6 +119,14 @@ import {
   runAttempts,
   spawnOnce,
 } from "../auto/runner";
+import {
+  SPEC_VERIFY_UNBOUND_MESSAGE,
+  applySpecToTask,
+  bindVerifyFromSpec,
+  fetchPrSpecSearchText,
+  formatSpecRefusal,
+  resolveSpecContract,
+} from "../auto/spec-detect";
 import {
   type FrozenAttemptContext,
   type ReviewTask,
@@ -292,7 +292,7 @@ export async function runReview(
     throw errors.usage("--require-spec and --no-require-spec are mutually exclusive");
   }
   // Default true: force contract review. `--no-require-spec` opts into unbound legacy mode.
-  const requireSpec = values["no-require-spec"] === true ? false : true;
+  const requireSpec = values["no-require-spec"] !== true;
   task.requireSpec = requireSpec;
   // Snapshot CLI identity before any freeze overlay. Resume must reject a
   // mismatched --pr/--task/--focus even when execution later binds the frozen
@@ -369,7 +369,8 @@ export async function runReview(
     if (frozenManifest.task.pr !== undefined) task.pr = frozenManifest.task.pr;
     if (frozenManifest.task.task !== undefined) task.task = frozenManifest.task.task;
     if (frozenManifest.task.focus !== undefined) task.focus = frozenManifest.task.focus;
-    if (frozenManifest.task.specSource !== undefined) task.specSource = frozenManifest.task.specSource;
+    if (frozenManifest.task.specSource !== undefined)
+      task.specSource = frozenManifest.task.specSource;
     if (frozenManifest.task.specText !== undefined) task.specText = frozenManifest.task.specText;
     // Resume must honor the frozen require-spec preference (flag may be omitted on argv).
     task.requireSpec = frozenManifest.requireSpec !== false;
@@ -1193,7 +1194,7 @@ export async function runReview(
         searched: [task.task, task.focus].filter(Boolean).join("\n\n"),
         repoRoot: localRepo?.path ?? (values.repo as string | undefined) ?? null,
       });
-      out.progress(`  spec gate: SPEC_REQUIRED (require-spec) — refusing in review stage`);
+      out.progress("  spec gate: SPEC_REQUIRED (require-spec) — refusing in review stage");
       for (const spec of runnableSpecs) {
         const cancelled: AttemptResult = {
           attemptId: spec.attemptId,
@@ -2464,7 +2465,6 @@ function noteLiveBeat(
   }
 }
 
-
 /**
  * Bind a conventional spec-contract (explicit `--spec` or auto-detect) and
  * schedule verify against named acceptance points. PR description alone is
@@ -2532,7 +2532,9 @@ async function ensureSpecContractBound(input: {
     }
     task.acceptanceIds = verify.acceptanceIds;
     task.verifyScheduleNote = verify.scheduleNote;
-    out.progress(`  spec: ${task.specSource} (bound; ${verify.acceptanceIds.length} acceptance point(s))`);
+    out.progress(
+      `  spec: ${task.specSource} (bound; ${verify.acceptanceIds.length} acceptance point(s))`,
+    );
     return;
   }
 

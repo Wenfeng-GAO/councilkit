@@ -1,10 +1,10 @@
+import { buildFindingChecklist } from "@/lib/finding-checklist";
 import {
   type AgainstLedgerState,
   type FindingListFilter,
   defaultFindingListFilter,
   projectFindingList,
 } from "@/lib/finding-list";
-import { buildFindingChecklist } from "@/lib/finding-checklist";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";

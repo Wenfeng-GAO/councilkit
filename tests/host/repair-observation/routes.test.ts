@@ -90,7 +90,10 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-function ctx(query: Record<string, string>, params: Record<string, string> = { runId: RUN_ID }): RouteContext {
+function ctx(
+  query: Record<string, string>,
+  params: Record<string, string> = { runId: RUN_ID },
+): RouteContext {
   return {
     body: undefined,
     params,
@@ -130,30 +133,54 @@ describe("host repair observation routes (no listen)", () => {
       businessResult: "needs_attention",
       reasonCode: "squad_failed",
       candidateSha: null,
-      executions: [{ kind: "source_fix", state: "intent", pids: [], startedAtMs: null, endedAtMs: null }],
+      executions: [
+        { kind: "source_fix", state: "intent", pids: [], startedAtMs: null, endedAtMs: null },
+      ],
     });
     writeMeta({
       checkedAt: "2026-09-22T06:00:02Z",
       roles: [{ roleKey: "builder", status: "active", planned: true }],
     });
-    writeFileSync(join(home, "squad-tasks", "task-1", "orchestrator.log"), `${JSON.stringify({
-      type: "tool.started", callId: "old", name: "shell", role: "coder", at: "2026-09-22T05:00:00Z",
-    })}\n`);
+    writeFileSync(
+      join(home, "squad-tasks", "task-1", "orchestrator.log"),
+      `${JSON.stringify({
+        type: "tool.started",
+        callId: "old",
+        name: "shell",
+        role: "coder",
+        at: "2026-09-22T05:00:00Z",
+      })}\n`,
+    );
     const data = await observe();
-    expect(data.task).toMatchObject({ businessResult: "needs_attention", reasonCode: "squad_failed", phase: "active" });
+    expect(data.task).toMatchObject({
+      businessResult: "needs_attention",
+      reasonCode: "squad_failed",
+      phase: "active",
+    });
     expect(data.task.process.state).toBe("unknown");
     expect(data.upserts[0]?.status).toBe("unfinished");
     expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
   });
 
-  it.each(["completed", "failed", "unfinished"])("does not upgrade a %s tool record to a role outcome", async (status) => {
-    writeMeta({ roles: [{ roleKey: "builder", status: "active", planned: true }] });
-    writeFileSync(join(home, "squad-tasks", "task-1", "orchestrator.log"), `${JSON.stringify({
-      type: "tool", callId: "tool-1", name: "shell", role: "coder", status, at: "2026-09-22T06:00:01Z",
-    })}\n`);
-    const data = await observe();
-    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
-  });
+  it.each(["completed", "failed", "unfinished"])(
+    "does not upgrade a %s tool record to a role outcome",
+    async (status) => {
+      writeMeta({ roles: [{ roleKey: "builder", status: "active", planned: true }] });
+      writeFileSync(
+        join(home, "squad-tasks", "task-1", "orchestrator.log"),
+        `${JSON.stringify({
+          type: "tool",
+          callId: "tool-1",
+          name: "shell",
+          role: "coder",
+          status,
+          at: "2026-09-22T06:00:01Z",
+        })}\n`,
+      );
+      const data = await observe();
+      expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
+    },
+  );
 
   it("does not infer activity from the existence of empty source files", async () => {
     writeMeta({});
@@ -162,21 +189,38 @@ describe("host repair observation routes (no listen)", () => {
     expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe("unknown");
   });
 
-  it.each(["intent", "running"])("does not treat a %s journal entry as heartbeat evidence", async (state) => {
-    patchRun({
-      executions: [{ kind: "source_fix", state, pids: [1234], startedAtMs: Date.parse("2026-09-22T06:00:02Z"), endedAtMs: null }],
-    });
-    writeMeta({
-      executionRef: "squad:task-1#1.1", pid: 1234, startKey: "start-abc", checkedAt: "2026-09-22T06:00:02Z",
-    });
-    expect((await observe()).task.process.state).toBe("unknown");
-  });
+  it.each(["intent", "running"])(
+    "does not treat a %s journal entry as heartbeat evidence",
+    async (state) => {
+      patchRun({
+        executions: [
+          {
+            kind: "source_fix",
+            state,
+            pids: [1234],
+            startedAtMs: Date.parse("2026-09-22T06:00:02Z"),
+            endedAtMs: null,
+          },
+        ],
+      });
+      writeMeta({
+        executionRef: "squad:task-1#1.1",
+        pid: 1234,
+        startKey: "start-abc",
+        checkedAt: "2026-09-22T06:00:02Z",
+      });
+      expect((await observe()).task.process.state).toBe("unknown");
+    },
+  );
 
   it("keeps explicit role outcomes and fresh liveness when the business result is terminal", async () => {
     patchRun({ businessResult: "needs_attention", reasonCode: "squad_failed" });
     writeMeta({
-      executionRef: "squad:task-1#1.1", pid: 1234, startKey: "start-abc",
-      checkedAt: "2026-09-22T06:00:02Z", alive: true,
+      executionRef: "squad:task-1#1.1",
+      pid: 1234,
+      startKey: "start-abc",
+      checkedAt: "2026-09-22T06:00:02Z",
+      alive: true,
       roles: [
         { roleKey: "builder", status: "ended", planned: true },
         { roleKey: "reviewer", status: "failed", planned: true },
@@ -195,18 +239,32 @@ describe("host repair observation routes (no listen)", () => {
     });
     const data = await observe();
     expect(data.task.process.state).toBe(alive ? "alive" : "exited");
-    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe(alive ? "active" : "unknown");
+    expect(data.roles.find((r) => r.roleKey === "builder")?.status).toBe(
+      alive ? "active" : "unknown",
+    );
   });
 
   it("does not apply the builder's exit to independent review activity", async () => {
     writeMeta({
-      executionRef: "squad:task-1#1.1", pid: 1234, startKey: "start-abc",
-      checkedAt: "2026-09-22T06:00:02Z", alive: false,
-      roles: [{ roleKey: "reviewer", status: "active", planned: true, executionRef: "reviewer#1.1" }],
+      executionRef: "squad:task-1#1.1",
+      pid: 1234,
+      startKey: "start-abc",
+      checkedAt: "2026-09-22T06:00:02Z",
+      alive: false,
+      roles: [
+        { roleKey: "reviewer", status: "active", planned: true, executionRef: "reviewer#1.1" },
+      ],
     });
-    writeFileSync(join(home, "squad-tasks", "task-1", "reviewer.jsonl"), `${JSON.stringify({
-      type: "tool.started", callId: "review-1", name: "shell", role: "reviewer", at: "2026-09-22T06:00:01Z",
-    })}\n`);
+    writeFileSync(
+      join(home, "squad-tasks", "task-1", "reviewer.jsonl"),
+      `${JSON.stringify({
+        type: "tool.started",
+        callId: "review-1",
+        name: "shell",
+        role: "reviewer",
+        at: "2026-09-22T06:00:01Z",
+      })}\n`,
+    );
     const data = await observe();
     expect(data.task.process.state).toBe("exited");
     expect(data.roles.find((r) => r.roleKey === "reviewer")?.status).toBe("active");
@@ -392,7 +450,11 @@ describe("host repair observation routes (no listen)", () => {
 
     expect(guard).toBeLessThan(12);
     expect([...seen].sort()).toEqual(
-      ["BIG-LINE", "prefix-0", ...Array.from({ length: suffixCount }, (_, index) => `suffix-${index}`)].sort(),
+      [
+        "BIG-LINE",
+        "prefix-0",
+        ...Array.from({ length: suffixCount }, (_, index) => `suffix-${index}`),
+      ].sort(),
     );
   });
 
@@ -506,7 +568,9 @@ describe("host repair observation routes (no listen)", () => {
       return (match[1] === "a" ? 0 : 100) + Number(match[2]);
     };
     expect(
-      seen.filter((row) => row.startsWith("a-") || row.startsWith("b-")).sort((a, b) => rank(a) - rank(b)),
+      seen
+        .filter((row) => row.startsWith("a-") || row.startsWith("b-"))
+        .sort((a, b) => rank(a) - rank(b)),
     ).toEqual([
       ...Array.from({ length: 40 }, (_, index) => `a-${index}`),
       ...Array.from({ length: 40 }, (_, index) => `b-${index}`),
@@ -644,9 +708,10 @@ describe("host repair observation routes (no listen)", () => {
     const event = past.upserts.find((row) => row.summary.startsWith("round-1-row"));
     expect(event?.eventId).toMatch(/^evt_/);
     if (!event) throw new Error("missing round 1 event");
-    const current = (await detail.handler(
-      ctx({}, { runId: RUN_ID, eventId: event.eventId }),
-    )) as { availability: string; body: string };
+    const current = (await detail.handler(ctx({}, { runId: RUN_ID, eventId: event.eventId }))) as {
+      availability: string;
+      body: string;
+    };
     expect(current.availability).toBe("unavailable");
     expect(current.body).toBe("");
     const body = (await detail.handler(
@@ -680,9 +745,11 @@ describe("host repair observation routes (no listen)", () => {
     )) as RepairObservation;
     const later = second.upserts.find((row) => row.summary === "row-200");
     expect(later?.eventId).toMatch(/^evt_/);
-    const body = (await detail.handler(
-      ctx({}, { runId: RUN_ID, eventId: later!.eventId }),
-    )) as { availability: string; body: string; reasons: string[] };
+    const body = (await detail.handler(ctx({}, { runId: RUN_ID, eventId: later!.eventId }))) as {
+      availability: string;
+      body: string;
+      reasons: string[];
+    };
     expect(body.availability).toBe("available");
     expect(body.body).toBe("row-200");
     expect(body.reasons).toEqual([]);
@@ -710,9 +777,11 @@ describe("host repair observation routes (no listen)", () => {
     const page = (await list.handler(ctx({ round: "current" }))) as RepairObservation;
     const later = page.upserts.find((row) => row.summary === "c1");
     expect(later?.eventId).toMatch(/^evt_/);
-    const body = (await detail.handler(
-      ctx({}, { runId: RUN_ID, eventId: later!.eventId }),
-    )) as { availability: string; body: string; truncated: boolean };
+    const body = (await detail.handler(ctx({}, { runId: RUN_ID, eventId: later!.eventId }))) as {
+      availability: string;
+      body: string;
+      truncated: boolean;
+    };
     expect(body.availability).toBe("available");
     expect(body.body).toBe(second);
     expect(body.truncated).toBe(false);

@@ -11,7 +11,15 @@
  */
 
 import { Buffer } from "node:buffer";
-import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  type Dirent,
+  type Stats,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import { parseAntCodePrUrl, parseApplyPrUrl } from "@shared/runtime/pr-url";
 import { AGGREGATE_PROMPT_BUDGET, MAX_SPEC_TEXT_IN_PROMPT } from "./templates/review";
@@ -280,7 +288,7 @@ function truncateSpecBody(text: string, cap: number): string {
   const buf = Buffer.from(text, "utf8");
   if (buf.length <= cap) return text;
   let end = cap;
-  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
+  while (end > 0 && ((buf[end] ?? 0) & 0xc0) === 0x80) end -= 1;
   return `${buf.subarray(0, end).toString("utf8")}\n[truncated at ${cap} bytes]`;
 }
 
@@ -297,7 +305,7 @@ function resolveReadableSpecFile(
   }
   for (const candidate of tries) {
     if (!existsSync(candidate)) continue;
-    let st;
+    let st: Stats;
     try {
       st = lstatSync(candidate);
     } catch {
@@ -355,7 +363,7 @@ function listMarkdownFiles(dir: string, limit: number): string[] {
   const out: string[] = [];
   const walk = (current: string, depth: number): void => {
     if (out.length >= limit || depth > 6) return;
-    let entries;
+    let entries: Dirent[];
     try {
       entries = readdirSync(current, { withFileTypes: true });
     } catch {
@@ -386,7 +394,7 @@ export function formatSpecRefusal(detail?: {
   repoRoot?: string | null;
 }): string {
   const extra: string[] = [];
-  if (detail?.searched && detail.searched.trim()) {
+  if (detail?.searched?.trim()) {
     const refs = extractConventionalSpecRefs(detail.searched);
     if (refs.length > 0) {
       extra.push("", `Referenced but not readable under the local repo: ${refs.join(", ")}`);

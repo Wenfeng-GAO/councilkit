@@ -324,10 +324,12 @@ describe("councilkit init", () => {
     expect(new Store().getAgent("review-security").id).toBe(first);
     expect(new Store().listAgents()).toHaveLength(6);
     expect(new Store().listCouncils()).toHaveLength(2);
-    expect(new Store().listCouncils().map((c) => c.name).sort()).toEqual([
-      "pr-jury",
-      "product-jury",
-    ]);
+    expect(
+      new Store()
+        .listCouncils()
+        .map((c) => c.name)
+        .sort(),
+    ).toEqual(["pr-jury", "product-jury"]);
   });
 
   it("--force recreates default agents after deleting pr-jury", async () => {
@@ -417,9 +419,13 @@ describe("councilkit init", () => {
     await runInit([], makeSink());
     const sink = makeSink();
     try {
-      await runReview(["--council", "pr-jury", "--task", "fixture review", "--no-require-spec"], sink, {
-        spawnImpl: fakeSpawn(),
-      });
+      await runReview(
+        ["--council", "pr-jury", "--task", "fixture review", "--no-require-spec"],
+        sink,
+        {
+          spawnImpl: fakeSpawn(),
+        },
+      );
     } catch (error) {
       if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
     }

@@ -1,18 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { buildRepairViewModel } from "@/components/report/repair-workspace/repairViewModel";
 import {
   REPAIR_OBS_COPY,
   REPAIR_OBS_PROCESS_FRESH_MS,
   REPAIR_OBS_SILENCE_MS,
+  REPAIR_OBS_SUMMARY_MAX,
+  type RawSourceRecord,
+  type RepairOperation,
   applyUiWindow,
-  earlierControlCount,
-  mergeObservedOperations,
-  prependEarlierOperations,
   buildEventId,
   buildOperationId,
   countNewOperations,
   decodeObservationCursor,
   deriveProcessState,
   deriveSilenceAttention,
+  earlierControlCount,
   encodeObservationCursor,
   evaluateApprovalConsistency,
   exportEvidenceMarkdown,
@@ -20,24 +21,25 @@ import {
   foldPublicText,
   isStaleRequest,
   markUnfinishedTools,
+  mergeObservedOperations,
   mergeOperationRevision,
-  REPAIR_OBS_SUMMARY_MAX,
-  repairOperationSchema,
   nextPollDelayMs,
   normalizeToolRecords,
   observationDone,
   parsePublicSourceLine,
+  prependEarlierOperations,
   redactObservationText,
   redactObservationValue,
+  repairOperationSchema,
   resolveAttentionCopy,
-  type RawSourceRecord,
-  type RepairOperation,
 } from "@shared/runtime/repair-observation";
-import { buildRepairViewModel } from "@/components/report/repair-workspace/repairViewModel";
+import { describe, expect, it } from "vitest";
 
 const T0 = Date.parse("2026-09-22T06:00:00Z");
 
-function baseOp(partial: Partial<RepairOperation> & Pick<RepairOperation, "operationId" | "eventId">): RepairOperation {
+function baseOp(
+  partial: Partial<RepairOperation> & Pick<RepairOperation, "operationId" | "eventId">,
+): RepairOperation {
   return {
     sourceId: "s1",
     sourceGeneration: "g1",
@@ -56,7 +58,9 @@ function baseOp(partial: Partial<RepairOperation> & Pick<RepairOperation, "opera
   };
 }
 
-function raw(partial: Partial<RawSourceRecord> & Pick<RawSourceRecord, "type" | "byteOffset">): RawSourceRecord {
+function raw(
+  partial: Partial<RawSourceRecord> & Pick<RawSourceRecord, "type" | "byteOffset">,
+): RawSourceRecord {
   return {
     sourceId: "s1",
     sourceGeneration: "g1",
@@ -161,15 +165,17 @@ describe("U02 source association semantics", () => {
 
   it("counterexample: path traversal markers are not trusted as readable records", () => {
     // Resolver rejects; here the pure parser still requires structured JSON.
-    expect(parsePublicSourceLine("../etc/passwd", {
-      sourceId: "x",
-      sourceGeneration: "g",
-      executionRef: "e",
-      round: 1,
-      roleKey: "builder",
-      byteOffset: 0,
-      receivedAt: "t",
-    })).toBe("bad");
+    expect(
+      parsePublicSourceLine("../etc/passwd", {
+        sourceId: "x",
+        sourceGeneration: "g",
+        executionRef: "e",
+        round: 1,
+        roleKey: "builder",
+        byteOffset: 0,
+        receivedAt: "t",
+      }),
+    ).toBe("bad");
   });
 });
 
@@ -189,7 +195,12 @@ describe("U03 event identity", () => {
     });
     expect(a).not.toBe(b);
     const first = baseOp({ operationId: a, eventId: buildEventId(a, 1), status: "started" });
-    const replay = baseOp({ operationId: a, eventId: buildEventId(a, 1), status: "started", revision: 1 });
+    const replay = baseOp({
+      operationId: a,
+      eventId: buildEventId(a, 1),
+      status: "started",
+      revision: 1,
+    });
     expect(mergeOperationRevision(first, replay).eventId).toBe(first.eventId);
   });
 });
@@ -217,12 +228,12 @@ describe("U04 tool association", () => {
         .concat(mergeOperationRevision(prev, op));
     }, started);
     const c2 = merged.find((op) => op.operationId.includes("c2"))!;
-    const lateStart = mergeOperationRevision(
-      c2,
-      baseOp({ ...c2, status: "started", revision: 9 }),
-    );
+    const lateStart = mergeOperationRevision(c2, baseOp({ ...c2, status: "started", revision: 9 }));
     expect(lateStart.status).toBe("completed");
-    expect(merged.map((op) => op.operationId).filter((id) => id.includes("c1") || id.includes("c2")).length).toBe(2);
+    expect(
+      merged.map((op) => op.operationId).filter((id) => id.includes("c1") || id.includes("c2"))
+        .length,
+    ).toBe(2);
   });
 
   it("counterexample: same command name without callId does not pair", () => {
@@ -514,23 +525,28 @@ describe("U10 time and liveness", () => {
     ).toEqual({ state: "unknown", checkedAt: null });
   });
 
-  it.each([false, true])("uses matching explicit exit evidence with business terminal=%s", (authoritativeTerminal) => {
-    const input = {
-      authoritativeTerminal,
-      currentExecutionRef: "exec-a#1.1",
-      evidence: {
-        executionRef: "exec-a#1.1",
-        pid: 42,
-        startKey: "start-1",
-        checkedAt: new Date(T0).toISOString(),
-        alive: false,
-      },
-      nowMs: T0,
-    };
-    expect(deriveProcessState(input).state).toBe("exited");
-    expect(deriveProcessState({ ...input, currentExecutionRef: "other#1.1" }).state).toBe("unknown");
-    expect(deriveProcessState({ ...input, currentExecutionRef: null }).state).toBe("unknown");
-  });
+  it.each([false, true])(
+    "uses matching explicit exit evidence with business terminal=%s",
+    (authoritativeTerminal) => {
+      const input = {
+        authoritativeTerminal,
+        currentExecutionRef: "exec-a#1.1",
+        evidence: {
+          executionRef: "exec-a#1.1",
+          pid: 42,
+          startKey: "start-1",
+          checkedAt: new Date(T0).toISOString(),
+          alive: false,
+        },
+        nowMs: T0,
+      };
+      expect(deriveProcessState(input).state).toBe("exited");
+      expect(deriveProcessState({ ...input, currentExecutionRef: "other#1.1" }).state).toBe(
+        "unknown",
+      );
+      expect(deriveProcessState({ ...input, currentExecutionRef: null }).state).toBe("unknown");
+    },
+  );
 });
 
 describe("U11 reading freeze counts", () => {
@@ -630,8 +646,20 @@ describe("U14 historical selection", () => {
 describe("U15 role display grouping", () => {
   it("keeps independent sessions separate and does not invent planner_b", () => {
     const ops = normalizeToolRecords([
-      raw({ type: "tool.started", roleKey: "reviewer", callId: "r1", byteOffset: 1, executionRef: "rev#1.1" }),
-      raw({ type: "tool.started", roleKey: "verifier", callId: "v1", byteOffset: 2, executionRef: "ver#1.1" }),
+      raw({
+        type: "tool.started",
+        roleKey: "reviewer",
+        callId: "r1",
+        byteOffset: 1,
+        executionRef: "rev#1.1",
+      }),
+      raw({
+        type: "tool.started",
+        roleKey: "verifier",
+        callId: "v1",
+        byteOffset: 2,
+        executionRef: "ver#1.1",
+      }),
     ]);
     expect(ops.map((op) => op.roleKey).sort()).toEqual(["reviewer", "verifier"]);
     expect(ops.every((op) => op.executionRef.includes("#"))).toBe(true);
@@ -727,8 +755,17 @@ describe("U19 empty/restricted sources", () => {
 
 describe("U20 DOM focus helpers", () => {
   it("does not throw when return focus node is disconnected", () => {
-    const node = { isConnected: false, focus() { throw new Error("should not focus"); } };
-    const title = { focus() { /* ok */ } };
+    const node = {
+      isConnected: false,
+      focus() {
+        throw new Error("should not focus");
+      },
+    };
+    const title = {
+      focus() {
+        /* ok */
+      },
+    };
     expect(() => {
       if (node.isConnected) node.focus();
       else title.focus();

@@ -1664,9 +1664,7 @@ describe("recovery orchestration: rotateScope", () => {
       createdAt: decoyCreatedAt,
       updatedAt: decoyCreatedAt,
     });
-    const latest = (
-      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
-    )
+    const latest = (await db.runtimeBindings.where("roomId").equals(room.id).toArray())
       .filter((binding) => binding.state !== "closed")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     expect(latest?.id).toBe("binding-decoy-rotate");
@@ -1794,9 +1792,7 @@ describe("recovery orchestration: releaseRuntime (S5)", () => {
       createdAt: decoyCreatedAt,
       updatedAt: decoyCreatedAt,
     });
-    const latest = (
-      await db.runtimeBindings.where("roomId").equals(room.id).toArray()
-    )
+    const latest = (await db.runtimeBindings.where("roomId").equals(room.id).toArray())
       .filter((binding) => binding.state !== "closed")
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     expect(latest?.id).toBe("binding-decoy-release");

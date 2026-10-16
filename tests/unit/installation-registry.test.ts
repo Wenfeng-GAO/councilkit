@@ -1074,10 +1074,8 @@ describe("installation registry", () => {
       });
     } finally {
       // process.env entries are removed only by delete; assigning undefined stringifies them.
-      // biome-ignore lint/performance/noDelete: unset PATH when the process did not have one
       if (savedPath === undefined) delete process.env.PATH;
       else process.env.PATH = savedPath;
-      // biome-ignore lint/performance/noDelete: unset HOME when the process did not have one
       if (savedHome === undefined) delete process.env.HOME;
       else process.env.HOME = savedHome;
     }

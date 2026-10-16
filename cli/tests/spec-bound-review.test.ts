@@ -1,10 +1,10 @@
+import { isFindingBlocking } from "@shared/runtime/cli-ledger";
 /**
  * Spec-bound review: extraction classifies Act On vs suggest-amend-spec;
  * prompts bind a named spec and separate the two finding classes.
  */
 import { describe, expect, it } from "vitest";
 import { extractFindingsFromReport } from "../src/auto/ledger";
-import { isFindingBlocking } from "@shared/runtime/cli-ledger";
 import {
   AGGREGATE_PROMPT_BUDGET,
   AGGREGATE_PROMPT_RESERVED_OVERHEAD,
@@ -114,7 +114,8 @@ describe("spec-bound prompts", () => {
           attemptId: "a1",
           name: "A",
           status: "success",
-          output: "## 发现\n- [major][act-on] x\n  不变量：`AC-1`\n  反例：y\n\n## 结论\nchanges-requested\n",
+          output:
+            "## 发现\n- [major][act-on] x\n  不变量：`AC-1`\n  反例：y\n\n## 结论\nchanges-requested\n",
         },
       ],
     });

@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   ideateRoleLabel,
   rosterToIdeateModels,
@@ -6,6 +5,7 @@ import {
   uniqueModelConfigCount,
 } from "@/lib/ideate-roster";
 import type { ReviewJurySeat } from "@shared/runtime/review-jury";
+import { describe, expect, it } from "vitest";
 
 const seats: ReviewJurySeat[] = [
   {

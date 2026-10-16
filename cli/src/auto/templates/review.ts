@@ -43,8 +43,7 @@ export const AGGREGATE_PROMPT_BUDGET = 200 * 1024;
 export const AGGREGATE_PROMPT_RESERVED_OVERHEAD = 48 * 1024;
 
 /** Max UTF-8 bytes of bound spec body allowed in Attempt/Aggregate prompts. */
-export const MAX_SPEC_TEXT_IN_PROMPT =
-  AGGREGATE_PROMPT_BUDGET - AGGREGATE_PROMPT_RESERVED_OVERHEAD;
+export const MAX_SPEC_TEXT_IN_PROMPT = AGGREGATE_PROMPT_BUDGET - AGGREGATE_PROMPT_RESERVED_OVERHEAD;
 
 /** Below this per-output allowance we drop an output instead of shrinking it to
  * uselessness. */
@@ -452,10 +451,7 @@ function renderSpecBinding(task: ReviewTask): string {
   const source = task.specSource?.trim();
   const body = task.specText?.trim();
   const requireSpec = task.requireSpec !== false;
-  const lines = [
-    "## 绑定规格（审查合同）",
-    "",
-  ];
+  const lines = ["## 绑定规格（审查合同）", ""];
   if (source) {
     lines.push(
       "本审查为规格合同减法：Act On 默认只接受「违反下列绑定规格中具名不变量 / 验收 ID」且带可复现反例的发现。",
