@@ -129,6 +129,23 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
    * would otherwise deadlock against the page's own lock and flip the page
    * to observing. */
   const heldLocks = new Map<string, LockHandle>();
+  /** B4 (#279): per-Room serial chain shared by the controller takeover and
+   * the startup audit. On reopen both run at once (bootstrap audit + RoomPage
+   * controlRoom); without ordering the audit read the pre-takeover controller
+   * pair, so its cancel hit 409 STALE_CONTROLLER and its terminal write fell
+   * through to "owned-by-controller", leaving the report execution `running`
+   * with nobody following it until the turn timeout (~10.5 min). */
+  const roomChains = new Map<string, Promise<unknown>>();
+  function serialRoom<T>(roomId: string, task: () => Promise<T>): Promise<T> {
+    const previous = roomChains.get(roomId) ?? Promise.resolve();
+    const next = previous.then(task, task);
+    const settled = next.catch(() => undefined);
+    roomChains.set(roomId, settled);
+    void settled.then(() => {
+      if (roomChains.get(roomId) === settled) roomChains.delete(roomId);
+    });
+    return next;
+  }
 
   async function hostInstanceId(): Promise<string> {
     if (!cachedHostInstanceId) {
@@ -171,9 +188,36 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       return "settled";
     } catch (caught) {
       if (!(caught instanceof TransactionError && caught.code === "STALE_CONTROLLER")) throw caught;
+      // B4: this page may have taken the Room over since `token` was read.
+      // Settle with the current pair instead of leaving the row `running`.
+      const fresh = await tokenForRoom(execution.roomId);
+      if (
+        fresh &&
+        (fresh.controllerId !== token.controllerId || fresh.leaseEpoch !== token.leaseEpoch)
+      ) {
+        try {
+          await failExecution(db, {
+            executionId: execution.executionId,
+            token: fresh,
+            error,
+            kind,
+          });
+          return "settled";
+        } catch (retryError) {
+          if (!(retryError instanceof TransactionError && retryError.code === "STALE_CONTROLLER")) {
+            throw retryError;
+          }
+        }
+      }
       return failUnboundExecution(db, { executionId: execution.executionId, error, kind });
     }
   }
+
+  /** The status check got no Host answer: the request itself failed
+   * (connection refused/reset while the Host is down), or the Host no longer
+   * knows this page's session (it restarted). A live Host's 5xx is not this. */
+  const hostUnreachable = (error: unknown): boolean =>
+    error instanceof RuntimeClientError ? error.status === 401 : error instanceof TypeError;
 
   const lostHostError = () =>
     errorOf("SAFE_INTERRUPTION", "host restarted or terminal lost before commit");
@@ -263,6 +307,14 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
       .first();
     const binding = active ?? latest;
     if (binding && binding.state === "active" && binding.executionScopeId) {
+      await serialRoom(roomId, () => takeOverBinding(roomId, binding));
+    }
+    display.onControlState?.(roomId, "controlling");
+    return tracked;
+  }
+
+  async function takeOverBinding(roomId: string, binding: RuntimeBinding): Promise<void> {
+    if (binding.executionScopeId) {
       try {
         const controllerId = ids.uuid();
         const takeover = await client.takeoverScope(binding.executionScopeId, controllerId);
@@ -290,8 +342,6 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         }
       }
     }
-    display.onControlState?.(roomId, "controlling");
-    return tracked;
   }
 
   async function currentToken(roomId: string): Promise<ControllerToken> {
@@ -429,6 +479,44 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
   // Startup audit: converge, never resume, never re-invoke
   // -------------------------------------------------------------------------
 
+  async function auditUnfinished(listed: ModelExecution, hostId: string): Promise<void> {
+    // Re-read inside the Room chain: a takeover or another settle may have
+    // moved this row since the audit listed it.
+    const execution = await db.modelExecutions.get(listed.executionId);
+    if (!execution || !["prepared", "running", "succeeded_uncommitted"].includes(execution.state)) {
+      return;
+    }
+    const token = await tokenForRoom(execution.roomId);
+    if (!token) {
+      const outcome = await failLostExecution(execution, null, lostHostError());
+      if (outcome === "settled") notify(execution.roomId);
+      return;
+    }
+    let code = "SAFE_INTERRUPTION";
+    if (execution.hostInstanceId === hostId && execution.executionScopeId) {
+      try {
+        const status = await client.getExecution(execution.executionScopeId, execution.executionId);
+        code = "INTERRUPTED_UNKNOWN";
+        if (status.state === "running") {
+          await cancelAbandonedExecution(execution.executionScopeId, execution.executionId, token);
+        }
+      } catch (error) {
+        if (!(error instanceof RuntimeClientError && error.status === 404)) throw error;
+      }
+    }
+    const outcome = await failLostExecution(
+      execution,
+      token,
+      errorOf(
+        code,
+        code === "SAFE_INTERRUPTION"
+          ? "host restarted or terminal lost before commit"
+          : "execution still exists but its outcome is unknown after reload",
+      ),
+    );
+    if (outcome === "settled") notify(execution.roomId);
+  }
+
   async function startupAudit(): Promise<void> {
     const hostId = await hostInstanceId();
     /** Converge a Room's crash windows only while holding its Web Lock: an
@@ -477,42 +565,7 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         .toArray();
       for (const execution of unfinished) {
         if (!(await auditLock(execution.roomId))) continue;
-        const token = await tokenForRoom(execution.roomId);
-        if (!token) {
-          const outcome = await failLostExecution(execution, null, lostHostError());
-          if (outcome === "settled") notify(execution.roomId);
-          continue;
-        }
-        let code = "SAFE_INTERRUPTION";
-        if (execution.hostInstanceId === hostId && execution.executionScopeId) {
-          try {
-            const status = await client.getExecution(
-              execution.executionScopeId,
-              execution.executionId,
-            );
-            code = "INTERRUPTED_UNKNOWN";
-            if (status.state === "running") {
-              await cancelAbandonedExecution(
-                execution.executionScopeId,
-                execution.executionId,
-                token,
-              );
-            }
-          } catch (error) {
-            if (!(error instanceof RuntimeClientError && error.status === 404)) throw error;
-          }
-        }
-        const outcome = await failLostExecution(
-          execution,
-          token,
-          errorOf(
-            code,
-            code === "SAFE_INTERRUPTION"
-              ? "host restarted or terminal lost before commit"
-              : "execution still exists but its outcome is unknown after reload",
-          ),
-        );
-        if (outcome === "settled") notify(execution.roomId);
+        await serialRoom(execution.roomId, () => auditUnfinished(execution, hostId));
       }
 
       // Pending ACKs: resend against the same Host instance; converge to
@@ -1023,7 +1076,11 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         await failExecution(db, {
           executionId: execution.executionId,
           token,
-          error: errorOf("INTERRUPTED_UNKNOWN", "execution status failed before a terminal"),
+          // #350: no answer at all (connection refused) or a 401 (a restarted
+          // Host minted a new session) means the Host went away, not the page.
+          error: hostUnreachable(error)
+            ? errorOf("SAFE_INTERRUPTION", "host unreachable before its terminal")
+            : errorOf("INTERRUPTED_UNKNOWN", "execution status failed before a terminal"),
           kind: "interrupted",
         });
         notify(room.id);
@@ -1155,6 +1212,8 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
               phase: event.error.phase,
               message: event.error.message,
               retryable: event.retryable,
+              ...(event.error.driverId ? { driverId: event.error.driverId } : {}),
+              ...(event.error.limitMs ? { limitMs: event.error.limitMs } : {}),
             }
           : errorOf("INTERRUPTED", `interrupted (${event.reason})`),
       kind: event.type === "failed" ? "failed" : "interrupted",

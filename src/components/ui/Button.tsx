@@ -15,9 +15,9 @@ export function Button({ variant = "primary", className = "", children, ...rest 
   return (
     <button
       type="button"
+      data-variant={variant}
       className={`${base} ${variants[variant]} ${className}`}
       {...rest}
-      data-variant={variant}
     >
       {children}
     </button>

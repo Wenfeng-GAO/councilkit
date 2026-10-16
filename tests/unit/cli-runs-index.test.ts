@@ -156,6 +156,36 @@ describe("listCliRuns squad", () => {
     expect(runs[0]?.progress?.phase).toBe("repair-preparing");
   });
 
+  it("CK-3 runs index ignores an empty run dir", () => {
+    const ghost = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee8";
+    mkdirSync(join(home, "runs", ghost), { recursive: true });
+    expect(listCliRuns(process.env)).toEqual([]);
+    const real = join(home, "runs", REVIEW_ID);
+    mkdirSync(real, { recursive: true });
+    writeFileSync(join(real, "report.md"), "# Autonomous Review Report\n");
+    writeFileSync(
+      join(real, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: REVIEW_ID,
+        startedAt: "2026-08-01T00:00:00.000Z",
+        task: { pr: "https://github.com/acme/repo/pull/9" },
+        attempts: [],
+        aggregator: {
+          attemptId: "a",
+          agentId: "a",
+          agentName: "A",
+          driverId: "kimi-stream-json",
+          modelId: "kimi-code/k3",
+        },
+      })}\n`,
+    );
+    const listed = listCliRuns(process.env);
+    expect(listed.map((run) => run.runId)).toEqual([REVIEW_ID]);
+    expect(listed[0]).not.toMatchObject({ status: "unknown", hasReport: false });
+  });
+
   it("maps a k4p2-shaped interrupted sidecar to awaiting_orchestrator", () => {
     const dir = join(home, "runs", SQUAD_ID);
     mkdirSync(dir, { recursive: true });

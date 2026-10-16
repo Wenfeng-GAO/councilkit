@@ -12,6 +12,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { QUOTAS } from "@shared/runtime/contracts";
+import {
+  isHostDisconnectFailure,
+  reportFailureCopy,
+  reportInterruptionLine,
+} from "@shared/runtime/interruption-copy";
+import { isSlowGenExecutablePath, slowGenFromEnv } from "@shared/runtime/slow-gen";
 import { z } from "zod";
 import { errors } from "../errors";
 import { HostClient } from "../host/client";
@@ -126,6 +132,7 @@ export async function runRun(argv: string[], out: OutputSink): Promise<void> {
     reporter,
     rounds,
     outPath: values.out as string | undefined,
+    demo: slowGenRun(installations, agents),
   };
 
   // SIGINT/SIGTERM → bounded cleanup inside the orchestrator, then exit 130.
@@ -153,6 +160,22 @@ export async function runRun(argv: string[], out: OutputSink): Promise<void> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
   }
+}
+
+/** Test-only COUNCILKIT_SLOW_GEN: the CLI env or a Host serving the synthetic
+ * slow-gen installations both make this a demo (示例) run. */
+export function slowGenRun(
+  installations: {
+    installations: ReadonlyArray<{ installationId: string; executablePath: string | null }>;
+  },
+  agents: ReadonlyArray<{ installationId: string }>,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (slowGenFromEnv(env) !== null) return true;
+  const used = new Set(agents.map((agent) => agent.installationId));
+  return installations.installations.some(
+    (dto) => used.has(dto.installationId) && isSlowGenExecutablePath(dto.executablePath),
+  );
 }
 
 /** Sentinel carrying the orchestrator's exit code up to main(). */
@@ -201,14 +224,23 @@ function progressMessage(ev: import("../run/types").RunProgressEvent): string {
   }
 }
 
-function renderHuman(o: import("../run/types").RunOutcome): string {
+export function renderHuman(o: import("../run/types").RunOutcome): string {
   const lines: string[] = [];
   lines.push(`Run ${o.runId}: ${o.status} (exit ${o.exitCode})`);
   lines.push(`  report: ${o.reportPath}`);
   lines.push(`  transcript: ${o.transcriptPath}`);
   lines.push(`  turns: ${o.turns.length}`);
-  if (o.failure)
+  const disconnect =
+    o.failure && isHostDisconnectFailure(o.failure) && reportFailureCopy(o.failure);
+  if (o.failure && disconnect) {
+    // #351: the Host restarted or went away. The card's title and detail,
+    // then the bare code on its own line; the raw English stream error stays in --json.
+    lines.push(`  ${disconnect.title}`, `  ${disconnect.detail}`, `  ${o.failure.code}`);
+  } else if (o.failure) {
+    const interruption = reportInterruptionLine(o.failure);
+    if (interruption) lines.push(`  ${interruption}`);
     lines.push(`  failure: [${o.failure.phase}] ${o.failure.code} — ${o.failure.message}`);
+  }
   if (o.artifactIoFailure)
     lines.push(
       `  artifact IO: [${o.artifactIoFailure.phase}] ${o.artifactIoFailure.code} — ${o.artifactIoFailure.message}`,

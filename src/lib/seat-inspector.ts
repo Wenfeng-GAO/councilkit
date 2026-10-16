@@ -1,3 +1,5 @@
+import { formatDurationMs } from "@shared/runtime/format-duration";
+
 export interface SeatAttemptRef {
   attemptId: string;
   agentName: string;
@@ -22,11 +24,7 @@ export function matchSeatAttempt(
 }
 
 export function formatAttemptMs(ms: number): string {
-  const total = Math.floor(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  if (m === 0) return `${s}s`;
-  return `${m}m${String(s).padStart(2, "0")}s`;
+  return formatDurationMs(ms);
 }
 
 export function inspectorDuration(

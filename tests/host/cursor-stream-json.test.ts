@@ -35,6 +35,7 @@ const BASE_TIMEOUTS: DriverTimeouts = {
   dispatchAckMs: 1500,
   streamIdleMs: 3000,
   turnMs: 15000,
+  oneshotMs: 600_000,
   interruptGraceMs: 800,
   shutdownGraceMs: 3000,
 };
@@ -105,7 +106,10 @@ function makeInstallation(): InstallationRecord {
   };
 }
 
-async function createDriver(config: Record<string, unknown> = {}): Promise<ParticipantDriver> {
+async function createDriver(
+  config: Record<string, unknown> = {},
+  timeouts: DriverTimeouts = BASE_TIMEOUTS,
+): Promise<ParticipantDriver> {
   const participantId = "p-1";
   const config2: HostConfig = {
     mode: "production",
@@ -122,7 +126,7 @@ async function createDriver(config: Record<string, unknown> = {}): Promise<Parti
   const deps: DriverDeps = {
     supervisor,
     logger,
-    timeouts: BASE_TIMEOUTS,
+    timeouts,
     workRoot: join(tempRoot, "work"),
   };
   const driver = createCursorStreamJsonDriver(deps)(participantId);
@@ -317,5 +321,60 @@ describe("cursor-stream-json driver", () => {
         installation: makeInstallation(),
       }),
     ).rejects.toMatchObject({ runtimeCode: "AUTH_REQUIRED" });
+  });
+
+  // B4/#339: cursor is one-shot (final answer only), so no idle window: the
+  // bound is "not finished within oneshotMs"; an early exit fails at once.
+  const ONESHOT_TIMEOUTS = { ...BASE_TIMEOUTS, streamIdleMs: 300, oneshotMs: 1500, turnMs: 15000 };
+  const turnInput = (prompt: string) => ({
+    executionId: "exec-1",
+    prompt,
+    modelId: MODEL,
+    coldStart: true,
+  });
+  const setTurnConfig = (config: Record<string, unknown>) =>
+    writeFile(join(tempRoot, "work", "p-1", "fake-driver-config.json"), JSON.stringify(config));
+
+  it("B4 #339: silent past streamIdleMs is not cut; ONESHOT_TIMEOUT at oneshotMs", async () => {
+    const driver = await createDriver({}, ONESHOT_TIMEOUTS);
+    // Prewarm ran `models`; only the turn hangs.
+    await setTurnConfig({ hang: true });
+    const startedAt = Date.now();
+    const run = executeCollecting(driver, turnInput("Hang."));
+    await run.done;
+    const elapsed = Date.now() - startedAt;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("ONESHOT_TIMEOUT");
+    expect(terminal.error.limitMs).toBe(1500);
+    expect(elapsed).toBeGreaterThanOrEqual(1400);
+    expect(elapsed).toBeLessThan(8000);
+  });
+
+  it("B4 #339: a silent answer that lands before oneshotMs completes", async () => {
+    const driver = await createDriver(
+      { delayMs: 1000, reply: "Long report." },
+      { ...ONESHOT_TIMEOUTS, oneshotMs: 6000 },
+    );
+    const run = executeCollecting(driver, turnInput("Slow."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    expect(terminal.output).toBe("Long report.");
+  });
+
+  it("B4 #339: process exits before finishing -> DRIVER_CRASH at once", async () => {
+    const driver = await createDriver({}, { ...ONESHOT_TIMEOUTS, oneshotMs: 60_000 });
+    await setTurnConfig({ crashAfterMs: 300 });
+    const startedAt = Date.now();
+    const run = executeCollecting(driver, turnInput("Crash."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("DRIVER_CRASH");
+    expect(Date.now() - startedAt).toBeLessThan(5000);
   });
 });

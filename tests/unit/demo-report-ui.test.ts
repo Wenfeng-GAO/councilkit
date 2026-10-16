@@ -3,6 +3,11 @@
  * A full workbench mount needs the app jsdom harness; the banner and the hidden
  * repair cards are the DM-02 / DM-06 surfaces covered here.
  */
+import {
+  DEMO_NOTICE_COPY,
+  DemoReportNotice,
+  demoNoticeKind,
+} from "@/components/report/DemoReportNotice";
 import { FixPipeline } from "@/components/report/FixPipeline";
 import { RepairExportCard } from "@/components/report/RepairExportCard";
 import { RepairRunPanel } from "@/components/report/RepairRunPanel";
@@ -62,6 +67,34 @@ describe("DM-02 demo report banner", () => {
     );
     expect(html).not.toContain("◆ 示例数据");
     expect(html).not.toContain("Sample data");
+  });
+});
+
+describe("B4 discussion demo banner (chosen by run type)", () => {
+  it("discussion runs get their own copy, no 只读审查, CTA to 新建讨论", () => {
+    expect(demoNoticeKind("discuss")).toBe("discuss");
+    expect(demoNoticeKind("review")).toBe("review");
+    expect(demoNoticeKind("squad")).toBe("review");
+    const html = renderToStaticMarkup(createElement(DemoReportNotice, { kind: "discuss" }));
+    expect(html).toContain("◆ 示例数据");
+    expect(html).not.toContain("只读审查");
+    expect(html).toContain(
+      "<strong>这是示例讨论报告。</strong>发言和结论都由内置示例 AI 生成，不代表真实模型的判断。",
+    );
+    expect(html).toMatch(
+      /<a class="ck-demo-banner-cta" href="\/rooms\/new">接入真实 AI，发起一场讨论 →<\/a>/,
+    );
+    expect(html).not.toContain("审我自己的 PR");
+    expect(html).not.toContain("Sample");
+  });
+
+  it("review copy is unchanged and both kinds have en equivalents", () => {
+    const review = renderToStaticMarkup(createElement(DemoReportNotice));
+    expect(review).toContain("🔒 只读审查");
+    expect(review).toContain("接入真实 AI，审我自己的 PR →");
+    expect(DEMO_NOTICE_COPY.discuss.en.cta).toBe("Connect a real AI and start a discussion →");
+    expect(DEMO_NOTICE_COPY.discuss.en.readonlyTag).toBeNull();
+    expect(DEMO_NOTICE_COPY.review.en.tag).toBe("◆ Sample data");
   });
 });
 

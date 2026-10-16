@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import { retryBlockedAfterGap } from "@shared/runtime/retry-stop";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
+import { withLoginHint } from "../login-hint";
 import { redact } from "../redact";
 import {
   type AttemptActivity,
@@ -557,9 +558,10 @@ async function runOneSpawn(
       exitCode: out.exitCode,
     });
     if (out.exitCode !== 0) {
+      const message = terminal?.message ?? formatExitFailure(out.exitCode, out.stderr);
       failure = {
         code: "EXIT",
-        message: terminal?.message ?? formatExitFailure(out.exitCode, out.stderr),
+        message: terminal?.errorClass === "auth" ? withLoginHint(message, spec.driverId) : message,
         errorClass: terminal?.errorClass,
         retryable: terminal?.retryable ?? true,
       };
@@ -573,7 +575,10 @@ async function runOneSpawn(
       if (!recoveredReconnect) {
         failure = {
           code: "EXIT",
-          message: terminal.message,
+          message:
+            terminal.errorClass === "auth"
+              ? withLoginHint(terminal.message, spec.driverId)
+              : terminal.message,
           errorClass: terminal.errorClass,
           retryable: terminal.retryable,
         };

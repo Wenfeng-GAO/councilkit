@@ -1,3 +1,5 @@
+import { reportInterruptionLine } from "@shared/runtime/interruption-copy";
+import { SLOW_GEN_DEMO_MARKER } from "@shared/runtime/slow-gen";
 import { errors } from "../errors";
 import type { CompletedTurn, CouncilSnapshot, RunFailure } from "../run/types";
 /**
@@ -33,6 +35,8 @@ export interface SuccessReportInput {
   participantNames: ReadonlyArray<string>;
   /** The Reporter's completed Markdown output. */
   reporterOutput: string;
+  /** B4 (DM-04): a slow-gen/demo run; the report opens with the 示例 marker. */
+  demo?: boolean;
 }
 
 export interface PartialReportInput {
@@ -45,6 +49,8 @@ export interface PartialReportInput {
   /** Persisted ordinary turns, in completion order. */
   completedTurns: ReadonlyArray<CompletedTurn>;
   failure: RunFailure;
+  /** B4 (DM-04): a slow-gen/demo run; the report opens with the 示例 marker. */
+  demo?: boolean;
 }
 
 function header(opts: {
@@ -85,9 +91,9 @@ export function renderSuccessReport(input: SuccessReportInput): string {
     status: "complete",
   });
   const body = input.reporterOutput.trim();
-  return body.length > 0
-    ? `${head}---\n\n${body}\n`
-    : `${head}---\n\n_(Reporter produced no body.)_\n`;
+  const markdown =
+    body.length > 0 ? `${head}---\n\n${body}\n` : `${head}---\n\n_(Reporter produced no body.)_\n`;
+  return withDemoMarker(markdown, input.demo);
 }
 
 /** Render the deterministic partial report (zero model calls). Lists council
@@ -125,6 +131,7 @@ export function renderPartialReport(input: PartialReportInput): string {
   lines.push(
     "## Failure",
     "",
+    ...interruptionLines(input.failure),
     `- Phase: ${input.failure.phase}`,
     `- Code: ${input.failure.code}`,
     `- Message: ${input.failure.message}`,
@@ -135,7 +142,15 @@ export function renderPartialReport(input: PartialReportInput): string {
     "- Re-run with a fresh Run id after resolving the failure (V1.1 has no `--resume`).",
     "",
   );
-  return lines.join("\n");
+  return withDemoMarker(lines.join("\n"), input.demo);
+}
+
+/** B4 (DM-04): a demo run's report.md opens with the 示例 marker (zh only,
+ * #295). A Reporter body that already starts with it does not repeat it. */
+function withDemoMarker(markdown: string, demo: boolean | undefined): string {
+  if (!demo) return markdown;
+  const deduped = markdown.replace(`---\n\n${SLOW_GEN_DEMO_MARKER}\n\n`, "---\n\n");
+  return `${SLOW_GEN_DEMO_MARKER}\n\n${deduped}`;
 }
 
 /** Assert a rendered report is non-empty Markdown (plan-a §7). */
@@ -169,4 +184,10 @@ export function writeReportCopy(outPath: string, markdown: string): void {
 function ioName(cause: unknown): string {
   if (cause instanceof Error) return cause.name;
   return "IOFailure";
+}
+
+/** B4: the same interruption wording as the browser card, when it applies. */
+function interruptionLines(failure: RunFailure): string[] {
+  const line = reportInterruptionLine(failure);
+  return line ? [`- ${line}`] : [];
 }

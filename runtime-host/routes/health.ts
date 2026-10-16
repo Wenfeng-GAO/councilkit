@@ -1,4 +1,5 @@
 import { API_VERSION, DRIVER_IDS } from "@shared/runtime/contracts";
+import type { GenerationTimeouts } from "@shared/runtime/generation-timeouts";
 import { type HealthResponse, healthResponseSchema } from "@shared/runtime/schemas";
 import type { HostServices, Route } from "../server";
 
@@ -25,6 +26,9 @@ export function healthRoutes(services: HostServices): Route[] {
           hostInstanceId: services.hostInstanceId,
           node: { version: process.version, major: Number.parseInt(process.version.slice(1), 10) },
           drivers: drivers as HealthResponse["drivers"],
+          ...(services.generationTimeouts
+            ? { generationTimeouts: services.generationTimeouts as GenerationTimeouts }
+            : {}),
         };
       },
     },

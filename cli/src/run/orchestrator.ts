@@ -32,9 +32,16 @@
  * same via the `persist` hook on each TurnRequest.
  */
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { CREDENTIAL_MODE, QUOTAS } from "@shared/runtime/contracts";
 import type { AckDisposition, DispatchState, ToolState } from "@shared/runtime/contracts";
 import type { ModelVerdict, Usage } from "@shared/runtime/events";
+import {
+  type GenerationRule,
+  type GenerationTimeouts,
+  generationRule,
+  generationTimeoutsFromEnv,
+} from "@shared/runtime/generation-timeouts";
 import type {
   CloseScopeResponse,
   ControllerRequest,
@@ -55,6 +62,7 @@ import {
   executeTurn,
 } from "../host/execute-turn";
 import { resolveInstallations } from "../host/installations";
+import { isAuthRequiredError, withLoginHint } from "../login-hint";
 import { reporterInstruction } from "../report/instruction";
 import {
   assertNonEmptyMarkdown,
@@ -63,7 +71,7 @@ import {
   writeCanonicalReport,
   writeReportCopy,
 } from "../report/render";
-import { atomicWriteFile } from "../store/atomic-write";
+import { atomicWriteFile, atomicWriteJson } from "../store/atomic-write";
 import { type StorePaths, ensureRunDir } from "../store/paths";
 import {
   type RunFinishedRecord,
@@ -160,8 +168,11 @@ export interface OrchestratorDeps {
   signal?: AbortSignal;
   /** Progress sink (stderr in --json, stdout in human). */
   onProgress?: (event: RunProgressEvent) => void;
-  /** Per-turn deadline covering execute + SSE + terminal ACK. */
-  turnTimeoutMs?: number;
+  /** B4/#339: generation limits (default: shared defaults after the test-only
+   * COUNCILKIT_STREAM_IDLE_MS / COUNCILKIT_ONESHOT_TIMEOUT_MS env). There is no
+   * fixed per-turn total: each turn follows its seat's generation rule, the
+   * same one the Host enforces (streaming 2-min no-output, one-shot 10 min). */
+  generationTimeouts?: GenerationTimeouts;
   /** Injectable turn driver (tests). Defaults to the real executeTurn wiring. */
   turnDriver?: TurnDriver;
   /** F3: shared cleanup budget (ms) for the SIGINT cancel → observe → ACK → close
@@ -170,8 +181,6 @@ export interface OrchestratorDeps {
   cleanupBudgetMs?: number;
 }
 
-const DEFAULT_TURN_TIMEOUT_MS = 600_000;
-
 // ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
@@ -179,7 +188,8 @@ const DEFAULT_TURN_TIMEOUT_MS = 600_000;
 export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promise<RunOutcome> {
   const now = deps.now ?? (() => new Date());
   const ids = deps.idFactory ?? randomUUID;
-  const turnTimeoutMs = deps.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+  const generationTimeouts =
+    deps.generationTimeouts ?? generationTimeoutsFromEnv(deps.env ?? process.env);
   const startedAt = now();
   const path = deps.paths;
   const runId = input.runId;
@@ -221,7 +231,9 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
 
   try {
     // --- create run dir + write run.started ----------------------------------
-    ensureRunDir(runId, deps.env);
+    const runDir = ensureRunDir(runId, deps.env);
+    // B4 #279: a slow-gen (fake model) run is a demo run, marked before any turn.
+    if (input.demo === true) atomicWriteJson(join(runDir, "demo.json"), { demo: true });
     const startedRec: RunStartedRecord = {
       kind: "run.started",
       version: TRANSCRIPT_VERSION,
@@ -284,7 +296,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
     // --- ordinary turns -----------------------------------------------------
     const driver =
       deps.turnDriver ??
-      makeRealTurnDriver(deps.host, scopeId, controller, turnTimeoutMs, runCleanup);
+      makeRealTurnDriver(deps.host, scopeId, controller, generationTimeouts, runCleanup);
     let seq = 0;
     let stopped = false;
     for (let round = 1; round <= input.rounds && !stopped; round += 1) {
@@ -373,7 +385,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
               ? "interrupted"
               : "failed";
           failure = result.error
-            ? { phase: result.error.phase, code: result.error.code, message: result.error.message }
+            ? turnFailure(result.error, agent, "message")
             : {
                 phase: "turn",
                 code: "TURN_NOT_COMPLETED",
@@ -446,6 +458,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
             council: input.council,
             reporterName: input.reporter.snapshot.name,
             participantNames: input.agents.map((a) => a.snapshot.name),
+            demo: input.demo === true,
             onSuccess: (markdown: string) => {
               reporterSuccessMarkdown = markdown;
             },
@@ -473,7 +486,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
       if (result.verdict !== "completed" || result.terminal === null) {
         status = deps.signal?.aborted ? "interrupted" : "failed";
         failure = result.error
-          ? { phase: result.error.phase, code: result.error.code, message: result.error.message }
+          ? turnFailure(result.error, reporter, "report")
           : {
               phase: "reporter",
               code: "REPORTER_NOT_COMPLETED",
@@ -576,6 +589,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
           council: input.council,
           reporterName: input.reporter.snapshot.name,
           participantNames: input.agents.map((a) => a.snapshot.name),
+          demo: input.demo === true,
           reporterOutput: reporterOutput ?? "",
         });
         assertNonEmptyMarkdown(reportMarkdown);
@@ -592,6 +606,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
           council: input.council,
           reporterName: input.reporter.snapshot.name,
           participantNames: input.agents.map((a) => a.snapshot.name),
+          demo: input.demo === true,
           reporterOutput: reporterOutput ?? "",
         });
         assertNonEmptyMarkdown(reportMarkdown);
@@ -609,6 +624,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         council: input.council,
         reporterName: input.reporter.snapshot.name,
         participantNames: input.agents.map((a) => a.snapshot.name),
+        demo: input.demo === true,
         completedTurns,
         failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
       });
@@ -696,6 +712,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
         council: input.council,
         reporterName: input.reporter.snapshot.name,
         participantNames: input.agents.map((a) => a.snapshot.name),
+        demo: input.demo === true,
         completedTurns,
         failure: failure ?? { phase: "run", code: "UNKNOWN", message: "run did not complete" },
       });
@@ -864,6 +881,14 @@ function isRetryableTransport(error: unknown): boolean {
 // Turn driving
 // ---------------------------------------------------------------------------
 
+/** The seat's shared generation rule (same function the Host drivers use). */
+export function turnGenerationRule(
+  agent: ResolvedAgent,
+  timeouts: GenerationTimeouts,
+): GenerationRule {
+  return generationRule(agent.profile.driverId, timeouts);
+}
+
 async function driveTurn(driver: TurnDriver, request: TurnRequest): Promise<TurnResult> {
   return driver(request);
 }
@@ -873,7 +898,7 @@ function makeRealTurnDriver(
   host: OrchestratorHost,
   scopeId: string,
   controller: ControllerRequest,
-  timeoutMs: number,
+  generationTimeouts: GenerationTimeouts,
   runCleanup: RunCleanup,
 ): TurnDriver {
   return async (request) => {
@@ -885,7 +910,7 @@ function makeRealTurnDriver(
       executionId: request.executionId,
       snapshot: request.snapshot,
       role: request.role,
-      timeoutMs,
+      generation: turnGenerationRule(request.agent, generationTimeouts),
       signal: request.signal,
       persist: request.persist,
       // F3: share the run-level cleanup budget so this turn's cancel → observe →
@@ -969,6 +994,7 @@ function makeReporterPersist(
     council: RunInput["council"];
     reporterName: string;
     participantNames: ReadonlyArray<string>;
+    demo: boolean;
     onSuccess: (markdown: string) => void;
   },
 ): (evidence: TerminalEvidence) => Promise<void> {
@@ -1007,6 +1033,7 @@ function makeReporterPersist(
       council: reportCtx.council,
       reporterName: reportCtx.reporterName,
       participantNames: reportCtx.participantNames,
+      demo: reportCtx.demo,
       reporterOutput: evidence.output,
     });
     assertNonEmptyMarkdown(markdown);
@@ -1255,15 +1282,27 @@ export async function resolveRunAgents(input: {
     try {
       readiness = await input.host.profileReadiness(profile, snapshot.modelId);
     } catch (error) {
+      const raw = `profile readiness failed for agent "${snapshot.name}": ${messageOf(error)}`;
       throw errors.hostUnavailable(
-        `profile readiness failed for agent "${snapshot.name}": ${messageOf(error)}`,
-        { code: "READINESS_FAILED", agentId },
+        isAuthRequiredError(error) ? withLoginHint(raw, snapshot.driverSelection.driverId) : raw,
+        {
+          code: isAuthRequiredError(error) ? "AUTH_REQUIRED" : "READINESS_FAILED",
+          agentId,
+        },
       );
     }
     if (readiness.readiness.state !== "ready") {
+      const detail = readiness.readiness.detail ?? "no detail";
+      const raw = `agent "${snapshot.name}" is not ready (state=${readiness.readiness.state}: ${detail})`;
+      const auth =
+        readiness.readiness.state === "runtime_unavailable" && /auth|login/i.test(detail);
       throw errors.hostUnavailable(
-        `agent "${snapshot.name}" is not ready (state=${readiness.readiness.state}: ${readiness.readiness.detail ?? "no detail"})`,
-        { code: "PROFILE_NOT_READY", agentId, readiness: readiness.readiness.state },
+        auth ? withLoginHint(raw, snapshot.driverSelection.driverId) : raw,
+        {
+          code: auth ? "AUTH_REQUIRED" : "PROFILE_NOT_READY",
+          agentId,
+          readiness: readiness.readiness.state,
+        },
       );
     }
     out.push({
@@ -1287,6 +1326,23 @@ export function buildProfile(
     credentialMode: CREDENTIAL_MODE,
     options: selection.options,
   } as ExecutionProfileDto;
+}
+
+/** A turn's error as the run failure; keeps the seat's driver and the limit
+ * that fired so the CLI can print the shared interruption copy. */
+function turnFailure(
+  error: { phase: string; code: string; message: string; limitMs?: number },
+  agent: ResolvedAgent,
+  role: "message" | "report",
+): RunFailure {
+  return {
+    phase: error.phase,
+    code: error.code,
+    message: error.message,
+    role,
+    driverId: agent.profile.driverId,
+    ...(error.limitMs ? { limitMs: error.limitMs } : {}),
+  };
 }
 
 function messageOf(error: unknown): string {

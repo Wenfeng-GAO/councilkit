@@ -48,6 +48,7 @@
  *                         ms before flushThenExit (F2: exit control frame races the
  *                         stdout drain; 0 = close immediately)
  *   delayMs           number  delay before emitting frames (default 0)
+ *   crashAfterMs      number  B4: exit(3) after this many ms, no frames (crash)
  *   statsPath         string  stats file prefix; stats land at `<statsPath>.<pid>`
  *
  * Stats (written after every event, tmp+rename): {pid, providerLists, turns,
@@ -76,6 +77,7 @@ const DEFAULTS = {
   hang: false,
   ignoreSigterm: false,
   delayMs: 0,
+  crashAfterMs: 0,
   delayExitStdoutMs: 0,
   statsPath: null,
 };
@@ -224,6 +226,10 @@ async function runTurn(config, parsed) {
     return;
   }
 
+  if (config.crashAfterMs > 0) {
+    await sleep(config.crashAfterMs);
+    process.exit(3);
+  }
   if (config.delayMs > 0) await sleep(config.delayMs);
 
   if (config.toolTurn) {

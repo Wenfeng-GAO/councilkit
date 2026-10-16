@@ -1,9 +1,11 @@
+import { reportFailureCopy } from "@/components/room/ReportView";
 import { PAUSE_REASON_COPY, pauseReasonCopy } from "@/components/room/pause-reasons";
 import {
   USER_SPEAKER,
   failureRecordDisplay,
   isFailedExecution,
   isNeedsRebasePause,
+  isRoundFailureRecord,
   isSkippedFailure,
   pausedPanelBranch,
   resolveSpeaker,
@@ -500,5 +502,118 @@ describe("isSkippedFailure (S3)", () => {
       resultKind: "summary",
     });
     expect(isSkippedFailure(summaryExec, [r], [summaryExec])).toBe(false);
+  });
+});
+
+describe("B4 report failure display (#279)", () => {
+  it("B4-02 a failed report execution is not listed as a Round failure record", () => {
+    const report = execution({
+      resultKind: "report",
+      state: "interrupted",
+      error: { code: "INTERRUPTED_UNKNOWN", phase: "stream", message: "x", retryable: false },
+    });
+    expect(isFailedExecution(report)).toBe(true);
+    expect(isRoundFailureRecord(report)).toBe(false);
+    expect(isRoundFailureRecord(execution({ resultKind: "message", state: "interrupted" }))).toBe(
+      true,
+    );
+    expect(isRoundFailureRecord(execution({ resultKind: "summary", state: "failed" }))).toBe(true);
+  });
+
+  it("B4-05 an interrupted report gets the designer copy, never the raw code as the title", () => {
+    for (const [code, title] of [
+      ["INTERRUPTED_UNKNOWN", "报告生成被中断（可能关闭了页面）"],
+      ["SAFE_INTERRUPTION", "报告生成被中断（本地执行服务重启或断开）"],
+    ] as const) {
+      const copy = reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "interrupted",
+          error: { code, phase: "stream", message: "x", retryable: false },
+        }),
+      );
+      expect(copy).toMatchObject({
+        title,
+        action: "重新生成报告",
+        note: "将重新调用模型",
+        interrupted: true,
+      });
+      // 「详情」 is Chinese; the raw English Host message never reaches the UI.
+      expect(copy.detail).toMatch(/[\u4e00-\u9fff]/);
+      expect(copy.detail).not.toMatch(/outcome|reload/);
+    }
+    expect(
+      reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "interrupted",
+          error: { code: "INTERRUPTED_UNKNOWN", phase: "stream", message: "x", retryable: false },
+        }),
+      ).detail,
+    ).toBe("刷新后找不到这次生成的结果。");
+    const idle = reportFailureCopy(
+      execution({
+        resultKind: "report",
+        state: "failed",
+        error: {
+          code: "STREAM_IDLE_TIMEOUT",
+          phase: "stream",
+          message: "No protocol frames within the idle limit.",
+          retryable: false,
+        },
+      }),
+    );
+    expect(idle).toMatchObject({
+      title: "报告生成被中断（模型 2 分钟没有输出）",
+      interrupted: true,
+      detail: "模型超过 2 分钟没有任何输出。",
+    });
+    // B4 #339: one-shot limit and crash; the tool comes from the error, else
+    // from the reporter seat's driver; durations follow limitMs.
+    expect(
+      reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "failed",
+          error: {
+            code: "ONESHOT_TIMEOUT",
+            phase: "stream",
+            message: "x",
+            retryable: false,
+            driverId: "grok-stream-json",
+            limitMs: 60_000,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      title: "报告生成被中断（模型 1 分钟没有写完）",
+      interrupted: true,
+      detail: "Grok 超过 1 分钟没有返回结果。",
+    });
+    expect(
+      reportFailureCopy(
+        execution({
+          resultKind: "report",
+          state: "failed",
+          error: { code: "DRIVER_CRASH", phase: "stream", message: "x", retryable: false },
+        }),
+        "cursor-stream-json",
+      ),
+    ).toMatchObject({
+      title: "报告生成被中断（模型进程意外退出）",
+      interrupted: true,
+      detail: "Cursor 在写完报告前退出了。",
+    });
+    const failed = reportFailureCopy(
+      execution({
+        resultKind: "report",
+        state: "failed",
+        error: { code: "MODEL_UNAVAILABLE", phase: "stream", message: "x", retryable: false },
+      }),
+    );
+    expect(failed.title).toBe("报告生成失败");
+    expect(failed.interrupted).toBe(false);
+    expect(failed.detail).toBeNull();
+    expect(failed.title).not.toContain("MODEL_UNAVAILABLE");
   });
 });

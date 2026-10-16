@@ -49,6 +49,14 @@ export function isFailedExecution(execution: ModelExecution): boolean {
   );
 }
 
+/** Failure records listed inside a Round. A report execution anchors on the
+ * completed Round but its failure is a ROOM-level fact owned by the report
+ * banner, which disappears once a report commits. Listing it in the Round too
+ * left a red 「已中断」 record behind after a successful retry (B4-02). */
+export function isRoundFailureRecord(execution: ModelExecution): boolean {
+  return isFailedExecution(execution) && execution.resultKind !== "report";
+}
+
 export const ROUND_PHASE_LABELS: Record<RoundPhase, string> = {
   pending: "待开始",
   prewarming: "预热中",

@@ -76,6 +76,12 @@ describe("classifyDriverTerminal", () => {
     expect(
       classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 401", exitCode: 1 })?.errorClass,
     ).toBe("auth");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "AUTH_REQUIRED", exitCode: 1 })?.errorClass,
+    ).toBe("auth");
+    expect(
+      classifyDriverTerminal({ stdout: "", stderr: "not logged in", exitCode: 1 })?.errorClass,
+    ).toBe("auth");
   });
 
   it("does not read a source location or a named port or version as a status code", () => {

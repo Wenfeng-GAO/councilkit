@@ -404,6 +404,58 @@ describe("cli review command — argument matrix", () => {
       "already exists",
     );
   });
+
+  it("CK-3 BUG-03 missing driver: exit 2 and no new run dir", async () => {
+    const store = new Store();
+    const ds = { driverId: "kimi-stream-json" as const, options: {} };
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "kimi-code/k3",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    store.createAgent({
+      name: "B",
+      personaPrompt: "p",
+      modelId: "kimi-code/k3",
+      color: "#445566",
+      driverSelection: ds,
+    });
+    const bin = mkdtempSync(join(tmpdir(), "ck-review-empty-bin-"));
+    const oldUserHome = process.env.HOME;
+    process.env.PATH = bin;
+    process.env.HOME = home;
+    const runsRoot = join(home, "runs");
+    const before = existsSync(runsRoot) ? readdirSync(runsRoot).sort() : [];
+    try {
+      await runReview(
+        [
+          "--task",
+          "x",
+          "--agents",
+          '["A","B"]',
+          "--aggregator",
+          "B",
+          "--json",
+          "--no-require-spec",
+        ],
+        makeSink(),
+      );
+      throw new Error("expected usage");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      const err = error as CliError;
+      expect(err.exitCode).toBe(2);
+      expect(err.message).toContain("kimi");
+    } finally {
+      if (oldUserHome === undefined) process.env.HOME = undefined;
+      else process.env.HOME = oldUserHome;
+      rmSync(bin, { recursive: true, force: true });
+    }
+    const after = existsSync(runsRoot) ? readdirSync(runsRoot).sort() : [];
+    expect(after).toEqual(before);
+  });
 });
 
 describe("cli review command — end-to-end (fake spawn)", () => {

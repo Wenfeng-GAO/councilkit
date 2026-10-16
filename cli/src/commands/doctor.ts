@@ -5,8 +5,9 @@
  * exits 3. doctor also routes through `resolveInstallations` so its view never
  * drifts from what a run would use.
  */
-import { CANONICAL_ORIGIN } from "@shared/runtime/contracts";
+import { CANONICAL_ORIGIN, CREDENTIAL_MODE } from "@shared/runtime/contracts";
 import type {
+  ExecutionProfileDto,
   HealthResponse,
   InstallationsResponse,
   ModelCatalogResponse,
@@ -14,13 +15,27 @@ import type {
 import { errors } from "../errors";
 import { HostClient } from "../host/client";
 import { listTrusted } from "../host/installations";
+import { isAuthRequiredError, withLoginHint } from "../login-hint";
 import type { OutputSink } from "../output";
 import { parseFlags } from "./parse";
 
-export async function runDoctor(argv: string[], out: OutputSink): Promise<void> {
+export type DoctorHost = Pick<
+  HostClient,
+  "health" | "listInstallations" | "modelCatalog" | "profileReadiness"
+>;
+
+export interface DoctorDeps {
+  host?: DoctorHost;
+}
+
+export async function runDoctor(
+  argv: string[],
+  out: OutputSink,
+  deps: DoctorDeps = {},
+): Promise<void> {
   parseFlags({ flags: {}, allowPositionals: 0 }, argv);
 
-  const host = new HostClient();
+  const host = deps.host ?? new HostClient();
   let health: HealthResponse;
   let installations: InstallationsResponse;
   try {
@@ -40,11 +55,17 @@ export async function runDoctor(argv: string[], out: OutputSink): Promise<void> 
     drivers.map(async (driverId) => {
       const trusted = listTrusted(installations, driverId);
       const sample = await probeCatalog(host, driverId, trusted[0]?.installationId);
+      const catalogProbe = await overlayLoginProbe(
+        host,
+        driverId,
+        trusted[0]?.installationId,
+        sample,
+      );
       return {
         driverId,
         trustedCount: trusted.length,
         trustedInstallationIds: trusted.map((t) => t.installationId),
-        catalogProbe: sample,
+        catalogProbe,
       };
     }),
   );
@@ -65,7 +86,7 @@ export async function runDoctor(argv: string[], out: OutputSink): Promise<void> 
 }
 
 async function probeCatalog(
-  host: HostClient,
+  host: Pick<HostClient, "modelCatalog">,
   driverId: string,
   installationId: string | undefined,
 ): Promise<{ ok: boolean; catalog?: string[]; cachedAt?: string; error?: string }> {
@@ -78,7 +99,44 @@ async function probeCatalog(
     });
     return { ok: true, catalog: resp.catalog, cachedAt: resp.cachedAt };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    const raw = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      error: isAuthRequiredError(error) ? withLoginHint(raw, driverId) : raw,
+    };
+  }
+}
+
+/** Catalog can succeed from a hardcoded closed set before the driver login
+ * probe runs (kimi `__catalog__` → MODEL_UNAVAILABLE + catalog). A follow-up
+ * readiness handshake with a real modelId is what surfaces AUTH_REQUIRED. */
+async function overlayLoginProbe(
+  host: Pick<HostClient, "profileReadiness">,
+  driverId: string,
+  installationId: string | undefined,
+  catalog: { ok: boolean; catalog?: string[]; cachedAt?: string; error?: string },
+): Promise<{ ok: boolean; catalog?: string[]; cachedAt?: string; error?: string }> {
+  if (!catalog.ok || installationId === undefined) return catalog;
+  const modelId = catalog.catalog?.[0];
+  if (modelId === undefined || modelId.length === 0) return catalog;
+  const profile = {
+    driverId,
+    installationId,
+    credentialMode: CREDENTIAL_MODE,
+    options: driverId === "claude-stream-json" ? { route: "cfuse" } : {},
+  } as ExecutionProfileDto;
+  try {
+    const readiness = await host.profileReadiness(profile, modelId, { refresh: true });
+    if (readiness.readiness.state === "ready") return catalog;
+    const detail = readiness.readiness.detail ?? readiness.readiness.state;
+    if (readiness.readiness.state === "runtime_unavailable" && /auth|login/i.test(detail)) {
+      return { ok: false, error: withLoginHint(detail, driverId) };
+    }
+    return catalog;
+  } catch (error) {
+    if (!isAuthRequiredError(error)) return catalog;
+    const raw = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: withLoginHint(raw, driverId) };
   }
 }
 

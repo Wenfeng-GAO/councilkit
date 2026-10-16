@@ -26,13 +26,18 @@
  *                                        followExecutionEvents resolves
  *                                        "closed" and the afterSeq reconnect
  *                                        path runs.
+ *   POST /api/v1/__test__/forget-executions — B4: forget every execution and
+ *                                        drop the event streams (what the page
+ *                                        sees when the Host restarts).
+ *   POST /api/v1/__test__/discuss-demo-run — B4: {present} seeds or removes
+ *                                        the demo discussion run (banner case).
  *   POST /api/v1/__test__/resume       — release all held fake drivers
  *                                        (pauseAfterEvents holds).
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,12 +47,15 @@ import {
   type DriverId,
   INSTALLATION_STATES,
   type InstallationState,
+  TIMEOUTS,
   type ToolState,
 } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
 import type { ModelVerdict } from "@shared/runtime/events";
+import { generationRule, generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
 import type { InstallationDto } from "@shared/runtime/schemas";
 import { z } from "zod";
+import { renderSuccessReport } from "../../cli/src/report/render";
 import { loadConfig } from "../../runtime-host/config";
 import type {
   Emit,
@@ -76,6 +84,7 @@ import { createScopeManager } from "../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../runtime-host/scopes/session-reconciler";
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
+import { slowGenDemoReport } from "../../runtime-host/slow-gen";
 import { seedLostExecutionFixtures, seedReportCaseFixtures } from "./cli-run-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
@@ -86,6 +95,7 @@ process.env.COUNCILKIT_MODE = "production";
  * developer's real ~/.config/councilkit. Honored only when COUNCILKIT_E2E=1
  * (playwright webServer). */
 export const E2E_CLI_RUN_ID = "ck-review-00000000-0000-4000-8000-0000000000e2";
+export const E2E_DISCUSS_DEMO_RUN_ID = "ck-run-00000000-0000-4000-8000-0000000000e3";
 export const E2E_IDEATE_RUN_ID = "ck-ideate-00000000-0000-4000-8000-0000000000e2";
 if (process.env.COUNCILKIT_E2E === "1") {
   const home = mkdtempSync(join(tmpdir(), "ck-e2e-cli-"));
@@ -280,6 +290,19 @@ export interface DriverBehavior {
   hangUntilCancel?: boolean;
   /** execute holds after emitting N events until /__test__/resume or 300ms. */
   pauseAfterEvents?: number;
+  /** With pauseAfterEvents: no 300ms fallback; hold until /__test__/resume or
+   * cancel (B4: a report still in flight while the tab is closed). */
+  holdUntilResume?: boolean;
+  /** B4: emit nothing; the no-progress window ends the turn with
+   * STREAM_IDLE_TIMEOUT (like the real drivers) unless cancelled first. */
+  slowSilent?: boolean;
+  /** B4: fire slowSilent's limit after this many ms instead (CI does not wait
+   * 2 or 10 minutes); the error still carries the seat's configured limit
+   * (COUNCILKIT_STREAM_IDLE_MS / COUNCILKIT_ONESHOT_TIMEOUT_MS or defaults). */
+  slowSilentIdleMs?: number;
+  /** B4: with slowSilent, the model process "exits" after this many ms →
+   * DRIVER_CRASH (the 「进程意外退出」 card). */
+  crashAfterMs?: number;
 }
 
 interface DriverCounters {
@@ -382,10 +405,12 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
         // Hold so a test can drop the SSE connection mid-stream; released by
         // POST /api/v1/__test__/resume or a bounded 300ms fallback timer.
         await new Promise<void>((resolveHold) => {
-          const timer = setTimeout(() => {
-            rig.holds.delete(release);
-            resolveHold();
-          }, 300);
+          const timer = behavior().holdUntilResume
+            ? undefined
+            : setTimeout(() => {
+                rig.holds.delete(release);
+                resolveHold();
+              }, 300);
           const release = () => {
             clearTimeout(timer);
             rig.holds.delete(release);
@@ -442,6 +467,59 @@ function createScriptedDriver(driverId: DriverId, participantId: string): Partic
           retryable: failWith.retryable,
         });
         return Promise.resolve();
+      }
+      if (behavior().slowSilent) {
+        emit({ type: "started", requestedModel: input.modelId });
+        // Same rule as the real driver for this seat (generation-timeouts):
+        // streaming → STREAM_IDLE_TIMEOUT, one-shot → ONESHOT_TIMEOUT.
+        const rule = generationRule(driverId, generationTimeoutsFromEnv(process.env));
+        // slowSilentIdleMs only fires the limit early so CI does not wait; the
+        // error still reports the Host's configured limit, like a real driver.
+        const own = behavior().slowSilentIdleMs;
+        const fireMs = typeof own === "number" && own > 0 ? own : rule.limitMs;
+        const limitMs = rule.limitMs;
+        const crashAfterMs = behavior().crashAfterMs;
+        return new Promise<void>((resolveHang) => {
+          const idleTimer = setTimeout(
+            () => {
+              if (rig.pendingCancel !== onCancel) return;
+              rig.pendingCancel = null;
+              emit({
+                type: "failed",
+                error:
+                  typeof crashAfterMs === "number"
+                    ? makeError("DRIVER_CRASH", "stream", "fake model process exited.", {
+                        driverId,
+                        participantId,
+                        retryable: false,
+                      })
+                    : makeError(rule.code, "stream", rule.message, {
+                        driverId,
+                        participantId,
+                        limitMs,
+                        retryable: false,
+                      }),
+                dispatchState: "accepted",
+                toolState: "none",
+                retryable: false,
+              });
+              resolveHang();
+            },
+            typeof crashAfterMs === "number" ? crashAfterMs : fireMs,
+          );
+          const onCancel = () => {
+            clearTimeout(idleTimer);
+            rig.pendingCancel = null;
+            emit({
+              type: "interrupted",
+              reason: "user_cancelled",
+              dispatchState: "accepted",
+              toolState: "none",
+            });
+            resolveHang();
+          };
+          rig.pendingCancel = onCancel;
+        });
       }
       if (behavior().hangUntilCancel) {
         emit({ type: "started", requestedModel: input.modelId });
@@ -572,6 +650,72 @@ const fakeInstallationRegistry: InstallationRegistry = {
 // ---------------------------------------------------------------------------
 // Test-only control routes
 // ---------------------------------------------------------------------------
+
+/** B4: a slow-gen (demo) discussion run for the report-page banner e2e case.
+ * Seeded on demand through POST /__test__/discuss-demo-run and removed again
+ * (also by /__test__/reset), so the default /reports fixtures and their
+ * counts stay unchanged for every other spec. The report.md comes from the
+ * real CLI renderer around the real slow-gen body. */
+function discussDemoRunDir(): string {
+  const home = process.env.COUNCILKIT_HOME;
+  if (home === undefined || home.length === 0) {
+    throw new Error("COUNCILKIT_HOME missing in e2e host");
+  }
+  return join(home, "runs", E2E_DISCUSS_DEMO_RUN_ID);
+}
+
+function removeDiscussDemoRun(): void {
+  if (process.env.COUNCILKIT_E2E !== "1") return;
+  rmSync(discussDemoRunDir(), { recursive: true, force: true });
+}
+
+function seedDiscussDemoRun(): void {
+  const runDir = discussDemoRunDir();
+  mkdirSync(runDir, { recursive: true });
+  const council = {
+    id: "c-slow",
+    name: "slow-gen",
+    topic: "慢生成测试：要不要把支付服务拆出来",
+    background: "",
+    targetOutput: "决策报告",
+    rounds: 1,
+    reporterAgentId: "a",
+    agentIds: ["a"],
+  };
+  writeFileSync(
+    join(runDir, "transcript.jsonl"),
+    `${[
+      {
+        kind: "run.started",
+        runId: E2E_DISCUSS_DEMO_RUN_ID,
+        startedAt: "2026-10-16T05:00:00.000Z",
+        council,
+      },
+      {
+        kind: "run.finished",
+        status: "completed",
+        endedAt: "2026-10-16T05:02:30.000Z",
+        incomplete: false,
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n")}\n`,
+  );
+  writeFileSync(join(runDir, "demo.json"), JSON.stringify({ demo: true }));
+  writeFileSync(
+    join(runDir, "report.md"),
+    renderSuccessReport({
+      runId: E2E_DISCUSS_DEMO_RUN_ID,
+      startedAt: "2026-10-16T05:00:00.000Z",
+      endedAt: "2026-10-16T05:02:30.000Z",
+      council,
+      reporterName: "A",
+      participantNames: ["A"],
+      reporterOutput: slowGenDemoReport(5),
+      demo: true,
+    }),
+  );
+}
 
 const TEST_BASE = "/api/v1/__test__";
 
@@ -782,7 +926,10 @@ function testRoutes(
       method: "POST",
       pattern: `${TEST_BASE}/reset`,
       auth: "session",
-      handler: () => doReset(),
+      handler: () => {
+        removeDiscussDemoRun();
+        return doReset();
+      },
     },
     {
       method: "POST",
@@ -851,6 +998,32 @@ function testRoutes(
       pattern: `${TEST_BASE}/drop-events`,
       auth: "session",
       handler: () => ({ dropped: dropOpenEventStreams() }),
+    },
+    {
+      // B4: a Host restart mid-generation as the page sees it. The executions
+      // are forgotten (a fresh Host has none) and the open event streams drop,
+      // so the page's reconnect finds 404 → SAFE_INTERRUPTION.
+      method: "POST",
+      pattern: `${TEST_BASE}/forget-executions`,
+      auth: "session",
+      handler: () => {
+        executions.reset();
+        return { dropped: dropOpenEventStreams() };
+      },
+    },
+    {
+      // B4: seed ({present:true}) or remove ({present:false}) the demo
+      // discussion run under the e2e CLI home.
+      method: "POST",
+      pattern: `${TEST_BASE}/discuss-demo-run`,
+      auth: "session",
+      bodySchema: z.object({ present: z.boolean() }),
+      handler: ({ body }) => {
+        const { present } = body as { present: boolean };
+        if (present) seedDiscussDemoRun();
+        else removeDiscussDemoRun();
+        return { runId: E2E_DISCUSS_DEMO_RUN_ID, present };
+      },
     },
     {
       method: "POST",
@@ -988,6 +1161,7 @@ async function main(): Promise<void> {
     session,
     hostInstanceId,
     startedAt: new Date().toISOString(),
+    generationTimeouts: generationTimeoutsFromEnv(process.env),
     installationRegistry: fakeInstallationRegistry,
     executionRegistry: executions,
     scopeManager,

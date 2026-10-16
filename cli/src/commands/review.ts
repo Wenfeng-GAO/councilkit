@@ -774,23 +774,11 @@ export async function runReview(
   if (assignedRunId !== undefined && existsSync(paths.transcript(runId))) {
     throw errors.usage(`--run-id ${runId} already exists`);
   }
-  deps.onRunCreated?.(runId);
   const runDir = paths.runDir(runId);
   const transcriptPath = paths.transcript(runId);
   const reportPath = paths.report(runId);
   const startedAt = priorStartedAt ?? new Date().toISOString();
   let reviewedSha: string | null = null;
-  // The run dir must exist before the first transcript flush — but
-  // `workspaces/` is created only AFTER probing, for attempts that will
-  // actually spawn (a probe must be able to prove no workspace existed yet).
-  createWorkspace(runDir);
-  writeReviewPid(runDir);
-  if (repairPackage && resumeRaw === undefined) {
-    atomicWriteFile(
-      join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
-      `${JSON.stringify(repairPackage, null, 2)}\n`,
-    );
-  }
 
   const isReused = (attemptId: string): boolean => reusedByAttemptId.has(attemptId);
 
@@ -821,10 +809,8 @@ export async function runReview(
     );
   }
 
-  // Build spawn specs for the attempts that will actually (re)run, up front so
-  // usage errors (non-cfuse route, missing executable) fail fast BEFORE any
-  // subprocess is spawned. No workspace is created here — probing happens
-  // first, and probe-failed attempts never get a workspace.
+  // Build spawn specs BEFORE creating the run dir so a missing executable
+  // (exit 2) cannot leave an empty ghost under runs/.
   const attemptMetas: AttemptMeta[] = [];
   const rerunSpecs: AttemptSpec[] = [];
   const rerunAgents: AgentRecord[] = [];
@@ -854,6 +840,19 @@ export async function runReview(
     index++;
   }
   const aggregatorWorkspace = join(runDir, "workspaces", "aggregator");
+
+  deps.onRunCreated?.(runId);
+  // The run dir must exist before the first transcript flush — but
+  // `workspaces/` is created only AFTER probing, for attempts that will
+  // actually spawn (a probe must be able to prove no workspace existed yet).
+  createWorkspace(runDir);
+  writeReviewPid(runDir);
+  if (repairPackage && resumeRaw === undefined) {
+    atomicWriteFile(
+      join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
+      `${JSON.stringify(repairPackage, null, 2)}\n`,
+    );
+  }
 
   // --- SIGINT / SIGTERM ---------------------------------------------------
   // Registered BEFORE the probes so a signal mid-probe still takes the

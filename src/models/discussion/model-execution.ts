@@ -45,6 +45,10 @@ export interface ModelExecutionError {
   phase: string;
   message: string;
   retryable: boolean;
+  /** B4: driver of the failing seat (names the tool in the interruption copy). */
+  driverId?: string;
+  /** B4: generation limit that fired (STREAM_IDLE_TIMEOUT / ONESHOT_TIMEOUT). */
+  limitMs?: number;
 }
 
 export interface ModelExecutionUsage {

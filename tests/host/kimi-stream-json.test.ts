@@ -48,6 +48,7 @@ const BASE_TIMEOUTS: DriverTimeouts = {
   dispatchAckMs: 1500,
   streamIdleMs: 3000,
   turnMs: 15000,
+  oneshotMs: 600_000,
   interruptGraceMs: 800,
   shutdownGraceMs: 3000,
 };
@@ -421,18 +422,52 @@ describe("kimi-stream-json driver", () => {
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
   });
 
-  it("silent turn (final-only protocol) -> turnMs timeout, NOT stream-idle", async () => {
-    // The kimi protocol emits NO frames during generation: a long generation
-    // must not be killed by a per-frame idle watchdog. The only bound is the
-    // turnMs absolute timer (interruptTurn "timeout" + session invalidation).
-    const driver = await createDriver({ hang: true }, { ...BASE_TIMEOUTS, turnMs: 3000 });
+  // B4/#339: kimi is one-shot (final answer only), so no idle window: the
+  // bound is "not finished within oneshotMs"; an early exit fails at once.
+  const ONESHOT_TIMEOUTS = { ...BASE_TIMEOUTS, streamIdleMs: 300, oneshotMs: 1500, turnMs: 15000 };
+
+  it("B4 #339: silent past streamIdleMs is not cut; ONESHOT_TIMEOUT at oneshotMs", async () => {
+    const driver = await createDriver({ hang: true }, ONESHOT_TIMEOUTS);
+    const startedAt = Date.now();
     const run = executeCollecting(driver, execInput("exec-1", "Hang."));
     await run.done;
+    const elapsed = Date.now() - startedAt;
     const terminal = terminalOf(run.events);
-    expect(terminal.type).toBe("interrupted");
-    if (terminal.type !== "interrupted") throw new Error("unreachable");
-    expect(terminal.reason).toBe("timeout");
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("ONESHOT_TIMEOUT");
+    expect(terminal.error.limitMs).toBe(1500);
+    expect(elapsed).toBeGreaterThanOrEqual(1400);
+    expect(elapsed).toBeLessThan(8000);
     expect(driver.sessionEpoch).toBeGreaterThanOrEqual(1);
+  });
+
+  it("B4 #339: a silent answer that lands before oneshotMs completes", async () => {
+    const driver = await createDriver(
+      { delayMs: 1000, reply: "Long report." },
+      { ...ONESHOT_TIMEOUTS, oneshotMs: 6000 },
+    );
+    const run = executeCollecting(driver, execInput("exec-1", "Slow."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("completed");
+    if (terminal.type !== "completed") throw new Error("unreachable");
+    expect(terminal.output).toBe("Long report.");
+  });
+
+  it("B4 #339: process exits before finishing -> DRIVER_CRASH at once", async () => {
+    const driver = await createDriver(
+      { crashAfterMs: 300 },
+      { ...ONESHOT_TIMEOUTS, oneshotMs: 60_000 },
+    );
+    const startedAt = Date.now();
+    const run = executeCollecting(driver, execInput("exec-1", "Crash."));
+    await run.done;
+    const terminal = terminalOf(run.events);
+    expect(terminal.type).toBe("failed");
+    if (terminal.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("DRIVER_CRASH");
+    expect(Date.now() - startedAt).toBeLessThan(5000);
   });
 
   it("malformed JSON line is off-protocol: turn completes with toolState=unknown (discardable, F6)", async () => {
@@ -687,11 +722,14 @@ describe("kimi-stream-json driver", () => {
 
   it("F3: a successful first turn establishes a sid; a resume turn that hangs times out and the NEXT turn is a full coldStart with no -S", async () => {
     // Turn 1 succeeds and captures a resume hint (clean, toolState=none).
-    // Turn 2 is a resume turn that emits nothing and hangs (turnMs timeout —
-    // the final-only protocol has no per-frame idle watchdog). It must be
+    // Turn 2 is a resume turn that emits nothing and hangs (turnMs timeout;
+    // the idle window is pushed out so this pins the turnMs path). It must be
     // interrupted AND the sessionEpoch must bump synchronously so turn 3 is a
     // cold rebase (full prompt, no -S) rather than an incremental resume.
-    const driver = await createDriver({ reply: "First cold." }, { ...BASE_TIMEOUTS, turnMs: 3000 });
+    const driver = await createDriver(
+      { reply: "First cold." },
+      { ...BASE_TIMEOUTS, streamIdleMs: 60_000, turnMs: 3000 },
+    );
     const run1 = executeCollecting(driver, execInput("exec-1", "Seed."));
     await run1.done;
     expect(terminalOf(run1.events).type).toBe("completed");

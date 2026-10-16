@@ -224,6 +224,9 @@ export class HostClient {
 
 function isAuthRejection(error: unknown): boolean {
   if (!(error instanceof RuntimeClientError)) return false;
+  // Driver login (AUTH_REQUIRED) is a 403 from the Host, but re-extracting the
+  // session cookie cannot fix it — retrying here is CK-12 (auth auto-retry).
+  if (error.code === "AUTH_REQUIRED") return false;
   if (error.status === 401 || error.status === 403) return true;
   return AUTH_CODES.has(error.code);
 }

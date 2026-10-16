@@ -209,6 +209,7 @@ export function createCodexAppServerDriver(
             driverId: "codex-app-server",
             executionId: turn.executionId,
             participantId,
+            limitMs: timeouts.streamIdleMs,
           }),
         );
       }, timeouts.streamIdleMs);

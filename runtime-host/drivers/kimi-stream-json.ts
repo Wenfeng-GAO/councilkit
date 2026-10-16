@@ -4,6 +4,11 @@ import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { directoryEscapes } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
+import {
+  type GenerationWatchdog,
+  generationRule,
+  startGenerationWatchdog,
+} from "@shared/runtime/generation-timeouts";
 import { sanitizeString } from "../logging";
 import { type DriverProcess, createBoundedRing } from "../process/process-supervisor";
 import { attachNdjsonSplitter, withDeadline } from "./ndjson";
@@ -151,6 +156,9 @@ interface ActiveTurn {
   cancelling: boolean;
   settled: boolean;
   turnTimer?: NodeJS.Timeout;
+  /** B4/#339: one-shot "not finished" deadline (oneshotMs). The CLI prints
+   * the answer only at the end, so stdout is not progress here. */
+  deadline?: GenerationWatchdog;
   resolve(): void;
 }
 
@@ -201,6 +209,8 @@ export function createKimiStreamJsonDriver(
 
     function clearTurnTimers(turn: ActiveTurn) {
       if (turn.turnTimer) clearTimeout(turn.turnTimer);
+      turn.deadline?.clear();
+      turn.deadline = undefined;
     }
 
     function emitTerminal(turn: ActiveTurn, event: DriverEvent) {
@@ -815,12 +825,25 @@ export function createKimiStreamJsonDriver(
             // until the assistant frame arrives.
             if (turn.dispatchState === "not_dispatched") turn.dispatchState = "unknown";
 
-            // Turn timer (armed after spawn so a never-supervised spawn
-            // still times out rather than hanging the execute promise). The
-            // kimi protocol is final-only — it emits NO frames during
-            // generation, so the streaming-style per-frame idle watchdog
-            // (streamIdleMs) does not apply here; the turnMs absolute timer
-            // is the only turn bound.
+            // B4/#339: one-shot drivers get no idle window (silence is normal
+            // until the final answer). Not finished within oneshotMs →
+            // ONESHOT_TIMEOUT; an early exit fails at once via the exit handler.
+            // turnMs (1h) stays only as a safety ceiling.
+            const rule = generationRule("kimi-stream-json", timeouts);
+            turn.deadline = startGenerationWatchdog(rule, () => {
+              if (!deadlineMaySettle(turn, activeTurn === turn)) return;
+              invalidateSession("oneshot_timeout");
+              failTurn(
+                turn,
+                makeError(rule.code, "stream", rule.message, {
+                  driverId: "kimi-stream-json",
+                  executionId: turn.executionId,
+                  participantId,
+                  limitMs: rule.limitMs,
+                }),
+              );
+              void reapActiveProcess("oneshot_timeout");
+            });
             turn.turnTimer = setTimeout(() => {
               // CK-RS-002: a turnMs armed after a pending spawn (or a callback
               // already queued on the event loop) must NOT preempt an in-flight
