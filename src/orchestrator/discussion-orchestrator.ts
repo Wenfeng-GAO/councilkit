@@ -213,6 +213,12 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
     }
   }
 
+  /** The status check got no Host answer: the request itself failed
+   * (connection refused/reset while the Host is down), or the Host no longer
+   * knows this page's session (it restarted). A live Host's 5xx is not this. */
+  const hostUnreachable = (error: unknown): boolean =>
+    error instanceof RuntimeClientError ? error.status === 401 : error instanceof TypeError;
+
   const lostHostError = () =>
     errorOf("SAFE_INTERRUPTION", "host restarted or terminal lost before commit");
 
@@ -1070,7 +1076,11 @@ export function createDiscussionOrchestrator(deps: OrchestratorDeps) {
         await failExecution(db, {
           executionId: execution.executionId,
           token,
-          error: errorOf("INTERRUPTED_UNKNOWN", "execution status failed before a terminal"),
+          // #350: no answer at all (connection refused) or a 401 (a restarted
+          // Host minted a new session) means the Host went away, not the page.
+          error: hostUnreachable(error)
+            ? errorOf("SAFE_INTERRUPTION", "host unreachable before its terminal")
+            : errorOf("INTERRUPTED_UNKNOWN", "execution status failed before a terminal"),
           kind: "interrupted",
         });
         notify(room.id);

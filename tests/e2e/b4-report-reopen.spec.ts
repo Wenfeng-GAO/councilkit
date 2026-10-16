@@ -13,6 +13,7 @@ import {
 import {
   concludeRoomViaButton,
   driverCounters,
+  dropEventStreams,
   forgetHostExecutions,
   reportView,
   resetDriverState,
@@ -313,6 +314,50 @@ test.describe("B4 #339 Host restarted or disconnected mid-report", () => {
     await expect(card.getByText("SAFE_INTERRUPTION")).toBeVisible();
     await shot(page, "restart-02-detail-expanded");
     await resumeDrivers(page);
+  });
+});
+
+test.describe("#350 Host killed while the page stays open", () => {
+  test("no Host answer mid-report: 「本地执行服务重启或断开」, also after reload", async () => {
+    test.setTimeout(120_000);
+    const fixture = await setupRoomWithTwoAgents(page, "B4 杀掉执行服务·页面不关");
+    await startRound(page);
+    await waitRoundPhase(page, 1, "已完成");
+    await setDriverBehavior(page, fixture.claudePid, {
+      pauseAfterEvents: 2,
+      holdUntilResume: true,
+    });
+    await concludeRoomViaButton(page);
+    await expect(page.getByText("正在生成决策报告")).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => (await driverCounters(page))[fixture.claudePid]?.executeCount ?? 0)
+      .toBe(4);
+    // What the open page sees after `kill -9`: its stream ends and nothing
+    // answers on the Host port any more (page.request bypasses this route).
+    await context.route("**/api/v1/**", (route) => route.abort("connectionrefused"));
+    await dropEventStreams(page);
+    const card = page.getByTestId("report-failure");
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await expect(
+      card.getByText("报告生成被中断（本地执行服务重启或断开）", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("报告生成被中断（可能关闭了页面）")).toHaveCount(0);
+    const failed = (await roomExecutions(page, fixture.roomId)).filter(
+      (execution) => execution.state === "interrupted",
+    );
+    expect(failed.map((execution) => execution.error?.code)).toEqual(["SAFE_INTERRUPTION"]);
+    // The Host comes back without the execution; the stored reason sticks.
+    await context.unroute("**/api/v1/**");
+    await forgetHostExecutions(page);
+    await resumeDrivers(page);
+    await page.reload();
+    await expect(page.getByTestId("report-failure")).toBeVisible({ timeout: 11_000 });
+    await expect(
+      page
+        .getByTestId("report-failure")
+        .getByText("报告生成被中断（本地执行服务重启或断开）", { exact: true }),
+    ).toBeVisible();
+    await shot(page, "host-killed-page-open");
   });
 });
 
