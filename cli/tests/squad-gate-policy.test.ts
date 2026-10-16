@@ -12,7 +12,10 @@ import {
   parseOfficialPolicyFreezeStdout,
   recoverOfficialPolicyFreeze,
 } from "@shared/runtime/squad-gate-policy";
-import { buildFrozenPrProfile, deliveryAuthorityFromProfile } from "@shared/runtime/squad-pr-profile";
+import {
+  buildFrozenPrProfile,
+  deliveryAuthorityFromProfile,
+} from "@shared/runtime/squad-pr-profile";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   defaultSupervisedPolicy,
@@ -311,7 +314,10 @@ describe("production freeze recovery IO", () => {
     });
     writeFileSync(
       join(root, "gate-policy.json"),
-      JSON.stringify({ policy_hash: hashOfficialFrozenPolicy(policy, briefHash), brief_hash: briefHash }),
+      JSON.stringify({
+        policy_hash: hashOfficialFrozenPolicy(policy, briefHash),
+        brief_hash: briefHash,
+      }),
     );
     expect(recoverWrittenFreeze(root, "task-A", policy).ok).toBe(true);
     writeFileSync(
@@ -439,7 +445,9 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("official squadctl publish gate", () => {
     );
     const deniedPush = pushRemote(repo, deniedDir, base, candidate, profile, env);
     expect(deniedPush.status).not.toBe(0);
-    expect(`${deniedPush.stderr}\n${deniedPush.stdout}`).toMatch(/lacks journal-frozen delivery authority/i);
+    expect(`${deniedPush.stderr}\n${deniedPush.stdout}`).toMatch(
+      /lacks journal-frozen delivery authority/i,
+    );
     expect(git(bare, ["rev-parse", "refs/heads/feat-x"])).toBe(base);
 
     const taskDir = join(root, "task-granted");
@@ -475,7 +483,9 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("official squadctl publish gate", () => {
     );
     const drifted = pushRemote(repo, taskDir, base, candidate, driftedPath, env);
     expect(drifted.status).not.toBe(0);
-    expect(`${drifted.stderr}\n${drifted.stdout}`).toMatch(/differs from frozen delivery authority/i);
+    expect(`${drifted.stderr}\n${drifted.stdout}`).toMatch(
+      /differs from frozen delivery authority/i,
+    );
     expect(git(bare, ["rev-parse", "refs/heads/feat-x"])).toBe(base);
     const allowed = pushRemote(repo, taskDir, base, candidate, profilePath, env);
     expect(allowed.status, `${allowed.stderr}\n${allowed.stdout}`).toBe(0);
@@ -789,10 +799,7 @@ function pushRemote(
   profile: string | object,
   env: NodeJS.ProcessEnv,
 ): { status: number | null; stdout: string; stderr: string } {
-  const profilePath =
-    typeof profile === "string"
-      ? profile
-      : join(taskDir, "push-profile.json");
+  const profilePath = typeof profile === "string" ? profile : join(taskDir, "push-profile.json");
   if (typeof profile !== "string") writeFileSync(profilePath, JSON.stringify(profile));
   const result = spawnSync(
     LIVE_SQUADCTL,

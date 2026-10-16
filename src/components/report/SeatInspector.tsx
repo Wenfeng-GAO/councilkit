@@ -141,6 +141,7 @@ export function SeatInspector({
       />
       <div
         ref={dialogRef}
+        // biome-ignore lint/a11y/useSemanticElements: portal modal with its own focus trap and scrim; native <dialog> needs showModal() and top-layer styling this panel does not use
         role="dialog"
         aria-modal="true"
         aria-labelledby="ck-inspector-title"

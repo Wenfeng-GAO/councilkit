@@ -21,9 +21,9 @@ import {
   loadOrCreateChain,
   readRepairChain,
 } from "../src/auto/repair-chain-store";
+import { releaseWriterLease } from "../src/auto/repair-lease";
 import { saveRepairProfile } from "../src/auto/repair-profile";
 import { FakeSquadBridge } from "../src/auto/squad-bridge";
-import { releaseWriterLease } from "../src/auto/repair-lease";
 import { type RepairCommandDeps, RepairExit, runRepair } from "../src/commands/repair";
 import type { OutputSink } from "../src/output";
 

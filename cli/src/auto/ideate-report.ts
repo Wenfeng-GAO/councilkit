@@ -78,13 +78,16 @@ export function renderIdeateReport(input: IdeateReportInput): string {
     lines.push(input.debateRounds === 0 ? "_未安排辩论。_" : "_没有辩论发言。_", "");
   } else {
     for (const seat of input.debates) {
-      lines.push(`### ${seat.attemptId} — ${seat.agentName} (${seat.driverId}/${seat.modelId})`, "");
+      lines.push(
+        `### ${seat.attemptId} — ${seat.agentName} (${seat.driverId}/${seat.modelId})`,
+        "",
+      );
       lines.push(appendixBody(seat.result), "");
     }
   }
   if (input.aggregation) {
     lines.push(
-      `## 附录：汇总过程`,
+      "## 附录：汇总过程",
       "",
       `- Duration: ${formatDurationMs(input.aggregation.durationMs)}`,
       `- Exit: ${String(input.aggregation.exitCode)}`,

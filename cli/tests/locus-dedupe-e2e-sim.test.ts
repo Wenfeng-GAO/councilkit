@@ -4,15 +4,12 @@
  * writes artifacts/locus-dedupe-sim/{report.html,ledger.json,console.txt}.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
 import { isFindingBlocking } from "@shared/runtime/cli-ledger";
 import { describe, expect, it } from "vitest";
-import {
-  extractFindingsFromReport,
-  persistFindingsFromReport,
-} from "../src/auto/ledger";
+import { extractFindingsFromReport, persistFindingsFromReport } from "../src/auto/ledger";
 
 const OUT_DIR = join(process.cwd(), "artifacts/locus-dedupe-sim");
 
@@ -113,13 +110,9 @@ function naiveLocusBuckets(markdown: string): {
   rows: { title: string; locus: string; severity: string }[];
 } {
   // Pre-fix Bug A behavior sketch: group solely by primary file:line + severity.
-  const itemRe =
-    /^- \[(critical|major|minor|nit)\](?:\[[^\]]+\])?\s+(.+)$/gm;
+  const itemRe = /^- \[(critical|major|minor|nit)\](?:\[[^\]]+\])?\s+(.+)$/gm;
   const locusRe = /((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}):(\d+)(?:-\d+)?/;
-  const buckets = new Map<
-    string,
-    { title: string; locus: string; severity: string }
-  >();
+  const buckets = new Map<string, { title: string; locus: string; severity: string }>();
   let match = itemRe.exec(markdown);
   while (match) {
     const severity = match[1] ?? "major";
@@ -148,10 +141,7 @@ function renderHtml(input: {
   afterPersist: ReturnType<typeof dumpRows>;
   checks: { name: string; pass: boolean; detail: string }[];
 }): string {
-  const rowTable = (
-    rows: Array<Record<string, unknown>>,
-    cols: string[],
-  ): string => {
+  const rowTable = (rows: Array<Record<string, unknown>>, cols: string[]): string => {
     const head = cols.map((c) => `<th>${c}</th>`).join("");
     const body = rows
       .map((row) => {
@@ -293,9 +283,7 @@ describe("locus dedupe e2e simulation", () => {
       },
       {
         name: "P1-1 distinct invariantIds retained",
-        pass:
-          handler.length === 2 &&
-          new Set(handler.map((r) => r.invariantId)).size === 2,
+        pass: handler.length === 2 && new Set(handler.map((r) => r.invariantId)).size === 2,
         detail: `AC-VALIDATE vs AC-AUTHORIZE at handler.ts:42 → ${handler.length} findings (want 2)`,
       },
       {

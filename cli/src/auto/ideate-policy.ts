@@ -24,13 +24,14 @@
  *  - cursor-agent: --mode ask (documented read-only), --sandbox enabled.
  */
 import {
+  type Stats,
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -120,11 +121,9 @@ export const IDEATE_GROK_CONFIG = [
   "",
 ].join("\n");
 
-export const IDEATE_GROK_REQUIREMENTS = [
-  "[ui]",
-  "disable_bypass_permissions_mode = true",
-  "",
-].join("\n");
+export const IDEATE_GROK_REQUIREMENTS = ["[ui]", "disable_bypass_permissions_mode = true", ""].join(
+  "\n",
+);
 
 /**
  * Custom profile extending built-in `read-only`. Built-in `--sandbox read-only`
@@ -201,7 +200,10 @@ export function buildIdeateKimiConfig(sourceToml: string): string {
   return lines.join("\n");
 }
 
-export function splitKimiModelCatalog(sourceToml: string): { defaultModel: string; tables: string } {
+export function splitKimiModelCatalog(sourceToml: string): {
+  defaultModel: string;
+  tables: string;
+} {
   if (sourceToml.length > KIMI_CONFIG_MAX_BYTES) return { defaultModel: "", tables: "" };
   const defaultModels: string[] = [];
   const tables: string[] = [];
@@ -260,7 +262,10 @@ function formatTomlTableHeader(header: { path: string; array: boolean }): string
 }
 
 function isKimiModelCatalogTable(path: string): boolean {
-  const first = path.split(".")[0]?.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+  const first = path
+    .split(".")[0]
+    ?.replace(/^"(.*)"$/, "$1")
+    .replace(/^'(.*)'$/, "$1");
   return first === "models" || first === "providers";
 }
 
@@ -443,7 +448,9 @@ export function ideateEnvOverlay(
   };
   if (driverId === "kimi-stream-json") {
     if (authHome === null) {
-      throw errors.usage("ideate kimi requires an ephemeral isolated KIMI_CODE_HOME; refusing to spawn");
+      throw errors.usage(
+        "ideate kimi requires an ephemeral isolated KIMI_CODE_HOME; refusing to spawn",
+      );
     }
     return {
       KIMI_CODE_HOME: authHome,
@@ -492,7 +499,10 @@ export function assertNoIdeateBypassFlags(argv: readonly string[], driverId: str
         `ideate invocation for ${driverId} requested bypassPermissions; restricted policy refused`,
       );
     }
-    if (argv[i] === "--sandbox" && (argv[i + 1] === "danger-full-access" || argv[i + 1] === "off")) {
+    if (
+      argv[i] === "--sandbox" &&
+      (argv[i + 1] === "danger-full-access" || argv[i + 1] === "off")
+    ) {
       throw errors.usage(
         `ideate invocation for ${driverId} requested sandbox ${argv[i + 1]}; restricted policy refused`,
       );
@@ -533,9 +543,7 @@ function requireDenyRules(
   }
   for (const rule of rules) {
     if (!values.includes(rule)) {
-      throw errors.usage(
-        `ideate invocation for ${driverId} must deny ${rule}; refusing to spawn`,
-      );
+      throw errors.usage(`ideate invocation for ${driverId} must deny ${rule}; refusing to spawn`);
     }
   }
 }
@@ -588,17 +596,15 @@ export function assertIdeateIsolatedEnv(
   }
 }
 
-function assertEphemeralAuthDir(
-  dir: string | undefined,
-  workspace: string,
-  label: string,
-): void {
+function assertEphemeralAuthDir(dir: string | undefined, workspace: string, label: string): void {
   if (dir === undefined || dir.trim().length === 0) {
     throw errors.usage(`ideate env must set ephemeral ${label}; refusing to spawn`);
   }
   const resolved = resolve(dir);
   if (isInsideDir(resolved, workspace)) {
-    throw errors.usage(`ideate ${label} must not live under the retained workspace; refusing to spawn`);
+    throw errors.usage(
+      `ideate ${label} must not live under the retained workspace; refusing to spawn`,
+    );
   }
   const tmp = resolve(tmpdir());
   if (resolved !== tmp && !resolved.startsWith(`${tmp}${sep}`)) {
@@ -695,7 +701,7 @@ function copyGrokAuth(destHome: string, env: NodeJS.ProcessEnv): void {
 }
 
 function copyAuthTree(src: string, dest: string): void {
-  let st;
+  let st: Stats;
   try {
     st = lstatSync(src);
   } catch {

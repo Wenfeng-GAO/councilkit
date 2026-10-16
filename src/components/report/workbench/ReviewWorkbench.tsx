@@ -1,15 +1,17 @@
+import { buildFindingChecklist } from "@/lib/finding-checklist";
 import {
   type AgainstLedgerState,
   type FindingListFilter,
   defaultFindingListFilter,
   projectFindingList,
 } from "@/lib/finding-list";
-import { buildFindingChecklist } from "@/lib/finding-checklist";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
+import { exportRunMarkdown, isDemoRun } from "@shared/runtime/demo-report";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { type Ref, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { DemoReportNotice } from "../DemoReportNotice";
 import { ReviewExplainer } from "../explainer/ReviewExplainer";
 import { ContextBar } from "./ContextBar";
 import { OverviewView } from "./OverviewView";
@@ -69,6 +71,10 @@ export function ReviewWorkbench({
   };
   const hostStatus = useWorkbenchHostStatus();
   const { selected, select, tabs, setTab, getOrInitTab } = useWorkbenchSelection();
+  const demoRun = isDemoRun(run);
+  useEffect(() => {
+    if (demoRun && selected === "repair") select("overview");
+  }, [demoRun, selected, select]);
 
   // Overview filter state (lifted to enable copy with correct filter)
   const projection = projectFindingList(run.findings, {
@@ -80,20 +86,20 @@ export function ReviewWorkbench({
   );
 
   const attempts = run.progress?.attempts ?? [];
-  // AC-01：kind=review 即可达「当前修复」（沿用旧 reviewActions 语义）——无 pipeline 时
-  // RepairView 内的 RepairRunPanel/FixPipeline 提供真实启动能力；入口不是占位。
-  const repairAvailable = true;
-  // 真实修复证据（内置 pipeline 或独立 Squad 自动修复 Run）；只控制总览内的快捷入口，
-  // 不把「尚未启动」藏成没有入口。
-  const repairExists = run.pipeline !== null || repair.activeRepair !== null;
+  // 示例报告没有读过代码，不提供修复入口。其余 kind=review 仍可达「当前修复」。
+  const repairAvailable = !demoRun;
+  // 真实修复证据（内置 pipeline 或独立 Squad 自动修复 Run）；只控制总览内的快捷入口。
+  const repairExists = repairAvailable && (run.pipeline !== null || repair.activeRepair !== null);
   const seats = attempts.filter((row) => row.role === "attempt");
   const aggregators = attempts.filter((row) => row.role === "aggregator");
 
-  // 选择兜底：attemptId 必须在当前 attempts 中，否则回退总览，不留无效选中态。
+  // 选择兜底：attemptId 必须在当前 attempts 中，否则回退总览。示例报告即使
+  // 全局选择停在 repair，这一帧也只渲染总览。
   const effectiveSelection: WorkbenchSelection =
-    selected !== "overview" &&
-    selected !== "repair" &&
-    !attempts.some((row) => row.attemptId === selected)
+    (!repairAvailable && selected === "repair") ||
+    (selected !== "overview" &&
+      selected !== "repair" &&
+      !attempts.some((row) => row.attemptId === selected))
       ? "overview"
       : selected;
 
@@ -235,7 +241,7 @@ export function ReviewWorkbench({
 
   const copyFullReport = () => {
     if (effectiveSelection === "overview" && run.markdown.trim().length > 0) {
-      return run.markdown;
+      return exportRunMarkdown(run);
     }
     return null;
   };
@@ -274,6 +280,7 @@ export function ReviewWorkbench({
           }}
         />
         <div className="ck-wb-reader" ref={readerRef as Ref<HTMLDivElement>}>
+          {demoRun ? <DemoReportNotice /> : null}
           {effectiveSelection === "overview" ? (
             <OverviewView
               run={run}

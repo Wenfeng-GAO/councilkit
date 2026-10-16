@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import {
-  type RepairSeat,
   REPAIR_ROLE_SWAP_LIMIT,
+  type RepairSeat,
   applyRepairRoleUpdates,
   preferredCursorModel,
   readSquadBridgeFile,
@@ -107,9 +107,9 @@ async function resetRepairRoles(out: OutputSink): Promise<void> {
   mkdirSync(resolveCouncilkitHome(process.env), { recursive: true, mode: 0o700 });
   const current = readSquadBridgeObject(process.env);
   if (!current.ok) throw errors.usage(current.reason);
-  delete current.value.roles;
-  delete current.value.model;
-  const path = writeSquadBridgeFile(process.env, current.value);
+  // Reset = the persisted file must not carry the override keys at all.
+  const { roles: _roles, model: _model, ...withoutOverrides } = current.value;
+  const path = writeSquadBridgeFile(process.env, withoutOverrides);
   const loaded = readSquadBridgeFile(process.env);
   const resolved = resolveRepairRoles({
     orchestratorRuntime: loaded.file.orchestratorRuntime,
@@ -124,7 +124,9 @@ async function resetRepairRoles(out: OutputSink): Promise<void> {
 function parseSeatSpec(seat: RepairSeat, spec: string): { runtime: string; model: string } {
   const index = spec.indexOf(":");
   if (index <= 0 || index === spec.length - 1) {
-    throw errors.usage(`${seat} 的格式是 runtime:model，例如 cursor:composer-2.5 或 grokb:grok-4.6`);
+    throw errors.usage(
+      `${seat} 的格式是 runtime:model，例如 cursor:composer-2.5 或 grokb:grok-4.6`,
+    );
   }
   return { runtime: spec.slice(0, index).trim(), model: spec.slice(index + 1).trim() };
 }

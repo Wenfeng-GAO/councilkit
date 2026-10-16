@@ -1,15 +1,16 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import { DemoReportNotice } from "@/components/report/DemoReportNotice";
 import { FindingLedger } from "@/components/report/FindingLedger";
 import { FixPlanDocument, formatCliActionError } from "@/components/report/FixPipeline";
 import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
 import { RepairExportCard } from "@/components/report/RepairExportCard";
-import { RepairWorkspace } from "@/components/report/repair-workspace/RepairWorkspace";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { SeatInspector } from "@/components/report/SeatInspector";
 import { SquadWorkspace } from "@/components/report/SquadWorkspace";
+import { RepairWorkspace } from "@/components/report/repair-workspace/RepairWorkspace";
 import { ReviewWorkbench } from "@/components/report/workbench/ReviewWorkbench";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Button } from "@/components/ui/Button";
@@ -20,6 +21,7 @@ import { HOST_DOWN_HINT, HOST_DOWN_TITLE, isHostUnreachableError } from "@/lib/h
 import { buildPrComment } from "@/lib/report-groups";
 import { parseReviewReport } from "@/lib/review-report";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import { exportRunMarkdown, isDemoRun } from "@shared/runtime/demo-report";
 import { writerRepoFromPrUrl } from "@shared/runtime/pr-url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -124,7 +126,7 @@ export function ReportDetailPage() {
 
   const copyMarkdown = () => {
     if (!query.data) return;
-    void copyText("markdown", query.data.markdown);
+    void copyText("markdown", exportRunMarkdown(query.data));
   };
 
   const copyFixPrompt = () => {
@@ -157,11 +159,12 @@ export function ReportDetailPage() {
     ) ?? [];
   const isSquad = query.data?.kind === "squad";
   const isIdeate = query.data?.kind === "ideate";
-  const reviewActions = !isSquad && !isIdeate && query.data?.kind !== "repair";
+  const demoRun = isDemoRun(query.data);
+  const reviewActions = !demoRun && !isSquad && !isIdeate && query.data?.kind !== "repair";
   const profilesQuery = useQuery({
     queryKey: ["cli-repair-profiles", runId],
     queryFn: () => client.listCliRepairProfiles(runId),
-    enabled: query.data?.kind === "review",
+    enabled: query.data?.kind === "review" && !demoRun,
     retry: false,
   });
   const repairMutation = useMutation({
@@ -374,6 +377,7 @@ export function ReportDetailPage() {
             {query.data.truncated ? (
               <p className="text-sm text-warn">报告超过 2MB，已截断显示。</p>
             ) : null}
+            {demoRun ? <DemoReportNotice /> : null}
             {query.data.kind === "ideate" && query.data.ideateIntegrity ? (
               <IdeateIntegrityCard integrity={query.data.ideateIntegrity} />
             ) : null}

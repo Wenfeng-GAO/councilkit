@@ -90,17 +90,24 @@ describe("repair roles", () => {
   it("sets one seat, leaves the chain budget file alone, and reset clears only roles", async () => {
     const home = homeDir();
     const budget = join(home, "repair-budget.json");
-    writeFileSync(budget, "{\"used\":3}\n");
+    writeFileSync(budget, '{"used":3}\n');
     const out = sink();
     await runRepair(["roles", "set", "--reviewer", "codex:gpt-5.6-sol"], out);
-    expect(readFileSync(budget, "utf8")).toBe("{\"used\":3}\n");
+    expect(readFileSync(budget, "utf8")).toBe('{"used":3}\n');
     const written = JSON.parse(readFileSync(join(home, "squad-bridge.json"), "utf8")) as {
       roles: { reviewer: { runtime: string; model: string }; coder?: { model: string } };
     };
     expect(written.roles.reviewer).toEqual({ runtime: "codex", model: "gpt-5.6-sol" });
     expect(written.roles.coder).toBeUndefined();
     await runRepair(
-      ["roles", "set", "--orchestrator", "cursor:composer-2.5", "--verifier", "cursor:grok-4.7-xhigh"],
+      [
+        "roles",
+        "set",
+        "--orchestrator",
+        "cursor:composer-2.5",
+        "--verifier",
+        "cursor:grok-4.7-xhigh",
+      ],
       out,
     );
     const next = JSON.parse(readFileSync(join(home, "squad-bridge.json"), "utf8")) as {
@@ -111,16 +118,16 @@ describe("repair roles", () => {
     expect(next.roles.coder.model).toBe("composer-2.5");
     expect(next.roles.reviewer.model).toBe("gpt-5.6-sol");
     expect(next.roles.verifier.model).toBe("grok-4.7-xhigh");
-    await expect(
-      runRepair(["roles", "set", "--reviewer", "cursor:auto"], out),
-    ).rejects.toThrow(/auto|拒绝/);
-    expect(readFileSync(budget, "utf8")).toBe("{\"used\":3}\n");
+    await expect(runRepair(["roles", "set", "--reviewer", "cursor:auto"], out)).rejects.toThrow(
+      /auto|拒绝/,
+    );
+    expect(readFileSync(budget, "utf8")).toBe('{"used":3}\n');
     await runRepair(["roles", "reset"], out);
     const cleared = JSON.parse(readFileSync(join(home, "squad-bridge.json"), "utf8")) as {
       roles?: unknown;
     };
     expect(cleared.roles).toBeUndefined();
-    expect(readFileSync(budget, "utf8")).toBe("{\"used\":3}\n");
+    expect(readFileSync(budget, "utf8")).toBe('{"used":3}\n');
   });
 
   it("show and set refuse damaged config and leave the file unchanged", async () => {
@@ -129,11 +136,14 @@ describe("repair roles", () => {
     writeFileSync(configPath, "{not json\n");
     const out = sink();
     await expect(runRepair(["roles", "show"], out)).rejects.toThrow(/JSON/);
-    await expect(runRepair(["roles", "set", "--reviewer", "codex:gpt-5.6-sol"], out)).rejects.toThrow(
-      /JSON/,
-    );
+    await expect(
+      runRepair(["roles", "set", "--reviewer", "codex:gpt-5.6-sol"], out),
+    ).rejects.toThrow(/JSON/);
     expect(readFileSync(configPath, "utf8")).toBe("{not json\n");
-    writeFileSync(configPath, `${JSON.stringify({ roles: { reviewer: { runtime: "cursor", model: "composer-2.5" } } })}\n`);
+    writeFileSync(
+      configPath,
+      `${JSON.stringify({ roles: { reviewer: { runtime: "cursor", model: "composer-2.5" } } })}\n`,
+    );
     await runRepair(["roles", "show"], out);
     const shown = out.last() as { roles: { reviewer: { model: string } } };
     expect(shown.roles.reviewer.model).toBe("composer-2.5");
@@ -159,7 +169,6 @@ describe("repair roles", () => {
       });
     } finally {
       if (previous === undefined) {
-        // biome-ignore lint/performance/noDelete: restore an unset env var
         delete process.env.COUNCILKIT_CURSOR_MODEL;
       } else process.env.COUNCILKIT_CURSOR_MODEL = previous;
     }

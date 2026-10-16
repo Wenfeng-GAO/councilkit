@@ -1,5 +1,6 @@
 import { type Page, expect, test } from "@playwright/test";
 import { CANDIDATE_C, GOAL, PARENT_RUN_ID } from "./constants";
+import { shellCompleted, textProgress } from "./fixtures/cursor-events";
 import {
   advanceClock,
   appendLines,
@@ -12,7 +13,6 @@ import {
   resetFixture,
   seedLine,
 } from "./helpers";
-import { shellCompleted, textProgress } from "./fixtures/cursor-events";
 
 test.describe.configure({ mode: "serial" });
 
@@ -27,9 +27,7 @@ async function boot(page: Page, fixture: Parameters<typeof resetFixture>[1]) {
 
 test("[E01] @p0 enter repair workspace with goal/phase/activity/attention", async ({ page }) => {
   await boot(page, "F1");
-  const obsPromise = page.waitForResponse(
-    (r) => r.url().includes("/repair/observation") && r.ok(),
-  );
+  const obsPromise = page.waitForResponse((r) => r.url().includes("/repair/observation") && r.ok());
   await openRepairWorkspace(page);
   const obs = await obsPromise;
   const body = (await obs.json()) as { data: { upserts: unknown[] } };
@@ -66,7 +64,9 @@ test("[E03] @p0 continuous Builder roles share one execution group", async ({ pa
   await openRepairWorkspace(page);
   const roles = page.getByTestId("repair-role-list");
   await expect(roles).toContainText(/编排|开发|Builder/i);
-  const groupCount = await page.locator("[data-testid^='repair-role-'][data-execution-group]").count();
+  const groupCount = await page
+    .locator("[data-testid^='repair-role-'][data-execution-group]")
+    .count();
   // Shared session → one group, not three parallel executors.
   expect(groupCount).toBeLessThanOrEqual(2);
   await page.getByTestId("repair-role-builder").click();
@@ -79,7 +79,10 @@ test("[E04] @p0 optional Planner B appears only when planned", async ({ page }) 
   await boot(page, "F1");
   await openRepairWorkspace(page);
   await expect(page.getByTestId("repair-role-planner_b")).toHaveCount(0);
-  const selected = await page.getByTestId(/^repair-role-/).first().getAttribute("data-testid");
+  const selected = await page
+    .getByTestId(/^repair-role-/)
+    .first()
+    .getAttribute("data-testid");
   await resetFixture(page, "F2");
   await page.reload();
   await expect(page.getByTestId("repair-workspace")).toBeVisible();
@@ -95,7 +98,9 @@ test("[E05] @p0 independent Reviewer and Verifier run in parallel", async ({ pag
   await openRepairWorkspace(page);
   await expect(page.getByTestId("repair-role-reviewer")).toBeVisible();
   await expect(page.getByTestId("repair-role-verifier")).toBeVisible();
-  await expect(page.getByTestId("repair-activity-list")).toContainText(/Reviewer|Verifier|核验|审查/);
+  await expect(page.getByTestId("repair-activity-list")).toContainText(
+    /Reviewer|Verifier|核验|审查/,
+  );
   // Builder ended ≠ PR approved
   await expect(page.getByText("已准出")).toHaveCount(0);
 });
@@ -136,7 +141,9 @@ test("[E08] @p0 interleaved same-name tools pair by callId", async ({ page }) =>
   await openRepairWorkspace(page);
   const obs = await fetchObservation(page);
   const upserts = (obs.data?.upserts as Array<{ operationId: string; summary: string }>) ?? [];
-  const shells = upserts.filter((u) => /echo one|shell|命令/i.test(u.summary) || u.operationId.includes("call_x"));
+  const shells = upserts.filter(
+    (u) => /echo one|shell|命令/i.test(u.summary) || u.operationId.includes("call_x"),
+  );
   // Two distinct operations, not name-adjacent pairing into one
   expect(shells.length).toBeGreaterThanOrEqual(2);
   const ids = new Set(shells.map((s) => s.operationId));
@@ -146,14 +153,20 @@ test("[E08] @p0 interleaved same-name tools pair by callId", async ({ page }) =>
 test("[E09] @p0 read vs edit diff provenance", async ({ page }) => {
   await boot(page, "F1");
   await openRepairWorkspace(page);
-  const readRow = page.locator("[data-testid^='repair-activity-row-']").filter({ hasText: "读取" }).first();
+  const readRow = page
+    .locator("[data-testid^='repair-activity-row-']")
+    .filter({ hasText: "读取" })
+    .first();
   await readRow.click();
   const drawer = page.getByTestId("repair-event-drawer");
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText(/读取/);
   await expect(drawer).not.toContainText(/已修改统计|编造/);
   await page.keyboard.press("Escape");
-  const editRow = page.locator("[data-testid^='repair-activity-row-']").filter({ hasText: "已记录差异" }).first();
+  const editRow = page
+    .locator("[data-testid^='repair-activity-row-']")
+    .filter({ hasText: "已记录差异" })
+    .first();
   await editRow.click();
   await expect(drawer).toContainText(/差异|已记录|未记录/);
 });

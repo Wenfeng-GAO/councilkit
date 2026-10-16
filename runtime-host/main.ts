@@ -7,6 +7,7 @@ import {
   type DriverId,
   TIMEOUTS,
 } from "@shared/runtime/contracts";
+import { enforceSupportedNode } from "@shared/runtime/node-gate";
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "./drivers/codex-app-server";
@@ -37,7 +38,7 @@ import { type HostServices, type Route, createRuntimeServer } from "./server";
 /**
  * CouncilKit Runtime Host entry point.
  *
- * Foreground Node.js 22 process serving the Web UI and the same-origin
+ * Foreground Node.js (>= 22) process serving the Web UI and the same-origin
  * /api/v1 from the fixed canonical origin. Startup failures (wrong Node
  * version, occupied port) are structured and fatal — the origin never moves.
  */
@@ -76,7 +77,8 @@ function withCapabilityTracking(
 async function main(): Promise<void> {
   const nodeCheck = checkNodeVersion();
   if (!nodeCheck.ok) {
-    process.stderr.write(`${JSON.stringify({ ok: false, error: nodeCheck.error })}\n`);
+    // NPX-03: plain zh + en lines on stderr, no stack / code prefix, exit 1.
+    enforceSupportedNode(nodeCheck.version);
     process.exit(1);
   }
 

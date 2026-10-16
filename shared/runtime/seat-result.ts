@@ -22,15 +22,19 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
     return { parseStatus: "empty", summary: null, findingCount: null, blockingCount: null };
   }
   const visible = textOutsideFences(text);
-  const matches = [...visible.matchAll(SEVERITY_RE)];
+  // QA-PR295-OBS3 (#288): only a severity tag that STARTS a finding item counts.
+  // Tags quoted in prose / inline code (「review-adversarial 标 `[critical]`」 in
+  // ## 分歧) are not findings and must not inflate findingCount / blockingCount.
+  const matches = [...visible.matchAll(SEVERITY_RE)].filter((row) =>
+    startsFindingItem(visible, row.index ?? 0),
+  );
   const findingCount = matches.length;
   const blockingCount = matches.filter((row, index) => {
     const severity = row[1]?.toLowerCase();
     if (severity !== "critical" && severity !== "major") return false;
     // Scope out-of-spec markers to this finding only (stop at the next severity tag).
     const start = row.index ?? 0;
-    const end =
-      index + 1 < matches.length ? (matches[index + 1]!.index ?? visible.length) : visible.length;
+    const end = matches[index + 1]?.index ?? visible.length;
     const around = visible.slice(start, end).toLowerCase();
     // Out-of-spec / suggest-amend-spec majors are non-blocking by default.
     if (
@@ -48,6 +52,14 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
     return { parseStatus: "parsed", summary, findingCount, blockingCount };
   }
   return { parseStatus: "unparsed", summary, findingCount: null, blockingCount: null };
+}
+
+const FINDING_ITEM_PREFIX_RE = /^\s*(?:[-*+]|\d+[.)]|#{1,6})?\s*(?:\*\*)?$/;
+
+/** True when the tag at `index` is the first thing on its line after an optional list / heading marker. */
+function startsFindingItem(text: string, index: number): boolean {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  return FINDING_ITEM_PREFIX_RE.test(text.slice(lineStart, index));
 }
 
 export function clipSeatSummary(value: string | null): string | null {

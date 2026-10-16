@@ -3,11 +3,7 @@
  * FindingLedger display.
  */
 import type { FindingListFilter, FindingListProblem } from "@/lib/finding-list";
-import {
-  filterFindingProblems,
-  projectFindingList,
-  severityLabel,
-} from "@/lib/finding-list";
+import { filterFindingProblems, projectFindingList, severityLabel } from "@/lib/finding-list";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 

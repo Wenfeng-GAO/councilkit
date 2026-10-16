@@ -1,8 +1,8 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
-import { appendLines, installOriginAllowlist, openRepairWorkspace, resetFixture } from "./helpers";
 import { readCompleted, shellStarted } from "./fixtures/cursor-events";
+import { appendLines, installOriginAllowlist, openRepairWorkspace, resetFixture } from "./helpers";
 const longPath =
   "/Users/example/.config/councilkit/repair-workspaces/ck-repair-example/.worktrees/20260922-repair-example/pkg/runtime/manager/session_recovery.go";
 test("real failure presentation uses the workspace and readable activity rather than raw bookkeeping", async ({

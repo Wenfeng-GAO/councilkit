@@ -56,6 +56,8 @@ export const invocationManifestSchema = z
     concurrency: z.number().int().positive().nullable(),
     /** Soft-start preference: refuse unbound contract in the review stage (default true when omitted). */
     requireSpec: z.boolean().optional(),
+    /** Seat permissions (SAFE-01..04); omitted on manifests written before #273. */
+    seatAccess: z.enum(["read-only", "write"]).optional(),
     agents: z
       .array(
         z
@@ -243,6 +245,7 @@ export function buildInvocationManifest(input: {
   timeoutMs: number;
   concurrency: number | null;
   requireSpec?: boolean;
+  seatAccess?: "read-only" | "write";
   agents: readonly AgentRecord[];
   aggregator: AgentRecord;
   tools: ToolFingerprint[];
@@ -252,6 +255,7 @@ export function buildInvocationManifest(input: {
     kind: "councilkit-invocation-manifest",
     runId: input.runId,
     requireSpec: input.requireSpec !== false,
+    seatAccess: input.seatAccess ?? "read-only",
     task: {
       ...(input.task.pr ? { pr: input.task.pr } : {}),
       ...(input.task.task ? { task: input.task.task } : {}),
@@ -435,6 +439,7 @@ export function resumeArgvFromManifest(manifest: InvocationManifest): string[] {
   if (manifest.task.specSource) argv.push("--spec", manifest.task.specSource);
   if (manifest.task.against) argv.push("--against", manifest.task.against);
   if (manifest.requireSpec === false) argv.push("--no-require-spec");
+  if (manifest.seatAccess === "write") argv.push("--allow-write");
   return argv;
 }
 

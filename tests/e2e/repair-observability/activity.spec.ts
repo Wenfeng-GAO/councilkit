@@ -1,4 +1,5 @@
 import { type Page, expect, test } from "@playwright/test";
+import { textProgress } from "./fixtures/cursor-events";
 import {
   appendLines,
   expectChinese,
@@ -9,7 +10,6 @@ import {
   resetFixture,
   seedLine,
 } from "./helpers";
-import { textProgress } from "./fixtures/cursor-events";
 
 test.describe.configure({ mode: "serial" });
 
@@ -32,7 +32,9 @@ test("[E11] @p0 follow mode shows new activity near bottom", async ({ page }) =>
   await seedLine(page, "跟随模式新活动");
   await expect(list).toContainText("跟随模式新活动", { timeout: 10_000 });
   await expect(page.getByTestId("repair-new-count")).toHaveCount(0);
-  const nearBottom = await list.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 48);
+  const nearBottom = await list.evaluate(
+    (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 48,
+  );
   expect(nearBottom).toBeTruthy();
 });
 
@@ -54,7 +56,10 @@ test("[E12] @p0 pause follow buffers new count without POST", async ({ page }) =
   const launches = await launcherCalls(page);
   expect(launches.stops.length).toBe(0);
   expect(launches.launches.filter((l) => /stop|resume/i.test(l.action)).length).toBe(0);
-  await page.getByText(/查看新活动|新活动/).first().click();
+  await page
+    .getByText(/查看新活动|新活动/)
+    .first()
+    .click();
   await expect(page.getByTestId("repair-new-count")).toHaveCount(0);
 });
 
@@ -91,7 +96,9 @@ test("[E14] @p0 pause still surfaces needs_attention", async ({ page }) => {
   await boot(page, "F1");
   await openRepairWorkspace(page);
   await page.getByTestId("repair-follow-toggle").click();
-  const scrollBefore = await page.getByTestId("repair-activity-list").evaluate((el) => el.scrollTop);
+  const scrollBefore = await page
+    .getByTestId("repair-activity-list")
+    .evaluate((el) => el.scrollTop);
   await resetFixture(page, "F5");
   await page.reload();
   await expect(page.getByTestId("repair-workspace")).toBeVisible();
@@ -135,7 +142,10 @@ test("[E17] @p0 event drawer focus return Esc and hidden initially", async ({ pa
   await boot(page, "F1");
   await openRepairWorkspace(page);
   await expect(page.getByTestId("repair-event-drawer")).toBeHidden();
-  const row = page.locator("[data-testid^='repair-activity-row-']").filter({ hasText: /读取|文件|resume/ }).first();
+  const row = page
+    .locator("[data-testid^='repair-activity-row-']")
+    .filter({ hasText: /读取|文件|resume/ })
+    .first();
   await row.click();
   const drawer = page.getByTestId("repair-event-drawer");
   await expect(drawer).toBeVisible();
@@ -163,7 +173,10 @@ test("[E18] @p0 long command output truncate and copy", async ({ page }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await boot(page, "F2");
   await openRepairWorkspace(page);
-  const row = page.locator("[data-testid^='repair-activity-row-']").filter({ hasText: /pnpm test|FAIL|命令/ }).first();
+  const row = page
+    .locator("[data-testid^='repair-activity-row-']")
+    .filter({ hasText: /pnpm test|FAIL|命令/ })
+    .first();
   await row.click();
   const drawer = page.getByTestId("repair-event-drawer");
   await expect(drawer).toContainText(/FAIL|错误|截断|完整/);

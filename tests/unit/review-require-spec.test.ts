@@ -1,7 +1,4 @@
-import {
-  DEFAULT_REQUIRE_SPEC,
-  REQUIRE_SPEC_CHECKBOX_LABEL,
-} from "@/lib/review-require-spec";
+import { DEFAULT_REQUIRE_SPEC, REQUIRE_SPEC_CHECKBOX_LABEL } from "@/lib/review-require-spec";
 import { describe, expect, it } from "vitest";
 
 describe("require-spec UI/CLI defaults", () => {

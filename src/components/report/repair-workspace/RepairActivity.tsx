@@ -1,7 +1,7 @@
-import { activityPresentation, roleName } from "./presentation";
 import type { RepairRole } from "@shared/runtime/repair-observation";
 import type { RepairOperation } from "@shared/runtime/repair-observation";
 import { IconActivity, IconArrowDown, IconFiles, IconSearch } from "./icons";
+import { activityPresentation, roleName } from "./presentation";
 
 const KIND_LABEL: Record<RepairOperation["kind"], string> = {
   progress: "进展",
@@ -116,7 +116,7 @@ export function RepairActivity({
       </div>
       <div className="ck-repair-list-meta">
         <p className="ck-repair-meta">
-          已加载 {operations.length} 条{hiddenCount > 0 ? ` · 有更早记录` : ""}
+          已加载 {operations.length} 条{hiddenCount > 0 ? " · 有更早记录" : ""}
           （仅搜索已加载范围）
         </p>
         {hiddenCount > 0 ? (

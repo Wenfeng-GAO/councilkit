@@ -50,7 +50,7 @@ function sha256Hex(text: string): string {
       const w2 = w[t - 2] ?? 0;
       const s0 = rotr(w15, 7) ^ rotr(w15, 18) ^ (w15 >>> 3);
       const s1 = rotr(w2, 17) ^ rotr(w2, 19) ^ (w2 >>> 10);
-      w[t] = (((w[t - 16] ?? 0) + s0 + (w[t - 7] ?? 0) + s1) >>> 0);
+      w[t] = ((w[t - 16] ?? 0) + s0 + (w[t - 7] ?? 0) + s1) >>> 0;
     }
     let a = h0;
     let b = h1;
@@ -147,13 +147,7 @@ export type RepairAvailability = z.infer<typeof repairAvailabilitySchema>;
 export const repairProcessStateSchema = z.enum(["alive", "exited", "unknown"]);
 export type RepairProcessState = z.infer<typeof repairProcessStateSchema>;
 
-export const repairRoleStatusSchema = z.enum([
-  "pending",
-  "active",
-  "ended",
-  "failed",
-  "unknown",
-]);
+export const repairRoleStatusSchema = z.enum(["pending", "active", "ended", "failed", "unknown"]);
 export type RepairRoleStatus = z.infer<typeof repairRoleStatusSchema>;
 
 export const repairOpKindSchema = z.enum(["progress", "tool", "file", "command", "state"]);
@@ -458,7 +452,10 @@ export function mergeOperationRevision(
   };
 }
 
-export function upsertOperations(existing: RepairOperation[], incoming: RepairOperation[]): RepairOperation[] {
+export function upsertOperations(
+  existing: RepairOperation[],
+  incoming: RepairOperation[],
+): RepairOperation[] {
   const byOp = new Map<string, RepairOperation>();
   for (const row of existing) byOp.set(row.operationId, row);
   for (const row of incoming) {
@@ -475,8 +472,8 @@ export function foldPublicText(records: RawSourceRecord[]): RepairOperation[] {
   const out: RepairOperation[] = [];
   let buffer: RawSourceRecord[] = [];
   const flush = () => {
-    if (buffer.length === 0) return;
-    const first = buffer[0]!;
+    const first = buffer[0];
+    if (first === undefined) return;
     const text = buffer
       .map((r) => r.text ?? r.summary ?? "")
       .join("")
@@ -520,9 +517,8 @@ export function foldPublicText(records: RawSourceRecord[]): RepairOperation[] {
     }
     if (type === "text" || type === "text.delta" || type === "progress") {
       if (
-        buffer.length > 0 &&
-        (buffer[0]!.executionRef !== record.executionRef ||
-          buffer[0]!.roleKey !== record.roleKey)
+        buffer[0] !== undefined &&
+        (buffer[0].executionRef !== record.executionRef || buffer[0].roleKey !== record.roleKey)
       ) {
         flush();
       }
@@ -541,10 +537,7 @@ export function normalizeToolRecords(records: RawSourceRecord[]): RepairOperatio
     const type = record.type.toLowerCase();
     if (type.includes("thinking") || type.includes("reasoning")) continue;
     const isTool =
-      type.startsWith("tool") ||
-      type === "command" ||
-      type === "file" ||
-      type.includes("toolcall");
+      type.startsWith("tool") || type === "command" || type === "file" || type.includes("toolcall");
     if (!isTool && type !== "state") continue;
 
     const callId = record.callId;
@@ -556,9 +549,20 @@ export function normalizeToolRecords(records: RawSourceRecord[]): RepairOperatio
     });
     const toolName = (record.name ?? "").toLowerCase();
     let kind: RepairOpKind = "tool";
-    if (type === "file" || record.action === "read" || record.action === "edit" || toolName.includes("read") || toolName.includes("edit")) {
+    if (
+      type === "file" ||
+      record.action === "read" ||
+      record.action === "edit" ||
+      toolName.includes("read") ||
+      toolName.includes("edit")
+    ) {
       kind = "file";
-    } else if (type === "command" || type.includes("command") || toolName.includes("shell") || toolName.includes("command")) {
+    } else if (
+      type === "command" ||
+      type.includes("command") ||
+      toolName.includes("shell") ||
+      toolName.includes("command")
+    ) {
       kind = "command";
     } else if (type === "state") kind = "state";
 
@@ -569,9 +573,9 @@ export function normalizeToolRecords(records: RawSourceRecord[]): RepairOperatio
     }
     if (record.status === "unfinished") status = "unfinished";
 
-    const fileAction = record.action === "read" ? "读取" : record.action === "edit" ? "修改" : "文件";
-    const fileNote =
-      record.action === "edit" ? (record.detail ? "已记录差异" : "未记录") : "";
+    const fileAction =
+      record.action === "read" ? "读取" : record.action === "edit" ? "修改" : "文件";
+    const fileNote = record.action === "edit" ? (record.detail ? "已记录差异" : "未记录") : "";
     const baseSummary =
       kind === "file"
         ? `${fileAction} ${record.path ?? ""} ${fileNote}`.trim()
@@ -691,10 +695,7 @@ export function deriveProcessState(input: {
   if (!Number.isFinite(checkedMs) || input.nowMs - checkedMs > REPAIR_OBS_PROCESS_FRESH_MS) {
     return { state: "unknown", checkedAt: evidence.checkedAt };
   }
-  if (
-    !input.currentExecutionRef ||
-    evidence.executionRef !== input.currentExecutionRef
-  ) {
+  if (!input.currentExecutionRef || evidence.executionRef !== input.currentExecutionRef) {
     return { state: "unknown", checkedAt: evidence.checkedAt };
   }
   // Same PID with a different startKey is not proof of the current execution.
@@ -728,7 +729,13 @@ export function evaluateApprovalConsistency(input: {
   evidenceCandidateSha: string | null;
   requiredItems: Array<{ status: RepairEvidenceItem["status"]; candidateSha: string | null }>;
 }): {
-  display: "approved" | "conflict" | "candidate_pending" | "needs_attention" | "stopped" | "running";
+  display:
+    | "approved"
+    | "conflict"
+    | "candidate_pending"
+    | "needs_attention"
+    | "stopped"
+    | "running";
   exportableAsApproved: boolean;
   gateConsistent: boolean;
 } {
@@ -841,7 +848,8 @@ export function applyUiWindow(
   let bytes = 0;
   const kept: RepairOperation[] = [];
   for (let i = ops.length - 1; i >= 0; i -= 1) {
-    const row = ops[i]!;
+    const row = ops[i];
+    if (row === undefined) continue;
     const size = utf8Bytes(JSON.stringify(row)).byteLength;
     if (bytes + size > cacheBudget && kept.length >= capped) break;
     kept.push(row);
@@ -859,7 +867,7 @@ export function applyUiWindow(
 export function nextPollDelayMs(failures: number): number {
   if (failures <= 0) return REPAIR_OBS_POLL_MS;
   const idx = Math.min(failures - 1, REPAIR_OBS_BACKOFF_MS.length - 1);
-  return REPAIR_OBS_BACKOFF_MS[idx]!;
+  return REPAIR_OBS_BACKOFF_MS[idx] ?? REPAIR_OBS_POLL_MS;
 }
 
 export function isStaleRequest(requestSeq: number, currentSeq: number): boolean {
@@ -961,17 +969,24 @@ function readCursorPayload(row: Record<string, unknown>): {
     const first = entries[0];
     if (first) {
       const [name, body] = first;
-      const payload = body !== null && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+      const payload =
+        body !== null && typeof body === "object" && !Array.isArray(body)
+          ? (body as Record<string, unknown>)
+          : {};
       const args =
         payload.args !== null && typeof payload.args === "object" && !Array.isArray(payload.args)
           ? (payload.args as Record<string, unknown>)
           : payload;
       const result =
-        payload.result !== null && typeof payload.result === "object" && !Array.isArray(payload.result)
+        payload.result !== null &&
+        typeof payload.result === "object" &&
+        !Array.isArray(payload.result)
           ? (payload.result as Record<string, unknown>)
           : null;
       const success =
-        result?.success !== null && typeof result?.success === "object" && !Array.isArray(result?.success)
+        result?.success !== null &&
+        typeof result?.success === "object" &&
+        !Array.isArray(result?.success)
           ? (result.success as Record<string, unknown>)
           : null;
       const command =
@@ -994,7 +1009,11 @@ function readCursorPayload(row: Record<string, unknown>): {
         undefined;
       const exitCode = typeof result?.exitCode === "number" ? result.exitCode : null;
       const lower = name.toLowerCase();
-      const action = lower.includes("read") ? "read" : lower.includes("edit") || lower.includes("write") ? "edit" : undefined;
+      const action = lower.includes("read")
+        ? "read"
+        : lower.includes("edit") || lower.includes("write")
+          ? "edit"
+          : undefined;
       if (path?.includes("..") || path?.includes("\0")) {
         return { skip: false, name, summary: "路径不可用", action, exitCode };
       }
@@ -1027,7 +1046,8 @@ export function parsePublicSourceLine(
   }
   if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return "bad";
   const row = rec as Record<string, unknown>;
-  const type = typeof row.type === "string" ? row.type : typeof row.kind === "string" ? row.kind : null;
+  const type =
+    typeof row.type === "string" ? row.type : typeof row.kind === "string" ? row.kind : null;
   if (!type) return "bad";
   const lower = type.toLowerCase();
   if (lower.includes("thinking") || lower.includes("reasoning")) return "skip";
@@ -1053,8 +1073,7 @@ export function parsePublicSourceLine(
   return {
     sourceId: meta.sourceId,
     sourceGeneration: meta.sourceGeneration,
-    executionRef:
-      (typeof row.executionRef === "string" && row.executionRef) || meta.executionRef,
+    executionRef: (typeof row.executionRef === "string" && row.executionRef) || meta.executionRef,
     round: meta.round,
     roleKey,
     byteOffset: meta.byteOffset,
@@ -1066,10 +1085,18 @@ export function parsePublicSourceLine(
     summary: cursor.summary ?? (typeof row.summary === "string" ? row.summary : undefined),
     text:
       cursor.text ??
-      (typeof row.text === "string" ? row.text : typeof row.message === "string" ? row.message : undefined),
+      (typeof row.text === "string"
+        ? row.text
+        : typeof row.message === "string"
+          ? row.message
+          : undefined),
     path:
       cursor.path ??
-      (typeof row.path === "string" ? row.path : typeof row.file === "string" ? row.file : undefined),
+      (typeof row.path === "string"
+        ? row.path
+        : typeof row.file === "string"
+          ? row.file
+          : undefined),
     action:
       row.action === "read" || row.action === "edit"
         ? row.action
@@ -1086,10 +1113,14 @@ export function parsePublicSourceLine(
         : row.subtype === "completed" || row.subtype === "failed" || row.subtype === "started"
           ? row.subtype
           : undefined,
-    exitCode: typeof row.exitCode === "number" ? row.exitCode : cursor.exitCode ?? null,
+    exitCode: typeof row.exitCode === "number" ? row.exitCode : (cursor.exitCode ?? null),
     detail:
       cursor.detail ??
-      (typeof row.detail === "string" ? row.detail : typeof row.output === "string" ? row.output : undefined),
+      (typeof row.detail === "string"
+        ? row.detail
+        : typeof row.output === "string"
+          ? row.output
+          : undefined),
   };
 }
 
@@ -1126,7 +1157,12 @@ export function roleLabel(roleKey: string): string {
 }
 
 export function executionGroupForRole(roleKey: string): string {
-  if (roleKey === "orchestrator" || roleKey === "planner_a" || roleKey === "coder" || roleKey === "builder") {
+  if (
+    roleKey === "orchestrator" ||
+    roleKey === "planner_a" ||
+    roleKey === "coder" ||
+    roleKey === "builder"
+  ) {
     return "builder";
   }
   if (roleKey === "final_review" || roleKey.startsWith("jury-")) return "final_review";

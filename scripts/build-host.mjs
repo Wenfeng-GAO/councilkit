@@ -25,7 +25,7 @@ await build({
   },
   external: ["vite", "@vitejs/plugin-react", "fsevents", "lightningcss"],
   banner: {
-    js: "// CouncilKit Runtime Host — production bundle (Node.js 22).",
+    js: "// CouncilKit Runtime Host — production bundle (Node.js >= 22).",
   },
 });
 

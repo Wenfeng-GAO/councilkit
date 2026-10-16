@@ -1,10 +1,7 @@
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/TextInput";
+import { DEFAULT_REQUIRE_SPEC, REQUIRE_SPEC_CHECKBOX_LABEL } from "@/lib/review-require-spec";
 import { mapStartReviewError, parseStartReviewQuery } from "@/lib/start-review-hints";
-import {
-  DEFAULT_REQUIRE_SPEC,
-  REQUIRE_SPEC_CHECKBOX_LABEL,
-} from "@/lib/review-require-spec";
 import { getAppRuntime } from "@/runtime/bootstrap";
 import type { CliRunStartReviewRequest } from "@shared/runtime/schemas";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -117,8 +114,8 @@ export function StartReviewForm() {
           <span>
             <span className="font-medium">{REQUIRE_SPEC_CHECKBOX_LABEL}</span>
             <span className="mt-0.5 block text-xs text-muted">
-              默认开启。无绑定规格时进入审查阶段后拒绝（不会在点「开始审查」时立刻因
-              SPEC_REQUIRED 退出）。取消勾选则允许非合同 / 遗留加法审查。
+              默认开启。无绑定规格时进入审查阶段后拒绝（不会在点「开始审查」时立刻因 SPEC_REQUIRED
+              退出）。取消勾选则允许非合同 / 遗留加法审查。
             </span>
           </span>
         </label>

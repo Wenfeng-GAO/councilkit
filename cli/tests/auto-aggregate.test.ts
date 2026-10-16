@@ -427,7 +427,9 @@ describe("cli auto aggregate — indented close of a column-0 fence", () => {
 describe("cli auto aggregate — indented opener with indent-preserving force-close", () => {
   it("tracks a ≤3-space indented opener and force-closes at the same indent", () => {
     const md = renderReviewReport(
-      buildInput([attempt({ agentName: "Alice", output: "  ```js\n  const x = 1;\n# HeadingInside" })]),
+      buildInput([
+        attempt({ agentName: "Alice", output: "  ```js\n  const x = 1;\n# HeadingInside" }),
+      ]),
     );
     // Heading inside the still-open fence stays code (not demoted); the
     // force-close carries the opener indent so the appendix structure holds.
@@ -437,7 +439,9 @@ describe("cli auto aggregate — indented opener with indent-preserving force-cl
 
   it("a column-0 fence line after an untracked indented sample does not leak", () => {
     const md = renderReviewReport(
-      buildInput([attempt({ agentName: "Alice", output: "- item\n  ```js\n  code\n```\n# After" })]),
+      buildInput([
+        attempt({ agentName: "Alice", output: "- item\n  ```js\n  code\n```\n# After" }),
+      ]),
     );
     // The column-0 run OPENS a tracked fence; `# After` is inside it → not demoted.
     expect(md).toContain("# After");

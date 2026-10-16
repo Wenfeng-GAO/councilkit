@@ -289,4 +289,101 @@ describe("ReportsPage", () => {
     expect(view.container.textContent).toContain("进行中、失败或未决重大项会列在这里。");
     expect(view.container.textContent).not.toContain("另有");
   });
+
+  it("DM-03 DM-07 demo runs show 示例 and stay out of 需要处理", async () => {
+    const realPr = "https://github.com/acme/real/pull/2";
+    const samplePr = "https://github.com/acme/sample/pull/8";
+    const view = await openWith({
+      runs: [
+        run({
+          runId: "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+          title: realPr,
+          status: "failed",
+          startedAt: "2026-10-14T00:00:00.000Z",
+          reviewEvidence: evidence(realPr),
+        }),
+        run({
+          runId: "ck-review-demo-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9",
+          title: "示例 PR：给登录接口加限流",
+          status: "completed",
+          demo: true,
+          hasFindings: true,
+          startedAt: "2026-10-15T00:00:00.000Z",
+          reviewEvidence: evidence(samplePr, {
+            complete: true,
+            sha: "c".repeat(40),
+            blockingIds: ["demo-limiter-memory"],
+            openIds: ["demo-limiter-memory"],
+          }),
+        }),
+      ],
+    });
+    await waitForText(view.container, "acme/real #2");
+    expect(filterButton(view.container, "需要处理").querySelector("span")?.textContent).toBe("1");
+    expect(filterButton(view.container, "示例").querySelector("span")?.textContent).toBe("1");
+    expect(view.container.textContent).not.toContain("acme/sample #8");
+    expect(view.container.querySelector(".ck-demo-tag")).toBeNull();
+
+    await pressFilter(view.container, "全部案件");
+    expect(view.container.textContent).toContain("acme/sample #8");
+    expect(view.container.textContent).toContain("acme/real #2");
+    expect(view.container.querySelector(".ck-demo-tag")?.textContent).toBe("示例");
+
+    await pressFilter(view.container, "真实");
+    expect(view.container.textContent).toContain("acme/real #2");
+    expect(view.container.textContent).not.toContain("acme/sample #8");
+    expect(view.container.querySelector(".ck-demo-tag")).toBeNull();
+
+    await pressFilter(view.container, "示例");
+    expect(view.container.textContent).toContain("acme/sample #8");
+    expect(view.container.textContent).not.toContain("acme/real #2");
+    expect(view.container.querySelector(".ck-demo-tag")?.textContent).toBe("示例");
+  });
+
+  it("DM-07 mentions sample reports when attention is empty", async () => {
+    const view = await openWith({
+      runs: [
+        run({
+          runId: "ck-review-demo-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9",
+          title: "示例 PR：给登录接口加限流",
+          status: "completed",
+          demo: true,
+          reviewEvidence: evidence("https://github.com/acme/sample/pull/8", {
+            complete: true,
+            sha: "d".repeat(40),
+            blockingIds: ["demo-limiter-memory"],
+          }),
+        }),
+      ],
+    });
+    await waitForText(view.container, "没有需要处理的案件");
+    expect(filterButton(view.container, "需要处理").querySelector("span")?.textContent).toBe("0");
+    expect(view.container.textContent).toContain("示例报告在「示例」里，不计入需要处理。");
+    await pressFilter(view.container, "已完成");
+    expect(view.container.textContent).toContain("acme/sample #8");
+    expect(view.container.querySelector(".ck-demo-tag")?.textContent).toBe("示例");
+  });
+
+  it("#304 case card shows 「N 需要处理 · M 阻塞」 next to 已完成 from the shared count", async () => {
+    const view = await openWith({
+      runs: [
+        run({
+          runId: "ck-review-188cdfd8-2e7e-482a-af6e-87141ce17a91",
+          title: "真实任务审查",
+          hasFindings: true,
+          attention: {
+            problems: 7,
+            findings: 7,
+            needsAttention: 6,
+            blocking: 0,
+            aggregatorBlocking: 4,
+          },
+        }),
+      ],
+    });
+    await waitForText(view.container, "真实任务审查");
+    const status = view.container.querySelector(".ck-case-status");
+    expect(status?.textContent).toContain("已完成");
+    expect(status?.querySelector(".ck-case-counts")?.textContent).toBe("6 需要处理 · 0 阻塞");
+  });
 });

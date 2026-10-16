@@ -6,7 +6,6 @@ import type {
   ScopeState,
 } from "@shared/runtime/contracts";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
-import { clipUtf16 } from "@shared/text/clip-utf16";
 import type {
   ContextSnapshot,
   CreateScopeRequest,
@@ -16,6 +15,7 @@ import type {
   ResolvedBinding,
   ScopeStatus,
 } from "@shared/runtime/schemas";
+import { clipUtf16 } from "@shared/text/clip-utf16";
 import type { ParticipantDriver } from "../drivers/types";
 import type { ExecutionRegistry } from "../executions/execution-registry";
 import type { InstallationRegistry } from "../installations/registry";

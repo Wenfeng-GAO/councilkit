@@ -88,7 +88,7 @@ export async function followExecutionEvents(options: FollowEventsOptions): Promi
 
   try {
     for (;;) {
-      let chunk;
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
       try {
         chunk = await reader.read();
       } catch (error) {

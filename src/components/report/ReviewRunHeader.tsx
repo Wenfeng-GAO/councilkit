@@ -2,8 +2,10 @@ import { cliRunPhaseHeading } from "@/lib/cli-run-status";
 import { extractPrUrl } from "@/lib/fix-prompt";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { formatAttemptMs } from "@/lib/seat-inspector";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
+import { DemoReportNotice } from "./DemoReportNotice";
 
 export function ReviewRunHeader({
   run,
@@ -32,6 +34,7 @@ export function ReviewRunHeader({
   }
   return (
     <header className="ck-review-run-header">
+      {isDemoRun(run) ? <DemoReportNotice /> : null}
       <div className="ck-review-run-heading">
         <div>
           <p className="ck-review-eyebrow">PR 审查</p>
