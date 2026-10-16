@@ -223,7 +223,7 @@ describe("ReportsPage", () => {
     expect(view.container.textContent).toContain("工程班甲");
     expect(view.container.textContent).toContain("修复任务甲");
     expect(view.container.textContent).not.toContain("acme/repo #9");
-    await pressFilter(view.container, "审查与工程班");
+    await pressFilter(view.container, "全部类型");
 
     const search = view.container.querySelector("#report-search");
     expect(search instanceof HTMLInputElement).toBe(true);
@@ -338,6 +338,49 @@ describe("ReportsPage", () => {
     expect(view.container.textContent).toContain("acme/sample #8");
     expect(view.container.textContent).not.toContain("acme/real #2");
     expect(view.container.querySelector(".ck-demo-tag")?.textContent).toBe("示例");
+  });
+
+  it("B4 DM-03 discussion runs are listed; slow-gen ones count under 示例 like demo reviews", async () => {
+    const view = await openWith({
+      runs: [
+        run({
+          runId: "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1",
+          kind: "discuss",
+          title: "要不要把支付服务拆出来",
+          status: "completed",
+          startedAt: "2026-10-14T00:00:00.000Z",
+        }),
+        run({
+          runId: "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2",
+          kind: "discuss",
+          title: "慢生成测试讨论",
+          status: "completed",
+          demo: true,
+          startedAt: "2026-10-15T00:00:00.000Z",
+        }),
+        run({
+          runId: "ck-review-demo-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee9",
+          title: "示例 PR：给登录接口加限流",
+          status: "completed",
+          demo: true,
+          startedAt: "2026-10-13T00:00:00.000Z",
+          reviewEvidence: evidence("https://github.com/acme/sample/pull/8"),
+        }),
+      ],
+    });
+    await waitForText(view.container, "没有需要处理的案件");
+    expect(filterButton(view.container, "示例").querySelector("span")?.textContent).toBe("2");
+    expect(filterButton(view.container, "真实").querySelector("span")?.textContent).toBe("1");
+    expect(filterButton(view.container, "讨论").querySelector("span")?.textContent).toBeTruthy();
+    await pressFilter(view.container, "全部案件");
+    expect(view.container.textContent).toContain("要不要把支付服务拆出来");
+    expect(view.container.textContent).toContain("慢生成测试讨论");
+    await pressFilter(view.container, "示例");
+    expect(view.container.textContent).toContain("慢生成测试讨论");
+    expect(view.container.textContent).not.toContain("要不要把支付服务拆出来");
+    await pressFilter(view.container, "讨论");
+    expect(view.container.textContent).toContain("慢生成测试讨论");
+    expect(view.container.textContent).not.toContain("给登录接口加限流");
   });
 
   it("DM-07 mentions sample reports when attention is empty", async () => {

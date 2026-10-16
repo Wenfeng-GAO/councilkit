@@ -124,9 +124,10 @@ export function ReportsPage() {
   }));
   const kindFilters: { id: KindFilter; label: string; count: number }[] = (
     [
-      { id: "all" as const, label: "审查与工程班" },
+      { id: "all" as const, label: "全部类型" },
       { id: "review" as const, label: "审查" },
       { id: "squad" as const, label: "工程班" },
+      { id: "discuss" as const, label: "讨论" },
     ] satisfies { id: KindFilter; label: string }[]
   ).map((item) => ({
     ...item,

@@ -1,6 +1,6 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
-import { DemoReportNotice } from "@/components/report/DemoReportNotice";
+import { DemoReportNotice, demoNoticeKind } from "@/components/report/DemoReportNotice";
 import { FindingLedger } from "@/components/report/FindingLedger";
 import { FixPlanDocument, formatCliActionError } from "@/components/report/FixPipeline";
 import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
@@ -377,7 +377,7 @@ export function ReportDetailPage() {
             {query.data.truncated ? (
               <p className="text-sm text-warn">报告超过 2MB，已截断显示。</p>
             ) : null}
-            {demoRun ? <DemoReportNotice /> : null}
+            {demoRun ? <DemoReportNotice kind={demoNoticeKind(query.data.kind)} /> : null}
             {query.data.kind === "ideate" && query.data.ideateIntegrity ? (
               <IdeateIntegrityCard integrity={query.data.ideateIntegrity} />
             ) : null}

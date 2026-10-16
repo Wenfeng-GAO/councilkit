@@ -3,6 +3,11 @@ import { join } from "node:path";
 import { LIMITS, type ToolState } from "@shared/runtime/contracts";
 import { directoryEscapes, replacePrivateFile } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
+import {
+  type GenerationWatchdog,
+  generationRule,
+  startGenerationWatchdog,
+} from "@shared/runtime/generation-timeouts";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
@@ -77,6 +82,9 @@ interface ActiveTurn {
   cancelling: boolean;
   settled: boolean;
   turnTimer?: NodeJS.Timeout;
+  /** B4/#339: one-shot "not finished" deadline (oneshotMs). The CLI prints
+   * the answer only at the end, so stdout is not progress here. */
+  deadline?: GenerationWatchdog;
   resolve: () => void;
 }
 
@@ -184,6 +192,8 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
         clearTimeout(turn.turnTimer);
         turn.turnTimer = undefined;
       }
+      turn.deadline?.clear();
+      turn.deadline = undefined;
     }
 
     function invalidateSession(reason: string): void {
@@ -620,6 +630,25 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
                   }),
                 );
               }
+            });
+            // B4/#339: one-shot drivers get no idle window (silence is normal
+            // until the final answer). Not finished within oneshotMs →
+            // ONESHOT_TIMEOUT; an early exit fails at once via the exit handler.
+            // turnMs (1h) stays only as a safety ceiling.
+            const rule = generationRule("grok-stream-json", timeouts);
+            turn.deadline = startGenerationWatchdog(rule, () => {
+              if (!deadlineMaySettle(turn, activeTurn === turn)) return;
+              invalidateSession("oneshot_timeout");
+              failTurn(
+                turn,
+                makeError(rule.code, "stream", rule.message, {
+                  driverId: "grok-stream-json",
+                  executionId: turn.executionId,
+                  participantId,
+                  limitMs: rule.limitMs,
+                }),
+              );
+              void reapActiveProcess();
             });
             turn.turnTimer = setTimeout(() => {
               if (deadlineMaySettle(turn, activeTurn === turn)) {

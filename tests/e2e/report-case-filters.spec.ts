@@ -33,12 +33,13 @@ async function clickStatus(page: Page, name: RegExp): Promise<void> {
   await page.getByRole("button", { name }).click();
 }
 
-// 类型徽标文案互相包含（“审查”是“审查与工程班”的前缀），正则匹配会
-// 同时命中两个按钮，因此按固定顺序定位：[all, review, squad]。
+// 示例筛选和案件类型共用 `.ck-library-kinds`。案件类型是
+// [全部类型, 审查, 工程班, 讨论]；这里只点前三个，且必须落在
+// 「案件类型」那一排，不能点到上面的「全部 / 真实 / 示例」。
 const KIND_ORDER = ["all", "review", "squad"] as const;
 type KindId = (typeof KIND_ORDER)[number];
 const kindButton = (page: Page, id: KindId) =>
-  page.locator(".ck-library-kinds button").nth(KIND_ORDER.indexOf(id));
+  page.locator('[aria-label="案件类型"] button').nth(KIND_ORDER.indexOf(id));
 
 async function clickKind(page: Page, id: KindId): Promise<void> {
   await kindButton(page, id).click();

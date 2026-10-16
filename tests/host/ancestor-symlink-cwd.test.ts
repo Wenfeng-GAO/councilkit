@@ -34,6 +34,7 @@ function deps(workRoot: string): DriverDeps {
       dispatchAckMs: 50,
       streamIdleMs: 50,
       turnMs: 50,
+      oneshotMs: 50,
       interruptGraceMs: 50,
       shutdownGraceMs: 50,
     },

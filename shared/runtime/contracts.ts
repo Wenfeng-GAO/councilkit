@@ -49,8 +49,14 @@ export const QUOTAS = {
 export const TIMEOUTS = {
   handshakeMs: 15_000,
   dispatchAckMs: 5_000,
-  streamIdleMs: 60_000,
-  turnMs: 600_000,
+  streamIdleMs: 120_000,
+  /** Absolute turn ceiling (safety). Product B4: user-visible no-progress is
+   * streamIdleMs only; long reports that keep emitting must not stop at 10 min.
+   * Raised so continuous output is not cut by wall-clock. */
+  turnMs: 3_600_000,
+  /** One-shot drivers (kimi/grok/cursor print the report only at the end):
+   * not finished within this → ONESHOT_TIMEOUT. See generation-timeouts.ts. */
+  oneshotMs: 600_000,
   interruptGraceMs: 5_000,
   shutdownGraceMs: 10_000,
   reapAfterHostDeathMs: 5_000,
