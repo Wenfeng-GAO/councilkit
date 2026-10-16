@@ -31,7 +31,8 @@
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -626,6 +627,150 @@ function resetAll(
   };
 }
 
+function startE2EReReview(home: string, sourceRunId: string): { pid: number } {
+  const followUpRunId = `ck-review-${randomUUID()}`;
+  const followDir = join(home, "runs", followUpRunId);
+  mkdirSync(followDir, { recursive: true });
+  const seat = {
+    attemptId: "attempt-security",
+    agentId: "sec",
+    agentName: "review-security",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  const aggregator = {
+    attemptId: "aggregator",
+    agentId: "adv",
+    agentName: "review-adversarial",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  writeFileSync(
+    join(followDir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId: followUpRunId,
+      startedAt: new Date().toISOString(),
+      task: { task: "e2e-re-review" },
+      attempts: [seat],
+      aggregator,
+    })}\n`,
+  );
+  writeFileSync(join(followDir, "report.md"), "# Autonomous Review Report\n\n复审席位已调用。\n");
+  const now = new Date().toISOString();
+  writeFileSync(
+    join(followDir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "running",
+      progress: {
+        phase: "attempts",
+        updatedAt: now,
+        attempts: [
+          { ...seat, role: "attempt", status: "running", durationMs: null, lastActivity: null },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  const sourceStatus = join(home, "runs", sourceRunId, "status.json");
+  let current: Record<string, unknown> = {};
+  try {
+    current = JSON.parse(readFileSync(sourceStatus, "utf8")) as Record<string, unknown>;
+  } catch {
+    current = {};
+  }
+  writeFileSync(
+    sourceStatus,
+    `${JSON.stringify({
+      ...current,
+      version: 1,
+      pipeline: {
+        phase: "re-reviewing",
+        round: 0,
+        maxRounds: 2,
+        planVerdict: null,
+        applyStatus: null,
+        followUpRunId,
+        summary: "正在启动复审",
+        updatedAt: now,
+      },
+    })}\n`,
+  );
+  return { pid: process.pid };
+}
+
+function seedStaleReview(input: { shape: "pr" | "task"; liveness: "dead" | "alive" }): {
+  runId: string;
+} {
+  const home = process.env.COUNCILKIT_HOME;
+  if (home === undefined || home.length === 0) throw new Error("COUNCILKIT_HOME missing");
+  const runId = `ck-review-${randomUUID()}`;
+  const dir = join(home, "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const task =
+    input.shape === "pr"
+      ? { pr: "https://github.com/acme/payments/pull/348" }
+      : { task: "给结算页补一张失败态说明" };
+  const seat = {
+    attemptId: "attempt-security",
+    agentId: "sec",
+    agentName: "review-security",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  const aggregator = {
+    attemptId: "aggregator",
+    agentId: "adv",
+    agentName: "review-adversarial",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId,
+      startedAt: staleAt,
+      task,
+      attempts: [seat],
+      aggregator,
+    })}\n`,
+  );
+  writeFileSync(
+    join(dir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "running",
+      progress: {
+        phase: "aggregating",
+        updatedAt: staleAt,
+        attempts: [
+          { ...seat, role: "attempt", status: "success", durationMs: 1000, lastActivity: null },
+          {
+            ...aggregator,
+            role: "aggregator",
+            status: "running",
+            durationMs: 1000,
+            lastActivity: null,
+          },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(join(dir, "report.md"), "# Autonomous Review Report\n\n中断前的摘要。\n");
+  if (input.liveness === "alive") {
+    writeFileSync(join(dir, "review.pid"), `${String(process.pid)}\n`);
+  } else {
+    writeFileSync(join(dir, "review.pid"), "2147483646\n");
+  }
+  return { runId };
+}
+
 function testRoutes(
   scopeManager: { closeAll(reason: string): Promise<void> },
   executions: { reset(): void },
@@ -638,6 +783,17 @@ function testRoutes(
       pattern: `${TEST_BASE}/reset`,
       auth: "session",
       handler: () => doReset(),
+    },
+    {
+      method: "POST",
+      pattern: `${TEST_BASE}/seed-stale-review`,
+      auth: "session",
+      bodySchema: z.object({
+        shape: z.enum(["pr", "task"]),
+        liveness: z.enum(["dead", "alive"]),
+      }),
+      handler: ({ body }) =>
+        seedStaleReview(body as { shape: "pr" | "task"; liveness: "dead" | "alive" }),
     },
     {
       method: "POST",
@@ -846,6 +1002,7 @@ async function main(): Promise<void> {
         if (home === undefined || home.length === 0) {
           throw new Error("COUNCILKIT_HOME missing in e2e host");
         }
+        if (input.action === "re-review") return startE2EReReview(home, input.runId);
         const runDir = join(home, "runs", input.runId);
         mkdirSync(runDir, { recursive: true });
         const ideate = input.action === "ideate";

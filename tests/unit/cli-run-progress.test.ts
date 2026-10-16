@@ -612,6 +612,51 @@ describe("reconcileRunningStatus", () => {
     ).toBe("interrupted");
   });
 
+  it("interrupts a dead pid once the heartbeat is 30 seconds old", () => {
+    const dead = 2_147_483_646;
+    expect(isPidAlive(dead)).toBe(false);
+    const base = {
+      status: "running" as const,
+      kind: "review",
+      pid: dead,
+      nowMs: T0,
+    };
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 29_000).toISOString(),
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 30_000).toISOString(),
+      }),
+    ).toBe("interrupted");
+  });
+
+  it("interrupts a live pid that has not progressed for 5 minutes", () => {
+    const base = {
+      status: "running" as const,
+      kind: "review",
+      pid: process.pid,
+      nowMs: T0,
+    };
+    expect(isPidAlive(process.pid)).toBe(true);
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - (5 * 60 * 1000 - 1000)).toISOString(),
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 5 * 60 * 1000).toISOString(),
+      }),
+    ).toBe("interrupted");
+  });
+
   it("does not remap squad running status", () => {
     expect(
       reconcileRunningStatus({

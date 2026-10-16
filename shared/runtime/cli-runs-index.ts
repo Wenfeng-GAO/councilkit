@@ -36,6 +36,7 @@ import {
 } from "./cli-ledger";
 import {
   CLI_RUN_PIPELINE_PID_FILE,
+  CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunLiveStatus,
   type CliRunPipeline,
@@ -418,12 +419,19 @@ function readRepairProjection(
   }
 }
 
-function readPipelinePid(dir: string): number | null {
-  const path = join(dir, CLI_RUN_PIPELINE_PID_FILE);
+function readPidFile(path: string): number | null {
   const stat = safeLstat(path);
   if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
   const raw = readCapped(path, 32).text.trim();
   return parseCanonicalPositiveInt(raw);
+}
+
+/** A live fix/repair pipeline pid wins. Otherwise the review process pid applies. */
+function readPipelinePid(dir: string): number | null {
+  return (
+    readPidFile(join(dir, CLI_RUN_PIPELINE_PID_FILE)) ??
+    readPidFile(join(dir, CLI_RUN_REVIEW_PID_FILE))
+  );
 }
 
 function readFindingsText(path: string): string | null {

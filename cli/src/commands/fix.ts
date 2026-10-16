@@ -7,6 +7,8 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import {
+  CLI_RUN_PIPELINE_READY_FILE,
+  CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunApplyStatus,
   type CliRunAttemptProgress,
@@ -15,7 +17,9 @@ import {
   type CliRunPipelinePhase,
   type CliRunPlanVerdict,
   type CliRunProgressPhase,
+  isPidAlive,
 } from "@shared/runtime/cli-run-progress";
+import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { replacePrivateFile } from "@shared/runtime/durable-write";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import { clipUtf16 } from "@shared/text/clip-utf16";
@@ -161,13 +165,19 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
     throw errors.usage(`run ${runId} has no review.started record`);
   }
   const finished = records.find((r) => r.kind === "review.finished");
-  if (finished === undefined) {
+  if (finished === undefined && reviewProcessAlive(runDir)) {
     throw errors.usage("review is still running; wait for it to finish before fix");
   }
-  const pr = started.task.pr?.trim();
-  if (pr === undefined || pr.length === 0) {
+  const pr = started.task.pr?.trim() ?? "";
+  const taskText = started.task.task?.trim() ?? "";
+  if (reReviewOnly) {
+    if (pr.length === 0 && taskText.length === 0) {
+      throw errors.usage("re-review needs the original PR URL or task text");
+    }
+  } else if (pr.length === 0) {
     throw errors.usage("fix requires a PR URL in the review transcript (this run used --task)");
   }
+  replacePrivateFile(join(runDir, CLI_RUN_PIPELINE_READY_FILE), `${String(process.pid)}\n`);
   const report = readRequired(reportPath, `report.md for ${runId}`);
   const findings = ensureFindings({ runDir, runId, markdown: report });
 
@@ -326,7 +336,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
     if (reReviewOnly) {
       persist("running", "re-reviewing", { applyStatus: null });
       const followUp = await startFollowUpReview({
-        pr,
+        pr: pr.length > 0 ? pr : null,
+        task: taskText.length > 0 ? taskText : null,
         sourceRunId: runId,
         planPath,
         out: nested,
@@ -728,7 +739,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         progressPhase: "re-reviewing",
       });
       const followUp = await startFollowUpReview({
-        pr,
+        pr: pr.length > 0 ? pr : null,
+        task: taskText.length > 0 ? taskText : null,
         sourceRunId: runId,
         planPath,
         out: nested,
@@ -795,8 +807,20 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   }
 }
 
+function reviewProcessAlive(runDir: string): boolean {
+  try {
+    const pid = parseCanonicalPositiveInt(
+      readFileSync(join(runDir, CLI_RUN_REVIEW_PID_FILE), "utf8").trim(),
+    );
+    return pid !== null && isPidAlive(pid);
+  } catch {
+    return false;
+  }
+}
+
 async function startFollowUpReview(input: {
-  pr: string;
+  pr: string | null;
+  task: string | null;
   sourceRunId: string;
   planPath: string;
   out: OutputSink;
@@ -821,7 +845,10 @@ async function startFollowUpReview(input: {
   ]
     .filter((line) => line.length > 0)
     .join("\n");
-  const argv = [input.pr, "--against", input.sourceRunId, "--focus", focus];
+  const argv =
+    input.pr !== null && input.pr.length > 0
+      ? [input.pr, "--against", input.sourceRunId, "--focus", focus]
+      : ["--task", input.task ?? "", "--against", input.sourceRunId, "--focus", focus];
   const source = readReviewTranscript(resolvePaths().transcript(input.sourceRunId)).find(
     (r) => r.kind === "review.started",
   );

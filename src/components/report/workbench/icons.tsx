@@ -91,6 +91,27 @@ export function ChevronRightIcon({ className }: WorkbenchIconProps) {
   );
 }
 
+export function CircleAlertIcon({ className }: WorkbenchIconProps) {
+  return (
+    <IconBase className={className}>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" x2="12" y1="8" y2="12" />
+      <line x1="12" x2="12.01" y1="16" y2="16" />
+    </IconBase>
+  );
+}
+
+/** Lucide circle-pause. Shared interruption mark for list, top bar, card, and sidebar. */
+export function CirclePauseIcon({ className }: WorkbenchIconProps) {
+  return (
+    <IconBase className={className}>
+      <circle cx="12" cy="12" r="10" />
+      <line x1="10" x2="10" y1="15" y2="9" />
+      <line x1="14" x2="14" y1="15" y2="9" />
+    </IconBase>
+  );
+}
+
 export function CircleHelpIcon({ className }: WorkbenchIconProps) {
   return (
     <IconBase className={className}>

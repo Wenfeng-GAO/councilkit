@@ -1,3 +1,4 @@
+import { InterruptionMark } from "@/components/report/interruption-mark";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import type { ComponentType } from "react";
@@ -24,14 +25,18 @@ function seatRoleIcon(agentName: string): ComponentType<WorkbenchIconProps> {
 function SeatRow({
   attempt,
   current,
+  lostExecution,
   onSelect,
 }: {
   attempt: WorkbenchAttempt;
   current: boolean;
+  lostExecution: boolean;
   onSelect: (attemptId: string) => void;
 }) {
   const RoleIcon = attempt.role === "aggregator" ? Layers2Icon : seatRoleIcon(attempt.agentName);
   const StatusIcon = STATUS_ICONS[attempt.status] ?? CircleHelpIcon;
+  const interruptedAggregator =
+    lostExecution && attempt.role === "aggregator" && attempt.status === "cancelled";
   return (
     <button
       type="button"
@@ -43,10 +48,16 @@ function SeatRow({
       <span className="ck-wb-seat-copy">
         <b>{reviewSeatTitle(attempt)}</b>
         <small>
-          <StatusIcon
-            className={`ck-wb-icon ck-wb-icon-state${attempt.status === "running" ? " ck-wb-running-icon" : ""}`}
-          />
-          {SEAT_STATUS_TEXT[attempt.status]}
+          {interruptedAggregator ? (
+            <InterruptionMark>中断</InterruptionMark>
+          ) : (
+            <>
+              <StatusIcon
+                className={`ck-wb-icon ck-wb-icon-state${attempt.status === "running" ? " ck-wb-running-icon" : ""}`}
+              />
+              {SEAT_STATUS_TEXT[attempt.status]}
+            </>
+          )}
           {attempt.durationMs !== null ? (
             <span className="ck-wb-time">{formatAttemptMs(attempt.durationMs)}</span>
           ) : null}
@@ -63,9 +74,11 @@ function SeatRow({
 export function SeatColumn({
   attempts,
   hasRepair,
+  lostExecution = false,
 }: {
   attempts: WorkbenchAttempt[];
   hasRepair: boolean;
+  lostExecution?: boolean;
 }) {
   const { selected, select } = useWorkbenchSelection();
   const seats = attempts.filter((row) => row.role === "attempt");
@@ -99,6 +112,7 @@ export function SeatColumn({
           key={attempt.attemptId}
           attempt={attempt}
           current={selected === attempt.attemptId}
+          lostExecution={lostExecution}
           onSelect={select}
         />
       ))}
@@ -110,6 +124,7 @@ export function SeatColumn({
               key={attempt.attemptId}
               attempt={attempt}
               current={selected === attempt.attemptId}
+              lostExecution={lostExecution}
               onSelect={select}
             />
           ))}

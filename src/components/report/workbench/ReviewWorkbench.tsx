@@ -8,6 +8,7 @@ import {
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import { exportRunMarkdown, isDemoRun } from "@shared/runtime/demo-report";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { type Ref, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -86,6 +87,7 @@ export function ReviewWorkbench({
   );
 
   const attempts = run.progress?.attempts ?? [];
+  const lostExecution = isLostExecutionReview(run);
   // 示例报告没有读过代码，不提供修复入口。其余 kind=review 仍可达「当前修复」。
   const repairAvailable = !demoRun;
   // 真实修复证据（内置 pipeline 或独立 Squad 自动修复 Run）；只控制总览内的快捷入口。
@@ -255,7 +257,7 @@ export function ReviewWorkbench({
     <div className="ck-wb ck-wb-app">
       <WorkbenchNav hostStatus={hostStatus} />
       <ContextBar run={run} hostStatus={hostStatus} />
-      <SeatColumn attempts={attempts} hasRepair={repairAvailable} />
+      <SeatColumn attempts={attempts} hasRepair={repairAvailable} lostExecution={lostExecution} />
       <main className="ck-wb-main">
         <ViewBar
           title={viewTitle}
@@ -270,6 +272,7 @@ export function ReviewWorkbench({
             seats,
             aggregators,
             hasRepair: repairAvailable,
+            lostExecution,
           }}
           getCopyText={copyText}
           getCopyFullReport={effectiveSelection === "overview" ? copyFullReport : undefined}

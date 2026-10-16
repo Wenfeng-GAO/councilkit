@@ -556,12 +556,21 @@ describe("listCliRuns stale running overlay", () => {
     expect(runs[0]?.status).toBe("interrupted");
   });
 
-  it("keeps a live pid running even when the heartbeat is old", () => {
+  it("interrupts a live pid once the heartbeat is five minutes old", () => {
     const dir = join(home, "runs", REVIEW_ID);
     mkdirSync(dir, { recursive: true });
     writeReviewTranscript(dir, "2026-09-08T00:00:00.000Z");
     writeFileSync(join(dir, "status.json"), runningStatus("2020-01-01T00:00:00.000Z", "attempts"));
     writeFileSync(join(dir, "pipeline.pid"), `${process.pid}\n`);
+    expect(listCliRuns(process.env)[0]?.status).toBe("interrupted");
+  });
+
+  it("keeps a live review pid running while the heartbeat is fresh", () => {
+    const dir = join(home, "runs", REVIEW_ID);
+    mkdirSync(dir, { recursive: true });
+    writeReviewTranscript(dir, "2026-09-08T00:00:00.000Z");
+    writeFileSync(join(dir, "status.json"), runningStatus(new Date().toISOString(), "attempts"));
+    writeFileSync(join(dir, "review.pid"), `${process.pid}\n`);
     expect(listCliRuns(process.env)[0]?.status).toBe("running");
   });
 });

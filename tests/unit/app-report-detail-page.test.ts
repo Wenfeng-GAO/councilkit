@@ -686,10 +686,8 @@ describe("ReportDetailPage", () => {
 
     client.startCliRunAction.mockRejectedValueOnce(new RuntimeClientError(404, "missing", "nope"));
     await clickButton(view.container, "发起复审");
-    await waitForText(
-      view.container,
-      "pipeline-error:Host 还没有加载修复接口。请重启 `pnpm dev` / `pnpm start` 后再点内置修复。",
-    );
+    await waitForText(view.container, "pipeline-error:复审没有启动：启动没有成功。可以再试一次。");
+    expect(view.container.textContent).not.toContain("repair-error:复审没有启动：");
 
     client.startCliRunAction.mockRejectedValueOnce(
       new RuntimeClientError(403, "forbidden", "scope"),

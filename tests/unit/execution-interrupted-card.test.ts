@@ -20,7 +20,10 @@ describe("ExecutionInterruptedCard", () => {
         onReReview: () => {},
       }),
     );
-    expect(html).toContain(`<h1>${EXECUTION_SERVICE_INTERRUPTION.title}</h1>`);
+    expect(html).toContain(EXECUTION_SERVICE_INTERRUPTION.title);
+    expect(html).toContain('data-interrupt-icon="circle-pause"');
+    expect(html).toContain('data-interrupt-token="--ck-interrupt"');
+    expect(html).not.toContain(`<h1>${EXECUTION_SERVICE_INTERRUPTION.title}</h1>`);
     expect(html).toContain(EXECUTION_SERVICE_INTERRUPTION.detail);
     expect(html).toContain(`data-variant="primary"`);
     expect(html).toContain(EXECUTION_SERVICE_INTERRUPTION.primaryAction);

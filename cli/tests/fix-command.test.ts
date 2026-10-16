@@ -175,7 +175,8 @@ describe("cli fix command", () => {
     });
   }
 
-  function seedReview(): void {
+  function seedReview(options: { finished?: boolean; task?: string } = {}): void {
+    const finished = options.finished !== false;
     const dir = join(home, "runs", RUN_ID);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -189,7 +190,7 @@ describe("cli fix command", () => {
         version: 1,
         runId: RUN_ID,
         startedAt: "2026-08-01T00:00:00.000Z",
-        task: { pr: PR_URL },
+        task: options.task ? { task: options.task } : { pr: PR_URL },
         attempts: [],
         aggregator: {
           attemptId: "aggregator",
@@ -198,14 +199,18 @@ describe("cli fix command", () => {
           driverId: "grok-stream-json",
           modelId: "grok-4.6",
         },
-      })}\n${JSON.stringify({
-        kind: "review.finished",
-        version: 1,
-        status: "completed",
-        endedAt: "2026-08-01T01:00:00.000Z",
-        incomplete: false,
-        reportPath: join(dir, "report.md"),
-      })}\n`,
+      })}\n${
+        finished
+          ? `${JSON.stringify({
+              kind: "review.finished",
+              version: 1,
+              status: "completed",
+              endedAt: "2026-08-01T01:00:00.000Z",
+              incomplete: false,
+              reportPath: join(dir, "report.md"),
+            })}\n`
+          : ""
+      }`,
     );
   }
 
@@ -389,6 +394,63 @@ describe("cli fix command", () => {
     const outcome = sink.finished as { failure: { code: string } | null; applied: boolean };
     expect(outcome.failure?.code).toBe("PLAN_NO_CONSENSUS");
     expect(outcome.applied).toBe(false);
+  });
+
+  it("re-reviews a killed review by invoking the follow-up seats", async () => {
+    seedRoster();
+    seedReview({ finished: false });
+    const seen: string[][] = [];
+    const followUpId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    let code = 0;
+    try {
+      await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async (argv, _out, deps) => {
+          seen.push(argv);
+          deps?.onRunCreated?.(followUpId);
+        },
+      });
+    } catch (error) {
+      if (error instanceof FixExit) code = error.exitCode;
+      else throw error;
+    }
+    expect(code).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.[0]).toBe(PR_URL);
+    expect(seen[0]).toContain("--against");
+  });
+
+  it("re-reviews a killed task run with the original task text", async () => {
+    seedRoster();
+    seedReview({ finished: false, task: "给结算页补一张失败态说明" });
+    const seen: string[][] = [];
+    try {
+      await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async (argv, _out, deps) => {
+          seen.push(argv);
+          deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2");
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof FixExit)) throw error;
+    }
+    expect(seen[0]?.slice(0, 2)).toEqual(["--task", "给结算页补一张失败态说明"]);
+  });
+
+  it("refuses re-review while the previous review process is still alive", async () => {
+    seedRoster();
+    seedReview({ finished: false });
+    writeFileSync(join(home, "runs", RUN_ID, "review.pid"), `${String(process.pid)}\n`);
+    try {
+      await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async () => {
+          throw new Error("review seats must not be called");
+        },
+      });
+      throw new Error("expected the live review to block re-review");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliError);
+      expect((error as CliError).message).toMatch(/still running/i);
+    }
   });
 
   it("fails when a follow-up re-review exits non-zero", async () => {

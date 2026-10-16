@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
+import {
+  type Stats,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   FULL_COMMIT_SHA,
@@ -7,6 +15,7 @@ import {
   isFindingVerifiedClosed,
 } from "@shared/runtime/cli-ledger";
 import {
+  CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunLiveHeartbeat,
   liveStateFromRecords,
@@ -775,6 +784,7 @@ export async function runReview(
   // `workspaces/` is created only AFTER probing, for attempts that will
   // actually spawn (a probe must be able to prove no workspace existed yet).
   createWorkspace(runDir);
+  writeReviewPid(runDir);
   if (repairPackage && resumeRaw === undefined) {
     atomicWriteFile(
       join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
@@ -1432,6 +1442,7 @@ export async function runReview(
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
+    clearReviewPid(runDir);
   }
 
   // A signal that arrived only during the final flush (executeReview already
@@ -2160,6 +2171,24 @@ function flushTranscript(
   if (root != null) revalidateTrustedRoot(root);
   writeReviewTranscript(path, records);
   persistLiveStatus(dirname(path), records, beats);
+}
+
+function writeReviewPid(runDir: string): void {
+  try {
+    replacePrivateFile(join(runDir, CLI_RUN_REVIEW_PID_FILE), `${String(process.pid)}\n`);
+  } catch {
+    // The pid file is observational. A kill -9 still leaves the last write.
+  }
+}
+
+function clearReviewPid(runDir: string): void {
+  const path = join(runDir, CLI_RUN_REVIEW_PID_FILE);
+  try {
+    if (readFileSync(path, "utf8").trim() !== String(process.pid)) return;
+    unlinkSync(path);
+  } catch {
+    // Missing file, or the process was killed before this finally ran.
+  }
 }
 
 function persistLiveStatus(

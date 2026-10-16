@@ -46,6 +46,42 @@ async function boot(): Promise<TestHost> {
   return host;
 }
 
+function seedStale(runId: string, shape: "pr" | "task", pid: string): void {
+  const dir = join(home, "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  writeFileSync(join(dir, "report.md"), MARKDOWN);
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId,
+      startedAt: staleAt,
+      task:
+        shape === "pr" ? { pr: "https://github.com/acme/repo/pull/9" } : { task: "给结算页补说明" },
+      attempts: [],
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: "a",
+        agentName: "A",
+        driverId: "kimi-stream-json",
+        modelId: "kimi-code/k3",
+      },
+    })}\n`,
+  );
+  writeFileSync(
+    join(dir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "running",
+      progress: { phase: "aggregating", attempts: [], updatedAt: staleAt },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(join(dir, "review.pid"), `${pid}\n`);
+}
+
 function seed(): void {
   const dir = join(home, "runs", RUN_ID);
   mkdirSync(dir, { recursive: true });
@@ -627,6 +663,117 @@ describe("cli-runs route", () => {
     expect(live.status).toBe("running");
     expect(live.pipeline.phase).toBe("planning");
     expect(live.pipeline.summary).toContain("探测模型");
+  });
+
+  it("POST re-review starts a follow-up when the review process is dead", async () => {
+    for (const shape of ["pr", "task"] as const) {
+      const runId = `ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee${shape === "pr" ? "c1" : "c2"}`;
+      seedStale(runId, shape, "2147483646");
+      const followUpRunId = `ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeee${shape === "pr" ? "d1" : "d2"}`;
+      host = await createTestHost({
+        routesFactory: (services) => {
+          services.cliRunLauncher = {
+            start: (input: CliRunLaunchRequest) => {
+              expect(input.action).toBe("re-review");
+              const followDir = join(home, "runs", followUpRunId);
+              mkdirSync(followDir, { recursive: true });
+              writeFileSync(
+                join(followDir, "transcript.jsonl"),
+                `${JSON.stringify({
+                  kind: "review.started",
+                  version: 1,
+                  runId: followUpRunId,
+                  startedAt: new Date().toISOString(),
+                  task:
+                    shape === "pr"
+                      ? { pr: "https://github.com/acme/repo/pull/9" }
+                      : { task: "task" },
+                  attempts: [
+                    {
+                      attemptId: "attempt-security",
+                      agentId: "sec",
+                      agentName: "review-security",
+                      driverId: "grok-stream-json",
+                      modelId: "grok-4.6",
+                    },
+                  ],
+                  aggregator: {
+                    attemptId: "aggregator",
+                    agentId: "a",
+                    agentName: "A",
+                    driverId: "grok-stream-json",
+                    modelId: "grok-4.6",
+                  },
+                })}\n`,
+              );
+              const statusPath = join(home, "runs", input.runId, "status.json");
+              const current = JSON.parse(readFileSync(statusPath, "utf8")) as Record<
+                string,
+                unknown
+              >;
+              writeFileSync(
+                statusPath,
+                `${JSON.stringify({
+                  ...current,
+                  pipeline: {
+                    phase: "re-reviewing",
+                    round: 0,
+                    maxRounds: 2,
+                    planVerdict: null,
+                    applyStatus: null,
+                    followUpRunId,
+                    summary: null,
+                    updatedAt: new Date().toISOString(),
+                  },
+                })}\n`,
+              );
+              return { pid: 4242 };
+            },
+          };
+          return cliRunsRoutes(services);
+        },
+      });
+      const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${runId}/actions`, {
+        method: "POST",
+        headers: authedHeaders(host),
+        body: JSON.stringify({ action: "re-review" }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; data: { started: boolean } };
+      expect(body.data.started).toBe(true);
+      expect(readFileSync(join(home, "runs", followUpRunId, "transcript.jsonl"), "utf8")).toContain(
+        "attempt-security",
+      );
+      await host.cleanup();
+      host = null;
+    }
+  });
+
+  it("POST re-review refuses while the previous review process is alive", async () => {
+    for (const shape of ["pr", "task"] as const) {
+      const runId = `ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee${shape === "pr" ? "e1" : "e2"}`;
+      seedStale(runId, shape, String(process.pid));
+      host = await createTestHost({
+        routesFactory: (services) => {
+          services.cliRunLauncher = {
+            start: () => {
+              throw new Error("launcher must not start while the review pid is alive");
+            },
+          };
+          return cliRunsRoutes(services);
+        },
+      });
+      const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${runId}/actions`, {
+        method: "POST",
+        headers: authedHeaders(host),
+        body: JSON.stringify({ action: "re-review" }),
+      });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { ok: false; error: { message: string } };
+      expect(body.error.message).toBe("上一次审查还在运行");
+      await host.cleanup();
+      host = null;
+    }
   });
 
   it("POST /actions rejects an unknown action", async () => {

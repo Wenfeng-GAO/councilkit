@@ -2,12 +2,18 @@ import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { Button } from "@/components/ui/Button";
 import { RuntimeClientError } from "@/runtime/client";
 import { isDemoRun } from "@shared/runtime/demo-report";
+import {
+  REVIEW_STILL_RUNNING_REASON,
+  RE_REVIEW_STARTING_LABEL,
+  reReviewStartFailure,
+} from "@shared/runtime/interruption-copy";
 import type {
   CliRunDetailResponse,
   CliRunPipelineDto,
   CliRunSummaryDto,
 } from "@shared/runtime/schemas";
 import { Link } from "react-router-dom";
+import { CircleAlertIcon } from "./workbench/icons";
 
 const STEPS: Array<{ phase: CliRunPipelineDto["phase"]; label: string }> = [
   { phase: "planning", label: "起草方案" },
@@ -60,11 +66,12 @@ export function FixPipeline({
     pipeline?.applyStatus === "failure" ||
     followUpFailed ||
     (pipeline?.phase === "done" && Boolean(pipeline.summary?.includes("failed")));
+  const startError = error?.startsWith("复审没有启动：") ? error : null;
   const liveHint = fixPipelineLiveStatus({
     busy,
     pendingAction,
     pipeline,
-    error,
+    error: startError ? null : error,
     failed,
     followUpFailed,
     followUpRunning,
@@ -118,7 +125,7 @@ export function FixPipeline({
           {inFlight && pendingAction !== "re-review" ? "修复进行中…" : "内置修复"}
         </Button>
         <Button variant="ghost" onClick={onReReview} disabled={!canAct}>
-          {inFlight && pendingAction === "re-review" ? "复审启动中…" : "只再审一遍（不改代码）"}
+          {pendingAction === "re-review" ? RE_REVIEW_STARTING_LABEL : "只再审一遍（不改代码）"}
         </Button>
         {followUp ? (
           <Link
@@ -135,6 +142,12 @@ export function FixPipeline({
           </Link>
         ) : null}
       </div>
+      {startError ? (
+        <p className="ck-action-error" role="alert">
+          <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
+          {startError}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -251,6 +264,21 @@ function PipelineSteps({ pipeline }: { pipeline: CliRunPipelineDto }) {
 function stepIndex(phase: CliRunPipelineDto["phase"]): number {
   const found = STEPS.findIndex((step) => step.phase === phase);
   return found < 0 ? 0 : found;
+}
+
+export function formatReReviewStartError(error: unknown): string {
+  return reReviewStartFailure(reReviewFailureReason(error));
+}
+
+function reReviewFailureReason(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "";
+  if (raw.includes(REVIEW_STILL_RUNNING_REASON)) return REVIEW_STILL_RUNNING_REASON;
+  if (/still running|already running|already in progress/i.test(raw)) {
+    return REVIEW_STILL_RUNNING_REASON;
+  }
+  if (raw.startsWith("复审进程没有") || raw === "启动没有成功") return raw;
+  if (raw.length > 0 && !/error\[\d+\]/i.test(raw) && !/[A-Za-z]{4,}/.test(raw)) return raw;
+  return "启动没有成功";
 }
 
 export function formatCliActionError(error: unknown): string {

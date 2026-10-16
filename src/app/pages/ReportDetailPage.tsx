@@ -2,7 +2,11 @@ import { AppShell } from "@/components/layout/AppShell";
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { DemoReportNotice } from "@/components/report/DemoReportNotice";
 import { FindingLedger } from "@/components/report/FindingLedger";
-import { FixPlanDocument, formatCliActionError } from "@/components/report/FixPipeline";
+import {
+  FixPlanDocument,
+  formatCliActionError,
+  formatReReviewStartError,
+} from "@/components/report/FixPipeline";
 import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
 import { PrCaseSummary } from "@/components/report/PrCaseSummary";
@@ -25,7 +29,7 @@ import { exportRunMarkdown, isDemoRun } from "@shared/runtime/demo-report";
 import { writerRepoFromPrUrl } from "@shared/runtime/pr-url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import "@/styles/report.css";
 import "@/styles/review-live.css";
 import "@/styles/repair-workspace.css";
@@ -34,6 +38,7 @@ type CopiedKind = "markdown" | "prompt" | "comment" | "apply" | "resume" | null;
 
 export function ReportDetailPage() {
   const { runId = "" } = useParams();
+  const navigate = useNavigate();
   const { client } = getAppRuntime();
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState<CopiedKind>(null);
@@ -43,6 +48,7 @@ export function ReportDetailPage() {
   const [inspectId, setInspectId] = useState<string | null>(null);
   // 轮询纪律（DELIVERY-PLAN §3.1）：隐藏页面时停轮询，恢复可见时立即续读一次。
   const pageVisibleRef = useRef(typeof document === "undefined" ? true : !document.hidden);
+  const followUpBeforeReReview = useRef<string | null>(null);
   const [resumeToken, setResumeToken] = useState(0);
   useEffect(() => {
     const sync = () => {
@@ -75,18 +81,30 @@ export function ReportDetailPage() {
       setActionError(null);
       setPendingAction(kind);
       setWatchUntil(Date.now() + 5 * 60 * 1000);
+      if (kind === "re-review") {
+        followUpBeforeReReview.current = query.data?.pipeline?.followUpRunId ?? null;
+      }
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, kind) => {
       await queryClient.invalidateQueries({ queryKey: ["cli-runs"] });
+      if (kind !== "re-review") {
+        window.setTimeout(() => setPendingAction(null), 1500);
+      }
     },
-    onError: (error) => {
-      setPendingAction(null);
-      setActionError(formatCliActionError(error));
-    },
-    onSettled: () => {
-      window.setTimeout(() => setPendingAction(null), 1500);
+    onError: (error, kind) => {
+      if (kind === "re-review") setPendingAction(null);
+      else window.setTimeout(() => setPendingAction(null), 1500);
+      setActionError(
+        kind === "re-review" ? formatReReviewStartError(error) : formatCliActionError(error),
+      );
     },
   });
+  const followUpRunId = query.data?.pipeline?.followUpRunId ?? null;
+  useEffect(() => {
+    if (pendingAction !== "re-review" || followUpRunId === null) return;
+    if (followUpRunId === followUpBeforeReReview.current) return;
+    navigate(`/reports/${followUpRunId}`);
+  }, [followUpRunId, navigate, pendingAction]);
   const listQuery = useQuery({
     queryKey: ["cli-runs"],
     queryFn: () => client.listCliRuns(),
@@ -254,7 +272,8 @@ export function ReportDetailPage() {
           outerUsed: run.outerUsed ?? 0,
           outerMax: run.outerMax ?? 10,
           error:
-            actionError ??
+            // 复审启动失败只写在「内置修复 / 只再审一遍」下面，不进 Squad 面板。
+            (actionError?.startsWith("复审没有启动：") ? null : actionError) ??
             run.lastError ??
             (profilesQuery.isError ? formatCliActionError(profilesQuery.error) : null),
           pending: repairMutation.isPending,

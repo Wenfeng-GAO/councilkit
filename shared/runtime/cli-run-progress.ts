@@ -22,7 +22,13 @@ export {
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
+/** Review process pid. A fix pipeline uses pipeline.pid and wins when both exist. */
+export const CLI_RUN_REVIEW_PID_FILE = "review.pid";
+/** Written by `councilkit fix` after it passes the still-running guard. */
+export const CLI_RUN_PIPELINE_READY_FILE = "pipeline.ready";
 export const STALE_RUNNING_MS = 5 * 60 * 1000;
+/** Dead pid: interrupt once the heartbeat is at least this old. */
+export const STALE_HEARTBEAT_MS = 30 * 1000;
 
 const PROGRESS_PHASE_SET = new Set<string>(CLI_RUN_PROGRESS_PHASES);
 
@@ -118,9 +124,11 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
- * Read-time overlay. A non-squad run still marked running, with no live pid and
- * no heartbeat inside STALE_RUNNING_MS, lost its local execution service.
- * That is an interruption, never a failed review. Exactly STALE_RUNNING_MS counts.
+ * Read-time overlay for a non-squad run still marked running.
+ * A dead pid interrupts once the heartbeat is at least STALE_HEARTBEAT_MS old.
+ * A live pid (including SIGSTOP) interrupts once progress is at least
+ * STALE_RUNNING_MS old. A missing pid uses that same five-minute fallback.
+ * Exactly the boundary counts. The result is interrupted, never failed.
  */
 export function reconcileRunningStatus(input: {
   status: CliRunLiveStatus;
@@ -129,14 +137,24 @@ export function reconcileRunningStatus(input: {
   pid: number | null;
   nowMs?: number;
   staleMs?: number;
+  heartbeatMs?: number;
 }): CliRunLiveStatus {
   if (input.status !== "running") return input.status;
   if (input.kind === "squad") return input.status;
-  if (input.pid !== null) return isPidAlive(input.pid) ? "running" : "interrupted";
   const updated = Date.parse(input.updatedAt ?? "");
   const now = input.nowMs ?? Date.now();
+  const age = Number.isFinite(updated) ? now - updated : null;
   const staleMs = input.staleMs ?? STALE_RUNNING_MS;
-  if (!Number.isFinite(updated) || now - updated >= staleMs) return "interrupted";
+  const heartbeatMs = input.heartbeatMs ?? STALE_HEARTBEAT_MS;
+  if (input.pid !== null) {
+    if (!isPidAlive(input.pid)) {
+      if (age === null || age >= heartbeatMs) return "interrupted";
+      return "running";
+    }
+    if (age !== null && age >= staleMs) return "interrupted";
+    return "running";
+  }
+  if (age === null || age >= staleMs) return "interrupted";
   return "running";
 }
 

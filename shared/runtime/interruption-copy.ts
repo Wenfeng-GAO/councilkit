@@ -6,6 +6,15 @@ export const EXECUTION_SERVICE_INTERRUPTION = {
   secondaryAction: "返回报告列表",
 } as const;
 
+/** Shown when 只再审一遍 is refused because the previous review process is still alive. */
+export const REVIEW_STILL_RUNNING_REASON = "上一次审查还在运行";
+
+export const RE_REVIEW_STARTING_LABEL = "正在启动复审…";
+
+export function reReviewStartFailure(reason: string): string {
+  return `复审没有启动：${reason}。可以再试一次。`;
+}
+
 /**
  * A review the index marked interrupted because nothing finished it.
  * A recorded review.finished interruption has endedAt and keeps the short label.
