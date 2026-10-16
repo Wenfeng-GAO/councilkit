@@ -47,6 +47,10 @@ test("过期审查在列表、标题和卡片上都是中断，并且可以再�
     await page.getByRole("button", { name: /全部案件/ }).click();
     const interrupted = page.locator(".ck-case-card").filter({ hasText: "acme/payments #348" });
     await expect(interrupted).toContainText("中断");
+    await expect(interrupted).toContainText(
+      `下一步：${EXECUTION_SERVICE_INTERRUPTION.primaryAction}`,
+    );
+    await expect(interrupted).not.toContainText("等待完整审查证据");
     await expect(interrupted).not.toContainText("失败");
     await expect(interrupted).not.toContainText("进行中");
     await interrupted.scrollIntoViewIfNeeded();

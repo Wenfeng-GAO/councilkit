@@ -1,4 +1,5 @@
 import type { FindingsFile } from "@shared/runtime/cli-ledger";
+import { EXECUTION_SERVICE_INTERRUPTION } from "@shared/runtime/interruption-copy";
 import {
   type ReviewCaseRun,
   summarizePrCase,
@@ -30,6 +31,21 @@ describe("PR case evidence", () => {
     expect(summary.latest?.runId).toBe("2");
     expect(summary.needsRecovery).toBe(true);
     expect(summary.nextAction).toContain("当前 PR SHA");
+  });
+  it("points a lost execution at the same re-review action as the interruption card", () => {
+    const lost = {
+      ...run("2", null, false),
+      status: "interrupted",
+      endedAt: null,
+    };
+    expect(summarizePrCase([lost]).nextAction).toBe(EXECUTION_SERVICE_INTERRUPTION.primaryAction);
+    expect(summarizePrCase([run("1", null), lost]).nextAction).toBe(
+      EXECUTION_SERVICE_INTERRUPTION.primaryAction,
+    );
+    expect(summarizePrCase([{ ...lost, endedAt: "2026-09-02T00:00:00.000Z" }]).nextAction).toBe(
+      "等待完整审查证据",
+    );
+    expect(summarizePrCase([{ ...lost, status: "running" }]).nextAction).toBe("等待完整审查证据");
   });
   it("rejects contradictory complete evidence on failed or interrupted runs", () => {
     for (const status of ["failed", "interrupted", "running", "unknown"]) {
