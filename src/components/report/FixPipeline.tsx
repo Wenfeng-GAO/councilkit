@@ -38,7 +38,7 @@ export function FixPipeline({
 }: {
   run: CliRunDetailResponse;
   busy: boolean;
-  pendingAction: "fix" | "re-review" | null;
+  pendingAction: "fix" | "re-review" | "re-aggregate" | null;
   error: string | null;
   followUpRun?: Pick<CliRunSummaryDto, "runId" | "status"> | null;
   onFix: () => void;
@@ -115,7 +115,9 @@ export function FixPipeline({
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
         <Button variant="ghost" onClick={onFix} disabled={!canAct}>
-          {inFlight && pendingAction !== "re-review" ? "修复进行中…" : "内置修复"}
+          {inFlight && pendingAction !== "re-review" && pendingAction !== "re-aggregate"
+            ? "修复进行中…"
+            : "内置修复"}
         </Button>
         <Button variant="ghost" onClick={onReReview} disabled={!canAct}>
           {inFlight && pendingAction === "re-review" ? "复审启动中…" : "只再审一遍（不改代码）"}
@@ -141,7 +143,7 @@ export function FixPipeline({
 
 export function fixPipelineLiveStatus(input: {
   busy: boolean;
-  pendingAction: "fix" | "re-review" | null;
+  pendingAction: "fix" | "re-review" | "re-aggregate" | null;
   pipeline: CliRunPipelineDto | null;
   error: string | null;
   failed: boolean;

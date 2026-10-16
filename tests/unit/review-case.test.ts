@@ -1,5 +1,8 @@
 import type { FindingsFile } from "@shared/runtime/cli-ledger";
-import { EXECUTION_SERVICE_INTERRUPTION } from "@shared/runtime/interruption-copy";
+import {
+  EXECUTION_SERVICE_INTERRUPTION,
+  REAGGREGATE_ACTION,
+} from "@shared/runtime/interruption-copy";
 import {
   type ReviewCaseRun,
   summarizePrCase,
@@ -99,5 +102,32 @@ describe("PR case evidence", () => {
       }),
     ).toMatchObject({ blockingIds: ["F-1"], unverifiedFixIds: ["F-1"] });
     expect(summarizePrCase([{ ...run("1", null), reviewEvidence: null }]).baseline).toBeNull();
+  });
+  it("points an aggregator drift at 只重跑汇总", () => {
+    const summary = summarizePrCase([
+      {
+        ...run("3", null, false),
+        status: "interrupted",
+        endedAt: "2026-10-16T08:06:55.000Z",
+        progress: {
+          attempts: [
+            {
+              role: "attempt",
+              status: "success",
+              agentName: "review-security",
+              driverId: "grok-stream-json",
+            },
+            {
+              role: "aggregator",
+              status: "failure",
+              agentName: "review-adversarial",
+              driverId: "grok-stream-json",
+              failureCode: "DRIVER_DRIFT",
+            },
+          ],
+        },
+      },
+    ]);
+    expect(summary.nextAction).toBe(REAGGREGATE_ACTION);
   });
 });

@@ -129,6 +129,21 @@ export const executionRevisionSchema = z
           .strict(),
       )
       .max(32),
+    /** Old and new hashes recorded when a run re-freezes a driver for re-aggregation. */
+    replacedTools: z
+      .array(
+        z
+          .object({
+            name: text.max(80),
+            previousSha256: z.string().regex(/^[0-9a-f]{64}$/),
+            nextSha256: z.string().regex(/^[0-9a-f]{64}$/),
+            previousRealpath: text.max(4096),
+            nextRealpath: text.max(4096),
+          })
+          .strict(),
+      )
+      .max(32)
+      .optional(),
   })
   .strict();
 export type ExecutionRevision = z.infer<typeof executionRevisionSchema>;

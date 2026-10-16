@@ -25,6 +25,7 @@ export function cliRunSpawnEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 export type CliRunAction =
   | "fix"
   | "re-review"
+  | "re-aggregate"
   | "review"
   | "ideate"
   | "repair"
@@ -183,6 +184,9 @@ export function launchArgs(input: CliRunLaunchRequest): string[] {
   }
   if (input.action === "re-review") {
     return ["fix", "--run", input.runId, "--re-review-only"];
+  }
+  if (input.action === "re-aggregate") {
+    return ["review", "--reaggregate", input.runId];
   }
   return ["fix", "--run", input.runId];
 }

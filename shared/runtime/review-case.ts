@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { type FindingsFile, isFindingBlocking, isFindingVerifiedClosed } from "./cli-ledger";
-import { EXECUTION_SERVICE_INTERRUPTION, isLostExecutionReview } from "./interruption-copy";
+import {
+  EXECUTION_SERVICE_INTERRUPTION,
+  REAGGREGATE_ACTION,
+  isLostExecutionReview,
+  reviewInterruptionOf,
+} from "./interruption-copy";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "./pr-url";
 import { fullSha } from "./repair-identity";
 
@@ -76,6 +81,15 @@ export interface ReviewCaseRun {
   endedAt?: string | null;
   reviewEvidence?: ReviewEvidence | null;
   attention?: { needsAttention: number } | null;
+  progress?: {
+    attempts: ReadonlyArray<{
+      role: string;
+      status: string;
+      agentName: string;
+      driverId: string;
+      failureCode?: string;
+    }>;
+  } | null;
 }
 
 export function isCompleteReviewRun(run: ReviewCaseRun | null | undefined): boolean {
@@ -134,16 +148,18 @@ export function summarizePrCase(runs: readonly ReviewCaseRun[]) {
     repeatedIds,
     nextAction: lostLatest
       ? EXECUTION_SERVICE_INTERRUPTION.primaryAction
-      : !baseline
-        ? "等待完整审查证据"
-        : needsRecovery
-          ? "恢复最新审查，确认当前 PR SHA"
-          : (evidence?.unverifiedFixIds.length ?? 0) > 0
-            ? "复审候选，核实修复声明"
-            : repeatedIds.length > 0
-              ? "同一问题再次出现，先检查根因与验收条件"
-              : (evidence?.blockingIds.length ?? 0) > 0
-                ? "导出修复任务，处理未决重大项"
-                : "核对验收和当前 PR SHA 后决定下一步",
+      : latest !== null && reviewInterruptionOf(latest)?.kind === "aggregation"
+        ? REAGGREGATE_ACTION
+        : !baseline
+          ? "等待完整审查证据"
+          : needsRecovery
+            ? "恢复最新审查，确认当前 PR SHA"
+            : (evidence?.unverifiedFixIds.length ?? 0) > 0
+              ? "复审候选，核实修复声明"
+              : repeatedIds.length > 0
+                ? "同一问题再次出现，先检查根因与验收条件"
+                : (evidence?.blockingIds.length ?? 0) > 0
+                  ? "导出修复任务，处理未决重大项"
+                  : "核对验收和当前 PR SHA 后决定下一步",
   };
 }

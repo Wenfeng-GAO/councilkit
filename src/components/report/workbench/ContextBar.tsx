@@ -1,6 +1,11 @@
 import { primaryRunStatus } from "@/lib/cli-run-status";
 import { isDemoRun } from "@shared/runtime/demo-report";
-import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
+import {
+  INCOMPLETE_CONCLUSION_LABEL,
+  isLostExecutionReview,
+  reviewInterruptionOf,
+  seatCountLabel,
+} from "@shared/runtime/interruption-copy";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { WorkbenchMobileMenu } from "./WorkbenchNav";
@@ -19,6 +24,12 @@ export function ContextBar({
   const status = primaryRunStatus(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
   const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
+  const interruption = reviewInterruptionOf(run);
+  const successSeats = seats.filter((row) => row.status === "success").length;
+  const seatLabel =
+    interruption && seats.length > 0
+      ? seatCountLabel(successSeats, seats.length)
+      : `${doneSeats}/${seats.length} 席位已完成`;
   const sha = run.reviewEvidence?.sha ?? null;
   // 只有真实 PR 链接才可点；缺失时禁用，绝不伪造 URL。
   const prUrl = normalizeReviewPr(run.reviewEvidence?.prUrl ?? null);
@@ -38,11 +49,10 @@ export function ContextBar({
         >
           {status.text}
         </span>
-        {seats.length > 0 && !isLostExecutionReview(run) ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
+        {interruption ? (
+          <span className="ck-incomplete-tag">{INCOMPLETE_CONCLUSION_LABEL}</span>
         ) : null}
+        {seats.length > 0 && !isLostExecutionReview(run) ? <span>{seatLabel}</span> : null}
         {sha ? (
           <code title={sha}>SHA {sha.slice(0, 7)}</code>
         ) : (

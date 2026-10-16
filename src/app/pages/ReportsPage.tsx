@@ -21,6 +21,10 @@ import {
 import { getAppRuntime } from "@/runtime/bootstrap";
 import { formatAttentionLabel } from "@shared/runtime/attention-counts";
 import { isDemoRun } from "@shared/runtime/demo-report";
+import {
+  INCOMPLETE_CONCLUSION_LABEL,
+  reviewInterruptionOf,
+} from "@shared/runtime/interruption-copy";
 import { summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useQuery } from "@tanstack/react-query";
@@ -310,6 +314,9 @@ function CaseCard({
         </div>
         <div className="ck-case-status">
           <StatusPill tone={pill.tone} text={pill.text} />
+          {reviewInterruptionOf(latest) ? (
+            <span className="ck-incomplete-tag">{INCOMPLETE_CONCLUSION_LABEL}</span>
+          ) : null}
           {latest.attention ? (
             // #304: same shared count as the report page and `runs list`.
             <span className="ck-case-counts">{formatAttentionLabel(latest.attention)}</span>

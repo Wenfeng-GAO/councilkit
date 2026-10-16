@@ -133,6 +133,55 @@ describe("primaryRunStatus", () => {
       primaryRunStatus({ kind: "repair", status: "completed", businessResult: "approved" }),
     ).toEqual({ tone: "success", text: "已完成" });
   });
+  it("names seat and aggregator interruptions without saying 失败", () => {
+    const seats = {
+      kind: "review" as const,
+      status: "interrupted" as const,
+      endedAt: "2026-10-16T03:20:00.000Z",
+      progress: {
+        phase: "done" as const,
+        attempts: [
+          {
+            role: "attempt",
+            status: "failure",
+            agentName: "review-security",
+            driverId: "claude-stream-json",
+            failureCode: "IDLE_TIMEOUT",
+          },
+          {
+            role: "aggregator",
+            status: "success",
+            agentName: "review-adversarial",
+            driverId: "grok-stream-json",
+          },
+        ],
+      },
+    };
+    expect(primaryRunStatus(seats)).toEqual({
+      tone: "warn",
+      text: "审查未完成（1 路席位中断）",
+    });
+    expect(reviewOverviewHeading(seats)).toBe("审查未完成（1 路席位中断）");
+    const drift = {
+      kind: "review" as const,
+      status: "interrupted" as const,
+      endedAt: "2026-10-16T08:06:55.000Z",
+      progress: {
+        phase: "done" as const,
+        attempts: [
+          {
+            role: "aggregator",
+            status: "failure",
+            agentName: "review-adversarial",
+            driverId: "grok-stream-json",
+            failureCode: "DRIVER_DRIFT",
+          },
+        ],
+      },
+    };
+    expect(primaryRunStatus(drift).text).toBe("审查未完成（汇总中断）");
+    expect(reviewOverviewHeading(drift)).toBe("审查未完成（汇总中断）");
+  });
 });
 
 describe("cliRunNeedsPoll", () => {

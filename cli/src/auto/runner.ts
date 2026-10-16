@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { interruptionBudget, interruptionReason } from "@shared/runtime/interruption-copy";
 import { retryBlockedAfterGap } from "@shared/runtime/retry-stop";
 import { clipUtf16Tail } from "@shared/text/clip-utf16";
 import { redact } from "../redact";
@@ -42,6 +43,19 @@ const STDERR_CAP = 1 * 1024 * 1024;
  * unnecessary by ESRCH) — otherwise a fire-and-forget timer can be cancelled by
  * an earlier process.exit, leaving process-group descendants alive. */
 const KILL_GRACE_MS = 2000;
+const CRASH_SIGNALS = new Set<NodeJS.Signals>([
+  "SIGABRT",
+  "SIGBUS",
+  "SIGFPE",
+  "SIGILL",
+  "SIGSEGV",
+  "SIGSYS",
+  "SIGTRAP",
+]);
+
+function isCrashSignal(signal: NodeJS.Signals | null): boolean {
+  return signal !== null && CRASH_SIGNALS.has(signal);
+}
 
 /** A never-aborting signal for callers that don't pass one. */
 const NEVER_ABORTED = new AbortController().signal;
@@ -118,6 +132,10 @@ export interface SpawnInput {
   envOverlay?: NodeJS.ProcessEnv;
   /** Probe-only warm GROK_HOME (see AttemptSpec.warmGrokHome). */
   warmGrokHome?: boolean;
+  /** Streaming: interrupt after this long with no stdout. One-shot leaves it unset. */
+  silenceMs?: number;
+  /** One-shot: interrupt if the process is still unfinished after this long. */
+  unfinishedMs?: number;
 }
 
 export interface SpawnOutput {
@@ -127,6 +145,12 @@ export interface SpawnOutput {
   exitCode: number | null;
   timedOut: boolean;
   aborted: boolean;
+  /** Streaming silence (2 minutes with no output). */
+  idle?: boolean;
+  /** One-shot hard cap (10 minutes unfinished). */
+  unfinished?: boolean;
+  /** Process died on a crash signal. */
+  crashed?: boolean;
   /** Set when the child could not be spawned at all (e.g. executable vanished). */
   error?: string;
   /** Last complete final-event line captured during streaming (claude/kimi).
@@ -208,6 +232,10 @@ export interface RunnerOptions {
   frozenTools?: readonly ToolFingerprint[];
   /** Explicit operator-recorded replacement binaries for this run. */
   executionRevision?: ExecutionRevision | null;
+  /** Test override for the streaming silence budget. */
+  silenceMs?: number;
+  /** Test override for the one-shot unfinished budget. */
+  unfinishedMs?: number;
 }
 
 export interface RunAttemptsOutcome {
@@ -409,6 +437,8 @@ export async function spawnOnce(
     timers: opts.timers,
     frozenTools: opts.frozenTools,
     executionRevision: opts.executionRevision,
+    silenceMs: opts.silenceMs,
+    unfinishedMs: opts.unfinishedMs,
   });
 }
 
@@ -425,6 +455,8 @@ async function runOne(
     timers?: RunnerTimers;
     frozenTools?: readonly ToolFingerprint[];
     executionRevision?: ExecutionRevision | null;
+    silenceMs?: number;
+    unfinishedMs?: number;
   },
 ): Promise<AttemptResult> {
   const timers = opts.timers ?? defaultTimers;
@@ -474,6 +506,8 @@ async function runOneSpawn(
     timers?: RunnerTimers;
     frozenTools?: readonly ToolFingerprint[];
     executionRevision?: ExecutionRevision | null;
+    silenceMs?: number;
+    unfinishedMs?: number;
   },
   timers: RunnerTimers,
   started: number,
@@ -509,6 +543,9 @@ async function runOneSpawn(
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
       driverId: spec.driverId,
+      silenceMs: opts.silenceMs ?? interruptionBudget(spec.driverId).silenceMs ?? undefined,
+      unfinishedMs:
+        opts.unfinishedMs ?? interruptionBudget(spec.driverId).unfinishedMs ?? undefined,
       envOverlay: spec.envOverlay,
       warmGrokHome: spec.warmGrokHome,
       onActivity: (hint) => {
@@ -542,6 +579,24 @@ async function runOneSpawn(
   let failure: AttemptFailure | undefined;
   if (out.error !== undefined) {
     failure = { code: "SPAWN_ERROR", message: out.error, retryable: false };
+  } else if (out.idle) {
+    failure = {
+      code: "IDLE_TIMEOUT",
+      message: interruptionReason("IDLE_TIMEOUT"),
+      retryable: false,
+    };
+  } else if (out.unfinished) {
+    failure = {
+      code: "UNFINISHED",
+      message: interruptionReason("UNFINISHED"),
+      retryable: false,
+    };
+  } else if (out.crashed) {
+    failure = {
+      code: "PROCESS_CRASH",
+      message: interruptionReason("PROCESS_CRASH"),
+      retryable: false,
+    };
   } else if (out.timedOut) {
     failure = {
       code: "TIMEOUT",
@@ -597,7 +652,7 @@ async function runOneSpawn(
     output: extracted ?? "",
     // Normalize a timeout/abort kill to "killed" (P1-4): a child reaped with
     // exit 0 after SIGTERM must not display as a clean exit.
-    exitCode: out.timedOut || out.aborted ? "killed" : out.exitCode,
+    exitCode: out.timedOut || out.aborted || out.idle || out.unfinished ? "killed" : out.exitCode,
     durationMs,
     workspace: spec.cwd,
     failure,
@@ -683,7 +738,10 @@ export function defaultSpawn(
 ): Promise<SpawnOutput> {
   return new Promise((resolveOutput) => {
     let settled = false;
-    let killReason: "timeout" | "abort" | "stream" | null = null;
+    let killReason: "timeout" | "abort" | "stream" | "idle" | "deadline" | null = null;
+    let leaderSignal: NodeJS.Signals | null = null;
+    let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let killInitiated = false;
     let killPromise: Promise<void> = Promise.resolve();
     const stdoutColl = new CappedCollector(STDOUT_CAP, STDOUT_CAP / 2, STDOUT_CAP / 2);
@@ -746,6 +804,8 @@ export function defaultSpawn(
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(silenceTimer);
+      clearTimeout(deadlineTimer);
       clearTimeout(drainTimer);
       input.signal.removeEventListener("abort", onAbort);
       // Flush the activity collector's trailing line and attach the summary to
@@ -768,7 +828,13 @@ export function defaultSpawn(
       }
     };
 
-    const killGroup = (reason: "timeout" | "abort" | "stream"): void => {
+    const interruptFields = (): Pick<SpawnOutput, "idle" | "unfinished" | "crashed"> => ({
+      idle: killReason === "idle",
+      unfinished: killReason === "deadline",
+      crashed: isCrashSignal(leaderSignal) && killReason === null,
+    });
+
+    const killGroup = (reason: "timeout" | "abort" | "stream" | "idle" | "deadline"): void => {
       if (settled) return;
       // Re-entry guard: only the FIRST kill sequence runs. A second entry
       // (e.g. abort after timeout) must not replace or confuse the in-flight
@@ -822,6 +888,7 @@ export function defaultSpawn(
             exitCode: null,
             timedOut: reason === "timeout",
             aborted: reason === "abort",
+            ...interruptFields(),
           });
         }
       }
@@ -829,6 +896,15 @@ export function defaultSpawn(
 
     const onAbort = (): void => killGroup("abort");
     const timeoutTimer = setTimeout(() => killGroup("timeout"), input.timeoutMs);
+    const armSilence = (): void => {
+      if (input.silenceMs === undefined || input.silenceMs <= 0) return;
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => killGroup("idle"), input.silenceMs);
+    };
+    armSilence();
+    if (input.unfinishedMs !== undefined && input.unfinishedMs > 0) {
+      deadlineTimer = setTimeout(() => killGroup("deadline"), input.unfinishedMs);
+    }
     input.signal.addEventListener("abort", onAbort, { once: true });
 
     // A stream error (e.g. EPIPE when the child died before we finished writing
@@ -850,6 +926,7 @@ export function defaultSpawn(
         timedOut: killReason === "timeout",
         aborted: killReason === "abort",
         error: errMsg(error),
+        ...interruptFields(),
       });
     };
     child.stdout?.on("error", onStreamError);
@@ -859,6 +936,7 @@ export function defaultSpawn(
     // Drain BOTH pipes. stderr is collected (capped) but never left unread — an
     // unread pipe fills its kernel buffer and the child blocks on its next write.
     child.stdout?.on("data", (chunk: Buffer) => {
+      armSilence();
       stdoutColl.feed(chunk);
       lineColl?.feed(chunk);
       activityColl?.feed(chunk);
@@ -896,6 +974,7 @@ export function defaultSpawn(
         timedOut: false,
         aborted: false,
         error: errMsg(error),
+        ...interruptFields(),
       });
     });
 
@@ -959,13 +1038,15 @@ export function defaultSpawn(
         // (reviewer finding).
         timedOut: killReason === "timeout",
         aborted: killReason === "abort",
+        ...interruptFields(),
       });
     };
     let drainTimer: NodeJS.Timeout;
     // `exit` = leader process ended (kill stragglers so pipes can close, and
     // bound the drain); `close` = stdio drained (settle the result first).
-    child.on("exit", (code) => {
+    child.on("exit", (code, signal) => {
       leaderExitCode = code ?? null;
+      if (signal) leaderSignal = signal;
       cleanupGroupOnNaturalEnd();
       if (!settled) {
         drainTimer = setTimeout(settleAfterDrain, DRAIN_GRACE_MS);
@@ -986,6 +1067,7 @@ export function defaultSpawn(
         exitCode: code ?? null,
         timedOut: killReason === "timeout",
         aborted: killReason === "abort",
+        ...interruptFields(),
       });
     });
   });
