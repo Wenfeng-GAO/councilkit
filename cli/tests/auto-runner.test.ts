@@ -514,6 +514,70 @@ describe("cli auto runner — transient EXIT retry (fake spawn, step clock)", ()
     }
   });
 
+  it("classifies streaming silence, one-shot unfinished, and a crash as interruptions", async () => {
+    const idle = await spawnOnce(spec("idle"), {
+      spawnImpl: async () => ({
+        stdout: "",
+        exitCode: null,
+        timedOut: false,
+        aborted: false,
+        idle: true,
+      }),
+    });
+    expect(idle.failure).toMatchObject({
+      code: "IDLE_TIMEOUT",
+      message: "2 分钟没有输出",
+      retryable: false,
+    });
+    const unfinished = await spawnOnce(
+      { ...spec("slow"), driverId: "grok-stream-json" },
+      {
+        spawnImpl: async () => ({
+          stdout: "",
+          exitCode: null,
+          timedOut: false,
+          aborted: false,
+          unfinished: true,
+        }),
+      },
+    );
+    expect(unfinished.failure).toMatchObject({ code: "UNFINISHED", message: "10 分钟没有写完" });
+    const crashed = await spawnOnce(spec("crash"), {
+      spawnImpl: async () => ({
+        stdout: "",
+        exitCode: null,
+        timedOut: false,
+        aborted: false,
+        crashed: true,
+      }),
+    });
+    expect(crashed.failure).toMatchObject({
+      code: "PROCESS_CRASH",
+      message: "进程意外退出",
+      retryable: false,
+    });
+  });
+
+  it("interrupts a silent streaming process after the silence budget", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-runner-idle-"));
+    try {
+      const result = await spawnOnce(
+        {
+          ...spec("silent", dir),
+          executable: process.execPath,
+          argv: ["-e", "setInterval(() => {}, 1000)"],
+          prompt: "",
+          promptStdin: false,
+        },
+        { silenceMs: 200, timeoutMs: 5000 },
+      );
+      expect(result.failure?.code).toBe("IDLE_TIMEOUT");
+      expect(result.failure?.message).toBe("2 分钟没有输出");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does NOT retry when the EXIT failure takes exactly 120000ms (boundary)", async () => {
     const { spawn, calls } = exitFailSpawn();
     const { results } = await runAttempts([spec("0")], {

@@ -10,7 +10,7 @@ import {
   type WorkbenchIconProps,
   WrenchIcon,
 } from "./icons";
-import { SEAT_STATUS_TEXT, type WorkbenchAttempt, useWorkbenchSelection } from "./selection";
+import { type WorkbenchAttempt, seatStatusLabel, useWorkbenchSelection } from "./selection";
 
 /** 按 agentName/角色关键词匹配职责图标；匹配不到退回 CircleHelp。 */
 function seatRoleIcon(agentName: string): ComponentType<WorkbenchIconProps> {
@@ -46,7 +46,7 @@ function SeatRow({
           <StatusIcon
             className={`ck-wb-icon ck-wb-icon-state${attempt.status === "running" ? " ck-wb-running-icon" : ""}`}
           />
-          {SEAT_STATUS_TEXT[attempt.status]}
+          {seatStatusLabel(attempt)}
           {attempt.durationMs !== null ? (
             <span className="ck-wb-time">{formatAttemptMs(attempt.durationMs)}</span>
           ) : null}

@@ -65,6 +65,8 @@ export interface CliRunAttemptProgress {
   requestedModelId?: string | null;
   observedModelId?: string | null;
   result?: CliRunAttemptResult;
+  /** Stable interruption code when this seat or the aggregator was interrupted. */
+  failureCode?: string;
 }
 
 /** Mid-run overlay written on heartbeat / stream activity. */
@@ -199,12 +201,14 @@ export function liveStateFromRecords(
       durationMs: number;
       result: CliRunAttemptResult;
       willRetry: boolean;
+      failureCode?: string;
     }
   >();
   let aggregation: {
     status: "success" | "failure";
     durationMs: number;
     result: CliRunAttemptResult;
+    failureCode?: string;
   } | null = null;
   let runStatus: CliRunLiveState["status"] = "running";
   let sawFinished = false;
@@ -266,11 +270,13 @@ export function liveStateFromRecords(
       if (attemptId.length === 0 || status === null) continue;
       const durationMs = typeof row.durationMs === "number" ? row.durationMs : 0;
       const output = typeof row.output === "string" ? row.output : null;
+      const failureCode = failureCodeOf(row);
       finished.set(attemptId, {
         status,
         durationMs,
         result: summarizeSeatOutput(output),
         willRetry: row.willRetry === true,
+        ...(failureCode ? { failureCode } : {}),
       });
     } else if (kind === "review.resumed") {
       const rerun = Array.isArray(row.rerunAttemptIds) ? row.rerunAttemptIds : [];
@@ -284,10 +290,12 @@ export function liveStateFromRecords(
       const status = row.status === "success" || row.status === "failure" ? row.status : null;
       if (status === null) continue;
       const output = typeof row.output === "string" ? row.output : null;
+      const failureCode = failureCodeOf(row);
       aggregation = {
         status,
         durationMs: typeof row.durationMs === "number" ? row.durationMs : 0,
         result: summarizeSeatOutput(output),
+        ...(failureCode ? { failureCode } : {}),
       };
     } else if (kind === "review.finished") {
       sawFinished = true;
@@ -308,6 +316,7 @@ export function liveStateFromRecords(
       durationMs: followUpOpen ? null : (done?.durationMs ?? null),
       lastActivity: null,
       ...(done?.result && !followUpOpen ? { result: done.result } : {}),
+      ...(done?.failureCode && !followUpOpen ? { failureCode: done.failureCode } : {}),
     };
   });
   const attemptTerminal = attemptRows.every(
@@ -365,6 +374,7 @@ export function liveStateFromRecords(
     durationMs: aggregatorDuration,
     lastActivity: null,
     ...(aggregation?.result ? { result: aggregation.result } : {}),
+    ...(aggregation?.failureCode ? { failureCode: aggregation.failureCode } : {}),
   });
 
   if (!sawFinished) runStatus = "running";
@@ -383,7 +393,23 @@ export function mergeLiveProgress(
   fromTranscript: CliRunProgress | null,
 ): CliRunProgress | null {
   if (live === null) return fromTranscript;
-  if (live.attempts.length > 0) return live;
+  if (live.attempts.length > 0) {
+    if (fromTranscript === null) return live;
+    const codes = new Map(
+      fromTranscript.attempts.flatMap((row) =>
+        row.failureCode ? ([[row.attemptId, row.failureCode]] as const) : [],
+      ),
+    );
+    if (codes.size === 0) return live;
+    return {
+      ...live,
+      attempts: live.attempts.map((row) =>
+        row.failureCode || !codes.has(row.attemptId)
+          ? row
+          : { ...row, failureCode: codes.get(row.attemptId) },
+      ),
+    };
+  }
   if (fromTranscript && fromTranscript.attempts.length > 0) {
     return { ...live, attempts: fromTranscript.attempts };
   }
@@ -659,7 +685,18 @@ function parseAttempt(value: unknown): CliRunAttemptProgress | null {
     requestedModelId: optionalStamp(row.requestedModelId),
     observedModelId: optionalStamp(row.observedModelId),
     ...(result ? { result } : {}),
+    ...(typeof row.failureCode === "string" && row.failureCode.length > 0
+      ? { failureCode: row.failureCode.slice(0, 80) }
+      : {}),
   };
+}
+
+function failureCodeOf(row: Record<string, unknown>): string | undefined {
+  const failure = row.failure;
+  if (failure === null || typeof failure !== "object") return undefined;
+  const code = (failure as { code?: unknown }).code;
+  if (typeof code !== "string" || code.length === 0 || code.length > 80) return undefined;
+  return code;
 }
 
 function parseAttemptResult(value: unknown): CliRunAttemptResult | undefined {

@@ -43,6 +43,7 @@ export const COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--pr",
   "--profile",
   "--protocol",
+  "--reaggregate",
   "--reason",
   "--repair-package",
   "--repo",

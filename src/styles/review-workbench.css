@@ -402,6 +402,42 @@
   font-weight: 600;
   margin: 0 0 12px;
 }
+.ck-incomplete-tag {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ck-warn, #b45309);
+  color: var(--ck-warn, #b45309);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.ck-incomplete-banner {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--ck-controlBorder);
+  border-radius: 8px;
+  background: var(--ck-surface, transparent);
+}
+.ck-incomplete-banner p,
+.ck-incomplete-banner li {
+  margin: 0;
+  color: var(--ck-secondary);
+  font-size: 14px;
+  line-height: 22px;
+}
+.ck-incomplete-banner ul {
+  margin: 8px 0;
+  padding-left: 1.2em;
+}
+.ck-interrupt-hint {
+  margin: 0 0 16px;
+  color: var(--ck-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
 .ck-interrupt p {
   margin: 0;
   color: var(--ck-secondary);

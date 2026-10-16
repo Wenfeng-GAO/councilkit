@@ -289,6 +289,8 @@ export function ReviewWorkbench({
               onOpenRepair={() => select("repair")}
               onReReview={pipeline.onReReview}
               reReviewBusy={pipeline.busy || pipeline.pendingAction === "re-review"}
+              onReaggregate={pipeline.onReaggregate}
+              reaggregateBusy={pipeline.busy || pipeline.pendingAction === "re-aggregate"}
               againstState={againstState}
               filter={overviewFilter}
               onFilterChange={setOverviewFilter}

@@ -6,11 +6,12 @@ import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/sch
 
 export interface WorkbenchPipelineProps {
   busy: boolean;
-  pendingAction: "fix" | "re-review" | null;
+  pendingAction: "fix" | "re-review" | "re-aggregate" | null;
   error: string | null;
   followUpRun: Pick<CliRunSummaryDto, "runId" | "status"> | null;
   onFix: () => void;
   onReReview: () => void;
+  onReaggregate: () => void;
 }
 
 export interface WorkbenchRepairProps {

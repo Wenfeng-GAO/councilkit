@@ -1,3 +1,8 @@
+import {
+  interruptionReason,
+  isInterruptionCode,
+  toolDisplayName,
+} from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { createStore, useStore } from "zustand";
 
@@ -16,6 +21,18 @@ export const SEAT_STATUS_TEXT: Record<WorkbenchAttempt["status"], string> = {
   failure: "执行失败",
   cancelled: "已取消",
 };
+
+/** Interrupted seats show the Chinese reason, never 「执行失败」. */
+export function seatStatusLabel(attempt: {
+  status: WorkbenchAttempt["status"];
+  driverId: string;
+  failureCode?: string;
+}): string {
+  if (isInterruptionCode(attempt.failureCode)) {
+    return interruptionReason(attempt.failureCode, toolDisplayName(attempt.driverId));
+  }
+  return SEAT_STATUS_TEXT[attempt.status];
+}
 
 /**
  * 工作台唯一选择器（WORKSPACE-STATES §1）。

@@ -31,7 +31,7 @@
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,7 +75,11 @@ import { createScopeManager } from "../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../runtime-host/scopes/session-reconciler";
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
-import { seedLostExecutionFixtures, seedReportCaseFixtures } from "./cli-run-fixtures";
+import {
+  seedLostExecutionFixtures,
+  seedReportCaseFixtures,
+  seedReviewInterruptionFixtures,
+} from "./cli-run-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
 // host must serve the built dist/ exactly like the shipped Host does.
@@ -126,6 +130,7 @@ if (process.env.COUNCILKIT_E2E === "1") {
   }, 60_000);
   keepFixtureFresh.unref();
   seedLostExecutionFixtures(home);
+  seedReviewInterruptionFixtures(home);
   writeFileSync(
     join(home, "agents.json"),
     JSON.stringify({
@@ -848,6 +853,117 @@ async function main(): Promise<void> {
         }
         const runDir = join(home, "runs", input.runId);
         mkdirSync(runDir, { recursive: true });
+        if (input.action === "re-aggregate") {
+          return new Promise<{ pid: number }>((resolve) => {
+            setTimeout(() => {
+              writeFileSync(
+                join(runDir, "report.md"),
+                [
+                  "# Autonomous Review Report",
+                  "",
+                  "---",
+                  "",
+                  "## 概览",
+                  "",
+                  "综合结论：两路已完成的审查都指出支付回调可以合入，没有新的阻塞项。",
+                  "",
+                  "## 结论",
+                  "",
+                  "approve",
+                  "",
+                ].join("\n"),
+              );
+              writeFileSync(
+                join(runDir, "status.json"),
+                `${JSON.stringify({
+                  version: 1,
+                  status: "completed",
+                  progress: {
+                    phase: "done",
+                    updatedAt: new Date().toISOString(),
+                    attempts: [
+                      {
+                        attemptId: "attempt-security",
+                        agentName: "review-security",
+                        driverId: "claude-stream-json",
+                        modelId: "claude",
+                        role: "attempt",
+                        status: "success",
+                        durationMs: 40000,
+                        lastActivity: null,
+                      },
+                      {
+                        attemptId: "attempt-correctness",
+                        agentName: "review-correctness",
+                        driverId: "grok-stream-json",
+                        modelId: "grok-4.6",
+                        role: "attempt",
+                        status: "success",
+                        durationMs: 45000,
+                        lastActivity: null,
+                      },
+                      {
+                        attemptId: "aggregator",
+                        agentName: "review-adversarial",
+                        driverId: "grok-stream-json",
+                        modelId: "grok-4.6",
+                        role: "aggregator",
+                        status: "success",
+                        durationMs: 8000,
+                        lastActivity: null,
+                      },
+                    ],
+                  },
+                  pipeline: null,
+                })}\n`,
+              );
+              appendFileSync(
+                join(runDir, "transcript.jsonl"),
+                `${[
+                  JSON.stringify({
+                    kind: "aggregation.finished",
+                    version: 1,
+                    attemptId: "aggregator",
+                    agentName: "review-adversarial",
+                    driverId: "grok-stream-json",
+                    status: "success",
+                    output: "综合结论：两路已完成的审查都指出支付回调可以合入，没有新的阻塞项。",
+                    exitCode: 0,
+                    durationMs: 8000,
+                  }),
+                  JSON.stringify({
+                    kind: "review.finished",
+                    version: 1,
+                    status: "completed",
+                    endedAt: new Date().toISOString(),
+                    incomplete: false,
+                  }),
+                ].join("\n")}\n`,
+              );
+              writeFileSync(
+                join(runDir, "execution-revision.v1.json"),
+                `${JSON.stringify({
+                  version: 1,
+                  kind: "councilkit-execution-revision",
+                  runId: input.runId,
+                  reason: "reaggregate",
+                  recordedAt: new Date().toISOString(),
+                  acceptedTools: [],
+                  replacedTools: [
+                    {
+                      name: "grok-stream-json",
+                      previousSha256: "a".repeat(64),
+                      nextSha256: "b".repeat(64),
+                      previousRealpath: "/old/grok",
+                      nextRealpath: "/new/grok",
+                    },
+                  ],
+                })}\n`,
+              );
+              resolve({ pid: process.pid });
+            }, 8000);
+          });
+        }
         const ideate = input.action === "ideate";
         writeFileSync(
           join(runDir, "transcript.jsonl"),

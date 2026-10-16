@@ -1,4 +1,5 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import { AggregationInterruptedCard } from "@/components/report/AggregationInterruptedCard";
 import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { FindingLedger } from "@/components/report/FindingLedger";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
@@ -11,9 +12,15 @@ import {
 } from "@/lib/finding-list";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
-import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
+import {
+  BLOCKING_ZERO_INCOMPLETE,
+  INCOMPLETE_CONCLUSION_LABEL,
+  isLostExecutionReview,
+  reviewInterruptionOf,
+  seatCountLabel,
+} from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
@@ -35,6 +42,8 @@ export function OverviewView({
   onOpenRepair,
   onReReview,
   reReviewBusy = false,
+  onReaggregate,
+  reaggregateBusy = false,
   againstState = { status: "none" },
   filter,
   onFilterChange,
@@ -45,6 +54,8 @@ export function OverviewView({
   onOpenRepair: () => void;
   onReReview?: () => void;
   reReviewBusy?: boolean;
+  onReaggregate?: () => void;
+  reaggregateBusy?: boolean;
   againstState?: AgainstLedgerState;
   filter?: FindingListFilter;
   onFilterChange?: (filter: FindingListFilter) => void;
@@ -71,9 +82,27 @@ export function OverviewView({
     blockingCount > 0 &&
     (parsed?.verdict === "approve" || parsed?.verdict === "comment");
   const lost = isLostExecutionReview(run);
+  const currentInterruption = reviewInterruptionOf(run);
+  const heldAggregation = useRef<Extract<
+    NonNullable<ReturnType<typeof reviewInterruptionOf>>,
+    { kind: "aggregation" }
+  > | null>(null);
+  if (currentInterruption?.kind === "aggregation") {
+    heldAggregation.current = currentInterruption;
+  }
+  // A re-aggregate flips the run to "running" before the button feedback can be
+  // read. Keep the card (and its busy label) until that run leaves "running".
+  const interruption =
+    currentInterruption ??
+    (reaggregateBusy && run.status === "running" ? heldAggregation.current : null);
   const heading = decisionConflict ? "审查结论待核对" : reviewOverviewHeading(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
+  const successSeats = seats.filter((row) => row.status === "success").length;
   const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
+  const seatLabel =
+    interruption && seats.length > 0
+      ? seatCountLabel(successSeats, seats.length)
+      : `${doneSeats}/${seats.length} 席位已完成`;
   const partial = seats.length > 0 && doneSeats < seats.length;
   const aggregator = run.progress?.attempts.find((row) => row.role === "aggregator") ?? null;
   const aggregatorLive =
@@ -95,15 +124,39 @@ export function OverviewView({
           onReReview={() => onReReview?.()}
         />
       ) : (
-        <h1>{heading}</h1>
+        <h1>
+          {heading}
+          {currentInterruption ? (
+            <span className="ck-incomplete-tag">{INCOMPLETE_CONCLUSION_LABEL}</span>
+          ) : null}
+        </h1>
       )}
+      {interruption?.kind === "aggregation" ? (
+        <AggregationInterruptedCard
+          tool={interruption.tool}
+          completedSeats={interruption.completedSeats}
+          code={interruption.code}
+          busy={reaggregateBusy}
+          onReaggregate={() => onReaggregate?.()}
+        />
+      ) : null}
+      {interruption && blockingCount === 0 && !parsed?.verdict ? (
+        <p className="ck-wb-source">{BLOCKING_ZERO_INCOMPLETE}</p>
+      ) : null}
+      {interruption?.kind === "seats" ? (
+        <section className="ck-incomplete-banner" aria-label={INCOMPLETE_CONCLUSION_LABEL}>
+          <p>{interruption.banner}</p>
+          <ul>
+            {interruption.interrupted.map((row) => (
+              <li key={row.line}>{row.line}</li>
+            ))}
+          </ul>
+          <p>{interruption.closing}</p>
+        </section>
+      ) : null}
       <p className="ck-wb-report-meta">
         {run.status === "completed" ? <span>审查执行已完成</span> : null}
-        {seats.length > 0 && !lost ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
-        ) : null}
+        {seats.length > 0 && !lost ? <span>{seatLabel}</span> : null}
         {run.truncated ? <span>报告超过 2MB，已截断显示</span> : null}
       </p>
       {parsed?.verdict ? (
@@ -118,9 +171,11 @@ export function OverviewView({
               <a className="ck-finding-list-link" href="#ck-ledger">
                 {blockingCount > 0
                   ? `${blockingCount} 个阻塞问题，待处理`
-                  : ledgerComplete
-                    ? "账本无阻塞"
-                    : "账本证据不完整，尚无法判断阻塞"}
+                  : interruption
+                    ? BLOCKING_ZERO_INCOMPLETE
+                    : ledgerComplete
+                      ? "账本无阻塞"
+                      : "账本证据不完整，尚无法判断阻塞"}
               </a>
             ) : (
               "账本未生成，尚无法判断阻塞"
@@ -136,7 +191,7 @@ export function OverviewView({
           ) : null}
         </section>
       ) : null}
-      {partial ? (
+      {partial && !interruption ? (
         <p className="ck-wb-source">结果尚不完整 · 缺席或失败的席位不代表没有意见</p>
       ) : null}
       {hasRepair ? (
@@ -147,7 +202,7 @@ export function OverviewView({
           </button>
         </p>
       ) : null}
-      {overviewBody ? (
+      {overviewBody && interruption?.kind !== "aggregation" ? (
         <section className="ck-wb-overview-brief" aria-label="审查概览">
           <h2>概览</h2>
           <SafeMarkdown className="text-sm" variant="document" content={overviewBody} />

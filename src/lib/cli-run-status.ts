@@ -2,6 +2,7 @@ import type { CliRunProgressPhase } from "@shared/runtime/cli-run-phases";
 import {
   EXECUTION_SERVICE_INTERRUPTION,
   isLostExecutionReview,
+  reviewInterruptionOf,
 } from "@shared/runtime/interruption-copy";
 import type { CliRunStatusDto, CliRunSummaryDto } from "@shared/runtime/schemas";
 
@@ -84,7 +85,16 @@ export function reviewOverviewHeading(run: {
   kind: CliRunSummaryDto["kind"];
   status: CliRunStatusDto;
   endedAt?: string | null;
-  progress?: { phase: keyof typeof PHASE_LABEL } | null;
+  progress?: {
+    phase: keyof typeof PHASE_LABEL;
+    attempts?: ReadonlyArray<{
+      role: string;
+      status: string;
+      agentName: string;
+      driverId: string;
+      failureCode?: string;
+    }>;
+  } | null;
   pipeline?: {
     phase: string;
     applyStatus?: string | null;
@@ -94,6 +104,8 @@ export function reviewOverviewHeading(run: {
   ideateIntegrity?: { incomplete: boolean } | null;
 }): string {
   if (isLostExecutionReview(run)) return EXECUTION_SERVICE_INTERRUPTION.title;
+  const interruption = reviewInterruptionOf(run);
+  if (interruption) return interruption.heading;
   const status = primaryRunStatus(run);
   if (run.kind === "review" && run.status === "completed" && status.text === "已完成") {
     return "审查已完成";
@@ -104,7 +116,16 @@ export function reviewOverviewHeading(run: {
 export function primaryRunStatus(run: {
   kind: CliRunSummaryDto["kind"];
   status: CliRunStatusDto;
-  progress?: { phase: keyof typeof PHASE_LABEL } | null;
+  progress?: {
+    phase: keyof typeof PHASE_LABEL;
+    attempts?: ReadonlyArray<{
+      role: string;
+      status: string;
+      agentName: string;
+      driverId: string;
+      failureCode?: string;
+    }>;
+  } | null;
   pipeline?: {
     phase: string;
     applyStatus?: string | null;
@@ -113,6 +134,7 @@ export function primaryRunStatus(run: {
   } | null;
   ideateIntegrity?: { incomplete: boolean } | null;
   businessResult?: "approved" | "needs_attention" | "stopped" | null;
+  endedAt?: string | null;
 }): { tone: "muted" | "info" | "success" | "error" | "warn"; text: string } {
   if (run.pipeline?.applyStatus === "failure") {
     const reReviewFailed =
@@ -137,6 +159,8 @@ export function primaryRunStatus(run: {
     }
     return { tone: "info", text: "进行中" };
   }
+  const interruption = reviewInterruptionOf(run);
+  if (interruption) return { tone: "warn", text: interruption.heading };
   if (run.kind === "ideate" && run.ideateIntegrity?.incomplete && run.status === "completed") {
     return { tone: "warn", text: "降级" };
   }

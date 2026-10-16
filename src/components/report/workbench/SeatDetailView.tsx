@@ -5,7 +5,12 @@ import { reviewSeatTitle } from "@/lib/seat-label";
 import { WorkbenchProcessView } from "./WorkbenchProcessView";
 import { CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 import { seatReportView } from "./seatDetailModel";
-import { SEAT_STATUS_TEXT, type SeatViewTab, type WorkbenchAttempt } from "./selection";
+import {
+  SEAT_STATUS_TEXT,
+  type SeatViewTab,
+  type WorkbenchAttempt,
+  seatStatusLabel,
+} from "./selection";
 import { useAttemptResult } from "./useAttemptResult";
 import { useWorkbenchProcess } from "./useWorkbenchProcess";
 
@@ -39,11 +44,7 @@ export function SeatDetailView({
 
   const StatusIcon = STATUS_ICONS[attempt.status] ?? CircleHelpIcon;
   const statusText =
-    view.kind === "failure"
-      ? SEAT_STATUS_TEXT.failure
-      : view.kind === "cancelled"
-        ? SEAT_STATUS_TEXT.cancelled
-        : (SEAT_STATUS_TEXT[attempt.status] ?? "状态未知");
+    view.kind === "cancelled" ? SEAT_STATUS_TEXT.cancelled : seatStatusLabel(attempt);
   const model = attempt.observedModelId ?? attempt.requestedModelId ?? attempt.modelId;
 
   return (
@@ -69,6 +70,7 @@ export function SeatDetailView({
           <SeatReportBody
             view={view}
             activity={attempt.lastActivity}
+            failureLabel={statusText}
             onViewProcess={() => onTabChange("process")}
             onRefetch={refetch}
           />
@@ -89,11 +91,13 @@ export function SeatDetailView({
 function SeatReportBody({
   view,
   activity,
+  failureLabel,
   onViewProcess,
   onRefetch,
 }: {
   view: ReturnType<typeof seatReportView>;
   activity: string | null | undefined;
+  failureLabel: string;
   onViewProcess: () => void;
   onRefetch: () => void;
 }) {
@@ -148,7 +152,7 @@ function SeatReportBody({
     case "failure":
       return (
         <div className="ck-wb-process-head ck-wb-fail-block">
-          <p className="ck-wb-fail-text">执行失败</p>
+          <p className="ck-wb-fail-text">{failureLabel}</p>
           <p>已记录原因：{view.message}</p>
           <p>
             过程里的结论文本不构成审查结论。可

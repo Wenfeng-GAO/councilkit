@@ -551,7 +551,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             }),
           );
         }
-        const body = ctx.body as { action: "fix" | "re-review" };
+        const body = ctx.body as { action: "fix" | "re-review" | "re-aggregate" };
         const home = resolveCouncilkitHome(process.env);
         const runDir = join(home, "runs", runId);
         const pidPath = join(runDir, PIPELINE_PID_FILE);
@@ -1255,8 +1255,34 @@ function resolveBridgeProbe(
   return probeSquadBridge;
 }
 
-function writeStartingStatus(runDir: string, action: "fix" | "re-review"): void {
+function writeStartingStatus(runDir: string, action: "fix" | "re-review" | "re-aggregate"): void {
   const now = new Date().toISOString();
+  if (action === "re-aggregate") {
+    let attempts: unknown[] = [];
+    try {
+      const prev = JSON.parse(readFileSync(join(runDir, CLI_RUN_STATUS_FILE), "utf8")) as {
+        progress?: { attempts?: unknown[] };
+      };
+      if (Array.isArray(prev.progress?.attempts)) attempts = prev.progress.attempts;
+    } catch {
+      attempts = [];
+    }
+    const live = {
+      version: 1 as const,
+      status: "running" as const,
+      progress: { phase: "aggregating" as const, attempts, updatedAt: now },
+      pipeline: null,
+    };
+    try {
+      writeFileSync(join(runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(live)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    } catch {
+      // CLI writes status.json as soon as it boots
+    }
+    return;
+  }
   const phase = action === "re-review" ? "re-reviewing" : "planning";
   const live = {
     version: 1 as const,

@@ -3300,6 +3300,236 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       expect(log.modelId).toMatch(/^model-[12]$/);
     }
   });
+
+  it("interrupts aggregation on grok drift, then reaggregates without rerunning seats", async () => {
+    const bin = join(home, "bin", "grok");
+    writeFileSync(bin, "#!/bin/sh\necho v1\n");
+    chmodSync(bin, 0o755);
+    const original = createHash("sha256").update(readFileSync(bin)).digest("hex");
+    const ds = { driverId: "grok-stream-json" as const, options: {} };
+    const store = new Store();
+    store.createAgent({
+      name: "S",
+      personaPrompt: "p",
+      modelId: "grok-4.6",
+      color: "#112233",
+      driverSelection: ds,
+    });
+    store.createAgent({
+      name: "C",
+      personaPrompt: "p",
+      modelId: "grok-4.6",
+      color: "#223344",
+      driverSelection: ds,
+    });
+    const runId = "ck-review-00000000-0000-4000-8000-000000000352";
+    let seatSpawns = 0;
+    const first = makeSink();
+    first.json = true;
+    let exitCode = 0;
+    try {
+      await runReview(
+        [
+          "--task",
+          "look at payments",
+          "--no-require-spec",
+          "--agents",
+          '["S","C"]',
+          "--aggregator",
+          "S",
+          "--concurrency",
+          "1",
+          "--run-id",
+          runId,
+          "--json",
+        ],
+        first,
+        {
+          spawnImpl: async (input) => {
+            if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("OK");
+            if (input.prompt.includes("对比汇总")) {
+              return claudeEnvelope("## 概览\n\n不应出现的综合结论\n");
+            }
+            seatSpawns += 1;
+            if (seatSpawns === 2) writeFileSync(bin, "#!/bin/sh\necho v2\n");
+            return claudeEnvelope("席位结论");
+          },
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewExit)) throw error;
+      exitCode = error.exitCode;
+    }
+    expect(exitCode).toBe(4);
+    expect(seatSpawns).toBe(2);
+    const outcome = first.finished as {
+      status: string;
+      failure?: { code?: string; message?: string };
+    };
+    expect(outcome.status).toBe("interrupted");
+    expect(outcome.failure?.code).toBe("DRIVER_DRIFT");
+    expect(outcome.failure?.message).toContain("executable drift");
+    const report = readFileSync(resolvePaths().report(runId), "utf8");
+    expect(report).not.toContain("executable drift");
+    expect(report).toContain("grok 可执行文件在运行中被更新");
+    expect(report).not.toContain("不应出现的综合结论");
+
+    const again = makeSink();
+    let reseat = 0;
+    let reaggregate = 0;
+    exitCode = 1;
+    try {
+      await runReview(["--reaggregate", runId, "--json"], again, {
+        spawnImpl: async (input) => {
+          if (input.prompt === DRIVER_PROBE_PROMPT) return claudeEnvelope("OK");
+          if (input.prompt.includes("对比汇总")) {
+            reaggregate += 1;
+            return claudeEnvelope("## 概览\n\n综合结论已经补上。\n\n## 结论\n\napprove\n");
+          }
+          reseat += 1;
+          return claudeEnvelope("不应重跑席位");
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof ReviewExit)) throw error;
+      exitCode = error.exitCode;
+    }
+    expect(exitCode).toBe(0);
+    expect(reseat).toBe(0);
+    expect(reaggregate).toBe(1);
+    const revision = JSON.parse(
+      readFileSync(join(home, "runs", runId, "execution-revision.v1.json"), "utf8"),
+    ) as {
+      replacedTools: Array<{ previousSha256: string; nextSha256: string }>;
+    };
+    expect(revision.replacedTools[0]?.previousSha256).toBe(original);
+    expect(revision.replacedTools[0]?.nextSha256).not.toBe(original);
+    expect(revision.replacedTools[0]?.nextSha256).toBe(
+      createHash("sha256").update(readFileSync(bin)).digest("hex"),
+    );
+    const synthesized = readFileSync(resolvePaths().report(runId), "utf8");
+    expect(synthesized).toContain("综合结论已经补上。");
+    expect(synthesized).not.toContain("executable drift");
+    expect((again.finished as { status: string }).status).toBe("completed");
+  });
+
+  it("aggregates the seats that finished, and skips aggregation when every seat is interrupted", async () => {
+    const ds = {
+      driverId: "claude-stream-json" as const,
+      options: { route: "cfuse" as const },
+    };
+    const store = new Store();
+    for (const name of ["Alice", "Bob", "Carol", "Dave"]) {
+      store.createAgent({
+        name,
+        personaPrompt: "p",
+        modelId: "m",
+        color: "#112233",
+        driverSelection: ds,
+      });
+    }
+    const partial = makeSink();
+    partial.json = true;
+    let exitCode = 0;
+    let aggregated = 0;
+    try {
+      await runReview(
+        [
+          "--task",
+          "look at payments",
+          "--no-require-spec",
+          "--agents",
+          '["Alice","Bob"]',
+          "--aggregator",
+          "Bob",
+          "--run-id",
+          "ck-review-00000000-0000-4000-8000-000000000361",
+          "--json",
+        ],
+        partial,
+        {
+          spawnImpl: async (input) => {
+            const kind = classify(input);
+            if (kind === "probe") return claudeEnvelope("OK");
+            if (kind === "aggregation") {
+              aggregated += 1;
+              return claudeEnvelope("## 概览\n\n综合结论只覆盖了写完的一路。\n");
+            }
+            if (kind === "attempt:Alice") return { ...claudeEnvelope(""), idle: true };
+            return claudeEnvelope("Bob 写完了。");
+          },
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewExit)) throw error;
+      exitCode = error.exitCode;
+    }
+    expect(exitCode).toBe(0);
+    expect(aggregated).toBe(1);
+    expect((partial.finished as { status: string; failure?: { code?: string } }).status).toBe(
+      "interrupted",
+    );
+    expect((partial.finished as { failure?: { code?: string } }).failure?.code).toBe(
+      "SEATS_INTERRUPTED",
+    );
+    const partialReport = readFileSync(
+      resolvePaths().report("ck-review-00000000-0000-4000-8000-000000000361"),
+      "utf8",
+    );
+    expect(partialReport).toContain("结论不完整：1 路审查没有完成");
+    expect(partialReport).toContain("综合结论只覆盖了写完的一路。");
+
+    const skipped = makeSink();
+    skipped.json = true;
+    exitCode = 0;
+    let skippedAggregation = 0;
+    try {
+      await runReview(
+        [
+          "--task",
+          "look at payments",
+          "--no-require-spec",
+          "--agents",
+          '["Carol","Dave"]',
+          "--aggregator",
+          "Dave",
+          "--run-id",
+          "ck-review-00000000-0000-4000-8000-000000000362",
+          "--json",
+        ],
+        skipped,
+        {
+          spawnImpl: async (input) => {
+            const kind = classify(input);
+            if (kind === "probe") return claudeEnvelope("OK");
+            if (kind === "aggregation") {
+              skippedAggregation += 1;
+              return claudeEnvelope("## 概览\n\n不应汇总。\n");
+            }
+            if (kind === "attempt:Carol") return { ...claudeEnvelope(""), idle: true };
+            return { ...claudeEnvelope(""), crashed: true, exitCode: null };
+          },
+        },
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewExit)) throw error;
+      exitCode = error.exitCode;
+    }
+    expect(exitCode).toBe(4);
+    expect(skippedAggregation).toBe(0);
+    expect((skipped.finished as { status: string; failure?: { code?: string } }).status).toBe(
+      "interrupted",
+    );
+    expect((skipped.finished as { failure?: { code?: string } }).failure?.code).toBe(
+      "ALL_INTERRUPTED",
+    );
+    const skippedReport = readFileSync(
+      resolvePaths().report("ck-review-00000000-0000-4000-8000-000000000362"),
+      "utf8",
+    );
+    expect(skippedReport).toContain("结论不完整：2 路审查没有完成");
+    expect(skippedReport).not.toContain("不应汇总。");
+  });
 });
 
 function sha256Of(text: string): string {

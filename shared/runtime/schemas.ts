@@ -571,6 +571,8 @@ export const cliRunAttemptProgressSchema = z
     requestedModelId: z.string().max(200).nullable().optional(),
     observedModelId: z.string().max(200).nullable().optional(),
     result: cliRunAttemptResultSchema.optional(),
+    /** Stable interruption code (IDLE_TIMEOUT, UNFINISHED, PROCESS_CRASH, DRIVER_DRIFT). */
+    failureCode: z.string().min(1).max(80).optional(),
   })
   .strict();
 
@@ -704,14 +706,14 @@ export type CliRunDetailResponse = z.infer<typeof cliRunDetailResponseSchema>;
 
 export const cliRunActionRequestSchema = z
   .object({
-    action: z.enum(["fix", "re-review"]),
+    action: z.enum(["fix", "re-review", "re-aggregate"]),
   })
   .strict();
 export type CliRunActionRequest = z.infer<typeof cliRunActionRequestSchema>;
 
 export const cliRunActionResponseSchema = z
   .object({
-    action: z.enum(["fix", "re-review"]),
+    action: z.enum(["fix", "re-review", "re-aggregate"]),
     runId: z.string().min(1),
     started: z.literal(true),
   })

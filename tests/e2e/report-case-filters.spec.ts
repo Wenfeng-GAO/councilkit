@@ -28,7 +28,7 @@ async function openList(page: Page): Promise<void> {
   await page.goto("/reports");
   await expect(page.getByRole("heading", { name: "审查与报告" })).toBeVisible();
   // 等列表数据落地，避免与 refetch 竞态。
-  await expect(page.getByRole("button", { name: /全部案件/ })).toHaveText(/^全部案件\s*10$/);
+  await expect(page.getByRole("button", { name: /全部案件/ })).toHaveText(/^全部案件\s*12$/);
 }
 
 async function clickStatus(page: Page, name: RegExp): Promise<void> {
@@ -64,7 +64,7 @@ async function badge(page: Page, name: RegExp): Promise<number> {
 
 test("attention 视图以最新代表 run 判定：旧失败不污染新完成", async ({ page }) => {
   await openList(page);
-  await expect(cards(page)).toHaveCount(7);
+  await expect(cards(page)).toHaveCount(9);
   await expect(cardOf(page, "PR #912")).toBeVisible();
   await expect(cardOf(page, "PR #913")).toBeVisible();
   await expect(cardOf(page, "PR #914")).toBeVisible();
@@ -115,7 +115,7 @@ test("审查类型下混合案件呈现审查记录，不出现工程班状态",
   await openList(page);
   await clickStatus(page, /^全部案件/);
   await clickKind(page, "review");
-  await expect(cards(page)).toHaveCount(5);
+  await expect(cards(page)).toHaveCount(7);
   const mixed = cardOf(page, "e2e-case/pr916 #916");
   await expect(mixed).toContainText("已完成");
   await expect(mixed).toContainText("审查");
@@ -126,9 +126,9 @@ test("类型筛选下的状态计数基于该类型范围", async ({ page }) => 
   await openList(page);
   await clickStatus(page, /^全部案件/);
   await clickKind(page, "review");
-  await expect(await badge(page, /^需要处理/)).toBe(2);
+  await expect(await badge(page, /^需要处理/)).toBe(4);
   await expect(await badge(page, /^已完成/)).toBe(3);
-  await expect(await badge(page, /^全部案件/)).toBe(5);
+  await expect(await badge(page, /^全部案件/)).toBe(7);
 });
 
 test("状态筛选下的类型计数与点选后的可见卡片一致", async ({ page }) => {
@@ -178,16 +178,16 @@ test("搜索不会把创意/讨论案件注入审查清单", async ({ page }) =>
 test("列表标题显示可见/总数据口径", async ({ page }) => {
   await openList(page);
   await clickKind(page, "squad");
-  await expect(page.getByRole("heading", { name: "案件" })).toContainText(/ \/ 10$/);
+  await expect(page.getByRole("heading", { name: "案件" })).toContainText(/ \/ 12$/);
   await expect(await badge(page, /^需要处理/)).toBe(5);
   await expect(cards(page)).toHaveCount(5);
-  await expect(page.getByRole("heading", { name: "案件" })).toContainText("5 / 10");
+  await expect(page.getByRole("heading", { name: "案件" })).toContainText("5 / 12");
 });
 
 test("归档 run 不出现在清单，但直接详情可读", async ({ page }) => {
   await openList(page);
   await clickStatus(page, /^全部案件/);
-  await expect(cards(page)).toHaveCount(10);
+  await expect(cards(page)).toHaveCount(12);
   await expect(cards(page).filter({ hasText: "e2e-case/pr999" })).toHaveCount(0);
   await page.goto(`/reports/${ARCHIVED_RUN_ID}`);
   await page.getByRole("region", { name: "原始汇总报告" }).locator("summary").click();

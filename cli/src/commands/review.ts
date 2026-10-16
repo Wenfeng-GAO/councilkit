@@ -14,6 +14,12 @@ import {
 } from "@shared/runtime/cli-run-progress";
 import { readCliRun } from "@shared/runtime/cli-runs-index";
 import { replacePrivateFile } from "@shared/runtime/durable-write";
+import {
+  incompleteBanner,
+  interruptionReason,
+  isInterruptionCode,
+  toolDisplayName,
+} from "@shared/runtime/interruption-copy";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import { skipListForPr } from "@shared/runtime/review-explainer/pr-decisions";
 import {
@@ -81,12 +87,14 @@ import {
   agentsFromFrozenManifest,
   assertManifestMatchesStarted,
   buildInvocationManifest,
+  fingerprintExecutable,
   fingerprintsFromSpecs,
   formatResumeCommand,
   matchExecutionRevision,
   readExecutionRevision,
   readInvocationManifest,
   resumeArgvFromManifest,
+  writeExecutionRevision,
   writeInvocationManifest,
 } from "../auto/invocation-manifest";
 import {
@@ -235,6 +243,7 @@ export const REVIEW_FLAGS = {
   concurrency: { type: "string" },
   out: { type: "string" },
   resume: { type: "string" },
+  reaggregate: { type: "string" },
   "run-id": { type: "string" },
   repo: { type: "string" },
   against: { type: "string" },
@@ -261,6 +270,7 @@ const REVIEW_FLAG_DESCRIPTIONS: Record<keyof typeof REVIEW_FLAGS, string> = {
   concurrency: "<n> Max seats running at once (default 10).",
   out: "<file> Also write a copy of report.md here.",
   resume: "<run-id> Re-run failed seats; reuse successful ones.",
+  reaggregate: "<run-id> Re-run only the aggregator with the current binary.",
   "run-id": "<ck-review-uuid> Use this run id (not with --resume).",
   repo: "<path> Local clone of the PR repo (remembered).",
   against: "<run-id> Incremental review vs that run's findings.json.",
@@ -305,7 +315,7 @@ export async function runReview(
   if (hasPr && hasTask) {
     throw errors.usage("--pr and --task are mutually exclusive");
   }
-  if (!hasPr && !hasTask) {
+  if (!hasPr && !hasTask && values.reaggregate === undefined) {
     throw errors.usage("one of a PR URL, --pr, or --task is required");
   }
   if (hasPr && prRaw.trim().length === 0) {
@@ -340,7 +350,16 @@ export async function runReview(
     explicitSpecFlag !== undefined ? explicitSpecFlag.trim() || undefined : undefined;
 
   const assignedRunIdRaw = values["run-id"] as string | undefined;
-  const resumeRaw = values.resume as string | undefined;
+  const reaggregateRaw = values.reaggregate as string | undefined;
+  let resumeRaw = values.resume as string | undefined;
+  const aggregateOnly = reaggregateRaw !== undefined;
+  if (aggregateOnly && resumeRaw !== undefined) {
+    throw errors.usage("--reaggregate and --resume are mutually exclusive");
+  }
+  if (aggregateOnly && assignedRunIdRaw !== undefined) {
+    throw errors.usage("--reaggregate and --run-id are mutually exclusive");
+  }
+  if (aggregateOnly) resumeRaw = reaggregateRaw;
   if (assignedRunIdRaw !== undefined && resumeRaw !== undefined) {
     throw errors.usage("--run-id and --resume are mutually exclusive");
   }
@@ -592,10 +611,10 @@ export async function runReview(
   requestedSpecSource = task.specSource;
   // Keep requireSpec on the task (resume may have overlaid it from the manifest).
   if (resumeRaw && frozenManifest) {
-    if (frozenManifest.requireSpec === false && requireSpec !== false) {
+    if (!aggregateOnly && frozenManifest.requireSpec === false && requireSpec !== false) {
       throw errors.usage("--require-spec must match the resumed run (was --no-require-spec)");
     }
-    if (frozenManifest.requireSpec !== false && requireSpec === false) {
+    if (!aggregateOnly && frozenManifest.requireSpec !== false && requireSpec === false) {
       throw errors.usage("--no-require-spec must match the resumed run (was require-spec)");
     }
     task.requireSpec = frozenManifest.requireSpec !== false;
@@ -613,6 +632,7 @@ export async function runReview(
   let priorRecords: ReviewTranscriptRecord[] = [];
   let priorStartedAt: string | undefined;
   const reusedByAttemptId = new Map<string, AttemptResult>();
+  const carriedFailures = new Map<string, AttemptResult>();
   const resumedAfterFailureIds = new Set<string>();
   // The runs root is bound ONCE at the resume entry and the SAME binding is
   // carried through every later resume write/rebuild path (transcript flush,
@@ -688,26 +708,36 @@ export async function runReview(
     if (started.aggregator.agentId !== nowAggregatorId) {
       throw errors.usage("--aggregator must match the resumed run's aggregator");
     }
-    if (
-      (started.task.pr ?? undefined) !== requestedPr ||
-      (started.task.task ?? undefined) !== requestedTask
-    ) {
-      throw errors.usage("--pr/--task must match the resumed run");
-    }
-    if ((started.task.focus ?? undefined) !== requestedFocus) {
-      throw errors.usage("--focus must match the resumed run");
-    }
-    if ((started.task.specSource ?? undefined) !== requestedSpecSource) {
-      throw errors.usage("--spec must match the resumed run");
-    }
-    if ((started.task.councilTopic ?? undefined) !== councilTopic) {
-      throw errors.usage("council topic must match the resumed run");
-    }
-    if ((started.task.against ?? undefined) !== task.against) {
-      throw errors.usage("--against must match the resumed run");
-    }
-    if (started.task.repairPackageHash !== task.repairPackageHash) {
-      throw errors.usage("--repair-package must match the resumed run's immutable task");
+    if (aggregateOnly) {
+      task.pr = started.task.pr;
+      task.task = started.task.task;
+      task.focus = started.task.focus;
+      task.specSource = started.task.specSource;
+      task.against = started.task.against;
+      task.councilTopic = started.task.councilTopic;
+      task.repairPackageHash = started.task.repairPackageHash;
+    } else {
+      if (
+        (started.task.pr ?? undefined) !== requestedPr ||
+        (started.task.task ?? undefined) !== requestedTask
+      ) {
+        throw errors.usage("--pr/--task must match the resumed run");
+      }
+      if ((started.task.focus ?? undefined) !== requestedFocus) {
+        throw errors.usage("--focus must match the resumed run");
+      }
+      if ((started.task.specSource ?? undefined) !== requestedSpecSource) {
+        throw errors.usage("--spec must match the resumed run");
+      }
+      if ((started.task.councilTopic ?? undefined) !== councilTopic) {
+        throw errors.usage("council topic must match the resumed run");
+      }
+      if ((started.task.against ?? undefined) !== task.against) {
+        throw errors.usage("--against must match the resumed run");
+      }
+      if (started.task.repairPackageHash !== task.repairPackageHash) {
+        throw errors.usage("--repair-package must match the resumed run's immutable task");
+      }
     }
     priorStartedAt = started.startedAt;
     // The LAST terminal record per attempt wins (a later resume may have
@@ -741,13 +771,31 @@ export async function runReview(
               ? true
               : undefined,
         });
+      } else if (aggregateOnly && rec !== undefined && rec.status === "failure") {
+        carriedFailures.set(meta.attemptId, {
+          attemptId: meta.attemptId,
+          agentId: meta.agentId,
+          agentName: meta.agentName,
+          driverId: meta.driverId,
+          modelId: meta.modelId,
+          status: "failure",
+          output: "",
+          exitCode: rec.exitCode,
+          durationMs: rec.durationMs,
+          workspace: join(paths.runDir(resumeId), "workspaces", meta.attemptId),
+          failure: rec.failure ?? undefined,
+          activity: rec.activity,
+        });
       }
+    }
+    if (aggregateOnly && reusedByAttemptId.size === 0) {
+      throw errors.usage("--reaggregate needs at least one successful seat");
     }
     // Attempts that FAILED in the prior run and are being rerun now: mark the
     // fresh result so the appendix can say 「上一轮失败,resume 重跑」 instead
     // of silently presenting it as a first-try success (reviewer finding).
     for (const meta of started.attempts) {
-      if (reusedByAttemptId.has(meta.attemptId)) continue;
+      if (reusedByAttemptId.has(meta.attemptId) || carriedFailures.has(meta.attemptId)) continue;
       if (lastFinished.has(meta.attemptId)) resumedAfterFailureIds.add(meta.attemptId);
     }
   }
@@ -782,7 +830,8 @@ export async function runReview(
     );
   }
 
-  const isReused = (attemptId: string): boolean => reusedByAttemptId.has(attemptId);
+  const isReused = (attemptId: string): boolean =>
+    reusedByAttemptId.has(attemptId) || carriedFailures.has(attemptId);
 
   // Cost-informed attempt list (printed before any workspace/spawn).
   out.progress(`review ${runId} starting${resumeRaw !== undefined ? " (resumed)" : ""}`);
@@ -887,12 +936,30 @@ export async function runReview(
       }),
     };
   });
-  const executionRevision = matchExecutionRevision(readExecutionRevision(runDir), runId);
+  let executionRevision = matchExecutionRevision(readExecutionRevision(runDir), runId);
   const frozenTools: ToolFingerprint[] =
     resumeRaw !== undefined
       ? (frozenManifest?.tools ??
         fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]))
       : fingerprintsFromSpecs([...probeJobs.map((job) => job.spec), ...rerunSpecs]);
+  // Re-aggregation accepts the binary that is installed now. Freeze that hash
+  // before probes: a probe still verifies the fingerprint, and the drifted
+  // aggregator would fail closed against the original manifest.
+  if (aggregateOnly) {
+    const liveAggregator = buildSpawnSpec(aggregatorAgent, {
+      attemptId: "aggregator",
+      workspace: aggregatorWorkspace,
+      prompt: "",
+      access: task.seatAccess,
+    });
+    executionRevision = freezeLiveAggregator({
+      runId,
+      runDir,
+      frozenTools,
+      spec: liveAggregator,
+      out,
+    });
+  }
   const persistManifest = (sha: string | null): void => {
     writeInvocationManifest(
       runDir,
@@ -1128,7 +1195,7 @@ export async function runReview(
   // failures: recorded, never spawned, no workspace. Reused results are
   // carried over silently (no new attempt.finished — the history already
   // has one).
-  const presolved: AttemptResult[] = [...reusedByAttemptId.values()];
+  const presolved: AttemptResult[] = [...reusedByAttemptId.values(), ...carriedFailures.values()];
   for (const spec of rerunSpecs) {
     const probe = probeByModel.get(probeKeysByAgent.get(spec.agentId) ?? "");
     if (probe === undefined || probe.status === "success") continue;
@@ -1472,6 +1539,7 @@ export async function runReview(
       attemptAgents,
       frozenTools,
       executionRevision,
+      aggregateOnly,
       extraAssessments: replayAcceptedCorrections({
         runDir,
         runId,
@@ -1540,6 +1608,8 @@ interface ExecuteParams {
   attemptAgents: AgentRecord[];
   frozenTools: readonly ToolFingerprint[];
   executionRevision: ExecutionRevision | null;
+  /** Re-freeze the aggregator binary and do not spawn seats. */
+  aggregateOnly?: boolean;
   extraAssessments: DiagnosedAssessment[];
   checkoutProofs: Map<string, { head: string; clean: boolean }>;
   liveStatusWrittenAt: number;
@@ -1690,6 +1760,22 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   }
 
   const successes = results.filter((r) => r.status === "success");
+  const interruptedSeats = results.filter((r) => isInterruptionCode(r.failure?.code));
+
+  // Every seat interrupted → interruption card, skip aggregation.
+  if (successes.length === 0 && interruptedSeats.length === results.length && results.length > 0) {
+    return finalize(p, new Date().toISOString(), results, null, {
+      status: "interrupted",
+      exitCode: EXIT.runFailed,
+      incomplete: true,
+      failure: {
+        phase: "attempts",
+        code: "ALL_INTERRUPTED",
+        message: "every attempt was interrupted",
+      },
+      reportReason: incompleteBanner(interruptedSeats.length),
+    });
+  }
 
   // All attempts failed → no aggregation; deterministic failed report; exit 4.
   if (successes.length === 0) {
@@ -1708,7 +1794,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     aggregatorName: p.aggregatorAgent.name,
     aggregatorPersona: p.aggregatorAgent.personaPrompt,
     task: p.task,
-    attempts: results.map((r) => ({
+    attempts: (interruptedSeats.length > 0 ? successes : results).map((r) => ({
       attemptId: r.attemptId,
       name: r.agentName,
       status: r.status,
@@ -1809,25 +1895,77 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   }
 
   if (aggregation.status !== "success") {
+    const code = aggregation.failure?.code ?? "AGGREGATION_FAILED";
+    const interrupted = isInterruptionCode(code);
+    const tool = toolDisplayName(p.aggregatorAgent.driverSelection.driverId);
     return finalize(p, new Date().toISOString(), results, null, {
-      status: "failed",
+      status: interrupted ? "interrupted" : "failed",
       exitCode: EXIT.runFailed,
       incomplete: true,
       failure: {
         phase: "aggregation",
-        code: aggregation.failure?.code ?? "AGGREGATION_FAILED",
+        code,
         message: aggregation.failure?.message ?? "aggregator produced no output",
       },
+      reportReason: interrupted
+        ? interruptionReason(code, tool)
+        : (aggregation.failure?.message ?? "aggregator produced no output"),
     });
   }
 
   const incomplete = successes.length < results.length;
+  const seatsInterrupted = interruptedSeats.length > 0;
   return finalize(p, new Date().toISOString(), results, aggregation, {
-    status: "completed",
+    status: seatsInterrupted ? "interrupted" : "completed",
     exitCode: EXIT.ok,
-    incomplete,
-    failure: undefined,
+    incomplete: incomplete || seatsInterrupted,
+    failure: seatsInterrupted
+      ? {
+          phase: "attempts",
+          code: "SEATS_INTERRUPTED",
+          message: `${interruptedSeats.length} attempts interrupted`,
+        }
+      : undefined,
+    reportReason: seatsInterrupted ? incompleteBanner(interruptedSeats.length) : undefined,
   });
+}
+
+function freezeLiveAggregator(opts: {
+  runId: string;
+  runDir: string;
+  frozenTools: readonly ToolFingerprint[];
+  spec: AttemptSpec;
+  out: OutputSink;
+}): ExecutionRevision {
+  const { spec } = opts;
+  const live = fingerprintExecutable(spec.driverId, spec.executable);
+  const frozen = opts.frozenTools.find((tool) => tool.name === spec.driverId);
+  const revision: ExecutionRevision = {
+    version: 1,
+    kind: "councilkit-execution-revision",
+    runId: opts.runId,
+    reason: "reaggregate",
+    recordedAt: new Date().toISOString(),
+    acceptedTools: [live],
+    ...(frozen
+      ? {
+          replacedTools: [
+            {
+              name: spec.driverId,
+              previousSha256: frozen.sha256,
+              nextSha256: live.sha256,
+              previousRealpath: frozen.realpath,
+              nextRealpath: live.realpath,
+            },
+          ],
+        }
+      : {}),
+  };
+  writeExecutionRevision(opts.runDir, revision);
+  opts.out.progress(
+    `  re-froze ${spec.driverId} ${frozen?.sha256.slice(0, 12) ?? "none"} -> ${live.sha256.slice(0, 12)}`,
+  );
+  return revision;
 }
 
 interface FinalizeSpec {
@@ -1835,6 +1973,8 @@ interface FinalizeSpec {
   exitCode: number;
   incomplete: boolean;
   failure?: { phase: string; code: string; message: string };
+  /** User-facing report line. Drift keeps the English sentence in failure.message only. */
+  reportReason?: string;
 }
 
 async function finalize(
@@ -1850,7 +1990,9 @@ async function finalize(
   if (p.resumeRoot !== null) revalidateTrustedRoot(p.resumeRoot);
   // Surface the failure reason (interrupt cause / failure cause) in the report
   // header so an interrupted or failed run is labelled — not just "incomplete".
-  const reason = spec.failure?.message;
+  const reason =
+    spec.reportReason ??
+    (isInterruptionCode(spec.failure?.code) ? undefined : spec.failure?.message);
 
   const markdown = renderReviewReport({
     runId: p.runId,

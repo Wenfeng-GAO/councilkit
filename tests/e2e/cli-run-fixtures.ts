@@ -408,3 +408,296 @@ export function seedLostExecutionFixtures(home: string): void {
     ].join("\n"),
   );
 }
+
+export const DRIFT_REVIEW_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000352";
+export const DRIFT_REVIEW_PR = "https://github.com/acme/payments/pull/352";
+export const SEAT_INTERRUPT_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000358";
+export const SEAT_INTERRUPT_PR = "https://github.com/acme/payments/pull/358";
+
+/** Aggregator drift and a one-seat idle interruption. Both have endedAt. */
+export function seedReviewInterruptionFixtures(home: string): void {
+  const sha = "c4e8b1a09f6d3e2c1b0a9876543210fedcba9876";
+  const security = {
+    attemptId: "attempt-security",
+    agentId: "sec",
+    agentName: "review-security",
+    driverId: "claude-stream-json",
+    modelId: "claude",
+  };
+  const correctness = {
+    attemptId: "attempt-correctness",
+    agentId: "cor",
+    agentName: "review-correctness",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  const aggregator = {
+    attemptId: "aggregator",
+    agentId: "adv",
+    agentName: "review-adversarial",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  const driftDir = join(home, "runs", DRIFT_REVIEW_RUN_ID);
+  mkdirSync(driftDir, { recursive: true });
+  const driftEnglish =
+    "executable drift for grok-stream-json: frozen realpath/hash does not match live binary";
+  writeFileSync(
+    join(driftDir, "transcript.jsonl"),
+    `${[
+      JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: DRIFT_REVIEW_RUN_ID,
+        startedAt: "2026-10-16T02:59:02.000Z",
+        task: { pr: DRIFT_REVIEW_PR },
+        attempts: [security, correctness],
+        aggregator,
+      }),
+      JSON.stringify({
+        kind: "attempt.finished",
+        version: 1,
+        attemptId: security.attemptId,
+        agentName: security.agentName,
+        driverId: security.driverId,
+        status: "success",
+        output: "安全席已看完支付回调。",
+        exitCode: 0,
+        durationMs: 40000,
+      }),
+      JSON.stringify({
+        kind: "attempt.finished",
+        version: 1,
+        attemptId: correctness.attemptId,
+        agentName: correctness.agentName,
+        driverId: correctness.driverId,
+        status: "success",
+        output: "正确性席已看完幂等键。",
+        exitCode: 0,
+        durationMs: 45000,
+      }),
+      JSON.stringify({
+        kind: "aggregation.finished",
+        version: 1,
+        attemptId: "aggregator",
+        agentName: aggregator.agentName,
+        driverId: aggregator.driverId,
+        status: "failure",
+        output: null,
+        exitCode: null,
+        durationMs: 0,
+        failure: { code: "DRIVER_DRIFT", message: driftEnglish },
+      }),
+      JSON.stringify({
+        kind: "review.finished",
+        version: 1,
+        status: "interrupted",
+        endedAt: "2026-10-16T08:06:55.000Z",
+        incomplete: true,
+        failure: { phase: "aggregation", code: "DRIVER_DRIFT", message: driftEnglish },
+      }),
+    ].join("\n")}\n`,
+  );
+  writeFileSync(
+    join(driftDir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "interrupted",
+      progress: {
+        phase: "done",
+        updatedAt: "2026-10-16T08:06:55.000Z",
+        attempts: [
+          {
+            ...security,
+            role: "attempt",
+            status: "success",
+            durationMs: 40000,
+            lastActivity: null,
+          },
+          {
+            ...correctness,
+            role: "attempt",
+            status: "success",
+            durationMs: 45000,
+            lastActivity: null,
+          },
+          {
+            ...aggregator,
+            role: "aggregator",
+            status: "failure",
+            durationMs: 0,
+            lastActivity: null,
+            failureCode: "DRIVER_DRIFT",
+          },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(
+    join(driftDir, "report.md"),
+    ["# Autonomous Review Report", "", "席位原文还在。汇总没有写完。", ""].join("\n"),
+  );
+  writeFileSync(
+    join(driftDir, "findings.json"),
+    `${JSON.stringify({
+      version: 1,
+      runId: DRIFT_REVIEW_RUN_ID,
+      extractedAt: "2026-10-16T08:06:55.000Z",
+      sha,
+      againstRunId: null,
+      againstRange: null,
+      findings: [
+        {
+          id: "pay-note",
+          severity: "nit",
+          status: "open",
+          title: "注释里的渠道名过期了",
+          text: "注释仍提到已下线的渠道，不影响正确性。",
+          source: "unique",
+          reviewer: "review-security",
+          files: ["src/pay.ts"],
+        },
+      ],
+    })}\n`,
+  );
+
+  const seatDir = join(home, "runs", SEAT_INTERRUPT_RUN_ID);
+  mkdirSync(seatDir, { recursive: true });
+  writeFileSync(
+    join(seatDir, "transcript.jsonl"),
+    `${[
+      JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: SEAT_INTERRUPT_RUN_ID,
+        startedAt: "2026-10-16T03:00:00.000Z",
+        task: { pr: SEAT_INTERRUPT_PR },
+        attempts: [security, correctness],
+        aggregator,
+      }),
+      JSON.stringify({
+        kind: "attempt.finished",
+        version: 1,
+        attemptId: security.attemptId,
+        agentName: security.agentName,
+        driverId: security.driverId,
+        status: "failure",
+        output: null,
+        exitCode: "killed",
+        durationMs: 120000,
+        failure: { code: "IDLE_TIMEOUT", message: "2 分钟没有输出" },
+      }),
+      JSON.stringify({
+        kind: "attempt.finished",
+        version: 1,
+        attemptId: correctness.attemptId,
+        agentName: correctness.agentName,
+        driverId: correctness.driverId,
+        status: "success",
+        output: "正确性席写完了幂等键。",
+        exitCode: 0,
+        durationMs: 50000,
+      }),
+      JSON.stringify({
+        kind: "aggregation.finished",
+        version: 1,
+        attemptId: "aggregator",
+        agentName: aggregator.agentName,
+        driverId: aggregator.driverId,
+        status: "success",
+        output: "只汇总了已完成的一路。",
+        exitCode: 0,
+        durationMs: 20000,
+      }),
+      JSON.stringify({
+        kind: "review.finished",
+        version: 1,
+        status: "interrupted",
+        endedAt: "2026-10-16T03:20:00.000Z",
+        incomplete: true,
+        failure: {
+          phase: "attempts",
+          code: "SEATS_INTERRUPTED",
+          message: "1 attempts interrupted",
+        },
+      }),
+    ].join("\n")}\n`,
+  );
+  writeFileSync(
+    join(seatDir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "interrupted",
+      progress: {
+        phase: "done",
+        updatedAt: "2026-10-16T03:20:00.000Z",
+        attempts: [
+          {
+            ...security,
+            role: "attempt",
+            status: "failure",
+            durationMs: 120000,
+            lastActivity: null,
+            failureCode: "IDLE_TIMEOUT",
+          },
+          {
+            ...correctness,
+            role: "attempt",
+            status: "success",
+            durationMs: 50000,
+            lastActivity: null,
+          },
+          {
+            ...aggregator,
+            role: "aggregator",
+            status: "success",
+            durationMs: 20000,
+            lastActivity: null,
+          },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(
+    join(seatDir, "report.md"),
+    [
+      "# Autonomous Review Report",
+      "",
+      "---",
+      "",
+      "## 概览",
+      "",
+      "综合结论只覆盖了已经写完的正确性席。",
+      "",
+      "## 结论",
+      "",
+      "comment",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(seatDir, "findings.json"),
+    `${JSON.stringify({
+      version: 1,
+      runId: SEAT_INTERRUPT_RUN_ID,
+      extractedAt: "2026-10-16T03:20:00.000Z",
+      sha,
+      againstRunId: null,
+      againstRange: null,
+      findings: [
+        {
+          id: "seat-note",
+          severity: "nit",
+          status: "open",
+          title: "席位注释过期",
+          text: "注释仍提到已下线的渠道，不影响正确性。",
+          source: "unique",
+          reviewer: "review-correctness",
+          files: ["src/idempotency.ts"],
+        },
+      ],
+    })}\n`,
+  );
+}

@@ -38,7 +38,9 @@ export function ReportDetailPage() {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState<CopiedKind>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<"fix" | "re-review" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"fix" | "re-review" | "re-aggregate" | null>(
+    null,
+  );
   const [watchUntil, setWatchUntil] = useState(0);
   const [inspectId, setInspectId] = useState<string | null>(null);
   // 轮询纪律（DELIVERY-PLAN §3.1）：隐藏页面时停轮询，恢复可见时立即续读一次。
@@ -70,7 +72,8 @@ export function ReportDetailPage() {
     },
   });
   const action = useMutation({
-    mutationFn: (kind: "fix" | "re-review") => client.startCliRunAction(runId, kind),
+    mutationFn: (kind: "fix" | "re-review" | "re-aggregate") =>
+      client.startCliRunAction(runId, kind),
     onMutate: (kind) => {
       setActionError(null);
       setPendingAction(kind);
@@ -273,6 +276,7 @@ export function ReportDetailPage() {
             : null,
           onFix: () => action.mutate("fix"),
           onReReview: () => action.mutate("re-review"),
+          onReaggregate: () => action.mutate("re-aggregate"),
         }}
       />
     );
