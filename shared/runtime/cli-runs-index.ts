@@ -245,6 +245,16 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
   const transcriptPath = join(dir, "transcript.jsonl");
   const transcriptStat = safeLstat(transcriptPath);
   const transcriptReadable = Boolean(transcriptStat?.isFile() && !transcriptStat.isSymbolicLink());
+  const livePath = join(dir, CLI_RUN_STATUS_FILE);
+  const liveStat = safeLstat(livePath);
+  const hasLive = Boolean(liveStat?.isFile() && !liveStat.isSymbolicLink());
+  const repairStat = safeLstat(join(dir, "repair.json"));
+  const hasRepair = Boolean(repairStat?.isFile() && !repairStat.isSymbolicLink());
+  // Empty dirs left by a preflight-failed review are not runs: listing them as
+  // `unknown no-report` with the runId as title poisons runs list + 需要处理.
+  // Keep dirs that already have status.json / repair.json (repair bootstrap
+  // writes those sidecars before a transcript).
+  if (!hasReport && !transcriptReadable && !hasLive && !hasRepair) return null;
   const transcriptText = transcriptReadable
     ? readCapped(transcriptPath, TRANSCRIPT_HEAD_BYTES).text
     : "";

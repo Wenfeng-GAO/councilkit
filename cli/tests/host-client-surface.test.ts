@@ -280,6 +280,7 @@ describe("HostClient credential cache and auth retry", () => {
   it.each([
     { status: 401, code: "UNAUTHENTICATED", retries: true },
     { status: 403, code: "FORBIDDEN", retries: true },
+    { status: 403, code: "AUTH_REQUIRED", retries: false },
     { status: 400, code: "CSRF_MISMATCH", retries: true },
     { status: 409, code: "STALE_CONTROLLER", retries: true },
     { status: 400, code: "NOT_A_REAL_CODE", retries: false },
