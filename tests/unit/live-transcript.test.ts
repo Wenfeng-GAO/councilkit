@@ -180,6 +180,11 @@ describe("formatSpan", () => {
     expect(formatSpan("2026-08-24T07:30:22.000Z", "2026-08-24T07:31:27.000Z")).toBe("1m05s");
     expect(formatSpan("2026-08-24T07:30:22.000Z", "2026-08-24T07:30:22.400Z")).toBe("");
   });
+
+  it("rolls an hour instead of printing 60 minutes", () => {
+    expect(formatSpan("2026-08-24T07:30:22.000Z", "2026-08-24T08:30:22.000Z")).toBe("1h00m00s");
+    expect(formatSpan("2026-08-24T07:30:22.000Z", "2026-08-24T08:32:25.000Z")).toBe("1h02m03s");
+  });
 });
 
 describe("showsTick", () => {

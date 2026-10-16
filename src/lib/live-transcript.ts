@@ -1,4 +1,5 @@
 import type { AttemptLiveEvent } from "@shared/runtime/attempt-live-events";
+import { formatDurationMs } from "@shared/runtime/format-duration";
 
 export interface LivePollCursor {
   afterSeq: number;
@@ -360,12 +361,8 @@ export function formatSpan(startAt: string, endAt: string): string {
   const start = Date.parse(startAt);
   const end = Date.parse(endAt);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "";
-  const total = Math.floor((end - start) / 1000);
-  if (total < 1) return "";
-  if (total < 60) return `${total}s`;
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}m${String(s).padStart(2, "0")}s`;
+  if (end - start < 1000) return "";
+  return formatDurationMs(end - start);
 }
 
 export function originAt(events: readonly { at: string }[]): string {
