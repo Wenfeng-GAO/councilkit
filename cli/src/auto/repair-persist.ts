@@ -1,5 +1,5 @@
 import { existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   CLI_RUN_PIPELINE_PID_FILE,
   CLI_RUN_STATUS_FILE,
@@ -9,7 +9,7 @@ import {
 } from "@shared/runtime/cli-run-progress";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
-import { appendPrivateFile } from "@shared/runtime/durable-write";
+import { appendPrivateFile, directoryEscapes } from "@shared/runtime/durable-write";
 import { repairBudgetSchema } from "@shared/runtime/repair-chain";
 import { repairExecutionSchema } from "@shared/runtime/repair-execution";
 import { CLI_RUN_GOAL_SUMMARY_MAX, CLI_RUN_LAST_ERROR_MAX } from "@shared/runtime/schemas";
@@ -244,6 +244,9 @@ export function sourceReviewExists(sourceRunId: string): boolean {
 function ensureEmptyJournal(runDir: string): void {
   const path = join(runDir, REPAIR_JOURNAL_FILE);
   if (existsSync(path)) return;
+  // appendPrivateFile rejects the escaped parent. Creating the empty file first
+  // would follow that ancestor and leave the outside journal behind.
+  if (directoryEscapes(dirname(path))) return;
   try {
     writeFileSync(path, "", { encoding: "utf8", mode: 0o600, flag: "wx" });
   } catch (error) {

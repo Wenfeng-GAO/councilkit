@@ -10,12 +10,14 @@ import {
 } from "@shared/runtime/repair-chain";
 import {
   canStartWriter,
+  certifyDeadlineEnforced,
   countsAsSourceFixDispatch,
   createExecutionIntent,
   enforceDeadline,
   finishExecution,
   isInfrastructureRecovery,
   markExecutionStarted,
+  markUnknownWriter,
   replayExecution,
   takeOverExecution,
 } from "@shared/runtime/repair-execution";
@@ -137,6 +139,39 @@ describe("idempotent execution", () => {
     expect(
       isInfrastructureRecovery({ hadValidSourceFailure: false, isRestartSameExecutionId: true }),
     ).toBe(true);
+  });
+
+  it("keeps the first terminal execution state", () => {
+    const started = markExecutionStarted(
+      createExecutionIntent({
+        executionId: "exec-terminal",
+        kind: "source_fix",
+        chainId: "ck-chain-1",
+        parentRunId: "ck-repair-1",
+        inputSha: SHA,
+        contractVersion: 1,
+        deadlineAtMs: 50,
+      }),
+      [11],
+      1,
+    );
+    const enforced = certifyDeadlineEnforced(started, 50);
+    expect(enforced.state).toBe("deadline_enforced");
+    expect(markExecutionStarted(enforced, [99], 60)).toBe(enforced);
+    expect(takeOverExecution(enforced, [99], 60)).toBe(enforced);
+    expect(markUnknownWriter(enforced)).toBe(enforced);
+    expect(finishExecution(enforced, "failed", 70)).toBe(enforced);
+
+    const completed = finishExecution(started, "ok", 20);
+    expect(completed.state).toBe("completed");
+    expect(completed.result).toBe("ok");
+    expect(finishExecution(completed, "failed", 30)).toBe(completed);
+    expect(certifyDeadlineEnforced(completed, 40)).toBe(completed);
+    expect(canStartWriter({ existing: completed, writerKnown: true, writerAlive: false })).toEqual({
+      ok: false,
+      reason: "already_terminal",
+    });
+    expect(enforceDeadline(completed, 50).due).toBe(false);
   });
 
   it("enforces deadline after the cutoff even if the parent loop is gone", () => {

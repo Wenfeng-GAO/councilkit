@@ -19,6 +19,14 @@ const SHA = "9c0e83b83496b47590667532e71b2ffdca9fd7de";
 const POLICY = "b07590c09986aadf0b193743e3cf82026709003d2ffa8cec95a86ceaffbaf263";
 
 describe("journalFromSquadStatus", () => {
+  it("stores an uppercase candidate sha in lowercase", () => {
+    const journal = journalFromSquadStatus({
+      candidate: { candidate_sha: SHA.toUpperCase(), status: "running" },
+    });
+    expect(journal.candidateSha).toBe(SHA);
+    expect(journal.requiredGatesPassed).toBe(false);
+  });
+
   it("accepts the official completed candidate + aggregate + independence shape", () => {
     const journal = journalFromSquadStatus(actual);
     expect(journal.candidateSha).toBe(SHA);

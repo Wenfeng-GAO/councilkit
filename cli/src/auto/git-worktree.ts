@@ -1,6 +1,8 @@
 /**
- * Isolated git worktrees of a local clone, used as review Attempt cwd so
- * drivers do not each clone the PR themselves.
+ * Isolated per-seat checkouts of a local clone, used as review Attempt cwd so
+ * drivers do not each clone the PR themselves. Since #273 (SAFE-05) these are
+ * `git clone --shared` checkouts, not `git worktree add`, so a review never
+ * writes into the target repo's .git/.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, rmSync } from "node:fs";
@@ -120,14 +122,33 @@ export async function addDetachedWorktree(opts: {
     throw errors.io("refusing unusable worktree path or SHA");
   }
   await removeWorktreeIfPresent(opts);
-  const added = await runCommand({
+  // SAFE-05 (#273): never write into the target repo's .git/. `git worktree
+  // add` registers .git/worktrees/<name> (+ index, logs) in the user's repo and
+  // leaves it there for the life of the run. A `--shared` clone only *reads* the
+  // source: objects resolve through objects/info/alternates in the clone, so
+  // even an unreferenced SHA (fetched into a ref that was already deleted) can
+  // be checked out, and the seat still gets real git history to inspect.
+  const cloned = await runCommand({
     executable: "git",
-    argv: ["worktree", "add", "--detach", "--", dest, sha],
-    cwd: opts.repo,
+    argv: ["clone", "--shared", "--no-checkout", "--quiet", "--", opts.repo, dest],
+    cwd: opts.runDir,
     env,
   });
-  if (added.exitCode !== 0 || added.error !== undefined) {
-    throw errors.io(`git worktree add failed: ${(added.stderr || added.error || "exit").trim()}`);
+  if (cloned.exitCode !== 0 || cloned.error !== undefined) {
+    throw errors.io(
+      `git clone --shared failed: ${(cloned.stderr || cloned.error || "exit").trim()}`,
+    );
+  }
+  const checkedOut = await runCommand({
+    executable: "git",
+    argv: ["checkout", "--detach", "--quiet", sha],
+    cwd: dest,
+    env,
+  });
+  if (checkedOut.exitCode !== 0 || checkedOut.error !== undefined) {
+    throw errors.io(
+      `git checkout ${sha} failed: ${(checkedOut.stderr || checkedOut.error || "exit").trim()}`,
+    );
   }
 }
 

@@ -24,10 +24,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Stats } from "node:fs";
-import { lstat, mkdir } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import type { Duplex, Readable, Writable } from "node:stream";
 import { TIMEOUTS } from "@shared/runtime/contracts";
+import { mkdirPrivate } from "@shared/runtime/durable-write";
 import { type RuntimeError, makeError } from "@shared/runtime/errors";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import type { HostConfig } from "../config";
@@ -249,19 +250,19 @@ export async function prepareParticipantCwd(root: string, participantId: string)
   if (!PARTICIPANT_ID_PATTERN.test(participantId)) {
     throw spawnFailed("participantId is not safe for a dedicated cwd", participantId);
   }
-  await mkdir(root, { recursive: true });
   const target = join(root, participantId);
-  const existing = await lstatIfExists(target);
-  if (existing) {
-    if (existing.isSymbolicLink()) {
+  try {
+    mkdirPrivate(target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ELOOP") {
       throw spawnFailed("participant cwd must not be a symlink", participantId);
     }
-    if (!existing.isDirectory()) {
+    if (code === "ENOTDIR") {
       throw spawnFailed("participant cwd exists and is not a directory", participantId);
     }
-    return target;
+    throw error;
   }
-  await mkdir(target);
   return target;
 }
 
@@ -556,20 +557,30 @@ export function createProcessSupervisor(deps: {
 
   async function ensureCwd(cwd: string, participantId: string): Promise<void> {
     const existing = await lstatIfExists(cwd);
-    if (existing) {
-      if (existing.isSymbolicLink()) {
+    if (existing?.isSymbolicLink()) {
+      throw spawnFailed("driver cwd must not be a symlink", participantId);
+    }
+    if (existing && !existing.isDirectory()) {
+      throw spawnFailed("driver cwd is not a directory", participantId);
+    }
+    if (!existing) {
+      const rel = relative(config.driverWorkRoot, cwd);
+      if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
+        throw spawnFailed("driver cwd does not exist and is outside driverWorkRoot", participantId);
+      }
+    }
+    try {
+      mkdirPrivate(cwd);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ELOOP") {
         throw spawnFailed("driver cwd must not be a symlink", participantId);
       }
-      if (!existing.isDirectory()) {
+      if (code === "ENOTDIR") {
         throw spawnFailed("driver cwd is not a directory", participantId);
       }
-      return;
+      throw error;
     }
-    const rel = relative(config.driverWorkRoot, cwd);
-    if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-      throw spawnFailed("driver cwd does not exist and is outside driverWorkRoot", participantId);
-    }
-    await mkdir(cwd, { recursive: true });
   }
 
   function waitSupervised(record: DriverRecord, timeoutMs: number): Promise<void> {

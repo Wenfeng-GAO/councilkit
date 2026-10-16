@@ -4,8 +4,9 @@
  */
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import {
   type AssessmentDiagnosticItem,
   type DiagnosedAssessment,
@@ -301,7 +302,7 @@ export function loadAssessmentCorrections(runDir: string): AssessmentCorrections
   let text: string;
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    if (!stat.isFile() || stat.isSymbolicLink() || directoryEscapes(dirname(path))) return null;
     text = readFileSync(path, "utf8");
   } catch {
     return null;
@@ -369,11 +370,10 @@ export function replayAcceptedCorrections(input: {
     }
     if (rec.sourceOutputSha256 !== sha256Text(attempt.output)) continue;
     let correctionOutput = "";
+    const correctionPath = join(input.runDir, "corrections", `${rec.sourceAttemptId}.md`);
+    if (directoryEscapes(dirname(correctionPath))) continue;
     try {
-      correctionOutput = readFileSync(
-        join(input.runDir, "corrections", `${rec.sourceAttemptId}.md`),
-        "utf8",
-      );
+      correctionOutput = readFileSync(correctionPath, "utf8");
     } catch {
       continue;
     }

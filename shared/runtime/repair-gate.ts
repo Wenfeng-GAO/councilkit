@@ -7,7 +7,7 @@ import {
   gateAcceptanceView,
 } from "./repair-adjudication";
 import { type VerificationAsset, evaluateVerificationAsset } from "./repair-contract";
-import { type RepairIdentityFacts, isKnown } from "./repair-identity";
+import { type RepairIdentityFacts, fullSha, isKnown } from "./repair-identity";
 import { expectedGatePolicyHash, policyHashMatches } from "./repair-policy";
 
 type RepairPhaseName = Extract<CliRunProgressPhase, `repair-${string}`>;
@@ -95,10 +95,6 @@ export interface RepairGateResult {
 
 export { extractAggregatorVerdict } from "./aggregator-verdict";
 
-function sha40(value: string | null | undefined): boolean {
-  return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value);
-}
-
 function acceptedWithReason(row: LedgerFinding): boolean {
   return row.status === "accepted" && Boolean(row.acceptedReason?.trim());
 }
@@ -162,7 +158,7 @@ export function evaluateRepairGate(input: RepairGateInput): RepairGateResult {
   }
 
   if (
-    !sha40(candidate) ||
+    fullSha(candidate) === null ||
     input.source.sha === "unknown" ||
     input.source.sha.toLowerCase() !== candidate ||
     input.review.sha.toLowerCase() !== candidate ||
