@@ -82,6 +82,10 @@ const scene = vi.hoisted(() => {
   };
 });
 
+vi.mock("@/stores/host-generation-timeouts", () => ({
+  useHostGenerationTimeouts: () => null,
+}));
+
 vi.mock("@/runtime/bootstrap", () => ({
   getAppRuntime: () => ({
     client: {},

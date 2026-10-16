@@ -153,6 +153,9 @@ test.describe("S7 room admin", () => {
     const copyRoomId = page.url().split("/rooms/")[1] as string;
     await expect(page.getByRole("heading", { name: `${topic}（副本）` })).toBeVisible();
     await expect(page.getByText("还没有讨论")).toBeVisible();
+    // B4: the empty-state hint names the button that is actually there.
+    await expect(page.getByText("点击「发起讨论」，参与者会依次发言。")).toBeVisible();
+    await expect(page.getByRole("button", { name: "发起讨论" })).toBeVisible();
     const strip = page.getByRole("list", { name: "参与者" });
     await expect(strip.getByText("安全蓝方")).toBeVisible();
     await expect(strip.getByText("安全红方")).toBeVisible();

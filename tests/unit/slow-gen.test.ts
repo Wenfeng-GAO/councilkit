@@ -1,7 +1,8 @@
 import { DRIVER_IDS, type DriverId, TIMEOUTS } from "@shared/runtime/contracts";
+import type { GenerationTimeouts } from "@shared/runtime/generation-timeouts";
 import { REPORT_SECTION_HEADINGS } from "@shared/runtime/report-sections";
 import type { ExecutionProfileDto } from "@shared/runtime/schemas";
-import { type SlowGenConfig, slowGenFromEnv } from "@shared/runtime/slow-gen";
+import { SLOW_GEN_CRASH_AT_MS, type SlowGenConfig, slowGenFromEnv } from "@shared/runtime/slow-gen";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverEvent } from "../../runtime-host/drivers/types";
 import { createInstallationRegistry } from "../../runtime-host/installations/registry";
@@ -34,8 +35,13 @@ function factories(config: SlowGenConfig) {
   ) as Record<DriverId, ReturnType<typeof createSlowGenDriverFactory>>;
 }
 
-function run(config: SlowGenConfig, prompt: string) {
-  const driver = createSlowGenDriverFactory("kimi-stream-json", config, TIMEOUTS)("p-1");
+function run(
+  config: SlowGenConfig,
+  prompt: string,
+  driverId: DriverId = "claude-stream-json",
+  timeouts: GenerationTimeouts = TIMEOUTS,
+) {
+  const driver = createSlowGenDriverFactory(driverId, config, timeouts)("p-1");
   const events: DriverEvent[] = [];
   let done = false;
   const promise = driver
@@ -63,6 +69,13 @@ describe("slowGenFromEnv", () => {
       mode: "drip",
       intervalMs: 30_000,
     });
+    expect(
+      slowGenFromEnv({ COUNCILKIT_SLOW_GEN: "buffered", COUNCILKIT_SLOW_GEN_MS: "50000" }),
+    ).toEqual({
+      mode: "buffered",
+      intervalMs: 50_000,
+    });
+    expect(slowGenFromEnv({ COUNCILKIT_SLOW_GEN: "crash" })?.mode).toBe("crash");
     expect(slowGenFromEnv({})).toBeNull();
     expect(slowGenFromEnv({ COUNCILKIT_SLOW_GEN: "1" })).toBeNull();
   });
@@ -123,10 +136,11 @@ describe("slow-gen driver (fake timers, product values)", () => {
     expect(terminal?.type).toBe("completed");
     if (terminal?.type !== "completed") throw new Error("unreachable");
     expect(terminal.output).toContain("示例");
+    expect(terminal.output).not.toContain("COUNCILKIT_SLOW_GEN");
     expect(terminal.output).toMatch(/收敛建议：是$/);
   });
 
-  it("silent: nothing for 120s, then STREAM_IDLE_TIMEOUT", async () => {
+  it("silent on a streaming seat: nothing for 120s, then STREAM_IDLE_TIMEOUT", async () => {
     const turn = run({ mode: "silent", intervalMs: 30_000 }, REPORT_PROMPT);
     await vi.advanceTimersByTimeAsync(119_999);
     expect(turn.terminal()).toBeUndefined();
@@ -137,6 +151,80 @@ describe("slow-gen driver (fake timers, product values)", () => {
     expect(terminal?.type).toBe("failed");
     if (terminal?.type !== "failed") throw new Error("unreachable");
     expect(terminal.error.code).toBe("STREAM_IDLE_TIMEOUT");
+    expect(terminal.error.limitMs).toBe(120_000);
+  });
+
+  it("silent on a one-shot seat: not cut at 2 or 9 min, ONESHOT_TIMEOUT at 10 min", async () => {
+    const turn = run({ mode: "silent", intervalMs: 30_000 }, REPORT_PROMPT, "kimi-stream-json");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(turn.terminal()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(9 * 60_000 - 120_000);
+    expect(turn.terminal()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await turn.promise;
+    const terminal = turn.terminal();
+    expect(terminal?.type).toBe("failed");
+    if (terminal?.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("ONESHOT_TIMEOUT");
+    expect(terminal.error.limitMs).toBe(600_000);
+    expect(terminal.error.driverId).toBe("kimi-stream-json");
+  });
+
+  // QA cases from the PR body: COUNCILKIT_ONESHOT_TIMEOUT_MS=60000.
+  const QA_TIMEOUTS = { streamIdleMs: 120_000, oneshotMs: 60_000 };
+
+  it("buffered, limit 60s, report at 50s -> completes in one piece", async () => {
+    const turn = run(
+      { mode: "buffered", intervalMs: 50_000 },
+      REPORT_PROMPT,
+      "grok-stream-json",
+      QA_TIMEOUTS,
+    );
+    await vi.advanceTimersByTimeAsync(49_999);
+    expect(turn.events.map((e) => e.type)).toEqual(["started"]);
+    await vi.advanceTimersByTimeAsync(1);
+    await turn.promise;
+    const terminal = turn.terminal();
+    expect(terminal?.type).toBe("completed");
+    expect(turn.events.filter((e) => e.type === "output.delta")).toHaveLength(1);
+    if (terminal?.type !== "completed") throw new Error("unreachable");
+    for (const heading of REPORT_SECTION_HEADINGS) expect(terminal.output).toContain(heading);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(turn.events.filter((e) => e.type === "failed")).toHaveLength(0);
+  });
+
+  it("buffered, limit 60s, report at 90s -> ONESHOT_TIMEOUT at 60s, nothing after", async () => {
+    const turn = run(
+      { mode: "buffered", intervalMs: 90_000 },
+      REPORT_PROMPT,
+      "cursor-stream-json",
+      QA_TIMEOUTS,
+    );
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(turn.terminal()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await turn.promise;
+    const terminal = turn.terminal();
+    expect(terminal?.type).toBe("failed");
+    if (terminal?.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("ONESHOT_TIMEOUT");
+    expect(terminal.error.limitMs).toBe(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(turn.events.filter((e) => e.type === "output.delta")).toHaveLength(0);
+  });
+
+  it(`crash: DRIVER_CRASH at ${SLOW_GEN_CRASH_AT_MS}ms, before any limit`, async () => {
+    expect(SLOW_GEN_CRASH_AT_MS).toBe(5_000);
+    const turn = run({ mode: "crash", intervalMs: 30_000 }, REPORT_PROMPT, "kimi-stream-json");
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(turn.terminal()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await turn.promise;
+    const terminal = turn.terminal();
+    expect(terminal?.type).toBe("failed");
+    if (terminal?.type !== "failed") throw new Error("unreachable");
+    expect(terminal.error.code).toBe("DRIVER_CRASH");
+    expect(terminal.error.driverId).toBe("kimi-stream-json");
   });
 
   it("drip: a chunk every 30s for 2.5 min is not cut and completes as 示例", async () => {
@@ -150,7 +238,9 @@ describe("slow-gen driver (fake timers, product values)", () => {
     expect(terminal?.type).toBe("completed");
     if (terminal?.type !== "completed") throw new Error("unreachable");
     expect(turn.events.filter((e) => e.type === "output.delta")).toHaveLength(5);
-    expect(terminal.output).toContain("示例数据");
+    // #295: current language only, no env var name in the body.
+    expect(terminal.output.split("\n")[0]).toBe("> ⚠️ 示例数据：慢生成测试，非真实模型输出。");
+    expect(terminal.output).not.toMatch(/SAMPLE DATA|COUNCILKIT_SLOW_GEN/);
     for (const heading of REPORT_SECTION_HEADINGS) expect(terminal.output).toContain(heading);
   });
 

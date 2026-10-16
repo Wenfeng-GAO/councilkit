@@ -558,4 +558,110 @@ describe("cli execute-turn", () => {
     expect(res.verdict).toBe("cancelled"); // external abort, not a deadline timeout
     expect(res.error?.phase).toBe("cleanup");
   });
+
+  // B4/#339: no fixed per-turn total. The CLI follows the seat's shared
+  // generation rule (same as the Host) as a backstop after the Host's limit.
+  describe("generation rule backstop (B4 #339)", () => {
+    function turnWith(
+      c: Counters,
+      generation: {
+        mode: "streaming" | "oneshot";
+        limitMs: number;
+        code: "STREAM_IDLE_TIMEOUT" | "ONESHOT_TIMEOUT";
+      },
+      follow: typeof import("@/runtime/event-stream").followExecutionEvents,
+      opts: FakeClientOptions = {},
+    ) {
+      const fake = makeFake(opts, c);
+      return executeTurn({
+        host: fake.host,
+        followEvents: follow,
+        scopeId: "scope-1",
+        controller: CONTROLLER,
+        participantId: PARTICIPANT_ID,
+        executionId: EXECUTION_ID,
+        snapshot: snapshot(),
+        role: "report",
+        generation,
+        generationGraceMs: 0,
+        persist: fake.persist,
+      });
+    }
+    const hang: typeof import("@/runtime/event-stream").followExecutionEvents = async (fopts) => {
+      if (fopts.signal?.aborted) return { kind: "aborted", lastSeq: 0 };
+      await new Promise<void>((resolve) =>
+        fopts.signal?.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      return { kind: "aborted", lastSeq: 0 };
+    };
+
+    it("streaming: events keep arriving for 5x the window -> completes, never cut", async () => {
+      const c = counters();
+      const dripping: typeof import("@/runtime/event-stream").followExecutionEvents = async (
+        fopts,
+      ) => {
+        for (let i = 0; i < 10; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          fopts.onEvent?.({ type: "output.delta", text: "x" } as unknown as RuntimeEvent);
+        }
+        return { kind: "terminal", event: completedEvent(12, "long report") };
+      };
+      const res = await turnWith(
+        c,
+        { mode: "streaming", limitMs: 40, code: "STREAM_IDLE_TIMEOUT" },
+        dripping,
+      );
+      expect(res.verdict).toBe("completed");
+      expect(res.terminal?.output).toBe("long report");
+    });
+
+    it("streaming: silence past the window -> STREAM_IDLE_TIMEOUT with its limit", async () => {
+      const c = counters();
+      const res = await turnWith(
+        c,
+        { mode: "streaming", limitMs: 40, code: "STREAM_IDLE_TIMEOUT" },
+        hang,
+        { hangUntilAbort: true, cancelInterrupts: true },
+      );
+      expect(res.verdict).toBe("timeout");
+      expect(res.error).toMatchObject({ code: "STREAM_IDLE_TIMEOUT", limitMs: 40 });
+      expect(c.cancel).toBe(1);
+    });
+
+    it("one-shot: events do not extend the limit -> ONESHOT_TIMEOUT", async () => {
+      const c = counters();
+      const chatty: typeof import("@/runtime/event-stream").followExecutionEvents = async (
+        fopts,
+      ) => {
+        for (let i = 0; i < 20 && !fopts.signal?.aborted; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          fopts.onEvent?.({ type: "output.delta", text: "x" } as unknown as RuntimeEvent);
+        }
+        return { kind: "aborted", lastSeq: 0 };
+      };
+      const startedAt = Date.now();
+      const res = await turnWith(
+        c,
+        { mode: "oneshot", limitMs: 60, code: "ONESHOT_TIMEOUT" },
+        chatty,
+        { cancelInterrupts: true },
+      );
+      expect(res.verdict).toBe("timeout");
+      expect(res.error).toMatchObject({ code: "ONESHOT_TIMEOUT", limitMs: 60 });
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+    });
+
+    it("keeps the Host's limitMs on a failed terminal", async () => {
+      const c = counters();
+      const event = failedEvent(4, "ONESHOT_TIMEOUT");
+      if (event.type === "failed") event.error = { ...event.error, limitMs: 60_000 };
+      const res = await turnWith(
+        c,
+        { mode: "oneshot", limitMs: 60_000, code: "ONESHOT_TIMEOUT" },
+        async () => ({ kind: "terminal", event }),
+      );
+      expect(res.verdict).toBe("failed");
+      expect(res.error).toMatchObject({ code: "ONESHOT_TIMEOUT", limitMs: 60_000 });
+    });
+  });
 });

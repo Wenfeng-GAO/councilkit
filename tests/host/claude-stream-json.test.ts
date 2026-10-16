@@ -48,6 +48,7 @@ const BASE_TIMEOUTS: DriverTimeouts = {
   dispatchAckMs: 1500,
   streamIdleMs: 3000,
   turnMs: 15000,
+  oneshotMs: 600_000,
   interruptGraceMs: 800,
   shutdownGraceMs: 3000,
 };

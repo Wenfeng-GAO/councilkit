@@ -55,7 +55,7 @@ export function DiscussionStream({
   if (rounds.length === 0) {
     return (
       <div className="mx-auto w-full max-w-3xl px-6 py-4">
-        <EmptyState title="还没有讨论" hint="点击「开始新一轮」，参与者会依次发言。" />
+        <EmptyState title="还没有讨论" hint="点击「发起讨论」，参与者会依次发言。" />
       </div>
     );
   }

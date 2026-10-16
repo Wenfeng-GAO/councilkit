@@ -33,6 +33,8 @@ export interface DriverTimeouts {
   dispatchAckMs: number;
   streamIdleMs: number;
   turnMs: number;
+  /** One-shot drivers only: not finished within this → ONESHOT_TIMEOUT. */
+  oneshotMs: number;
   interruptGraceMs: number;
   shutdownGraceMs: number;
 }

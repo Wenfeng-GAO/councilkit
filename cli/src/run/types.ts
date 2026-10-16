@@ -57,6 +57,12 @@ export interface RunFailure {
   phase: string;
   code: string;
   message: string;
+  /** B4: which turn failed and its seat's driver, for the shared
+   * interruption copy (printed for the report turn). */
+  role?: "message" | "report";
+  driverId?: string;
+  /** B4: generation limit that fired (STREAM_IDLE_TIMEOUT / ONESHOT_TIMEOUT). */
+  limitMs?: number;
 }
 
 export interface TurnSummary {

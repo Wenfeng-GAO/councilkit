@@ -3,6 +3,12 @@ import { MessageBubble } from "@/components/message/MessageBubble";
 import { Button } from "@/components/ui/Button";
 import type { DecisionReport } from "@/models/discussion/entities";
 import type { ModelExecution } from "@/models/discussion/model-execution";
+import { isOneShotDriver } from "@shared/runtime/generation-timeouts";
+import {
+  isReportInterruptionCode,
+  oneShotGeneratingNote,
+  reportInterruptionCopy,
+} from "@shared/runtime/interruption-copy";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { useState } from "react";
 
@@ -98,14 +104,27 @@ interface ReportProgressProps {
   previewText: string;
   speakerName: string;
   speakerColor: string;
+  /** Reporter seat's driver: one-shot tools get the grey 「一次性给出」 line. */
+  driverId?: string | null;
+  /** The Host's one-shot limit (health), when known. */
+  oneshotLimitMs?: number | null;
 }
 
 /** The concluding-state streaming card. Mirrors DiscussionStream's
  * `ActivePreview` two-state shape (preview text → bubble; empty → spinner
  * line + info badge), but reads its preview from `previewByExecution` for the
  * report execution which never owns `round.activeExecutionId`. */
-export function ReportProgress({ previewText, speakerName, speakerColor }: ReportProgressProps) {
+export function ReportProgress({
+  previewText,
+  speakerName,
+  speakerColor,
+  driverId,
+  oneshotLimitMs,
+}: ReportProgressProps) {
   const badge = "报告生成中·尚未保存";
+  const oneShotNote = isOneShotDriver(driverId)
+    ? oneShotGeneratingNote(driverId, oneshotLimitMs ?? undefined)
+    : null;
   return (
     <div
       data-testid="report-progress"
@@ -128,6 +147,11 @@ export function ReportProgress({ previewText, speakerName, speakerColor }: Repor
           </span>
         </div>
       )}
+      {oneShotNote ? (
+        <p data-testid="report-oneshot-note" className="mt-1 text-xs text-muted">
+          {oneShotNote}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -139,15 +163,9 @@ interface ReportFailureBannerProps {
   retryPending: boolean;
   retryDisabled: boolean;
   disabledHint?: string;
+  /** Reporter seat's driver, for the tool name in 「详情」. */
+  driverId?: string | null;
 }
-
-/** Codes that mean "the report run was cut off" (tab closed, Host restarted,
- * outcome lost) rather than "the model returned an error" (B4 / #279). */
-const REPORT_INTERRUPTION_CODES: ReadonlySet<string> = new Set([
-  "INTERRUPTED_UNKNOWN",
-  "SAFE_INTERRUPTION",
-  "STREAM_IDLE_TIMEOUT",
-]);
 
 export interface ReportFailureCopy {
   title: string;
@@ -160,30 +178,30 @@ export interface ReportFailureCopy {
   detail: string | null;
 }
 
-/** B4 designer copy for the 「详情」 line; the raw code stays as small print. */
-const REPORT_INTERRUPTION_DETAIL: Readonly<Record<string, string>> = {
-  INTERRUPTED_UNKNOWN: "刷新后找不到这次生成的结果。",
-  SAFE_INTERRUPTION: "刷新后找不到这次生成的结果。",
-  STREAM_IDLE_TIMEOUT: "模型超过 2 分钟没有任何输出。",
-};
-
-const REPORT_INTERRUPTION_TITLE: Readonly<Record<string, string>> = {
-  STREAM_IDLE_TIMEOUT: "报告生成被中断（模型 2 分钟没有输出）",
-};
-
-/** B4-05: designer-approved copy. The raw code only appears in the small
- * 「详情」 disclosure, never as the headline. */
-export function reportFailureCopy(execution: ModelExecution): ReportFailureCopy {
-  const interrupted =
-    execution.state === "interrupted" || REPORT_INTERRUPTION_CODES.has(execution.error?.code ?? "");
+/** B4-05: designer-approved copy (shared with the CLI). Codes that mean "the
+ * report run was cut off" (tab closed, Host restarted, no output, one-shot not
+ * finished, model process exited) get the interrupted card; the raw code only
+ * appears as small print in 「详情」, never as the headline. `driverId` is the
+ * reporter seat's driver when the error itself does not carry one. */
+export function reportFailureCopy(
+  execution: ModelExecution,
+  driverId?: string | null,
+): ReportFailureCopy {
+  const code = execution.error?.code ?? "";
+  const interrupted = execution.state === "interrupted" || isReportInterruptionCode(code);
   if (interrupted) {
-    const code = execution.error?.code ?? "";
+    const copy =
+      reportInterruptionCopy({
+        code,
+        driverId: execution.error?.driverId ?? driverId ?? null,
+        limitMs: execution.error?.limitMs ?? null,
+      }) ?? reportInterruptionCopy({ code: "INTERRUPTED_UNKNOWN" });
     return {
-      title: REPORT_INTERRUPTION_TITLE[code] ?? "报告生成被中断（可能关闭了页面）",
+      title: copy?.title ?? "",
       action: "重新生成报告",
       note: "将重新调用模型",
       interrupted: true,
-      detail: REPORT_INTERRUPTION_DETAIL[code] ?? REPORT_INTERRUPTION_DETAIL.INTERRUPTED_UNKNOWN,
+      detail: copy?.detail ?? null,
     };
   }
   return {
@@ -201,8 +219,9 @@ export function ReportFailureBanner({
   retryPending,
   retryDisabled,
   disabledHint,
+  driverId,
 }: ReportFailureBannerProps) {
-  const copy = reportFailureCopy(execution);
+  const copy = reportFailureCopy(execution, driverId);
   const code = execution.error?.code ?? null;
   const message = copy.detail ?? execution.error?.message ?? null;
   return (
@@ -222,7 +241,9 @@ export function ReportFailureBanner({
             </details>
           ) : null}
         </div>
-        <div className="flex flex-col items-end gap-0.5">
+        {/* At 390 the button wraps under the title: the small print lines up
+            with the button's left edge there, its right edge on wide screens. */}
+        <div className="flex flex-col items-start gap-0.5 sm:items-end">
           <Button
             variant={copy.interrupted ? "primary" : "ghost"}
             onClick={onRetry}

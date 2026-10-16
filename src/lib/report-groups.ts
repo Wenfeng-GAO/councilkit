@@ -7,7 +7,7 @@ import { normalizeReviewPr, summarizePrCase } from "@shared/runtime/review-case"
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 
 export type CaseStatusFilter = "attention" | "active" | "done" | "all";
-export type CaseKindFilter = "all" | "review" | "squad";
+export type CaseKindFilter = "all" | "review" | "squad" | "discuss";
 
 export const OTHER_SQUADS_KEY = "__other-squads__";
 
@@ -25,7 +25,11 @@ type RunLike = Pick<CliRunSummaryDto, "kind" | "title" | "status" | "pipeline"> 
 };
 
 export function isWorkspaceRun(run: Pick<CliRunSummaryDto, "kind">): boolean {
-  return run.kind === "review" || run.kind === "squad" || run.kind === "repair";
+  // B4 (DM-03): `councilkit run` discussions (incl. slow-gen 示例 runs) are
+  // listed too, each as its own case; demo ones count under 「示例」.
+  return (
+    run.kind === "review" || run.kind === "squad" || run.kind === "repair" || run.kind === "discuss"
+  );
 }
 
 export function explicitPrKey(
@@ -98,6 +102,7 @@ export function latestRun(runs: readonly CliRunSummaryDto[]): CliRunSummaryDto |
 export function runInKindScope(run: Pick<CliRunSummaryDto, "kind">, kind: CaseKindFilter): boolean {
   if (kind === "all") return true;
   if (kind === "review") return run.kind === "review";
+  if (kind === "discuss") return run.kind === "discuss";
   return run.kind === "squad" || run.kind === "repair";
 }
 

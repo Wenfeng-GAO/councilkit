@@ -48,8 +48,7 @@
  *                         ms before flushThenExit (F2: exit control frame races the
  *                         stdout drain; 0 = close immediately)
  *   delayMs           number  delay before emitting frames (default 0)
- *   dripMs/dripCount  number  B4: write a blank line every dripMs, dripCount times,
- *                         before the frames (progress without content)
+ *   crashAfterMs      number  B4: exit(3) after this many ms, no frames (crash)
  *   statsPath         string  stats file prefix; stats land at `<statsPath>.<pid>`
  *
  * Stats (written after every event, tmp+rename): {pid, providerLists, turns,
@@ -78,8 +77,7 @@ const DEFAULTS = {
   hang: false,
   ignoreSigterm: false,
   delayMs: 0,
-  dripMs: 0,
-  dripCount: 0,
+  crashAfterMs: 0,
   delayExitStdoutMs: 0,
   statsPath: null,
 };
@@ -228,11 +226,11 @@ async function runTurn(config, parsed) {
     return;
   }
 
-  if (config.delayMs > 0) await sleep(config.delayMs);
-  for (let i = 0; config.dripMs > 0 && i < config.dripCount; i += 1) {
-    await sleep(config.dripMs);
-    process.stdout.write("\n");
+  if (config.crashAfterMs > 0) {
+    await sleep(config.crashAfterMs);
+    process.exit(3);
   }
+  if (config.delayMs > 0) await sleep(config.delayMs);
 
   if (config.toolTurn) {
     // A tooled turn (E10): assistant tool_calls frame → role:"tool" frame → a

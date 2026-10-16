@@ -39,6 +39,8 @@ export interface DriverBehaviorInput {
   /** B4: emit nothing until the idle window fails the turn (STREAM_IDLE_TIMEOUT). */
   slowSilent?: boolean;
   slowSilentIdleMs?: number;
+  /** B4: with slowSilent, fail with DRIVER_CRASH after this many ms. */
+  crashAfterMs?: number;
 }
 
 export interface DriverCounters {
@@ -155,6 +157,19 @@ export async function driverCounters(page: Page): Promise<Record<string, DriverC
 export async function dropEventStreams(page: Page): Promise<number> {
   const { dropped } = await controlPost<{ dropped: number }>(page, "/drop-events");
   return dropped;
+}
+
+/** B4: the Host forgets its executions and drops the streams (≈ restart). */
+export async function forgetHostExecutions(page: Page): Promise<number> {
+  const { dropped } = await controlPost<{ dropped: number }>(page, "/forget-executions");
+  return dropped;
+}
+
+/** B4: seed (true) or remove (false) the demo discussion run under the e2e
+ * CLI home. Isolated: the spec that seeds it removes it again. */
+export async function setDiscussDemoRun(page: Page, present: boolean): Promise<string> {
+  const { runId } = await controlPost<{ runId: string }>(page, "/discuss-demo-run", { present });
+  return runId;
 }
 
 /** Release all held fake drivers (pauseAfterEvents holds). */

@@ -46,6 +46,7 @@ export const RUNTIME_ERROR_CODES = [
   "HANDSHAKE_TIMEOUT",
   "DISPATCH_TIMEOUT",
   "STREAM_IDLE_TIMEOUT",
+  "ONESHOT_TIMEOUT",
   "STREAM_DRAIN_TIMEOUT",
   "TURN_TIMEOUT",
   "PROTOCOL_VIOLATION",
@@ -91,6 +92,9 @@ export const runtimeErrorSchema = z
     participantId: z.string().optional(),
     diagnosticId: z.string().optional(),
     retryAfterMs: z.number().int().nonnegative().optional(),
+    /** The generation limit that fired (STREAM_IDLE_TIMEOUT / ONESHOT_TIMEOUT),
+     * so the interruption copy can say the real threshold. */
+    limitMs: z.number().int().positive().optional(),
   })
   .strict();
 

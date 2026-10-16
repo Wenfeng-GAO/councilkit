@@ -1280,6 +1280,7 @@ function classifyCode(
     c === "HANDSHAKE_TIMEOUT" ||
     c === "DISPATCH_TIMEOUT" ||
     c === "STREAM_IDLE_TIMEOUT" ||
+    c === "ONESHOT_TIMEOUT" ||
     c === "STREAM_DRAIN_TIMEOUT" ||
     c === "TURN_TIMEOUT"
   ) {

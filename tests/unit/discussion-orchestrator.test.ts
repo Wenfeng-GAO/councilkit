@@ -273,6 +273,7 @@ class FakeHost {
     this.ackBehavior = "ok";
     this.onCreateScope = null;
     this.onExecutionStatus = null;
+    this.outage = "none";
   }
 
   failNextEventStreams(count: number): void {
@@ -470,7 +471,39 @@ class FakeHost {
     }
   }
 
+  /** #350: "down" refuses every request (kill -9, nothing listening);
+   * "new-session" answers 401 (a restarted Host minted another session). */
+  private outage: "none" | "down" | "new-session" = "none";
+
+  /** The Host process dies: open streams error out, requests are refused. */
+  killProcess(): void {
+    this.outage = "down";
+    for (const execution of this.executions.values()) {
+      for (const entry of [...execution.streams]) {
+        if (!entry.closed) {
+          entry.closed = true;
+          try {
+            entry.controller.error(new TypeError("network error"));
+          } catch {
+            // already closed by the client
+          }
+        }
+        execution.streams.delete(entry);
+      }
+    }
+  }
+
+  /** Back up as a new process that does not know this page's session. */
+  restartWithNewSession(hostInstanceId: string): void {
+    this.restart(hostInstanceId);
+    this.outage = "new-session";
+  }
+
   fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (this.outage === "down") throw new TypeError("Failed to fetch");
+    if (this.outage === "new-session") {
+      return errorResponse(401, "UNAUTHENTICATED", "Missing or invalid session capability.");
+    }
     const url = new URL(
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
     );
@@ -2055,6 +2088,53 @@ describe("discussion orchestrator (U5)", () => {
     expect(host.executeCalls).toHaveLength(1);
     expect(host.cancelCalls).toEqual([expect.objectContaining({ executionId })]);
     expect(host.executionState(executionId)).toBe("interrupted");
+  });
+
+  it("8l. #350 the Host is killed mid-turn with the page open: host restart, not page closed", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    const executionId = host.executeCalls[0]?.executionId as string;
+    await vi.waitFor(() => {
+      expect(host.openStreams(executionId)).toBe(1);
+    });
+    host.killProcess();
+
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("SAFE_INTERRUPTION");
+    expect(execution?.error?.message).toBe("host unreachable before its terminal");
+    expect(host.executeCalls).toHaveLength(1);
+  });
+
+  it("8m. #350 the Host is already back with a new session: still host restart", async () => {
+    const { room, p1, p2 } = await seedBase();
+    const { orchestrator } = makeOrchestrator();
+    await orchestrator.ensureScope(room.id, [p1, p2]);
+    host.plan(p1.id, { kind: "hang" });
+    const roundPromise = orchestrator.startRound(room.id);
+    await vi.waitFor(() => {
+      expect(host.executeCalls).toHaveLength(1);
+    });
+    const executionId = host.executeCalls[0]?.executionId as string;
+    await vi.waitFor(() => {
+      expect(host.openStreams(executionId)).toBe(1);
+    });
+    host.killProcess();
+    host.restartWithNewSession("host-2");
+
+    const round = await roundPromise;
+    expect(round?.phase).toBe("paused");
+    const execution = await db.modelExecutions.get(executionId);
+    expect(execution?.state).toBe("interrupted");
+    expect(execution?.error?.code).toBe("SAFE_INTERRUPTION");
   });
 
   it("8k. a lost execute response cancels the turn the host already accepted", async () => {
