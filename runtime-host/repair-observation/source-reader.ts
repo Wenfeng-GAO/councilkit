@@ -2,12 +2,12 @@
  * Bounded JSONL source reader for repair observation.
  * Tail/range reads, incomplete trailing lines held back, bad lines skipped.
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { type Stats, closeSync, openSync, readSync, statSync } from "node:fs";
 import {
   REPAIR_OBS_LINE_ISOLATE,
+  type RawSourceRecord,
   fingerprintSource,
   parsePublicSourceLine,
-  type RawSourceRecord,
   redactObservationText,
 } from "@shared/runtime/repair-observation";
 
@@ -38,7 +38,7 @@ export function readSourceWindow(input: {
   limitRecords: number;
   direction: "forward" | "earlier";
 }): SourceReadResult {
-  let st;
+  let st: Stats;
   try {
     st = statSync(input.path);
   } catch {
@@ -97,9 +97,10 @@ export function readSourceWindow(input: {
   try {
     if (input.direction === "forward") {
       const coldTail = reset || input.fromOffset === null;
-      const start = coldTail
-        ? Math.max(0, st.size - INITIAL_TAIL_BYTES)
-        : input.fromOffset!;
+      const start =
+        coldTail || input.fromOffset === null
+          ? Math.max(0, st.size - INITIAL_TAIL_BYTES)
+          : input.fromOffset;
       // Cold mid-file tails may start inside a line; committed cursors are
       // always on a line boundary and must not drop the next complete record.
       const dropPartialFirst = coldTail && start > 0;

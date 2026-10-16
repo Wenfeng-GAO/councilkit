@@ -4,6 +4,10 @@
   "version": "0.0.1",
   "type": "module",
   "description": "Local-first rooms for multi-agent decisions.",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.34.6",
   "scripts": {
     "dev": "tsx runtime-host/main.ts",
     "dev:vite": "vite",

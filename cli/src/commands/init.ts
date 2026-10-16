@@ -18,8 +18,8 @@ import {
 } from "../init/defaults";
 import {
   IDEATE_AGENT_SPECS,
-  type IdeateAgentSpec,
   IDEATE_REPORTER_FALLBACK,
+  type IdeateAgentSpec,
   NEXT_IDEATE_HINT,
   PRODUCT_JURY_BACKGROUND,
   PRODUCT_JURY_COUNCIL_NAME,
@@ -217,10 +217,7 @@ function pickReporter(roster: AgentRecord[], available: DefaultAgentSpec[]): Age
   return roster[0];
 }
 
-function pickIdeateReporter(
-  roster: AgentRecord[],
-  existing: CouncilRecord | null,
-): AgentRecord {
+function pickIdeateReporter(roster: AgentRecord[], existing: CouncilRecord | null): AgentRecord {
   if (existing !== null) {
     const current = roster.find((agent) => agent.id === existing.reporterAgentId);
     if (current !== undefined) return current;

@@ -200,8 +200,7 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
       return {
         readiness: {
           state: "runtime_unavailable",
-          detail:
-            error instanceof Error ? clipUtf16(error.message, MAX_DETAIL) : "probe failed",
+          detail: error instanceof Error ? clipUtf16(error.message, MAX_DETAIL) : "probe failed",
         },
         binding: null,
       };
@@ -226,10 +225,7 @@ export function createProfileProbe(deps: ProfileProbeDeps): ProfileProbe {
       return {
         readiness: {
           state: runtimeCode === "MODEL_UNAVAILABLE" ? "model_unavailable" : "runtime_unavailable",
-          detail:
-            error instanceof Error
-              ? clipUtf16(error.message, MAX_DETAIL)
-              : "prewarm failed",
+          detail: error instanceof Error ? clipUtf16(error.message, MAX_DETAIL) : "prewarm failed",
         },
         binding: null,
       };

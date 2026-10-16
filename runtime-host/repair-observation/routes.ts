@@ -3,13 +3,13 @@
  * stop/resume stay on existing cli-runs routes — do not re-authorize here.
  */
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
+import { makeError } from "@shared/runtime/errors";
 import {
   REPAIR_OBS_MAX_RESPONSE_BYTES,
-  repairEvidenceSchema,
   repairEventDetailSchema,
+  repairEvidenceSchema,
   repairObservationSchema,
 } from "@shared/runtime/repair-observation";
-import { makeError } from "@shared/runtime/errors";
 import { type Route, httpError } from "../server";
 import { createRepairObservationService } from "./service";
 

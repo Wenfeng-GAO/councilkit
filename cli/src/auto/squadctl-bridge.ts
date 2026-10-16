@@ -26,20 +26,6 @@ import {
   discoverSquadBridge,
   findOrchestratorExecutable,
 } from "@shared/runtime/squad-bridge-discovery";
-import {
-  CURSOR_REPAIR_MODEL,
-  GROK_REPAIR_MODEL,
-  type SquadOrchestratorRuntime,
-  buildRepairContract,
-  canonicalizeRepairModel,
-  cursorOrchestratorArgv,
-  executableServesRuntime,
-  preferredCursorModel,
-  readSquadBridgeFile,
-  repairModelReceiptMatches,
-  resolveRepairRoles,
-  runtimeOfExecutable,
-} from "@shared/runtime/squad-repair-runtime";
 import type {
   OfficialGatePolicyFile,
   OfficialGatePolicyFreeze,
@@ -60,6 +46,20 @@ import {
   headsRef,
   squadPrProfileSchema,
 } from "@shared/runtime/squad-pr-profile";
+import {
+  CURSOR_REPAIR_MODEL,
+  GROK_REPAIR_MODEL,
+  type SquadOrchestratorRuntime,
+  buildRepairContract,
+  canonicalizeRepairModel,
+  cursorOrchestratorArgv,
+  executableServesRuntime,
+  preferredCursorModel,
+  readSquadBridgeFile,
+  repairModelReceiptMatches,
+  resolveRepairRoles,
+  runtimeOfExecutable,
+} from "@shared/runtime/squad-repair-runtime";
 import { errors } from "../errors";
 import { redact } from "../redact";
 import {
@@ -281,7 +281,10 @@ export class SquadctlBridge implements SquadBridge {
       return { taskId: request.taskId, event: mapSquadStatus(null, { stopped: true }) };
     }
     const resumed = this.runSquadctlSync(["resume", "--task-dir", identity.taskDir, "--json"]);
-    if (resumed.exitCode !== 0 || !isOfficialSquadResumeReceipt(jsonParseEmbedded(resumed.stdout))) {
+    if (
+      resumed.exitCode !== 0 ||
+      !isOfficialSquadResumeReceipt(jsonParseEmbedded(resumed.stdout))
+    ) {
       throw errors.runFailed(
         `squadctl resume failed: ${resumed.stderr || resumed.stdout || `exit ${resumed.exitCode}`}`,
       );
@@ -386,7 +389,9 @@ export class SquadctlBridge implements SquadBridge {
         event: { kind: "failed", journal: mapSquadStatus(null).journal },
       };
     }
-    const event = mapSquadStatus(jsonParseEmbedded(snapshot.stdout), { stopped: identity?.stopped });
+    const event = mapSquadStatus(jsonParseEmbedded(snapshot.stdout), {
+      stopped: identity?.stopped,
+    });
     if (
       identity &&
       !this.writerStillLive(identity) &&
@@ -822,7 +827,9 @@ export class SquadctlBridge implements SquadBridge {
     if (spawned.child) this.attachLifecycle(taskId, spawned.child, generation);
     const runtime = canonicalRuntime(identity.requestedRuntime);
     const expectedSession =
-      runtime === "cursor" ? identity.nativeSession : (identity.nativeSession ?? identity.requestedSession);
+      runtime === "cursor"
+        ? identity.nativeSession
+        : (identity.nativeSession ?? identity.requestedSession);
     const supervised = spawned.child
       ? await superviseOrchestrator(
           spawned.child,
@@ -848,11 +855,21 @@ export class SquadctlBridge implements SquadBridge {
       }
     }
     if (expectedSession && supervised.sessionId !== expectedSession) {
-      this.abortSpawn(taskId, spawned.pid, "native session_id did not match the frozen session", generation);
+      this.abortSpawn(
+        taskId,
+        spawned.pid,
+        "native session_id did not match the frozen session",
+        generation,
+      );
       throw errors.runFailed("native session_id did not match the frozen session");
     }
     if (!expectedSession && runtime !== "cursor") {
-      this.abortSpawn(taskId, spawned.pid, "orchestrator produced no native session_id", generation);
+      this.abortSpawn(
+        taskId,
+        spawned.pid,
+        "orchestrator produced no native session_id",
+        generation,
+      );
       throw errors.runFailed("orchestrator produced no native session_id");
     }
     if (!this.isCurrentGeneration(taskId, generation)) return;
@@ -1596,7 +1613,9 @@ function requiredCursorModel(model: string | null): string {
   return pin.model;
 }
 
-function injectedOrchestrator(executable: string | null): NonNullable<SquadBridgeProbe["orchestrator"]> {
+function injectedOrchestrator(
+  executable: string | null,
+): NonNullable<SquadBridgeProbe["orchestrator"]> {
   const runtime = executable ? (runtimeOfExecutable(executable) ?? "grokb") : "grokb";
   return {
     requestedRuntime: runtime,
@@ -1646,7 +1665,9 @@ function roleLines(identity: BridgeIdentity): string[] {
   return lines;
 }
 
-function readContractRoles(path: string): Record<
+function readContractRoles(
+  path: string,
+): Record<
   string,
   { runtime?: string; model?: string; mode?: string; sandbox?: string; permission_mode?: string }
 > | null {
@@ -1659,7 +1680,13 @@ function readContractRoles(path: string): Record<
     }
     return parsed.roles as Record<
       string,
-      { runtime?: string; model?: string; mode?: string; sandbox?: string; permission_mode?: string }
+      {
+        runtime?: string;
+        model?: string;
+        mode?: string;
+        sandbox?: string;
+        permission_mode?: string;
+      }
     >;
   } catch {
     return null;

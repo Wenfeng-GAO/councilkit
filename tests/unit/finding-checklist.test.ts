@@ -178,8 +178,7 @@ describe("buildFindingChecklist", () => {
         source: {
           runId: "ck-run-test-123",
           sha: "abc123def456789012345678901234567890abcd",
-          findingsSha256:
-            "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+          findingsSha256: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
           againstRunId: null,
         },
         groups: [

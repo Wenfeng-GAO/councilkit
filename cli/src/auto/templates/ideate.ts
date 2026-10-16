@@ -56,7 +56,11 @@ export function clipUtf8(text: string, maxBytes: number, label = "truncated"): B
   return { text: clipped, truncated: true, bytes: Buffer.byteLength(clipped, "utf8") };
 }
 
-export function clipUserInput(task: IdeateTask): { idea: string; background: string; truncated: boolean } {
+export function clipUserInput(task: IdeateTask): {
+  idea: string;
+  background: string;
+  truncated: boolean;
+} {
   const combined = `IDEA\n${task.idea}\nBACKGROUND\n${task.background}`;
   if (Buffer.byteLength(combined, "utf8") <= IDEATE_INPUT_BUDGET) {
     return { idea: task.idea, background: task.background, truncated: false };
@@ -159,7 +163,9 @@ export function buildAggregatePrompt(input: {
 }): PromptBuild {
   const user = clipUserInput(input.task);
   const notes = [
-    input.singleProposal ? "实际只有一份成功提案，必须写明无法完成多方案比较，不得写成多模型共识。" : "",
+    input.singleProposal
+      ? "实际只有一份成功提案，必须写明无法完成多方案比较，不得写成多模型共识。"
+      : "",
     input.singleModel ? "成功来源只有一种模型配置，必须写明单模型来源。" : "",
     !input.debateScheduled ? "用户主动选择未安排辩论。" : "",
     input.debateScheduled && input.debateSucceeded === 0 ? "已安排辩论但交叉讨论未完成。" : "",

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -70,7 +70,9 @@ describe("resolveLocalRepo", () => {
   const oldHome = process.env.COUNCILKIT_HOME;
 
   beforeEach(() => {
-    home = mkdtempSync(join(tmpdir(), "ck-repos-"));
+    // realpath: macOS tmpdir is /var -> /private/var and resolveLocalRepo
+    // returns canonical paths (CI-01).
+    home = realpathSync(mkdtempSync(join(tmpdir(), "ck-repos-")));
     repo = join(home, "agentrun");
     mkdirSync(repo);
     execFileSync("git", ["init"], { cwd: repo });

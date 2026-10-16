@@ -33,16 +33,11 @@ function ReportsNav() {
       "button",
       {
         type: "button",
-        onClick: () =>
-          navigate(`/reports?pr=${encodeURIComponent(PR_B)}&against=${AGAINST}`),
+        onClick: () => navigate(`/reports?pr=${encodeURIComponent(PR_B)}&against=${AGAINST}`),
       },
       "另一条对照",
     ),
-    createElement(
-      "button",
-      { type: "button", onClick: () => navigate("/reports") },
-      "报告",
-    ),
+    createElement("button", { type: "button", onClick: () => navigate("/reports") }, "报告"),
   );
 }
 
@@ -91,9 +86,7 @@ describe("StartReviewForm query", () => {
           createElement(
             MemoryRouter,
             {
-              initialEntries: [
-                `/reports?pr=${encodeURIComponent(PR_A)}&against=${AGAINST}#review`,
-              ],
+              initialEntries: [`/reports?pr=${encodeURIComponent(PR_A)}&against=${AGAINST}#review`],
             },
             createElement(StartReviewForm),
             createElement(ReportsNav),

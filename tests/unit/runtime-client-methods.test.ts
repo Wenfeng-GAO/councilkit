@@ -215,6 +215,8 @@ describe("RuntimeClient session and mutation methods", () => {
         hasPlanLock: false,
         pipeline: null,
         handoff: null,
+        // #272: a run that predates the demo flag parses as a real run.
+        demo: false,
       },
     ]);
     expect(detail).toMatchObject({

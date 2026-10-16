@@ -1,4 +1,4 @@
-import { IdeateModelPicker, type IdeateJuryStatus } from "@/components/report/IdeateModelPicker";
+import { type IdeateJuryStatus, IdeateModelPicker } from "@/components/report/IdeateModelPicker";
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";

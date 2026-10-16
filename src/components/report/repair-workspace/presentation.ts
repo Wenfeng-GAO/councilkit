@@ -51,7 +51,7 @@ export function phaseName(phase?: string | null): string {
   return (phase && names[phase]) || "等待执行状态";
 }
 export function relativeTime(value: string | null | undefined, now: string): string {
-  const at = value ? Date.parse(value) : NaN;
+  const at = value ? Date.parse(value) : Number.NaN;
   const end = Date.parse(now);
   if (!Number.isFinite(at) || !Number.isFinite(end)) return "未记录";
   const secs = Math.max(0, Math.floor((end - at) / 1000));

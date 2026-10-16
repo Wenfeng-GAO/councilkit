@@ -160,6 +160,10 @@
 .ck-wb-crumb span {
   color: var(--ck-tertiary);
 }
+.ck-wb-crumb .ck-demo-tag {
+  /* solid amber tag: dark text, not the tertiary crumb grey */
+  color: #1a1408;
+}
 .ck-wb-crumb b {
   font-weight: 500;
   overflow: hidden;
@@ -771,7 +775,7 @@
   .ck-wb-context-right {
     font-size: 12px;
   }
-  .ck-wb-crumb > span {
+  .ck-wb-crumb > span:not(.ck-demo-tag) {
     display: none;
   }
   .ck-wb-viewbar {

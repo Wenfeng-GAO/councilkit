@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/Button";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { isRepairProfileName } from "@shared/runtime/repair-name";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useState } from "react";
@@ -85,6 +86,7 @@ export function RepairRunPanel({
     | "acceptanceCoverage"
     | "remainingBudget"
     | "recoveryAction"
+    | "demo"
   >;
   profiles?: RepairProfileSummary[];
   activeRepair?: Pick<
@@ -114,6 +116,7 @@ export function RepairRunPanel({
   squadVariant?: "primary" | "ghost";
 }) {
   const [formError, setFormError] = useState<string | null>(null);
+  if (isDemoRun(run)) return null;
   if (run.kind === "repair") {
     const used = `第 ${outerUsed} / ${outerMax} 次外循环`;
     const budgetOut = run.businessResult === "needs_attention" && outerUsed >= outerMax;

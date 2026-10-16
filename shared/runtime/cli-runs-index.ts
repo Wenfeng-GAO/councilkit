@@ -1,12 +1,3 @@
-/**
- * Read-only index of CLI runs under COUNCILKIT_HOME/runs.
- *
- * Used by `councilkit runs list|open` and by the Host GET /api/v1/cli-runs
- * surface so the browser can open the same report.md the CLI wrote.
- *
- * Safety: never follow symlinks; runId is a closed token; a single corrupt
- * directory is skipped on list (detail of a bad id is not-found).
- */
 import { createHash } from "node:crypto";
 import {
   constants,
@@ -20,6 +11,16 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { clipUtf16 } from "../text/clip-utf16";
+/**
+ * Read-only index of CLI runs under COUNCILKIT_HOME/runs.
+ *
+ * Used by `councilkit runs list|open` and by the Host GET /api/v1/cli-runs
+ * surface so the browser can open the same report.md the CLI wrote.
+ *
+ * Safety: never follow symlinks; runId is a closed token; a single corrupt
+ * directory is skipped on list (detail of a bad id is not-found).
+ */
+import { type RunAttentionCounts, computeRunAttention } from "./attention-counts";
 import { resolveCliRunsRoot } from "./cli-home";
 import {
   CLI_RUN_FINDINGS_FILE,
@@ -82,8 +83,15 @@ const SQUAD_DOCUMENT_SPECS = [
   { file: "final.md", id: "final", title: "收工摘要" },
 ] as const;
 
+/** `ck-review-demo-<uuid>` is the built-in sample run from `councilkit demo`. */
 export const CLI_RUN_ID_RE =
-  /^ck-(?:run|review|squad|ideate|repair)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^ck-(?:run|review|squad|ideate|repair)(?:-demo)?-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export {
+  countRealRunsNeedingAttention,
+  isDemoRun,
+  type RunAttentionInput,
+} from "./demo-report";
 
 export const MAX_CLI_REPORT_BYTES = 2 * 1024 * 1024;
 
@@ -106,6 +114,8 @@ export interface CliRunSummary {
   pipeline: CliRunPipeline | null;
   handoff: CliRunHandoffDto | null;
   reviewEvidence?: ReviewEvidence | null;
+  /** #289: the one 需要处理 / 阻塞 count shared by list, report page and `runs list`. */
+  attention?: RunAttentionCounts | null;
   ideateIntegrity?: IdeateIntegrityDto | null;
   businessResult?: "approved" | "needs_attention" | "stopped" | null;
   reasonCode?: string | null;
@@ -120,6 +130,8 @@ export interface CliRunSummary {
   acceptanceCoverage?: string | null;
   remainingBudget?: string | null;
   recoveryAction?: string | null;
+  /** True for the built-in sample. Absent or false on runs written before demo mode. */
+  demo?: boolean;
 }
 
 export interface CliRunDetail extends CliRunSummary {
@@ -244,7 +256,8 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
     ? readCapped(transcriptPath, TRANSCRIPT_TAIL_BYTES, true).text
     : "";
   const parsed = parseTranscriptMeta(`${transcriptText}\n${tailText}`, runId);
-  const live = readLiveState(join(dir, CLI_RUN_STATUS_FILE));
+  const statusExtras = readStatusExtras(join(dir, CLI_RUN_STATUS_FILE));
+  const live = statusExtras.live;
   const refillSeats = live === null || live.progress.attempts.length === 0;
   let progressRecords = parseTranscriptRecords(transcriptText);
   if (refillSeats && transcriptReadable && (transcriptStat?.size ?? 0) > TRANSCRIPT_HEAD_BYTES) {
@@ -283,6 +296,8 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
       : observed;
   const abandoned = observed === "running" && reconciled === "interrupted";
   const progress = abandoned ? releaseAbandonedSeats(derived) : derived;
+  const reviewEvidence =
+    parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null;
   const status = mapSquadObserveStatus({
     kind: parsed.kind,
     status: reconciled,
@@ -296,9 +311,10 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
     runId,
     kind: parsed.kind,
     status,
-    title: parsed.title,
-    startedAt: parsed.startedAt,
-    endedAt: parsed.endedAt,
+    title: parsed.title !== runId ? parsed.title : (statusExtras.title ?? parsed.title),
+    startedAt: parsed.startedAt ?? statusExtras.startedAt,
+    endedAt: parsed.endedAt ?? statusExtras.endedAt,
+    demo: statusExtras.demo || readDemoSentinel(dir),
     hasReport,
     hasPlan,
     hasFindings,
@@ -307,8 +323,8 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
     progress,
     pipeline,
     handoff: live?.handoff ?? null,
-    reviewEvidence:
-      parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null,
+    reviewEvidence,
+    attention: parsed.kind === "review" ? readRunAttention(dir, reviewEvidence, derived) : null,
     ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
     ...readRepairProjection(dir, parsed.kind),
   };
@@ -492,11 +508,53 @@ function readSquadDocuments(dir: string): CliRunDocumentDto[] {
   return documents;
 }
 
-function readLiveState(path: string): ReturnType<typeof parseLiveStateJson> {
+function readStatusExtras(path: string): {
+  live: ReturnType<typeof parseLiveStateJson>;
+  demo: boolean;
+  title: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+} {
+  const empty = {
+    live: null,
+    demo: false,
+    title: null,
+    startedAt: null,
+    endedAt: null,
+  };
   const stat = safeLstat(path);
-  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return null;
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return empty;
   const { text } = readCapped(path, 64 * 1024);
-  return parseLiveStateJson(text);
+  let rec: unknown;
+  try {
+    rec = JSON.parse(text);
+  } catch {
+    return empty;
+  }
+  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return empty;
+  const row = rec as Record<string, unknown>;
+  return {
+    live: parseLiveStateJson(text),
+    demo: row.demo === true,
+    title: stringOrNull(row.title),
+    startedAt: stringOrNull(row.startedAt),
+    endedAt: stringOrNull(row.endedAt),
+  };
+}
+
+/** Sentinel `runs/<id>/demo.json` of `{"demo":true}` marks a sample when status.json does not. */
+function readDemoSentinel(dir: string): boolean {
+  const path = join(dir, "demo.json");
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return false;
+  let rec: unknown;
+  try {
+    rec = JSON.parse(readCapped(path, 4096).text);
+  } catch {
+    return false;
+  }
+  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return false;
+  return (rec as { demo?: unknown }).demo === true;
 }
 
 const TRANSCRIPT_HEAD_BYTES = 256 * 1024;
@@ -787,6 +845,23 @@ function readCapped(
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+function readRunAttention(
+  dir: string,
+  evidence: ReviewEvidence | null,
+  progress: CliRunProgress | null,
+): RunAttentionCounts | null {
+  const findingsText = readFindingsText(join(dir, CLI_RUN_FINDINGS_FILE));
+  const ledger = findingsText ? parseFindingsFile(findingsText) : null;
+  if (!ledger) return null;
+  const groups = readOptionalFindingGroups(join(dir, FINDING_GROUPS_FILE), ledger, findingsText);
+  return computeRunAttention({
+    findings: ledger.findings,
+    sha: evidence?.sha ?? null,
+    groups: groups.groups,
+    progress,
+  });
 }
 
 function readReviewEvidence(dir: string, runId: string, head: string): ReviewEvidence {

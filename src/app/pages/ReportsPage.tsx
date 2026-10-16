@@ -19,6 +19,8 @@ import {
   seatProgress,
 } from "@/lib/report-groups";
 import { getAppRuntime } from "@/runtime/bootstrap";
+import { formatAttentionLabel } from "@shared/runtime/attention-counts";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
 import { useQuery } from "@tanstack/react-query";
@@ -27,12 +29,28 @@ import { Link } from "react-router-dom";
 
 type StatusFilter = CaseStatusFilter;
 type KindFilter = CaseKindFilter;
+type DemoFilter = "all" | "real" | "sample";
+
+function caseHasDemo(view: CaseView): boolean {
+  return view.scopedRuns.some((run) => isDemoRun(run));
+}
+
+function caseHasReal(view: CaseView): boolean {
+  return view.scopedRuns.some((run) => !isDemoRun(run));
+}
+
+function matchesDemoFilter(view: CaseView, filter: DemoFilter): boolean {
+  if (filter === "sample") return caseHasDemo(view);
+  if (filter === "real") return caseHasReal(view);
+  return true;
+}
 
 export function ReportsPage() {
   const { client } = getAppRuntime();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("attention");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
+  const [demoFilter, setDemoFilter] = useState<DemoFilter>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const query = useQuery({
     queryKey: ["cli-runs"],
@@ -63,7 +81,9 @@ export function ReportsPage() {
       scopedViews.filter((view) => queryText.length === 0 || view.searchBlob.includes(queryText)),
     [scopedViews, queryText],
   );
-  const visible = searchMatched
+  const sourceMatched = searchMatched.filter((view) => matchesDemoFilter(view, demoFilter));
+  const demoCaseCount = searchMatched.filter((view) => caseHasDemo(view)).length;
+  const visible = sourceMatched
     .filter((view) => caseMatchesStatusFilter(view.status, statusFilter))
     .sort((a, b) => {
       if (a.status.active !== b.status.active) return a.status.active ? -1 : 1;
@@ -72,26 +92,36 @@ export function ReportsPage() {
       return bTime.localeCompare(aTime);
     });
 
-  // 状态计数基于搜索+类型范围（忽略当前状态）；类型计数基于搜索+状态范围
-  // （忽略当前类型）——搜索任一维度时徽标反映的是“假如点开”的可见数。
+  // 状态计数跟当前来源（全部/真实/示例）和搜索走，忽略当前状态。
+  // 示例芯片计数只跟搜索走，忽略状态：默认停在「需要处理」时仍能看到有几份示例。
   const statusFilters: { id: StatusFilter; label: string; count: number }[] = [
     {
       id: "attention",
       label: "需要处理",
-      count: searchMatched.filter((view) => view.status.attention).length,
+      count: sourceMatched.filter((view) => view.status.attention).length,
     },
     {
       id: "active",
       label: "进行中",
-      count: searchMatched.filter((view) => view.status.active).length,
+      count: sourceMatched.filter((view) => view.status.active).length,
     },
     {
       id: "done",
       label: "已完成",
-      count: searchMatched.filter((view) => view.status.done).length,
+      count: sourceMatched.filter((view) => view.status.done).length,
     },
-    { id: "all", label: "全部案件", count: searchMatched.length },
+    { id: "all", label: "全部案件", count: sourceMatched.length },
   ];
+  const demoFilters: { id: DemoFilter; label: string; count: number }[] = (
+    [
+      { id: "all" as const, label: "全部" },
+      { id: "real" as const, label: "真实" },
+      { id: "sample" as const, label: "示例" },
+    ] satisfies { id: DemoFilter; label: string }[]
+  ).map((item) => ({
+    ...item,
+    count: searchMatched.filter((view) => matchesDemoFilter(view, item.id)).length,
+  }));
   const kindFilters: { id: KindFilter; label: string; count: number }[] = (
     [
       { id: "all" as const, label: "审查与工程班" },
@@ -104,6 +134,7 @@ export function ReportsPage() {
       const view = caseViewOf(group, item.id);
       return (
         view !== null &&
+        matchesDemoFilter(view, demoFilter) &&
         (queryText.length === 0 || view.searchBlob.includes(queryText)) &&
         caseMatchesStatusFilter(view.status, statusFilter)
       );
@@ -160,6 +191,19 @@ export function ReportsPage() {
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
+        <div className="ck-library-kinds" aria-label="示例数据">
+          {demoFilters.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={demoFilter === item.id}
+              onClick={() => setDemoFilter(item.id)}
+            >
+              {item.label}
+              <span>{item.count}</span>
+            </button>
+          ))}
+        </div>
         <div className="ck-library-kinds" aria-label="案件类型">
           {kindFilters.map((item) => (
             <button
@@ -197,7 +241,9 @@ export function ReportsPage() {
             }
             hint={
               statusFilter === "attention" && !queryText
-                ? "进行中、失败或未决重大项会列在这里。"
+                ? demoCaseCount > 0 && demoFilter !== "sample"
+                  ? "进行中、失败或未决重大项会列在这里。示例报告在「示例」里，不计入需要处理。"
+                  : "进行中、失败或未决重大项会列在这里。"
                 : "试试其他关键词，或切换案件状态。"
             }
           />
@@ -257,11 +303,22 @@ function CaseCard({
           <h3 title={view.label}>
             <Link to={`/reports/${latest.runId}`}>{title}</Link>
           </h3>
-          <p className="ck-case-kinds">{view.kindLabels.join(" · ")}</p>
+          <p className="ck-case-kinds">
+            {view.kindLabels.join(" · ")}
+            {caseHasDemo(view) ? <span className="ck-demo-tag">示例</span> : null}
+          </p>
         </div>
-        <StatusPill tone={pill.tone} text={pill.text} />
+        <div className="ck-case-status">
+          <StatusPill tone={pill.tone} text={pill.text} />
+          {latest.attention ? (
+            // #304: same shared count as the report page and `runs list`.
+            <span className="ck-case-counts">{formatAttentionLabel(latest.attention)}</span>
+          ) : null}
+        </div>
       </div>
-      {summary.prUrl ? <p className="ck-case-next">下一步：{summary.nextAction}</p> : null}
+      {summary.prUrl && !runs.every((run) => isDemoRun(run)) ? (
+        <p className="ck-case-next">下一步：{summary.nextAction}</p>
+      ) : null}
       <div className="ck-case-meta">
         <span>
           {progress ? `${progress} 席` : `${runs.length} 份记录`}
@@ -303,7 +360,10 @@ function HistoryRow({ run, groupKey }: { run: CliRunSummaryDto; groupKey: string
   return (
     <Link to={`/reports/${run.runId}`} className="ck-run-row" title={run.runId}>
       <div className="ck-run-row-top">
-        <p className="truncate text-sm font-medium text-fg">{runHistoryLabel(run, groupKey)}</p>
+        <p className="truncate text-sm font-medium text-fg">
+          {runHistoryLabel(run, groupKey)}
+          {isDemoRun(run) ? <span className="ck-demo-tag">示例</span> : null}
+        </p>
         <StatusPill tone={pill.tone} text={pill.text} />
       </div>
       <div className="ck-run-meta">

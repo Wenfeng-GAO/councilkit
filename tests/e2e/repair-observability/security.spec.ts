@@ -1,11 +1,5 @@
 import { type Page, expect, test } from "@playwright/test";
-import {
-  ORIGIN,
-  PARENT_RUN_ID,
-  PATH_SENTINEL,
-  SECRET_SENTINEL,
-  XSS_PAYLOAD,
-} from "./constants";
+import { ORIGIN, PARENT_RUN_ID, PATH_SENTINEL, SECRET_SENTINEL, XSS_PAYLOAD } from "./constants";
 import {
   authoritySnapshot,
   expectNoSecretInDom,
@@ -72,7 +66,9 @@ test("[E48] @p0 untrusted content rendered as text", async ({ page }) => {
   await boot(page, "F8-xss");
   await openRepairWorkspace(page);
   await expect(page.getByTestId("repair-activity-list")).toContainText("<script>");
-  const fired = await page.evaluate(() => (window as unknown as { __xss_fired?: number }).__xss_fired);
+  const fired = await page.evaluate(
+    () => (window as unknown as { __xss_fired?: number }).__xss_fired,
+  );
   expect(fired).toBeUndefined();
   expect(requests).toEqual([]);
   expect(XSS_PAYLOAD.length).toBeGreaterThan(10);
@@ -100,9 +96,12 @@ test("[E49] @p0 path traversal and sibling isolation", async ({ page }) => {
 test("[E50] @p0 auth and request guard on test port", async ({ page, request }) => {
   await boot(page, "F1");
   // No session
-  const bare = await request.get(`${ORIGIN}/api/v1/cli-runs/${PARENT_RUN_ID}/repair/observation?round=current`, {
-    headers: { Host: "127.0.0.1:43837", Origin: ORIGIN },
-  });
+  const bare = await request.get(
+    `${ORIGIN}/api/v1/cli-runs/${PARENT_RUN_ID}/repair/observation?round=current`,
+    {
+      headers: { Host: "127.0.0.1:43837", Origin: ORIGIN },
+    },
+  );
   expect([401, 403]).toContain(bare.status());
 
   await openRepairWorkspace(page);
@@ -130,12 +129,20 @@ test("[E58] @p0 observation has no execution side effects", async ({ page }) => 
   await openRepairWorkspace(page);
   await page.getByTestId("repair-filter-query").fill("session");
   await page.getByTestId("repair-filter-clear").click();
-  await page.getByTestId("repair-tab-evidence").click().catch(() => undefined);
-  await page.getByTestId("repair-tab-activity").click().catch(() => undefined);
+  await page
+    .getByTestId("repair-tab-evidence")
+    .click()
+    .catch(() => undefined);
+  await page
+    .getByTestId("repair-tab-activity")
+    .click()
+    .catch(() => undefined);
   const after = await authoritySnapshot(page);
   expect(after.unchanged || after.current.repairJson === before.baseline.repairJson).toBeTruthy();
   const launches = await launcherCalls(page);
-  expect(launches.all.filter((a) => a.action === "repair" || a.action.includes("squadctl")).length).toBe(0);
+  expect(
+    launches.all.filter((a) => a.action === "repair" || a.action.includes("squadctl")).length,
+  ).toBe(0);
 });
 
 test("[E62] @p0 evidence export download is redacted and non-publishing", async ({ page }) => {

@@ -1,4 +1,9 @@
 import {
+  exportRepairEvidence,
+  fetchRepairEvidence,
+  fetchRepairObservation,
+} from "@/runtime/repair-observation-client";
+import {
   REPAIR_OBS_PIN_THRESHOLD_PX,
   REPAIR_OBS_POLL_MS,
   REPAIR_OBS_UI_MAX_ROWS,
@@ -14,11 +19,6 @@ import {
   nextPollDelayMs,
   prependEarlierOperations,
 } from "@shared/runtime/repair-observation";
-import {
-  exportRepairEvidence,
-  fetchRepairEvidence,
-  fetchRepairObservation,
-} from "@/runtime/repair-observation-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type RepairReadingState = {
@@ -171,7 +171,10 @@ export function useRepairObservation(input: {
         setConnectionLost(false);
         setError(null);
         mergeObservation(data, false);
-        if (readingRoundRef.current === "current" || readingRoundRef.current === data.currentRound) {
+        if (
+          readingRoundRef.current === "current" ||
+          readingRoundRef.current === data.currentRound
+        ) {
           try {
             const ev = await fetchRepairEvidence({
               runId: input.runId,
@@ -217,6 +220,7 @@ export function useRepairObservation(input: {
     };
   }, [input.runId, mergeObservation]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-bind when new rows mount (the scroller element can be replaced as the list grows)
   useEffect(() => {
     const onScroll = () => {
       const el = input.getScroller();
@@ -231,6 +235,7 @@ export function useRepairObservation(input: {
     return () => el?.removeEventListener("scroll", onScroll);
   }, [input.getScroller, observation?.upserts.length]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: new rows are the trigger to keep a pinned reader scrolled to the bottom
   useEffect(() => {
     if (!reading.pinned) return;
     const el = input.getScroller();

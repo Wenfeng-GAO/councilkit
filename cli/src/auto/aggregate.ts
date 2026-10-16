@@ -40,9 +40,9 @@ function incompleteBanner(input: ReviewReportInput): string {
     input.failurePhase !== "aggregation" &&
     input.failurePhase !== "attempts"
   ) {
-    return `> INCOMPLETE — the run stopped before the Aggregator could start (${
-      oneLine(input.reason?.trim() || "see transcript")
-    }). What follows is the deterministic header plus each Attempt's raw deliverable in the appendix; no consensus is fabricated.`;
+    return `> INCOMPLETE — the run stopped before the Aggregator could start (${oneLine(
+      input.reason?.trim() || "see transcript",
+    )}). What follows is the deterministic header plus each Attempt's raw deliverable in the appendix; no consensus is fabricated.`;
   }
   // Distinguish every-Attempt-failed (no Aggregator ran) from an Aggregator
   // that ran but produced no usable output.
@@ -158,7 +158,10 @@ function renderAttemptsTable(attempts: ReadonlyArray<AttemptResult>): string {
  * table row. Backslashes are escaped FIRST so an existing `\|` is not
  * double-escaped into `\\|` (reviewer finding). */
 function cell(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/[\r\n]+/g, " ");
 }
 
 /** Distinguish completed / partial (incomplete success) / failed / interrupted
@@ -260,7 +263,10 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
   }
   for (const a of attempts) {
     const reusedMark = a.reused === true ? " [reused]" : "";
-    lines.push(`### ${oneLine(a.agentName)} (${oneLine(a.driverId)}/${oneLine(a.modelId)})${reusedMark}`, "");
+    lines.push(
+      `### ${oneLine(a.agentName)} (${oneLine(a.driverId)}/${oneLine(a.modelId)})${reusedMark}`,
+      "",
+    );
     // A retried Attempt keeps only its final result here; the failed first try
     // is noted once so the appendix never silently drops it.
     if (a.retryOf !== undefined) {
@@ -280,9 +286,10 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
       // failure.message can carry child stderr — demote its headings too, or a
       // failed deliverable could still inject an H1/H2 into the outline
       // (reviewer finding).
-      const detail = downgradeHeadingsOutsideFences(
-        a.failure?.message ?? "no output",
-      ).replace(/\n/g, " ");
+      const detail = downgradeHeadingsOutsideFences(a.failure?.message ?? "no output").replace(
+        /\n/g,
+        " ",
+      );
       lines.push(`failed: ${a.failure?.code ?? "unknown"} — ${detail}`, "");
     }
   }
@@ -399,7 +406,7 @@ export function writeReviewReportCopy(outPath: string, markdown: string): void {
 function codeSpan(text: string): string {
   const runs = text.match(/`+/g);
   const max = runs === null ? 0 : Math.max(...runs.map((r) => r.length));
-  if (max === 0) return "`" + text + "`";
+  if (max === 0) return `\`${text}\``;
   const fence = "`".repeat(max + 1);
   return `${fence} ${text} ${fence}`;
 }

@@ -150,7 +150,10 @@ describe.skipIf(!HAS_LIVE_SQUADCTL)("production SquadctlBridge with real squadct
     const freezePath = join(home, "squad-tasks", started.taskId, "councilkit-policy-freeze.json");
     expect(existsSync(freezePath)).toBe(true);
     const policy = JSON.parse(
-      readFileSync(join(home, "squad-tasks", started.taskId, "councilkit-gate-policy.json"), "utf8"),
+      readFileSync(
+        join(home, "squad-tasks", started.taskId, "councilkit-gate-policy.json"),
+        "utf8",
+      ),
     ) as { delivery_authority?: { authority_ref?: string; push?: boolean; pr_mutation?: boolean } };
     const authority = JSON.parse(
       readFileSync(join(home, "squad-tasks", started.taskId, "delivery-authority.json"), "utf8"),

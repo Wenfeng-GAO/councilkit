@@ -2,12 +2,16 @@
  * Resolve trusted observation sources from a validated parent repair run.
  * Never scans sibling tasks, candidate .squad, or arbitrary query paths.
  */
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import { isCliRunId } from "@shared/runtime/cli-runs-index";
 
-export type TrustedSourceKind = "orchestrator_log" | "adapter_meta" | "child_review_live" | "evidence";
+export type TrustedSourceKind =
+  | "orchestrator_log"
+  | "adapter_meta"
+  | "child_review_live"
+  | "evidence";
 
 export type TrustedSource = {
   sourceId: string;
@@ -117,7 +121,10 @@ function dirnameSafe(path: string): string {
   return path.slice(0, idx) || sep;
 }
 
-export function readRepairStateLite(runId: string, env: NodeJS.ProcessEnv = process.env): RepairStateLite | null {
+export function readRepairStateLite(
+  runId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): RepairStateLite | null {
   if (!isCliRunId(runId) || !runId.startsWith("ck-repair-")) return null;
   const path = join(resolveCliRunsRoot(env), runId, "repair.json");
   const check = assertTrustedPath(path, [resolveCliRunsRoot(env)]);
@@ -181,7 +188,11 @@ export function resolveTrustedSources(
           reasons.push(`orchestrator.log unreadable: ${logCheck.reason}`);
         }
 
-        const metaCandidates = ["process-heartbeat.json", "adapter-meta.json", "councilkit-bridge.json"];
+        const metaCandidates = [
+          "process-heartbeat.json",
+          "adapter-meta.json",
+          "councilkit-bridge.json",
+        ];
         for (const metaName of metaCandidates) {
           const metaPath = join(taskCheck.path, metaName);
           const metaCheck = assertTrustedPath(metaPath, allowedRoots);
@@ -199,8 +210,19 @@ export function resolveTrustedSources(
         }
 
         // Per-role JSONL under the registered task dir only.
-        for (const role of ["orchestrator", "planner_a", "planner_b", "coder", "reviewer", "verifier"] as const) {
-          const roleFiles = [`${role}.jsonl`, `${role}.session.jsonl`, join("adapter-runs", role, "events.jsonl")];
+        for (const role of [
+          "orchestrator",
+          "planner_a",
+          "planner_b",
+          "coder",
+          "reviewer",
+          "verifier",
+        ] as const) {
+          const roleFiles = [
+            `${role}.jsonl`,
+            `${role}.session.jsonl`,
+            join("adapter-runs", role, "events.jsonl"),
+          ];
           for (const rel of roleFiles) {
             const roleLog = join(taskCheck.path, rel);
             const roleCheck = assertTrustedPath(roleLog, allowedRoots);

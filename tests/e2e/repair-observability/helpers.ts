@@ -5,12 +5,12 @@
  */
 import { type APIResponse, type Locator, type Page, expect } from "@playwright/test";
 import {
+  type FixtureName,
   GOAL,
   ORIGIN,
   PARENT_RUN_ID,
   SECRET_SENTINEL,
   TEST_API,
-  type FixtureName,
 } from "./constants";
 
 export interface ResetResult {
@@ -28,7 +28,10 @@ export interface ResetResult {
 }
 
 async function controlPost<T>(page: Page, path: string, data?: unknown): Promise<T> {
-  const response = await page.request.post(`${TEST_API}${path}`, data === undefined ? {} : { data });
+  const response = await page.request.post(
+    `${TEST_API}${path}`,
+    data === undefined ? {} : { data },
+  );
   expect(response.ok(), `POST ${TEST_API}${path} → ${response.status()}`).toBeTruthy();
   const envelope = (await response.json()) as { ok: boolean; data: T };
   expect(envelope.ok).toBeTruthy();
@@ -120,11 +123,7 @@ export async function envSentinel(page: Page): Promise<{
   return controlGet(page, "/env-sentinel");
 }
 
-export async function chmodSource(
-  page: Page,
-  relativePath: string,
-  mode: number,
-): Promise<void> {
+export async function chmodSource(page: Page, relativePath: string, mode: number): Promise<void> {
   await controlPost(page, "/chmod-source", { relativePath, mode });
 }
 
@@ -204,9 +203,11 @@ export async function waitForObservation(
 
 export async function fetchObservation(
   page: Page,
-  query: string = "round=current&limit=200",
+  query = "round=current&limit=200",
 ): Promise<{ status: number; data: Record<string, unknown> | null; raw: unknown }> {
-  const res = await page.request.get(`/api/v1/cli-runs/${PARENT_RUN_ID}/repair/observation?${query}`);
+  const res = await page.request.get(
+    `/api/v1/cli-runs/${PARENT_RUN_ID}/repair/observation?${query}`,
+  );
   const json = (await res.json()) as { ok?: boolean; data?: Record<string, unknown> };
   return { status: res.status(), data: json.data ?? null, raw: json };
 }
