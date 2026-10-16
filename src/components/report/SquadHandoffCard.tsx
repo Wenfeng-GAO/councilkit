@@ -1,4 +1,5 @@
 import { cliRunPhaseHeading, cliRunStatusPill } from "@/lib/cli-run-status";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import type { CliRunHandoffDto, CliRunSummaryDto } from "@shared/runtime/schemas";
 import { Link } from "react-router-dom";
 
@@ -8,10 +9,10 @@ const CANDIDATE_STATUS = {
   invalidated: "已作废",
 } as const;
 
-type SquadRun = Pick<CliRunSummaryDto, "kind" | "status" | "progress" | "handoff">;
+type SquadRun = Pick<CliRunSummaryDto, "kind" | "status" | "progress" | "handoff" | "demo">;
 
 export function SquadHandoffCard({ run }: { run: SquadRun }) {
-  if (run.kind !== "squad") return null;
+  if (isDemoRun(run) || run.kind !== "squad") return null;
   const handoff = run.handoff;
   const phase = run.progress?.phase;
   if (handoff === null && phase === undefined) return null;

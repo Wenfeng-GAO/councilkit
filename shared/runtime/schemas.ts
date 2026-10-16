@@ -655,6 +655,8 @@ export const cliRunSummarySchema = z
     acceptanceCoverage: z.string().max(200).nullable().optional(),
     remainingBudget: z.string().max(200).nullable().optional(),
     recoveryAction: z.string().max(400).nullable().optional(),
+    /** Old runs omit the field. Parse fills false; a sample run sets true. */
+    demo: z.boolean().default(false).optional(),
   })
   .strict();
 export type CliRunSummaryDto = z.infer<typeof cliRunSummarySchema>;

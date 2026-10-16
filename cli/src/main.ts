@@ -75,6 +75,7 @@ Commands:
                                       Mark a ledger item accepted (won't fix) with a reason.
   runs list                           List CLI runs (report.md + transcript).
   runs open <run-id>                  Print the in-app URL for a run report.
+  demo [--new]                        Write a built-in sample review (reused if present). No accounts, no model calls.
 
 Global flags:
   --json     Machine-readable output: progress/diagnostics on stderr, one final JSON on stdout.

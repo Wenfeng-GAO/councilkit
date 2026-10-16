@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/Button";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { buildRepairPackage, repairExportCommand } from "@shared/runtime/repair-package";
 import { canExportRepairPackage } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
@@ -7,7 +8,7 @@ import { useState } from "react";
 export function RepairExportCard({ run }: { run: CliRunDetailResponse }) {
   const [clusterId, setClusterId] = useState("");
   const [message, setMessage] = useState("");
-  if (run.kind !== "review") return null;
+  if (isDemoRun(run) || run.kind !== "review") return null;
   let explanation = "";
   let count = 0;
   try {

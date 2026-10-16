@@ -135,7 +135,9 @@ async function runList(argv: string[], out: OutputSink): Promise<void> {
     return list
       .map((r) => {
         const report = r.hasReport ? "report" : "no-report";
-        return `${r.runId}  ${r.kind}  ${r.status}  ${report}  ${r.title}`;
+        // DM-05: a dedicated column, not a prefix, so `awk '{print $5}'` works.
+        const source = r.demo === true ? "[示例 DEMO]" : "真实";
+        return `${r.runId}  ${r.kind}  ${r.status}  ${report}  ${source}  ${r.title}`;
       })
       .join("\n");
   });

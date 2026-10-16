@@ -66,12 +66,15 @@ if [ -z "$ok" ]; then
 fi
 head -c 2000 "$LOG.health"; echo
 
-if $CK --help 2>&1 | grep -q "councilkit demo"; then
-  step "councilkit demo (mock review)"
-  $CK demo --json | tee "$LOG.demo"
-  grep -q '"demo": *true' "$LOG.demo"
-else
-  step "mock driver not available yet (#272); skipping mock review"
-fi
-
+step "councilkit demo (mock review, CI-03)"
+$CK demo --json | tee "$LOG.demo"
+grep -q '"demo": *true' "$LOG.demo"
+demo_id="$(sed -n 's/.*"runId": *"\([^"]*\)".*/\1/p' "$LOG.demo" | head -1)"
+[ -n "$demo_id" ] || { echo "ci-smoke: demo printed no runId" >&2; exit 1; }
+step "demo report: first two lines carry demo: true (DM-04)"
+head -2 "$HOME/.config/councilkit/runs/$demo_id/report.md" | tee "$LOG.demohead"
+grep -q 'demo: true' "$LOG.demohead"
+step "runs list marks the demo in its own column (DM-05)"
+$CK runs list | tee "$LOG.runs"
+grep -q "^$demo_id  review  completed  report  \[示例 DEMO\]" "$LOG.runs"
 step "ci-smoke: OK"
