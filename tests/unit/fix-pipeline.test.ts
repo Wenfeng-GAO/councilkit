@@ -86,6 +86,48 @@ describe("fixPipelineLiveStatus", () => {
     });
   });
 
+  it("enables fix and re-review once a review is interrupted, even without a report", () => {
+    const html = renderToStaticMarkup(
+      createElement(FixPipeline, {
+        run: {
+          kind: "review",
+          pipeline: null,
+          hasReport: false,
+          status: "interrupted",
+        } as never,
+        busy: false,
+        pendingAction: null,
+        error: null,
+        onFix: () => {},
+        onReReview: () => {},
+      }),
+    );
+    expect(html).toContain("内置修复");
+    expect(html).toContain("只再审一遍（不改代码）");
+    expect(html).not.toContain("修复进行中");
+    expect(html).not.toMatch(/<button[^>]*\sdisabled(?:=|>|\s)/);
+  });
+
+  it("keeps the fix controls disabled while the review is still running", () => {
+    const html = renderToStaticMarkup(
+      createElement(FixPipeline, {
+        run: {
+          kind: "review",
+          pipeline: null,
+          hasReport: true,
+          status: "running",
+        } as never,
+        busy: false,
+        pendingAction: null,
+        error: null,
+        onFix: () => {},
+        onReReview: () => {},
+      }),
+    );
+    expect(html).toContain("修复进行中…");
+    expect(html).toContain("disabled");
+  });
+
   it("does not render built-in fix stages for a repair parent run", () => {
     const html = renderToStaticMarkup(
       createElement(FixPipeline, {

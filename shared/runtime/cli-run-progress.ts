@@ -117,7 +117,11 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-/** Read-time overlay: a running sidecar without a live pid or fresh heartbeat is failed. */
+/**
+ * Read-time overlay. A non-squad run still marked running, with no live pid and
+ * no heartbeat inside STALE_RUNNING_MS, lost its local execution service.
+ * That is an interruption, never a failed review. Exactly STALE_RUNNING_MS counts.
+ */
 export function reconcileRunningStatus(input: {
   status: CliRunLiveStatus;
   kind: string;
@@ -128,11 +132,11 @@ export function reconcileRunningStatus(input: {
 }): CliRunLiveStatus {
   if (input.status !== "running") return input.status;
   if (input.kind === "squad") return input.status;
-  if (input.pid !== null) return isPidAlive(input.pid) ? "running" : "failed";
+  if (input.pid !== null) return isPidAlive(input.pid) ? "running" : "interrupted";
   const updated = Date.parse(input.updatedAt ?? "");
   const now = input.nowMs ?? Date.now();
   const staleMs = input.staleMs ?? STALE_RUNNING_MS;
-  if (!Number.isFinite(updated) || now - updated > staleMs) return "failed";
+  if (!Number.isFinite(updated) || now - updated >= staleMs) return "interrupted";
   return "running";
 }
 

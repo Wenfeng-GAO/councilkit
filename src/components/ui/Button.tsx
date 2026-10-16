@@ -13,7 +13,12 @@ export function Button({ variant = "primary", className = "", children, ...rest 
     ghost: "border border-edge text-fg hover:bg-surface",
   };
   return (
-    <button type="button" className={`${base} ${variants[variant]} ${className}`} {...rest}>
+    <button
+      type="button"
+      className={`${base} ${variants[variant]} ${className}`}
+      {...rest}
+      data-variant={variant}
+    >
       {children}
     </button>
   );

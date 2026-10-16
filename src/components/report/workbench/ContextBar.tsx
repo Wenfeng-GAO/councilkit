@@ -1,4 +1,5 @@
 import { primaryRunStatus } from "@/lib/cli-run-status";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { WorkbenchMobileMenu } from "./WorkbenchNav";
@@ -30,8 +31,12 @@ export function ContextBar({
         <b title={run.title}>{run.title}</b>
       </div>
       <div className="ck-wb-context-right">
-        <span className={status.tone === "info" ? "ck-wb-running" : undefined}>{status.text}</span>
-        {seats.length > 0 ? (
+        <span
+          className={status.tone === "info" ? "ck-wb-running ck-wb-run-status" : "ck-wb-run-status"}
+        >
+          {status.text}
+        </span>
+        {seats.length > 0 && !isLostExecutionReview(run) ? (
           <span>
             {doneSeats}/{seats.length} 席位已完成
           </span>

@@ -46,8 +46,11 @@ export function FixPipeline({
   if (run.kind === "repair") return null;
   const pipeline = run.pipeline;
   const inFlight =
-    busy || run.status === "running" || (pipeline !== null && pipeline.phase !== "done");
-  const canAct = run.kind === "review" && run.hasReport && !inFlight;
+    busy ||
+    run.status === "running" ||
+    (run.status !== "interrupted" && pipeline !== null && pipeline.phase !== "done");
+  const canAct =
+    run.kind === "review" && !inFlight && (run.hasReport || run.status === "interrupted");
   const followUp = pipeline?.followUpRunId ?? null;
   const followUpStatus = followUpRun?.status ?? null;
   const followUpFailed = followUpStatus === "failed" || followUpStatus === "interrupted";

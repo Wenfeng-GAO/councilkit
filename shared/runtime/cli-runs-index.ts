@@ -142,7 +142,10 @@ export function cliReportUrl(runId: string): string {
   return `${CANONICAL_ORIGIN}/reports/${runId}`;
 }
 
-export function listCliRuns(env: NodeJS.ProcessEnv = process.env): CliRunSummary[] {
+export function listCliRuns(
+  env: NodeJS.ProcessEnv = process.env,
+  nowMs = Date.now(),
+): CliRunSummary[] {
   const root = resolveCliRunsRoot(env);
   const rootStat = safeLstat(root);
   if (rootStat === null || !rootStat.isDirectory() || rootStat.isSymbolicLink()) return [];
@@ -157,7 +160,7 @@ export function listCliRuns(env: NodeJS.ProcessEnv = process.env): CliRunSummary
   const runs: CliRunSummary[] = [];
   for (const name of names) {
     if (!isCliRunId(name)) continue;
-    const summary = inspectRunDir(root, name);
+    const summary = inspectRunDir(root, name, nowMs);
     if (summary !== null) runs.push(summary);
   }
   runs.sort((a, b) => {
@@ -172,12 +175,13 @@ export function listCliRuns(env: NodeJS.ProcessEnv = process.env): CliRunSummary
 export function readCliRun(
   runId: string,
   env: NodeJS.ProcessEnv = process.env,
+  nowMs = Date.now(),
 ): CliRunDetail | null {
   if (!isCliRunId(runId)) return null;
   const root = resolveCliRunsRoot(env);
   const rootStat = safeLstat(root);
   if (rootStat === null || !rootStat.isDirectory() || rootStat.isSymbolicLink()) return null;
-  const summary = inspectRunDir(root, runId);
+  const summary = inspectRunDir(root, runId, nowMs);
   if (summary === null) return null;
   const reportPath = join(root, runId, "report.md");
   const reportStat = safeLstat(reportPath);
@@ -220,7 +224,7 @@ export function readCliRun(
   };
 }
 
-function inspectRunDir(root: string, runId: string): CliRunSummary | null {
+function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummary | null {
   const dir = join(root, runId);
   if (resolve(dir) !== resolve(root, runId)) return null;
   const dirStat = safeLstat(dir);
@@ -261,26 +265,31 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
   const lockStat = safeLstat(lockPath);
   const hasPlanLock = Boolean(lockStat?.isFile() && !lockStat.isSymbolicLink());
 
-  const rawStatus = live?.status ?? parsed.status;
+  const observed = live?.status ?? parsed.status;
   const reconciled =
-    live?.status === "running"
+    observed === "running"
       ? reconcileRunningStatus({
-          status: live.status,
+          status: "running",
           kind: parsed.kind,
-          updatedAt: live.progress?.updatedAt ?? derived?.updatedAt ?? null,
+          updatedAt:
+            live?.status === "running"
+              ? (live.progress?.updatedAt ?? derived?.updatedAt ?? null)
+              : transcriptStat
+                ? new Date(transcriptStat.mtimeMs).toISOString()
+                : null,
           pid: readPipelinePid(dir),
+          nowMs,
         })
-      : rawStatus;
+      : observed;
+  const abandoned = observed === "running" && reconciled === "interrupted";
+  const progress = abandoned ? releaseAbandonedSeats(derived) : derived;
   const status = mapSquadObserveStatus({
     kind: parsed.kind,
     status: reconciled,
-    progress: derived,
+    progress,
   });
   const pipeline =
-    reconciled === "failed" &&
-    rawStatus === "running" &&
-    live?.pipeline &&
-    live.pipeline.phase !== "done"
+    abandoned && live?.pipeline && live.pipeline.phase !== "done"
       ? { ...live.pipeline, phase: "done" as const }
       : (live?.pipeline ?? null);
   return {
@@ -295,7 +304,7 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     hasFindings,
     hasPlanLock,
     reportUrl: cliReportUrl(runId),
-    progress: derived,
+    progress,
     pipeline,
     handoff: live?.handoff ?? null,
     reviewEvidence:
@@ -303,6 +312,20 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
     ...readRepairProjection(dir, parsed.kind),
   };
+}
+
+/** Seats still marked running after the execution service died are not still running. */
+function releaseAbandonedSeats(progress: CliRunProgress | null): CliRunProgress | null {
+  if (progress === null) return null;
+  let changed = false;
+  const attempts = progress.attempts.map((row) => {
+    if (row.status !== "pending" && row.status !== "queued" && row.status !== "running") {
+      return row;
+    }
+    changed = true;
+    return { ...row, status: "cancelled" as const, lastActivity: null };
+  });
+  return changed ? { ...progress, attempts } : progress;
 }
 
 function readRepairProjection(
@@ -344,9 +367,7 @@ function readRepairProjection(
       reasonCode: typeof rec.reasonCode === "string" ? rec.reasonCode : null,
       sourceRunId: typeof rec.sourceRunId === "string" ? rec.sourceRunId : null,
       lastError:
-        typeof rec.lastError === "string"
-          ? clipUtf16(rec.lastError, CLI_RUN_LAST_ERROR_MAX)
-          : null,
+        typeof rec.lastError === "string" ? clipUtf16(rec.lastError, CLI_RUN_LAST_ERROR_MAX) : null,
       outerUsed,
       outerMax,
       resumeEligible:

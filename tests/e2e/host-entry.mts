@@ -31,7 +31,7 @@
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,7 +75,7 @@ import { createScopeManager } from "../../runtime-host/scopes/scope-manager";
 import { createSessionReconciler } from "../../runtime-host/scopes/session-reconciler";
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
-import { seedReportCaseFixtures } from "./cli-run-fixtures";
+import { seedLostExecutionFixtures, seedReportCaseFixtures } from "./cli-run-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
 // host must serve the built dist/ exactly like the shipped Host does.
@@ -95,8 +95,9 @@ if (process.env.COUNCILKIT_E2E === "1") {
     join(dir, "report.md"),
     "# Autonomous Review Report\n\nE2E fixture body. `<script>alert(1)</script>` stays text.\n",
   );
+  const fixtureTranscript = join(dir, "transcript.jsonl");
   writeFileSync(
-    join(dir, "transcript.jsonl"),
+    fixtureTranscript,
     `${JSON.stringify({
       kind: "review.started",
       version: 1,
@@ -113,6 +114,18 @@ if (process.env.COUNCILKIT_E2E === "1") {
       },
     })}\n`,
   );
+  // This fixture is a live run. Touch the transcript so a long e2e host
+  // does not cross the 5-minute stale window and look interrupted.
+  const keepFixtureFresh = setInterval(() => {
+    const now = new Date();
+    try {
+      utimesSync(fixtureTranscript, now, now);
+    } catch {
+      clearInterval(keepFixtureFresh);
+    }
+  }, 60_000);
+  keepFixtureFresh.unref();
+  seedLostExecutionFixtures(home);
   writeFileSync(
     join(home, "agents.json"),
     JSON.stringify({

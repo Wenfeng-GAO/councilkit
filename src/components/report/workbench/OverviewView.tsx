@@ -1,4 +1,5 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { FindingLedger } from "@/components/report/FindingLedger";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { reviewOverviewHeading } from "@/lib/cli-run-status";
@@ -10,6 +11,7 @@ import {
 } from "@/lib/finding-list";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useState } from "react";
 import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
@@ -31,6 +33,8 @@ export function OverviewView({
   parsed,
   hasRepair,
   onOpenRepair,
+  onReReview,
+  reReviewBusy = false,
   againstState = { status: "none" },
   filter,
   onFilterChange,
@@ -39,6 +43,8 @@ export function OverviewView({
   parsed: ParsedReviewReport | null;
   hasRepair: boolean;
   onOpenRepair: () => void;
+  onReReview?: () => void;
+  reReviewBusy?: boolean;
   againstState?: AgainstLedgerState;
   filter?: FindingListFilter;
   onFilterChange?: (filter: FindingListFilter) => void;
@@ -62,6 +68,7 @@ export function OverviewView({
     run.status === "completed" &&
     projection.blockingCount > 0 &&
     (parsed?.verdict === "approve" || parsed?.verdict === "comment");
+  const lost = isLostExecutionReview(run);
   const heading = decisionConflict ? "审查结论待核对" : reviewOverviewHeading(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
   const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
@@ -79,10 +86,18 @@ export function OverviewView({
 
   return (
     <article className="ck-wb-document">
-      <h1>{heading}</h1>
+      {lost ? (
+        <ExecutionInterruptedCard
+          heading="h1"
+          busy={reReviewBusy}
+          onReReview={() => onReReview?.()}
+        />
+      ) : (
+        <h1>{heading}</h1>
+      )}
       <p className="ck-wb-report-meta">
         {run.status === "completed" ? <span>审查执行已完成</span> : null}
-        {seats.length > 0 ? (
+        {seats.length > 0 && !lost ? (
           <span>
             {doneSeats}/{seats.length} 席位已完成
           </span>

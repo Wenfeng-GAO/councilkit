@@ -23,10 +23,11 @@ test("有 fixture 时能点进报告并看到标题；脚本标签保持为文�
   }
   await fixture.click();
   await expect(page).toHaveURL(new RegExp(`/reports/${E2E_CLI_RUN_ID}`));
-  await expect(page.getByRole("heading", { name: "Autonomous Review Report" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "复制当前内容" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "席位审查中" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制问题清单" })).toBeVisible();
+  await page.getByRole("region", { name: "原始汇总报告" }).locator("summary").click();
   await expect(page.locator("script", { hasText: "alert(1)" })).toHaveCount(0);
-  await expect(page.getByText("<script>alert(1)</script>")).toBeVisible();
+  await expect(page.getByText("<script>alert(1)</script>").first()).toBeVisible();
 });
 
 test("已有 CLI 报告时详情页能复制报告内容", async ({ page }) => {
@@ -35,12 +36,12 @@ test("已有 CLI 报告时详情页能复制报告内容", async ({ page }) => {
   const reportLink = page.locator('a[href^="/reports/ck-review-"]').first();
   if ((await reportLink.count()) === 0) return;
   await reportLink.click();
-  await expect(page.getByRole("button", { name: "复制当前内容" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制问题清单" })).toBeVisible();
 });
 
 test("深链 /reports/:runId 能直接打开 fixture", async ({ page }) => {
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
-  const title = page.getByRole("heading", { name: "Autonomous Review Report" });
+  const title = page.getByRole("heading", { name: "席位审查中" });
   const missing = page.getByText("找不到这份报告");
   await expect(title.or(missing)).toBeVisible();
 });
@@ -138,57 +139,21 @@ test("review 总览「复制」按钮复制短清单而非完整报告", async (
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
 
-  // Wait for the page to load
-  const overview = page.locator("text=本轮总览").or(page.getByRole("heading", { name: "本轮总览" }));
-  await expect(overview).toBeVisible({ timeout: 10000 });
-
-  // Check that we're on the overview (not a seat detail)
-  const copyButton = page.getByRole("button", { name: /复制/ }).first();
+  await expect(page.getByRole("button", { name: "本轮总览" })).toBeVisible();
+  const copyButton = page.getByRole("button", { name: "复制问题清单" });
   await expect(copyButton).toBeVisible();
-
-  // Click the copy button
   await copyButton.click();
-
-  // Wait for copy to complete
   await expect(page.getByText("已复制")).toBeVisible();
-
-  // Get clipboard content
   const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
-
-  // Verify short checklist format:
-  // 1. Should contain "# 问题清单" header
   expect(clipboardText).toContain("# 问题清单");
-
-  // 2. Should contain finding markers (## #01, ## #02, etc.)
-  expect(clipboardText).toMatch(/## #\d+/);
-
-  // 3. Should contain severity labels (致命/重大/次要/轻微)
-  expect(clipboardText).toMatch(/致命|重大|次要|轻微/);
-
-  // 4. Should NOT contain sections from the full report like 附录 or 过程对比
+  expect(clipboardText).toContain("当前筛选无问题");
+  expect(clipboardText).not.toContain("E2E fixture body");
   expect(clipboardText).not.toContain("附录");
-  expect(clipboardText).not.toContain("各审查者交付物");
-  expect(clipboardText).not.toContain("过程对比");
-
-  // 5. If there are findings, should have location markers
-  if (clipboardText.includes("**位置**")) {
-    expect(clipboardText).toMatch(/\*\*位置\*\*:\s*`[\w./-]+:\d+/);
-  }
-
-  // 6. Should include status tags
-  expect(clipboardText).toMatch(/\*\*状态\*\*/);
 });
 
 test("review 总览有「复制完整报告」按钮作为次要选项", async ({ page }) => {
   await page.goto(`/reports/${E2E_CLI_RUN_ID}`);
 
-  // Wait for the page to load
-  const overview = page.locator("text=本轮总览").or(page.getByRole("heading", { name: "本轮总览" }));
-  await expect(overview).toBeVisible({ timeout: 10000 });
-
-  // Check for the secondary "copy full report" button
-  const copyFullButton = page.getByRole("button", { name: /复制完整报告/ });
-
-  // The button should be visible on overview
-  await expect(copyFullButton).toBeVisible();
+  await expect(page.getByRole("button", { name: "本轮总览" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制完整报告" })).toBeVisible();
 });

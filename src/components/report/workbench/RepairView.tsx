@@ -1,5 +1,7 @@
+import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { FixPipeline } from "@/components/report/FixPipeline";
 import { type RepairProfileSummary, RepairRunPanel } from "@/components/report/RepairRunPanel";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 
 export interface WorkbenchPipelineProps {
@@ -53,10 +55,18 @@ export function RepairView({
   pipeline: WorkbenchPipelineProps;
 }) {
   const sha = run.reviewEvidence?.sha ?? null;
+  const lost = isLostExecutionReview(run);
   const notStarted = run.pipeline === null && repair.activeRepair === null;
   return (
     <article className="ck-wb-document">
       <h1>当前修复</h1>
+      {lost ? (
+        <ExecutionInterruptedCard
+          heading="h2"
+          busy={pipeline.busy || pipeline.pendingAction === "re-review"}
+          onReReview={pipeline.onReReview}
+        />
+      ) : null}
       <p className="ck-wb-source">
         原审查：{run.title} · {sha ? `SHA ${sha.slice(0, 7)}` : "提交信息缺失"}
       </p>
@@ -90,6 +100,7 @@ export function RepairView({
         onStop={repair.onStop}
         onResume={repair.onResume}
         onSaveProfile={repair.onSaveProfile}
+        squadVariant={lost ? "ghost" : "primary"}
       />
     </article>
   );

@@ -1,10 +1,10 @@
+import { buildFindingChecklist } from "@/lib/finding-checklist";
 import {
   type AgainstLedgerState,
   type FindingListFilter,
   defaultFindingListFilter,
   projectFindingList,
 } from "@/lib/finding-list";
-import { buildFindingChecklist } from "@/lib/finding-checklist";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
@@ -280,6 +280,8 @@ export function ReviewWorkbench({
               parsed={parsed}
               hasRepair={repairExists}
               onOpenRepair={() => select("repair")}
+              onReReview={pipeline.onReReview}
+              reReviewBusy={pipeline.busy || pipeline.pendingAction === "re-review"}
               againstState={againstState}
               filter={overviewFilter}
               onFilterChange={setOverviewFilter}

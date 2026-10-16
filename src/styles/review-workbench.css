@@ -398,6 +398,29 @@
   font-weight: 600;
   margin: 0 0 12px;
 }
+.ck-interrupt p {
+  margin: 0;
+  color: var(--ck-secondary);
+  font-size: 15px;
+  line-height: 24px;
+}
+.ck-interrupt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0 20px;
+}
+.ck-interrupt-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ck-controlBorder);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
 .ck-wb-report-meta {
   display: flex;
   gap: 16px;
@@ -720,7 +743,7 @@
   .ck-wb-context-right {
     gap: 10px;
   }
-  .ck-wb-context-right > span:not(.ck-wb-running):not(.ck-wb-design-tag) {
+  .ck-wb-context-right > span:not(.ck-wb-running):not(.ck-wb-design-tag):not(.ck-wb-run-status) {
     display: none;
   }
 }

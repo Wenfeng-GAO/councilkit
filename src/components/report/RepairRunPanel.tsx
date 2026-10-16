@@ -66,6 +66,7 @@ export function RepairRunPanel({
   onStop,
   onResume,
   onSaveProfile,
+  squadVariant = "primary",
 }: {
   run: Pick<
     CliRunDetailResponse,
@@ -109,6 +110,8 @@ export function RepairRunPanel({
     base: string;
     isolationMode: "collaborative";
   }) => void;
+  /** Ghost when the interruption card already owns the solid action. */
+  squadVariant?: "primary" | "ghost";
 }) {
   const [formError, setFormError] = useState<string | null>(null);
   if (run.kind === "repair") {
@@ -278,7 +281,7 @@ export function RepairRunPanel({
             </label>
           </fieldset>
           {formError ? <p className="text-sm text-error">{formError}</p> : null}
-          <Button type="submit" disabled={pending}>
+          <Button type="submit" variant={squadVariant} disabled={pending}>
             保存授权并启动
           </Button>
         </form>
@@ -290,6 +293,7 @@ export function RepairRunPanel({
           </p>
           <Button
             className="mt-3"
+            variant={squadVariant}
             disabled={pending}
             onClick={() => onStart?.(profiles[0]?.name ?? "default")}
           >
