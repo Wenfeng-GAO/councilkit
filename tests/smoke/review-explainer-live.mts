@@ -18,7 +18,10 @@ import { seedReviewRun, writeFrozenIdentity } from "../review-explainer/fixtures
 if (process.env.CK_EXPLAINER_LIVE !== "1" || !process.env.CK_EXPLAINER_LIVE_OUT) {
   throw new Error("Opt in with CK_EXPLAINER_LIVE=1 and CK_EXPLAINER_LIVE_OUT=<artifact directory>");
 }
-assert.equal(Number(process.versions.node.split(".")[0]), 22, "Live acceptance requires Node 22");
+assert.ok(
+  Number(process.versions.node.split(".")[0]) >= 22,
+  "Live acceptance requires Node 22 or newer (#282)",
+);
 assert.equal(
   execFileSync("git", ["status", "--porcelain", "--", "src", "shared", "runtime-host", "cli/src"], {
     encoding: "utf8",

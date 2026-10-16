@@ -37,8 +37,19 @@ await build({
   },
 });
 
+// NPX-03b: the launcher's Node gate, built from the one shared copy. Old-Node
+// target so it parses and runs on the Node versions it is meant to refuse.
+await build({
+  entryPoints: [resolve(repoRoot, "shared/runtime/node-gate.ts")],
+  outfile: resolve(cliRoot, "dist/node-gate.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node14",
+});
+
 // The launcher imports the bundle as a module (no shebang needed on the bundle
 // itself), but mark it executable anyway for direct invocation.
 await chmod(resolve(cliRoot, "dist/main.mjs"), 0o755);
 
-console.log("cli/dist/main.mjs built");
+console.log("cli/dist/main.mjs + cli/dist/node-gate.mjs built");

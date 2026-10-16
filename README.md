@@ -9,7 +9,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
 ### 前置条件
 
 - **macOS**（V1 仅支持 macOS）
-- **Node.js 22**（精确主版本；其他主版本会结构化拒绝）
+- **Node.js 22 或更新**（CI 覆盖 22 / 24 / 26；低于 22 会在安装和 Host 启动时明确拒绝）
 - **pnpm**
 - **至少一个已登录的本机 CLI**：
   - `cld`（支持 `ant` / `moonshot` / `deepseek` / `cfuse` 四条 route）
@@ -120,7 +120,7 @@ pnpm exec tsx tests/smoke/live-runtime-smoke.ts --route all
 ## 关键约束
 
 - **macOS only**（V1）
-- **Node.js 22 精确主版本**
+- **Node.js 22 或更新**
 - **Runtime Host 必须运行**（除 Autonomous Run（`review`/`ideate`/`apply`/`fix`/`repair`）与本地存储命令（`init`/`agent`/`council`/`jury`/`runs`/`findings`）外）
 - **CLI 与浏览器数据不互通**
 - **单一 canonical origin**：`http://127.0.0.1:43127`，永不迁移
