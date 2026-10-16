@@ -148,7 +148,12 @@ export function caseStatusAxis(scopedRuns: readonly CliRunSummaryDto[]): CaseSta
   const recoveryOnRepresentative =
     summary.needsRecovery && summary.latest?.runId === representative.runId;
   const attention =
-    !demoOnly && (active || !done || (summary.blockingCount ?? 0) > 0 || recoveryOnRepresentative);
+    !demoOnly &&
+    (active ||
+      !done ||
+      (summary.blockingCount ?? 0) > 0 ||
+      (representative.attention?.needsAttention ?? 0) > 0 ||
+      recoveryOnRepresentative);
   return { active, done, attention };
 }
 
@@ -209,7 +214,11 @@ export function caseViewOf(group: RunGroup, kind: CaseKindFilter): CaseView | nu
 export function caseNeedsAttention(runs: readonly CliRunSummaryDto[]): boolean {
   if (runs.some(runNeedsAttention)) return true;
   const summary = summarizePrCase(runs);
-  return (summary.blockingCount ?? 0) > 0 || summary.needsRecovery;
+  return (
+    (summary.blockingCount ?? 0) > 0 ||
+    (latestRun(runs)?.attention?.needsAttention ?? 0) > 0 ||
+    summary.needsRecovery
+  );
 }
 
 export function runNeedsAttention(run: RunLike): boolean {

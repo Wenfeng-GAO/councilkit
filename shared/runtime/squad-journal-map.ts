@@ -1,3 +1,4 @@
+import { fullSha } from "./repair-identity";
 import {
   type SquadBridgeEventKind,
   type SquadJournalRefs,
@@ -6,7 +7,6 @@ import {
 } from "./squad-bridge-contract";
 
 const ZERO_SHA = "0".repeat(40);
-const FULL_SHA = /^[0-9a-f]{40}$/i;
 const POLICY_HASH = /^[a-f0-9]{64}$/;
 
 export function journalFromSquadStatus(view: unknown): SquadJournalRefs {
@@ -45,7 +45,7 @@ export function journalFromSquadStatus(view: unknown): SquadJournalRefs {
     policyOk &&
     policyHash !== "unknown";
   return squadJournalRefsSchema.parse({
-    candidateSha: sha.toLowerCase(),
+    candidateSha: sha,
     invalidated: candidate.invalidated === true || candidate.status === "invalidated",
     independentReview,
     independentVerify,
@@ -81,10 +81,6 @@ export function mapSquadStatus(
     kind: eventKindFromSquadStatus(view, opts),
     journal: journalFromSquadStatus(view),
   };
-}
-
-function fullSha(value: unknown): string | null {
-  return typeof value === "string" && FULL_SHA.test(value) ? value.toLowerCase() : null;
 }
 
 function isEmptyArray(value: unknown): boolean {

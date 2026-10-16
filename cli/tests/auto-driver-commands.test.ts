@@ -220,7 +220,12 @@ describe("cli auto driver-commands", () => {
         "--output-format",
         "stream-json",
         "--include-partial-messages",
-        "--dangerously-skip-permissions",
+        "--permission-mode",
+        "plan",
+        "--disallowedTools",
+        "Bash",
+        "Edit",
+        "Write",
       ]);
       expect(spec.executable).toBe(join(tmp, "cld"));
     });
@@ -245,7 +250,7 @@ describe("cli auto driver-commands", () => {
       expect(spec.executable).toBe(join(tmp, "kimi"));
     });
 
-    it("grok: streaming-messages-json output on review, prompt in argv, always-approve, cwd set", () => {
+    it("grok: streaming-messages-json output on review, prompt in argv, read-only plan mode, cwd set", () => {
       const spec = buildSpawnSpec(agent(GROK, "grok-4.6"), {
         attemptId: "attempt-0",
         workspace: "/ws",
@@ -264,7 +269,14 @@ describe("cli auto driver-commands", () => {
         "review this",
         "--disable-web-search",
         "--no-subagents",
-        "--always-approve",
+        "--permission-mode",
+        "plan",
+        "--deny",
+        "Bash",
+        "--deny",
+        "Edit",
+        "--deny",
+        "Write",
         "--cwd",
         "/ws",
         "--leader-socket",
@@ -272,7 +284,7 @@ describe("cli auto driver-commands", () => {
       ]);
     });
 
-    it("cursor: stdin prompt, stream-json, force+trust, omit --model for auto", () => {
+    it("cursor: stdin prompt, stream-json, read-only ask mode, omit --model for auto", () => {
       const spec = buildSpawnSpec(agent(CURSOR, "auto"), {
         attemptId: "attempt-0",
         workspace: "/ws",
@@ -286,7 +298,8 @@ describe("cli auto driver-commands", () => {
         "--output-format",
         "stream-json",
         "--stream-partial-output",
-        "--force",
+        "--mode",
+        "ask",
         "--trust",
         "--workspace",
         "/ws",
@@ -317,8 +330,7 @@ describe("cli auto driver-commands", () => {
       expect(spec.argv).toEqual([
         "exec",
         "-s",
-        "workspace-write",
-        "--dangerously-bypass-approvals-and-sandbox",
+        "read-only",
         "--skip-git-repo-check",
         "--json",
         "-m",
@@ -459,7 +471,14 @@ describe("cli auto driver-commands", () => {
         DRIVER_PROBE_PROMPT,
         "--disable-web-search",
         "--no-subagents",
-        "--always-approve",
+        "--permission-mode",
+        "plan",
+        "--deny",
+        "Bash",
+        "--deny",
+        "Edit",
+        "--deny",
+        "Write",
         "--max-turns",
         "1",
         "--reasoning-effort",

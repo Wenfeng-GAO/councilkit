@@ -24,6 +24,17 @@ export const EXECUTION_STATES = [
 ] as const;
 export type ExecutionState = (typeof EXECUTION_STATES)[number];
 
+/** A finished execution stays finished. Later start, takeover, finish, deadline,
+ * and unknown-writer writes must not resurrect it or replace its result. */
+export function isTerminalRepairExecution(state: ExecutionState): boolean {
+  return (
+    state === "completed" ||
+    state === "failed" ||
+    state === "cancelled" ||
+    state === "deadline_enforced"
+  );
+}
+
 export const repairExecutionSchema = z
   .object({
     executionId: z.string().min(1).max(80),
@@ -95,12 +106,7 @@ export function canStartWriter(input: {
   writerAlive: boolean;
 }): { ok: true } | { ok: false; reason: "unknown_writer" | "writer_alive" | "already_terminal" } {
   if (input.existing === null) return { ok: true };
-  if (
-    input.existing.state === "completed" ||
-    input.existing.state === "failed" ||
-    input.existing.state === "cancelled" ||
-    input.existing.state === "deadline_enforced"
-  ) {
+  if (isTerminalRepairExecution(input.existing.state)) {
     return { ok: false, reason: "already_terminal" };
   }
   if (input.existing.pids.length === 0) return { ok: true };
@@ -119,6 +125,7 @@ export function takeOverExecution(
   pids: number[],
   nowMs: number,
 ): RepairExecution {
+  if (isTerminalRepairExecution(existing.state)) return existing;
   return {
     ...existing,
     state: "running",
@@ -132,6 +139,7 @@ export function markExecutionStarted(
   pids: number[],
   nowMs: number,
 ): RepairExecution {
+  if (isTerminalRepairExecution(execution.state)) return execution;
   return { ...execution, state: "started", pids, startedAtMs: nowMs };
 }
 
@@ -140,6 +148,7 @@ export function finishExecution(
   result: NonNullable<RepairExecution["result"]>,
   nowMs: number,
 ): RepairExecution {
+  if (isTerminalRepairExecution(execution.state)) return execution;
   const state = result === "ok" ? "completed" : result === "cancelled" ? "cancelled" : "failed";
   return { ...execution, state, result, endedAtMs: nowMs };
 }
@@ -149,14 +158,7 @@ export function enforceDeadline(
   nowMs: number,
 ): { due: boolean; execution: RepairExecution } {
   if (nowMs < execution.deadlineAtMs) return { due: false, execution };
-  if (
-    execution.state === "completed" ||
-    execution.state === "failed" ||
-    execution.state === "cancelled" ||
-    execution.state === "deadline_enforced"
-  ) {
-    return { due: false, execution };
-  }
+  if (isTerminalRepairExecution(execution.state)) return { due: false, execution };
   return { due: true, execution };
 }
 
@@ -164,6 +166,7 @@ export function certifyDeadlineEnforced(
   execution: RepairExecution,
   nowMs: number,
 ): RepairExecution {
+  if (isTerminalRepairExecution(execution.state)) return execution;
   return {
     ...execution,
     state: "deadline_enforced",
@@ -173,6 +176,7 @@ export function certifyDeadlineEnforced(
 }
 
 export function markUnknownWriter(execution: RepairExecution): RepairExecution {
+  if (isTerminalRepairExecution(execution.state)) return execution;
   return { ...execution, state: "unknown_writer", result: null, endedAtMs: null };
 }
 

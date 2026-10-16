@@ -53,6 +53,8 @@ export function OverviewView({
     if (filter === undefined) setInternalFilter(next);
     onFilterChange?.(next);
   };
+  // #289: one blocking number per page — the shared count the ledger header shows.
+  const blockingCount = run.attention?.blocking ?? projection.blockingCount;
   const hasLedger = run.hasFindings || run.findings.length > 0;
   const ledgerComplete =
     run.reviewEvidence?.complete === true &&
@@ -60,7 +62,7 @@ export function OverviewView({
     run.reviewEvidence.evidenceComplete !== false;
   const decisionConflict =
     run.status === "completed" &&
-    projection.blockingCount > 0 &&
+    blockingCount > 0 &&
     (parsed?.verdict === "approve" || parsed?.verdict === "comment");
   const heading = decisionConflict ? "审查结论待核对" : reviewOverviewHeading(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
@@ -99,8 +101,8 @@ export function OverviewView({
             账本门禁：
             {hasLedger ? (
               <a className="ck-finding-list-link" href="#ck-ledger">
-                {projection.blockingCount > 0
-                  ? `${projection.blockingCount} 个阻塞问题，待处理`
+                {blockingCount > 0
+                  ? `${blockingCount} 个阻塞问题，待处理`
                   : ledgerComplete
                     ? "账本无阻塞"
                     : "账本证据不完整，尚无法判断阻塞"}

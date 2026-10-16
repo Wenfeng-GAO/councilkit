@@ -6,6 +6,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { RuntimeClientError } from "@/runtime/client";
 import { reportInterruptionLine } from "@shared/runtime/interruption-copy";
 import type {
   CreateScopeRequest,
@@ -1976,6 +1977,35 @@ describe("resolveRunAgents and buildProfile", () => {
         'agent "Alpha" is not ready (state=invalid_binding: model missing)',
         EXIT.hostUnavailable,
         { code: "PROFILE_NOT_READY", agentId: "a-alpha", readiness: "invalid_binding" },
+      );
+    }
+  });
+
+  it("CK-4 BUG-04 run surfaces <cli> login on AUTH_REQUIRED", async () => {
+    try {
+      await resolveRunAgents({
+        council: { agentIds: ["a-alpha"], reporterAgentId: "a-alpha" },
+        agents: [{ snapshot: agent() }],
+        installations: { installations: [INSTALLATION] },
+        host: {
+          profileReadiness: async () => {
+            throw new RuntimeClientError(
+              403,
+              "AUTH_REQUIRED",
+              "kimi provider probe failed: provider list exited with code 1",
+            );
+          },
+        },
+        idFactory: () => "aaaaaaaaaaaa",
+      });
+      throw new Error("expected AUTH_REQUIRED");
+    } catch (error) {
+      if (error instanceof Error && error.message === "expected AUTH_REQUIRED") throw error;
+      expectCli(
+        error,
+        'profile readiness failed for agent "Alpha": kimi provider probe failed: provider list exited with code 1（先运行 `kimi login`）',
+        EXIT.hostUnavailable,
+        { code: "AUTH_REQUIRED", agentId: "a-alpha" },
       );
     }
   });

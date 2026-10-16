@@ -14,34 +14,127 @@ export function repoPath(value: string): string {
     throw new ExplainerError("Invalid repository-relative path", 403);
   return value;
 }
-function unquote(value: string): string {
-  if (!value.startsWith('"')) return value;
-  // Git's core.quotePath uses C escapes, including UTF-8 bytes as octal.
-  const bytes: number[] = [];
-  const raw = value.slice(1, -1);
-  for (let i = 0; i < raw.length; i += 1) {
-    if (raw[i] === "\\") {
-      const oct = /^[0-7]{3}/.exec(raw.slice(i + 1));
-      if (oct) {
-        bytes.push(Number.parseInt(oct[0], 8));
-        i += 3;
-        continue;
-      }
+/** Git C escapes from quote.c. Unknown escapes are rejected, not dropped. */
+function cEscapeByte(next: string): number | null {
+  switch (next) {
+    case "a":
+      return 0x07;
+    case "b":
+      return 0x08;
+    case "t":
+      return 0x09;
+    case "n":
+      return 0x0a;
+    case "v":
+      return 0x0b;
+    case "f":
+      return 0x0c;
+    case "r":
+      return 0x0d;
+    case "\\":
+    case '"':
+      return next.charCodeAt(0);
+    default:
+      return null;
+  }
+}
+/** Index just past the closing quote, or -1. */
+function endOfCQuote(value: string, open: number): number {
+  for (let i = open + 1; i < value.length; i += 1) {
+    if (value[i] === "\\") {
       i += 1;
-      const next = raw[i] ?? "";
-      bytes.push(...Buffer.from(next === "t" ? "\t" : next === "n" ? "\n" : next, "utf8"));
-    } else {
-      const point = raw.codePointAt(i);
+      continue;
+    }
+    if (value[i] === '"') return i + 1;
+  }
+  return -1;
+}
+/**
+ * Decode one git path token.
+ * An unquoted `---`/`+++` name ends at the timestamp tab (`a/my file.txt\t`).
+ * A quoted name ends at its closing quote; the timestamp tab sits outside it.
+ */
+function unquote(value: string): string {
+  if (!value.startsWith('"')) return value.split("\t", 1)[0] ?? value;
+  const bytes: number[] = [];
+  let i = 1;
+  while (i < value.length) {
+    const ch = value[i] ?? "";
+    if (ch === '"') {
+      const rest = value.slice(i + 1);
+      if (rest.length === 0 || rest.startsWith("\t")) return Buffer.from(bytes).toString("utf8");
+      throw new ExplainerError("Invalid frozen diff file header");
+    }
+    if (ch !== "\\") {
+      const point = value.codePointAt(i);
       const char = point === undefined ? "" : String.fromCodePoint(point);
       bytes.push(...Buffer.from(char, "utf8"));
-      i += char.length - 1;
+      i += Math.max(char.length, 1);
+      continue;
     }
+    const next = value[i + 1];
+    if (next === undefined) throw new ExplainerError("Invalid frozen diff file header");
+    const named = cEscapeByte(next);
+    if (named !== null) {
+      bytes.push(named);
+      i += 2;
+      continue;
+    }
+    const oct = /^[0-7]{3}/.exec(value.slice(i + 1));
+    if (!oct) throw new ExplainerError("Invalid frozen diff file header");
+    const code = Number.parseInt(oct[0], 8);
+    if (code > 255) throw new ExplainerError("Invalid frozen diff file header");
+    bytes.push(code);
+    i += 4;
   }
-  return Buffer.from(bytes).toString("utf8");
+  throw new ExplainerError("Invalid frozen diff file header");
 }
 function headerPath(raw: string): string | null {
   const value = unquote(raw);
   return value === "/dev/null" ? null : repoPath(value.replace(/^[ab]\//, ""));
+}
+/**
+ * `diff --git a/<old> b/<new>`.
+ * Git quotes each side on its own, so one side may be quoted and the other not.
+ * An unquoted name can contain spaces and ` b/`. The same name is the split
+ * where both sides match. A rename or copy differs. `rename from` / `rename to`,
+ * `copy from` / `copy to`, or the `---` / `+++` lines replace that guess.
+ */
+function splitDiffGitPaths(header: string): { oldRaw: string; newRaw: string } {
+  if (header.startsWith('"')) {
+    const firstEnd = endOfCQuote(header, 0);
+    if (firstEnd < 0 || header[firstEnd] !== " ") {
+      throw new ExplainerError("Invalid frozen diff file header");
+    }
+    const second = header.slice(firstEnd + 1);
+    if (second.startsWith('"')) {
+      if (endOfCQuote(second, 0) !== second.length) {
+        throw new ExplainerError("Invalid frozen diff file header");
+      }
+    } else if (!second.startsWith("b/")) {
+      throw new ExplainerError("Invalid frozen diff file header");
+    }
+    return { oldRaw: header.slice(0, firstEnd), newRaw: second };
+  }
+  if (!header.startsWith("a/")) throw new ExplainerError("Invalid frozen diff file header");
+  const quotedNew = header.indexOf(' "');
+  if (quotedNew > 0 && endOfCQuote(header, quotedNew + 1) === header.length) {
+    return { oldRaw: header.slice(0, quotedNew), newRaw: header.slice(quotedNew + 1) };
+  }
+  const rest = header.slice(2);
+  let from = 0;
+  let fallback: { oldRaw: string; newRaw: string } | null = null;
+  while (from < rest.length) {
+    const at = rest.indexOf(" b/", from);
+    if (at <= 0) break;
+    const name = rest.slice(0, at);
+    const after = rest.slice(at + 3);
+    if (after === name) return { oldRaw: `a/${name}`, newRaw: `b/${name}` };
+    if (!fallback) fallback = { oldRaw: `a/${name}`, newRaw: `b/${after}` };
+    from = at + 1;
+  }
+  if (!fallback) throw new ExplainerError("Invalid frozen diff file header");
+  return fallback;
 }
 export function parseFrozenDiff(diff: string): { files: DiffFile[]; warnings: string[] } {
   if (
@@ -67,11 +160,9 @@ export function parseFrozenDiff(diff: string): { files: DiffFile[]; warnings: st
   for (const line of diff.split("\n")) {
     if (line.startsWith("diff --git ")) {
       finishHunk();
-      const header = line.slice(11);
-      const pair = /^("(?:\\.|[^"\\])+"|a\/.+) ("(?:\\.|[^"\\])+"|b\/.+)$/.exec(header);
-      if (!pair?.[1] || !pair[2]) throw new ExplainerError("Invalid frozen diff file header");
-      const oldPath = headerPath(pair[1]);
-      const newPath = headerPath(pair[2]);
+      const paths = splitDiffGitPaths(line.slice(11));
+      const oldPath = headerPath(paths.oldRaw);
+      const newPath = headerPath(paths.newRaw);
       file = {
         path: newPath ?? oldPath ?? "",
         oldPath,
@@ -146,6 +237,13 @@ export function parseFrozenDiff(diff: string): { files: DiffFile[]; warnings: st
     }
     if (line.startsWith("rename to ")) {
       file.newPath = repoPath(unquote(line.slice(10)));
+      file.path = file.newPath;
+    }
+    if (line.startsWith("copy from ")) {
+      file.oldPath = repoPath(unquote(line.slice(10)));
+    }
+    if (line.startsWith("copy to ")) {
+      file.newPath = repoPath(unquote(line.slice(8)));
       file.path = file.newPath;
     }
     if (line.startsWith("Binary files ") || line === "GIT binary patch") {

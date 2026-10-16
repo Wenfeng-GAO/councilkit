@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS, type ToolState } from "@shared/runtime/contracts";
-import { replacePrivateFile } from "@shared/runtime/durable-write";
+import { directoryEscapes, replacePrivateFile } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
 import {
   type GenerationWatchdog,
@@ -247,6 +247,9 @@ export function createGrokStreamJsonDriver(deps: DriverDeps) {
 
     async function ensureLayout(): Promise<string> {
       const cwd = join(workRoot, participantId);
+      if (directoryEscapes(workRoot) || directoryEscapes(cwd)) {
+        throw Object.assign(new Error("participant cwd must not be a symlink"), { code: "ELOOP" });
+      }
       await mkdir(cwd, { recursive: true });
       return cwd;
     }

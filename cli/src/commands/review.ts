@@ -221,6 +221,61 @@ function logProbeAttempt(params: {
   console.error(JSON.stringify(log));
 }
 
+export const REVIEW_FLAGS = {
+  json: { type: "boolean" },
+  agents: { type: "string" },
+  "review-models": { type: "string" },
+  aggregator: { type: "string" },
+  council: { type: "string" },
+  pr: { type: "string" },
+  task: { type: "string" },
+  focus: { type: "string" },
+  timeout: { type: "string" },
+  "codex-timeout": { type: "string" },
+  concurrency: { type: "string" },
+  out: { type: "string" },
+  resume: { type: "string" },
+  "run-id": { type: "string" },
+  repo: { type: "string" },
+  against: { type: "string" },
+  "repair-package": { type: "string" },
+  "pin-sha": { type: "string" },
+  spec: { type: "string" },
+  "require-spec": { type: "boolean" },
+  "no-require-spec": { type: "boolean" },
+  "allow-write": { type: "boolean" },
+} as const;
+
+/** One help line per REVIEW_FLAGS key; tests assert the two never drift. */
+const REVIEW_FLAG_DESCRIPTIONS: Record<keyof typeof REVIEW_FLAGS, string> = {
+  json: "Machine-readable output (one final JSON on stdout).",
+  agents: "'<json-array>' of agent names/ids, one independent seat each.",
+  "review-models": "'<json>' per-run {models, aggregatorIndex}; saved agents unchanged.",
+  aggregator: "<id> Agent that synthesizes the final report.",
+  council: "<ref> Use a stored council (agents -> seats, reporter -> aggregator).",
+  pr: "<url> PR to review (same as the positional <pr-url>).",
+  task: '"<text>" Free-text task instead of a PR (e.g. a local repo path).',
+  focus: "<text> Extra focus for every seat.",
+  timeout: "<dur> Per-seat timeout (default 45m).",
+  "codex-timeout": "<dur> Timeout for codex seats (default 90m).",
+  concurrency: "<n> Max seats running at once (default 10).",
+  out: "<file> Also write a copy of report.md here.",
+  resume: "<run-id> Re-run failed seats; reuse successful ones.",
+  "run-id": "<ck-review-uuid> Use this run id (not with --resume).",
+  repo: "<path> Local clone of the PR repo (remembered).",
+  against: "<run-id> Incremental review vs that run's findings.json.",
+  "repair-package": "<file> Verify the selected repair task (with --against).",
+  "pin-sha": "<40-char sha> Review exactly this commit of --repo.",
+  spec: "<path|url> Spec contract to review against.",
+  "require-spec": "Refuse to run without a bound spec contract (default).",
+  "no-require-spec": "Review without a bound spec contract (legacy mode).",
+  "allow-write": "Let seats edit files / run commands (default: read-only).",
+};
+
+export const REVIEW_FLAG_HELP = (Object.keys(REVIEW_FLAGS) as (keyof typeof REVIEW_FLAGS)[])
+  .map((name) => `  --${name.padEnd(18)} ${REVIEW_FLAG_DESCRIPTIONS[name]}`)
+  .join("\n");
+
 export async function runReview(
   argv: string[],
   out: OutputSink,
@@ -228,29 +283,7 @@ export async function runReview(
 ): Promise<void> {
   const { values, positionals } = parseFlags(
     {
-      flags: {
-        json: { type: "boolean" },
-        agents: { type: "string" },
-        "review-models": { type: "string" },
-        aggregator: { type: "string" },
-        council: { type: "string" },
-        pr: { type: "string" },
-        task: { type: "string" },
-        focus: { type: "string" },
-        timeout: { type: "string" },
-        "codex-timeout": { type: "string" },
-        concurrency: { type: "string" },
-        out: { type: "string" },
-        resume: { type: "string" },
-        "run-id": { type: "string" },
-        repo: { type: "string" },
-        against: { type: "string" },
-        "repair-package": { type: "string" },
-        "pin-sha": { type: "string" },
-        spec: { type: "string" },
-        "require-spec": { type: "boolean" },
-        "no-require-spec": { type: "boolean" },
-      },
+      flags: REVIEW_FLAGS,
       allowPositionals: 1,
     },
     argv,
@@ -294,6 +327,8 @@ export async function runReview(
   // Default true: force contract review. `--no-require-spec` opts into unbound legacy mode.
   const requireSpec = values["no-require-spec"] !== true;
   task.requireSpec = requireSpec;
+  // SAFE-01/04: seats are read-only unless the user explicitly opts in.
+  task.seatAccess = values["allow-write"] === true ? "write" : "read-only";
   // Snapshot CLI identity before any freeze overlay. Resume must reject a
   // mismatched --pr/--task/--focus even when execution later binds the frozen
   // spec (P1-6). Spec is resolved after local-repo / PR body are available
@@ -564,6 +599,8 @@ export async function runReview(
       throw errors.usage("--no-require-spec must match the resumed run (was require-spec)");
     }
     task.requireSpec = frozenManifest.requireSpec !== false;
+    // Resume keeps the original run's seat access (older manifests: read-only).
+    task.seatAccess = frozenManifest.seatAccess ?? "read-only";
   } else {
     task.requireSpec = requireSpec;
   }
@@ -728,22 +765,11 @@ export async function runReview(
   if (assignedRunId !== undefined && existsSync(paths.transcript(runId))) {
     throw errors.usage(`--run-id ${runId} already exists`);
   }
-  deps.onRunCreated?.(runId);
   const runDir = paths.runDir(runId);
   const transcriptPath = paths.transcript(runId);
   const reportPath = paths.report(runId);
   const startedAt = priorStartedAt ?? new Date().toISOString();
   let reviewedSha: string | null = null;
-  // The run dir must exist before the first transcript flush — but
-  // `workspaces/` is created only AFTER probing, for attempts that will
-  // actually spawn (a probe must be able to prove no workspace existed yet).
-  createWorkspace(runDir);
-  if (repairPackage && resumeRaw === undefined) {
-    atomicWriteFile(
-      join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
-      `${JSON.stringify(repairPackage, null, 2)}\n`,
-    );
-  }
 
   const isReused = (attemptId: string): boolean => reusedByAttemptId.has(attemptId);
 
@@ -774,10 +800,8 @@ export async function runReview(
     );
   }
 
-  // Build spawn specs for the attempts that will actually (re)run, up front so
-  // usage errors (non-cfuse route, missing executable) fail fast BEFORE any
-  // subprocess is spawned. No workspace is created here — probing happens
-  // first, and probe-failed attempts never get a workspace.
+  // Build spawn specs BEFORE creating the run dir so a missing executable
+  // (exit 2) cannot leave an empty ghost under runs/.
   const attemptMetas: AttemptMeta[] = [];
   const rerunSpecs: AttemptSpec[] = [];
   const rerunAgents: AgentRecord[] = [];
@@ -799,7 +823,7 @@ export async function runReview(
         task,
         workspaceMode: localRepo !== null ? "worktree" : "empty",
       });
-      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt });
+      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt, access: task.seatAccess });
       spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
       rerunSpecs.push(spec);
       rerunAgents.push(a);
@@ -807,6 +831,18 @@ export async function runReview(
     index++;
   }
   const aggregatorWorkspace = join(runDir, "workspaces", "aggregator");
+
+  deps.onRunCreated?.(runId);
+  // The run dir must exist before the first transcript flush — but
+  // `workspaces/` is created only AFTER probing, for attempts that will
+  // actually spawn (a probe must be able to prove no workspace existed yet).
+  createWorkspace(runDir);
+  if (repairPackage && resumeRaw === undefined) {
+    atomicWriteFile(
+      join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
+      `${JSON.stringify(repairPackage, null, 2)}\n`,
+    );
+  }
 
   // --- SIGINT / SIGTERM ---------------------------------------------------
   // Registered BEFORE the probes so a signal mid-probe still takes the
@@ -869,6 +905,7 @@ export async function runReview(
         timeoutMs,
         concurrency: concurrency ?? null,
         requireSpec: task.requireSpec !== false,
+        seatAccess: task.seatAccess ?? "read-only",
         agents: attemptAgents,
         aggregator: aggregatorAgent,
         tools: frozenTools,
@@ -1681,6 +1718,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     attemptId: "aggregator",
     workspace: p.aggregatorWorkspace,
     prompt: aggregatePrompt,
+    access: p.task.seatAccess,
   });
 
   p.out.progress(`  aggregator ${p.aggregatorAgent.name} synthesizing`);
@@ -2268,6 +2306,7 @@ async function runAssessmentCorrections(
       const spec = buildSpawnSpec(item.agent, {
         attemptId: `corr-${item.result.attemptId}`,
         workspace: item.result.workspace,
+        access: p.task.seatAccess,
         prompt: buildCorrectionPrompt({
           agentName: item.result.agentName,
           requestedFindingIds: item.findingIds,
@@ -2411,6 +2450,7 @@ function rebuildAttemptSpecs(
       attemptId: spec.attemptId,
       workspace: spec.cwd,
       prompt,
+      access: task.seatAccess,
     });
     spec.prompt = rebuilt.prompt;
     spec.argv = rebuilt.argv;

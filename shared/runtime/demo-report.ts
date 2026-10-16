@@ -36,6 +36,7 @@ export interface RunAttentionInput {
   businessResult?: string | null;
   pipeline?: { phase?: string | null; applyStatus?: string | null } | null;
   reviewEvidence?: { blockingIds?: readonly string[] | null } | null;
+  attention?: { needsAttention: number } | null;
 }
 
 /** Real runs that still need a person. Demo runs never count, even with blocking findings. */
@@ -52,6 +53,8 @@ export function realRunNeedsAttention(run: RunAttentionInput): boolean {
   if (run.businessResult === "needs_attention" || run.businessResult === "stopped") return true;
   if (run.pipeline?.applyStatus === "failure") return true;
   if (run.pipeline?.phase && run.pipeline.phase !== "done") return true;
+  // #289: open critical/major problems count even without a PR, SHA or contract.
+  if ((run.attention?.needsAttention ?? 0) > 0) return true;
   return (run.reviewEvidence?.blockingIds?.length ?? 0) > 0;
 }
 

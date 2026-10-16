@@ -62,6 +62,7 @@ import {
   executeTurn,
 } from "../host/execute-turn";
 import { resolveInstallations } from "../host/installations";
+import { isAuthRequiredError, withLoginHint } from "../login-hint";
 import { reporterInstruction } from "../report/instruction";
 import {
   assertNonEmptyMarkdown,
@@ -1281,15 +1282,27 @@ export async function resolveRunAgents(input: {
     try {
       readiness = await input.host.profileReadiness(profile, snapshot.modelId);
     } catch (error) {
+      const raw = `profile readiness failed for agent "${snapshot.name}": ${messageOf(error)}`;
       throw errors.hostUnavailable(
-        `profile readiness failed for agent "${snapshot.name}": ${messageOf(error)}`,
-        { code: "READINESS_FAILED", agentId },
+        isAuthRequiredError(error) ? withLoginHint(raw, snapshot.driverSelection.driverId) : raw,
+        {
+          code: isAuthRequiredError(error) ? "AUTH_REQUIRED" : "READINESS_FAILED",
+          agentId,
+        },
       );
     }
     if (readiness.readiness.state !== "ready") {
+      const detail = readiness.readiness.detail ?? "no detail";
+      const raw = `agent "${snapshot.name}" is not ready (state=${readiness.readiness.state}: ${detail})`;
+      const auth =
+        readiness.readiness.state === "runtime_unavailable" && /auth|login/i.test(detail);
       throw errors.hostUnavailable(
-        `agent "${snapshot.name}" is not ready (state=${readiness.readiness.state}: ${readiness.readiness.detail ?? "no detail"})`,
-        { code: "PROFILE_NOT_READY", agentId, readiness: readiness.readiness.state },
+        auth ? withLoginHint(raw, snapshot.driverSelection.driverId) : raw,
+        {
+          code: auth ? "AUTH_REQUIRED" : "PROFILE_NOT_READY",
+          agentId,
+          readiness: readiness.readiness.state,
+        },
       );
     }
     out.push({

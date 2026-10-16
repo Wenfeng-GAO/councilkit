@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
 import {
   type GenerationWatchdog,
@@ -194,8 +195,15 @@ export function createKimiStreamJsonDriver(
       // Create the participant cwd and an empty skills dir under it once. The
       // driver layer owns the mkdir to mirror the claude/codex drivers and keep
       // the supervisor's cwd-existence check satisfied.
-      await mkdir(join(workRoot, participantId), { recursive: true });
+      const cwd = join(workRoot, participantId);
+      if (directoryEscapes(workRoot) || directoryEscapes(cwd)) {
+        throw Object.assign(new Error("participant cwd must not be a symlink"), { code: "ELOOP" });
+      }
+      await mkdir(cwd, { recursive: true });
       skillsDir = join(workRoot, participantId, SKILLS_DIR_NAME);
+      if (directoryEscapes(skillsDir)) {
+        throw Object.assign(new Error("participant cwd must not be a symlink"), { code: "ELOOP" });
+      }
       await mkdir(skillsDir, { recursive: true });
     }
 
@@ -1123,6 +1131,9 @@ export function createKimiStreamJsonDriver(
       defaultModel: string | null;
     }> {
       const cwd = join(workRoot, participantId);
+      if (directoryEscapes(workRoot) || directoryEscapes(cwd)) {
+        throw Object.assign(new Error("participant cwd must not be a symlink"), { code: "ELOOP" });
+      }
       await mkdir(cwd, { recursive: true });
       // H3: the LAST lifecycle check before spawning — there must be no await
       // between this check and the pendingProbe registration below, so close()
