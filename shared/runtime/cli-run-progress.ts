@@ -124,10 +124,12 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
- * Read-time overlay for a non-squad run still marked running.
+ * Read-time overlay for an autonomous run still marked running.
  * A dead pid interrupts once the heartbeat is at least STALE_HEARTBEAT_MS old.
  * A live pid (including SIGSTOP) interrupts once progress is at least
  * STALE_RUNNING_MS old. A missing pid uses that same five-minute fallback.
+ * Squad and discussion runs are unchanged: they have no review pid, and a
+ * discussion turn may not touch the transcript for up to ten minutes.
  * Exactly the boundary counts. The result is interrupted, never failed.
  */
 export function reconcileRunningStatus(input: {
@@ -140,7 +142,10 @@ export function reconcileRunningStatus(input: {
   heartbeatMs?: number;
 }): CliRunLiveStatus {
   if (input.status !== "running") return input.status;
-  if (input.kind === "squad") return input.status;
+  // Squad sidecars and Host discussion runs do not carry the autonomous
+  // review pid/heartbeat this overlay reads. A discussion turn can stay quiet
+  // in the transcript for the whole one-shot limit (10 min).
+  if (input.kind === "squad" || input.kind === "discuss") return input.status;
   const updated = Date.parse(input.updatedAt ?? "");
   const now = input.nowMs ?? Date.now();
   const age = Number.isFinite(updated) ? now - updated : null;

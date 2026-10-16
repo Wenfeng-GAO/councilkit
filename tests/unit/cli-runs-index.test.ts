@@ -663,6 +663,28 @@ describe("listCliRuns stale running boundary", () => {
     expect(run?.status).toBe("running");
   });
 
+  it("keeps a discussion run running when its transcript has been quiet for 10 minutes", () => {
+    const dir = join(home, "runs", "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "transcript.jsonl");
+    const startedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        kind: "run.started",
+        version: 1,
+        runId: "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5",
+        startedAt,
+        council: { topic: "quiet discussion" },
+      })}\n`,
+    );
+    const mtime = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(path, mtime, mtime);
+    const run = listCliRuns(process.env)[0];
+    expect(run?.kind).toBe("discuss");
+    expect(run?.status).toBe("running");
+  });
+
   function seedStuckStatus(updatedAt: string) {
     const dir = join(home, "runs", BOUNDARY_REVIEW);
     mkdirSync(dir, { recursive: true });

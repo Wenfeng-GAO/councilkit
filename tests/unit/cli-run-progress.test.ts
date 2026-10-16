@@ -668,6 +668,18 @@ describe("reconcileRunningStatus", () => {
       }),
     ).toBe("running");
   });
+
+  it("does not interrupt a live discussion run that has no pid", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "discuss",
+        updatedAt: new Date(T0 - 10 * 60 * 1000).toISOString(),
+        pid: null,
+        nowMs: T0,
+      }),
+    ).toBe("running");
+  });
 });
 
 describe("isPidAlive", () => {
