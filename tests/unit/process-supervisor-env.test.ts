@@ -1,4 +1,14 @@
-import { chmod, lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -182,6 +192,20 @@ describe("prepareParticipantCwd", () => {
     await expect(prepareParticipantCwd(root, "p-file")).rejects.toEqual(
       spawnFailed("participant cwd exists and is not a directory", "p-file"),
     );
+  });
+
+  it("rejects a participant directory reached through an ancestor symlink", async () => {
+    const outside = join(tempRoot, "outside");
+    await mkdir(join(outside, "p-1"), { recursive: true });
+    await writeFile(join(outside, "p-1", "keep.txt"), "SECRET\n");
+    const root = join(tempRoot, "linked-root");
+    await symlink(outside, root);
+    await expect(prepareParticipantCwd(root, "p-1")).rejects.toEqual(
+      spawnFailed("participant cwd must not be a symlink", "p-1"),
+    );
+    expect((await lstat(root)).isSymbolicLink()).toBe(true);
+    expect(await readdir(join(outside, "p-1"))).toEqual(["keep.txt"]);
+    expect(await readFile(join(outside, "p-1", "keep.txt"), "utf8")).toBe("SECRET\n");
   });
 
   it("rethrows filesystem errors other than a missing path", async () => {

@@ -1,4 +1,5 @@
 import { primaryRunStatus } from "@/lib/cli-run-status";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { WorkbenchMobileMenu } from "./WorkbenchNav";
@@ -28,6 +29,7 @@ export function ContextBar({
         <span aria-hidden="true">报告</span>
         <span aria-hidden="true">/</span>
         <b title={run.title}>{run.title}</b>
+        {isDemoRun(run) ? <span className="ck-demo-tag">◆ 示例数据</span> : null}
       </div>
       <div className="ck-wb-context-right">
         <span className={status.tone === "info" ? "ck-wb-running" : undefined}>{status.text}</span>

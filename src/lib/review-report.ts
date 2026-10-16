@@ -27,7 +27,7 @@ export interface ReviewFinding {
   text: string;
 }
 
-const FINDING_SEVERITY_LABEL: Record<FindingSeverity, string> = {
+export const FINDING_SEVERITY_LABEL: Record<FindingSeverity, string> = {
   critical: "致命",
   major: "重大",
   minor: "次要",

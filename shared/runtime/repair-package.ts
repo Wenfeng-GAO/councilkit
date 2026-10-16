@@ -12,6 +12,7 @@ import {
   resolveRootCause,
   validateFindingGroups,
 } from "./finding-groups";
+import { fullSha } from "./repair-identity";
 import { shellSingleQuote } from "./shell-quote";
 
 const text = plainText;
@@ -115,7 +116,7 @@ export function buildRepairPackage(input: {
   const { ledger, planLock, clusterId } = input;
   if (!input.complete)
     throw new Error("需要完整成功的独立审查；失败或不完整的 run 不能导出修复任务。");
-  if (!ledger || ledger.runId !== input.runId || !/^[0-9a-f]{40}$/i.test(ledger.sha ?? "")) {
+  if (!ledger || ledger.runId !== input.runId || fullSha(ledger.sha) === null) {
     throw new Error("修复任务需要与本次 run 对应的 findings.json 和完整候选 SHA。");
   }
   if (input.findingGroups) {

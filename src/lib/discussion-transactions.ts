@@ -13,6 +13,7 @@ import {
   digestOf,
 } from "@/models/discussion/factories";
 import type {
+  CommittedEntityType,
   ModelExecution,
   ModelExecutionError,
   ModelExecutionUsage,
@@ -615,6 +616,27 @@ function contentDigestOf(content: string): string {
   return digestOf({ digestVersion: 1, content });
 }
 
+async function persistCommittedExecution(
+  db: CouncilKitRuntimeDB,
+  execution: ModelExecution,
+  input: CommitInput,
+  entityType: CommittedEntityType,
+  entityId: string,
+): Promise<void> {
+  execution.state = "committed";
+  execution.contentDigest = contentDigestOf(input.content);
+  execution.committedEntityType = entityType;
+  execution.committedEntityId = entityId;
+  execution.effectiveModel = input.effectiveModel;
+  execution.usage = input.usage;
+  execution.finalEventSeq = input.finalEventSeq;
+  execution.dispatchState = input.dispatchState;
+  execution.toolState = input.toolState;
+  execution.ackState = "pending";
+  execution.updatedAt = ts();
+  await db.modelExecutions.put(execution);
+}
+
 async function loadCommitContext(
   db: CouncilKitRuntimeDB,
   executionId: string,
@@ -766,18 +788,7 @@ export async function commitModelMessage(
           createdAt: ts(),
         };
         await db.messages.add(message);
-        execution.state = "committed";
-        execution.contentDigest = contentDigestOf(input.content);
-        execution.committedEntityType = "message";
-        execution.committedEntityId = message.id;
-        execution.effectiveModel = input.effectiveModel;
-        execution.usage = input.usage;
-        execution.finalEventSeq = input.finalEventSeq;
-        execution.dispatchState = input.dispatchState;
-        execution.toolState = input.toolState;
-        execution.ackState = "pending";
-        execution.updatedAt = ts();
-        await db.modelExecutions.put(execution);
+        await persistCommittedExecution(db, execution, input, "message", message.id);
         await bumpRoomContext(db, room);
         round.activeExecutionId = null;
         round.nextParticipantIndex += 1;
@@ -854,18 +865,7 @@ export async function commitSummary(
           generatedAt: ts(),
         };
         await db.summaries.add(summary);
-        execution.state = "committed";
-        execution.contentDigest = contentDigestOf(input.content);
-        execution.committedEntityType = "summary";
-        execution.committedEntityId = summary.id;
-        execution.effectiveModel = input.effectiveModel;
-        execution.usage = input.usage;
-        execution.finalEventSeq = input.finalEventSeq;
-        execution.dispatchState = input.dispatchState;
-        execution.toolState = input.toolState;
-        execution.ackState = "pending";
-        execution.updatedAt = ts();
-        await db.modelExecutions.put(execution);
+        await persistCommittedExecution(db, execution, input, "summary", summary.id);
         await bumpRoomContext(db, room);
         round.phase = "completed";
         round.activeExecutionId = null;
@@ -1014,18 +1014,7 @@ export async function commitFocusMessage(
           createdAt: ts(),
         };
         await db.messages.add(message);
-        execution.state = "committed";
-        execution.contentDigest = contentDigestOf(input.content);
-        execution.committedEntityType = "message";
-        execution.committedEntityId = message.id;
-        execution.effectiveModel = input.effectiveModel;
-        execution.usage = input.usage;
-        execution.finalEventSeq = input.finalEventSeq;
-        execution.dispatchState = input.dispatchState;
-        execution.toolState = input.toolState;
-        execution.ackState = "pending";
-        execution.updatedAt = ts();
-        await db.modelExecutions.put(execution);
+        await persistCommittedExecution(db, execution, input, "message", message.id);
         await bumpRoomContext(db, room);
         // Focus consumes neither the cursor nor the phase: the round stays
         // running and nextParticipantIndex is untouched.
@@ -1202,18 +1191,7 @@ export async function commitReport(
           sourceExecutionId: execution.executionId,
         });
         await db.reports.add(report);
-        execution.state = "committed";
-        execution.contentDigest = contentDigestOf(input.content);
-        execution.committedEntityType = "report";
-        execution.committedEntityId = report.id;
-        execution.effectiveModel = input.effectiveModel;
-        execution.usage = input.usage;
-        execution.finalEventSeq = input.finalEventSeq;
-        execution.dispatchState = input.dispatchState;
-        execution.toolState = input.toolState;
-        execution.ackState = "pending";
-        execution.updatedAt = ts();
-        await db.modelExecutions.put(execution);
+        await persistCommittedExecution(db, execution, input, "report", report.id);
         // Conclude the room in the same transaction. The report never enters
         // the shared projection, so no bumpRoomContext.
         room.status = "concluded";

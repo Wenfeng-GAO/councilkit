@@ -1,6 +1,7 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { Button } from "@/components/ui/Button";
 import { RuntimeClientError } from "@/runtime/client";
+import { isDemoRun } from "@shared/runtime/demo-report";
 import type {
   CliRunDetailResponse,
   CliRunPipelineDto,
@@ -43,7 +44,7 @@ export function FixPipeline({
   onFix: () => void;
   onReReview: () => void;
 }) {
-  if (run.kind === "repair") return null;
+  if (isDemoRun(run) || run.kind === "repair") return null;
   const pipeline = run.pipeline;
   const inFlight =
     busy || run.status === "running" || (pipeline !== null && pipeline.phase !== "done");

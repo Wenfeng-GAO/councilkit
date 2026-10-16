@@ -320,6 +320,20 @@ describe("AC-03 isStaleResponse 迟到守卫", () => {
   });
 });
 
+describe("席位状态文字", () => {
+  it("席位列和席位详情共用同一套中性文案", async () => {
+    const { SEAT_STATUS_TEXT } = await import("@/components/report/workbench/selection");
+    expect(SEAT_STATUS_TEXT).toEqual({
+      pending: "等待启动",
+      queued: "排队中",
+      running: "执行中",
+      success: "执行完成",
+      failure: "执行失败",
+      cancelled: "已取消",
+    });
+  });
+});
+
 describe("AC-04 getOrInitTab 首次默认 Tab 持久化", () => {
   it("首次按席位状态写入默认 Tab，之后状态变化不重算；手动切换优先", async () => {
     const { workbenchSelectionStore } = await import("@/components/report/workbench/selection");

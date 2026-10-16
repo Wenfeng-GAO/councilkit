@@ -6,6 +6,7 @@ import { runCouncilCmd } from "./commands/council";
  * --help/--version) and hands the leaf command + its args here. Each command
  * owns its own strict parseArgs + zod validation; the router only selects.
  */
+import { runDemo } from "./commands/demo";
 import { runDoctor } from "./commands/doctor";
 import { runFindings } from "./commands/findings";
 import { runFix } from "./commands/fix";
@@ -28,6 +29,8 @@ export async function dispatch(command: string, args: string[], out: OutputSink)
       return runInit(args, out);
     case "ideate":
       return runIdeate(args, out);
+    case "demo":
+      return runDemo(args, out);
     case "doctor":
       return runDoctor(args, out);
     case "models":
