@@ -258,3 +258,88 @@ test("复审在进程已死时启动，进程还活着时停在页面上", async
     }
   }
 });
+
+test("没有报告的中途被杀审查会按原输入重开，失败重载仍是中断", async ({ page }) => {
+  test.setTimeout(120_000);
+  mkdirSync(ARTIFACTS, { recursive: true });
+  await page.goto("/reports");
+
+  for (const shape of ["pr", "task"] as const) {
+    const seeded = await page.request.post("/api/v1/__test__/seed-stale-review", {
+      data: { shape, liveness: "dead", report: "absent" },
+    });
+    expect(seeded.ok()).toBe(true);
+    const runId = ((await seeded.json()) as { ok: true; data: { runId: string } }).data.runId;
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/reports/${runId}`);
+    const card = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+    await card.getByRole("button", { name: /只再审一遍|正在启动复审/ }).click();
+    await expect(page).not.toHaveURL(new RegExp(runId), { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/reports\/ck-review-/);
+    await expect(page.getByText(EXECUTION_SERVICE_INTERRUPTION.title)).toHaveCount(0);
+    await expect(page.locator(".ck-wb-seat-row").filter({ hasText: "安全审查" })).toBeVisible();
+    await page.screenshot({ path: `${ARTIFACTS}/rereview-scratch-${shape}-1280.png` });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: `${ARTIFACTS}/rereview-scratch-${shape}-390.png` });
+
+    const failed = await page.request.post("/api/v1/__test__/seed-stale-review", {
+      data: { shape, liveness: "dead", report: "absent", failReReview: true },
+    });
+    expect(failed.ok()).toBe(true);
+    const failedId = ((await failed.json()) as { ok: true; data: { runId: string } }).data.runId;
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/reports/${failedId}`);
+    const failedCard = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (item) => item.url().includes("/actions") && item.request().method() === "POST",
+      ),
+      failedCard.getByRole("button", { name: "只再审一遍（不改代码）" }).click(),
+    ]);
+    expect(response.ok()).toBe(false);
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(failedId));
+    await expect(page.getByText("仍在运行")).toHaveCount(0);
+    await expect(page.getByText("执行中")).toHaveCount(0);
+    await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+    await expectAmberInterrupt(
+      page
+        .getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title })
+        .locator("[data-interrupt-icon='circle-pause']"),
+    );
+    const summary = page.locator(".ck-wb-aggregate");
+    await expect(summary).toContainText("结果汇总");
+    await expect(summary).toContainText("中断");
+    await expectAmberInterrupt(summary.locator("[data-interrupt-icon='circle-pause']"));
+    await page.screenshot({ path: `${ARTIFACTS}/rereview-reload-${shape}-1280.png` });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator(".ck-wb-seats").evaluate((el) => {
+      const node = el as HTMLElement;
+      const main = document.querySelector(".ck-wb-main");
+      if (main) main.appendChild(node);
+      node.style.display = "flex";
+      node.style.flexDirection = "column";
+      node.style.position = "static";
+      node.style.width = "100%";
+      node.style.gridColumn = "auto";
+      node.style.gridRow = "auto";
+    });
+    await expect(summary).toContainText("中断");
+    await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+    await page.screenshot({
+      path: `${ARTIFACTS}/rereview-reload-${shape}-390.png`,
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/reports");
+    await page.getByRole("button", { name: /全部案件/ }).click();
+    const listed = page.locator(".ck-case-card", {
+      has: page.locator(`a[href="/reports/${failedId}"]`),
+    });
+    await expect(listed.locator("[data-interrupt-icon='circle-pause']")).toBeVisible();
+    await expectAmberInterrupt(listed.locator("[data-interrupt-token='--ck-interrupt']"));
+    await listed.screenshot({ path: `${ARTIFACTS}/rereview-reload-list-${shape}-1280.png` });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await listed.screenshot({ path: `${ARTIFACTS}/rereview-reload-list-${shape}-390.png` });
+  }
+});

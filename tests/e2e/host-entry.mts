@@ -37,7 +37,15 @@
  *                                        installation's trust state.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +63,9 @@ import type { ModelVerdict } from "@shared/runtime/events";
 import { generationRule, generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
 import type { InstallationDto } from "@shared/runtime/schemas";
 import { z } from "zod";
+import { FixExit, runFix } from "../../cli/src/commands/fix";
+import { errors } from "../../cli/src/errors";
+import type { OutputSink } from "../../cli/src/output";
 import { renderSuccessReport } from "../../cli/src/report/render";
 import { loadConfig } from "../../runtime-host/config";
 import type {
@@ -771,81 +782,96 @@ function resetAll(
   };
 }
 
-function startE2EReReview(home: string, sourceRunId: string): { pid: number } {
-  const followUpRunId = `ck-review-${randomUUID()}`;
-  const followDir = join(home, "runs", followUpRunId);
-  mkdirSync(followDir, { recursive: true });
-  const seat = {
-    attemptId: "attempt-security",
-    agentId: "sec",
-    agentName: "review-security",
-    driverId: "grok-stream-json",
-    modelId: "grok-4.6",
+function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: number }> {
+  const sink: OutputSink = {
+    json: true,
+    progress() {},
+    diag() {},
+    finish: () => Promise.resolve(),
   };
-  const aggregator = {
-    attemptId: "aggregator",
-    agentId: "adv",
-    agentName: "review-adversarial",
-    driverId: "grok-stream-json",
-    modelId: "grok-4.6",
-  };
-  writeFileSync(
-    join(followDir, "transcript.jsonl"),
-    `${JSON.stringify({
-      kind: "review.started",
-      version: 1,
-      runId: followUpRunId,
-      startedAt: new Date().toISOString(),
-      task: { task: "e2e-re-review" },
-      attempts: [seat],
-      aggregator,
-    })}\n`,
+  const review = runFix(["--run", sourceRunId, "--re-review-only"], sink, {
+    reviewImpl: async (argv, _out, deps) => {
+      const sourceDir = join(home, "runs", sourceRunId);
+      if (existsSync(join(sourceDir, "e2e-rereview-fail"))) {
+        throw errors.io("forced re-review failure");
+      }
+      let hasReport = false;
+      try {
+        hasReport = readFileSync(join(sourceDir, "report.md"), "utf8").trim().length > 0;
+      } catch {
+        hasReport = false;
+      }
+      if (!hasReport && (argv.includes("--against") || argv.includes("--focus"))) {
+        throw new Error("scratch re-review referenced a prior report");
+      }
+      const followUpRunId = `ck-review-${randomUUID()}`;
+      const followDir = join(home, "runs", followUpRunId);
+      mkdirSync(followDir, { recursive: true });
+      const seat = {
+        attemptId: "attempt-security",
+        agentId: "sec",
+        agentName: "review-security",
+        driverId: "grok-stream-json",
+        modelId: "grok-4.6",
+      };
+      const aggregator = {
+        attemptId: "aggregator",
+        agentId: "adv",
+        agentName: "review-adversarial",
+        driverId: "grok-stream-json",
+        modelId: "grok-4.6",
+      };
+      const taskAt = argv.indexOf("--task");
+      const task =
+        argv[0] && !argv[0].startsWith("--")
+          ? { pr: argv[0] }
+          : { task: taskAt >= 0 ? (argv[taskAt + 1] ?? "") : "" };
+      writeFileSync(
+        join(followDir, "transcript.jsonl"),
+        `${JSON.stringify({
+          kind: "review.started",
+          version: 1,
+          runId: followUpRunId,
+          startedAt: new Date().toISOString(),
+          task,
+          attempts: [seat],
+          aggregator,
+        })}\n`,
+      );
+      const now = new Date().toISOString();
+      writeFileSync(
+        join(followDir, "status.json"),
+        `${JSON.stringify({
+          version: 1,
+          status: "running",
+          progress: {
+            phase: "attempts",
+            updatedAt: now,
+            attempts: [
+              { ...seat, role: "attempt", status: "running", durationMs: null, lastActivity: null },
+            ],
+          },
+          pipeline: null,
+        })}\n`,
+      );
+      deps?.onRunCreated?.(followUpRunId);
+    },
+  });
+  return review.then(
+    () => ({ pid: process.pid }),
+    (error: unknown) => {
+      if (error instanceof FixExit && error.exitCode === 0) return { pid: process.pid };
+      throw error;
+    },
   );
-  writeFileSync(join(followDir, "report.md"), "# Autonomous Review Report\n\n复审席位已调用。\n");
-  const now = new Date().toISOString();
-  writeFileSync(
-    join(followDir, "status.json"),
-    `${JSON.stringify({
-      version: 1,
-      status: "running",
-      progress: {
-        phase: "attempts",
-        updatedAt: now,
-        attempts: [
-          { ...seat, role: "attempt", status: "running", durationMs: null, lastActivity: null },
-        ],
-      },
-      pipeline: null,
-    })}\n`,
-  );
-  const sourceStatus = join(home, "runs", sourceRunId, "status.json");
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(readFileSync(sourceStatus, "utf8")) as Record<string, unknown>;
-  } catch {
-    current = {};
-  }
-  writeFileSync(
-    sourceStatus,
-    `${JSON.stringify({
-      ...current,
-      version: 1,
-      pipeline: {
-        phase: "re-reviewing",
-        round: 0,
-        maxRounds: 2,
-        planVerdict: null,
-        applyStatus: null,
-        followUpRunId,
-        summary: "正在启动复审",
-        updatedAt: now,
-      },
-    })}\n`,
-  );
-  return { pid: process.pid };
 }
 
-function seedStaleReview(input: { shape: "pr" | "task"; liveness: "dead" | "alive" }): {
+function seedStaleReview(input: {
+  shape: "pr" | "task";
+  liveness: "dead" | "alive";
+  report?: "present" | "absent";
+  failReReview?: boolean;
+}): {
   runId: string;
 } {
   const home = process.env.COUNCILKIT_HOME;
@@ -854,10 +880,11 @@ function seedStaleReview(input: { shape: "pr" | "task"; liveness: "dead" | "aliv
   const dir = join(home, "runs", runId);
   mkdirSync(dir, { recursive: true });
   const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const pull = 1000 + (Number.parseInt(runId.slice(-4), 16) % 8000);
   const task =
     input.shape === "pr"
-      ? { pr: "https://github.com/acme/payments/pull/348" }
-      : { task: "给结算页补一张失败态说明" };
+      ? { pr: `https://github.com/acme/payments/pull/${String(pull)}` }
+      : { task: `给结算页补一张失败态说明 ${runId.slice(-8)}` };
   const seat = {
     attemptId: "attempt-security",
     agentId: "sec",
@@ -884,16 +911,23 @@ function seedStaleReview(input: { shape: "pr" | "task"; liveness: "dead" | "aliv
       aggregator,
     })}\n`,
   );
+  const killedMidway = input.report === "absent";
   writeFileSync(
     join(dir, "status.json"),
     `${JSON.stringify({
       version: 1,
       status: "running",
       progress: {
-        phase: "aggregating",
+        phase: killedMidway ? "attempts" : "aggregating",
         updatedAt: staleAt,
         attempts: [
-          { ...seat, role: "attempt", status: "success", durationMs: 1000, lastActivity: null },
+          {
+            ...seat,
+            role: "attempt",
+            status: killedMidway ? "running" : "success",
+            durationMs: killedMidway ? null : 1000,
+            lastActivity: null,
+          },
           {
             ...aggregator,
             role: "aggregator",
@@ -906,7 +940,30 @@ function seedStaleReview(input: { shape: "pr" | "task"; liveness: "dead" | "aliv
       pipeline: null,
     })}\n`,
   );
-  writeFileSync(join(dir, "report.md"), "# Autonomous Review Report\n\n中断前的摘要。\n");
+  if (killedMidway && input.shape === "pr") {
+    writeFileSync(
+      join(dir, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task,
+        repoRealpath: "/tmp/acme-payments",
+        reviewedSha: "c4e8b1a09f6d3e2c1b0a9876543210fedcba9876",
+        timeoutMs: 1000,
+        concurrency: 1,
+        agents: [],
+        aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+  }
+  if (input.report !== "absent") {
+    writeFileSync(join(dir, "report.md"), "# Autonomous Review Report\n\n中断前的摘要。\n");
+  }
+  if (input.failReReview === true) {
+    writeFileSync(join(dir, "e2e-rereview-fail"), "1\n");
+  }
   if (input.liveness === "alive") {
     writeFileSync(join(dir, "review.pid"), `${String(process.pid)}\n`);
   } else {
@@ -938,9 +995,18 @@ function testRoutes(
       bodySchema: z.object({
         shape: z.enum(["pr", "task"]),
         liveness: z.enum(["dead", "alive"]),
+        report: z.enum(["present", "absent"]).optional(),
+        failReReview: z.boolean().optional(),
       }),
       handler: ({ body }) =>
-        seedStaleReview(body as { shape: "pr" | "task"; liveness: "dead" | "alive" }),
+        seedStaleReview(
+          body as {
+            shape: "pr" | "task";
+            liveness: "dead" | "alive";
+            report?: "present" | "absent";
+            failReReview?: boolean;
+          },
+        ),
     },
     {
       method: "POST",

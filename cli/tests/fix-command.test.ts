@@ -214,6 +214,76 @@ describe("cli fix command", () => {
     );
   }
 
+  function seedKilledMidway(
+    options: {
+      task?: string;
+      head?: { repo: string; sha: string };
+    } = {},
+  ): void {
+    const dir = join(home, "runs", RUN_ID);
+    mkdirSync(dir, { recursive: true });
+    const seat = {
+      attemptId: "attempt-security",
+      agentId: "sec",
+      agentName: "review-security",
+      driverId: "grok-stream-json",
+      modelId: "grok-4.6",
+    };
+    const task = options.task ? { task: options.task } : { pr: PR_URL };
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId: RUN_ID,
+        startedAt: "2026-08-01T00:00:00.000Z",
+        task,
+        attempts: [seat],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "a",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      })}\n`,
+    );
+    writeFileSync(
+      join(dir, "status.json"),
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: {
+          phase: "attempts",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+          attempts: [
+            { ...seat, role: "attempt", status: "running", durationMs: null, lastActivity: null },
+          ],
+        },
+        pipeline: null,
+      })}\n`,
+    );
+    writeFileSync(join(dir, "review.pid"), "2147483646\n");
+    if (options.head) {
+      writeFileSync(
+        join(dir, "invocation-manifest.v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          kind: "councilkit-invocation-manifest",
+          runId: RUN_ID,
+          task,
+          repoRealpath: options.head.repo,
+          reviewedSha: options.head.sha,
+          timeoutMs: 1000,
+          concurrency: 1,
+          agents: [],
+          aggregator: { id: "a", driverId: "grok-stream-json", modelId: "grok-4.6" },
+          tools: [],
+        })}\n`,
+      );
+    }
+  }
+
   function fakeSpawn(opts: { verdicts?: Array<"approve" | "changes-requested"> } = {}): {
     impl: SpawnImpl;
     prompts: string[];
@@ -434,6 +504,71 @@ describe("cli fix command", () => {
       if (!(error instanceof FixExit)) throw error;
     }
     expect(seen[0]?.slice(0, 2)).toEqual(["--task", "给结算页补一张失败态说明"]);
+  });
+
+  it("restarts a killed PR review from the original PR and head when report.md was never written", async () => {
+    const followUpId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const sha = "a".repeat(40);
+    const repo = "/tmp/acme-repo";
+    seedKilledMidway({ head: { repo, sha } });
+    const seen: string[][] = [];
+    let code = 0;
+    try {
+      await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async (argv, _out, deps) => {
+          seen.push(argv);
+          deps?.onRunCreated?.(followUpId);
+        },
+      });
+    } catch (error) {
+      if (error instanceof FixExit) code = error.exitCode;
+      else throw error;
+    }
+    expect(code).toBe(0);
+    expect(seen).toEqual([[PR_URL, "--repo", repo, "--pin-sha", sha]]);
+    expect(seen[0]?.join("\n")).not.toContain(RUN_ID);
+    const status = JSON.parse(readFileSync(join(home, "runs", RUN_ID, "status.json"), "utf8")) as {
+      pipeline: { followUpRunId: string | null };
+    };
+    expect(status.pipeline.followUpRunId).toBe(followUpId);
+  });
+
+  it("restarts a killed task review from the original task when report.md was never written", async () => {
+    const task = "给结算页补一张失败态说明";
+    const followUpId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee3";
+    seedKilledMidway({ task });
+    const seen: string[][] = [];
+    let code = 0;
+    try {
+      await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async (argv, _out, deps) => {
+          seen.push(argv);
+          deps?.onRunCreated?.(followUpId);
+        },
+      });
+    } catch (error) {
+      if (error instanceof FixExit) code = error.exitCode;
+      else throw error;
+    }
+    expect(code).toBe(0);
+    expect(seen).toEqual([["--task", task]]);
+    expect(seen[0]?.join("\n")).not.toContain(RUN_ID);
+  });
+
+  it("leaves the killed run untouched when a re-review fails before a new run exists", async () => {
+    seedKilledMidway({ task: "给结算页补一张失败态说明" });
+    const statusPath = join(home, "runs", RUN_ID, "status.json");
+    const before = readFileSync(statusPath, "utf8");
+    await expect(
+      runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async () => {
+          throw new CliError({ code: 5, message: "forced re-review failure" });
+        },
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.ready"))).toBe(false);
+    expect(existsSync(join(home, "runs", RUN_ID, "report.md"))).toBe(false);
   });
 
   it("refuses re-review while the previous review process is still alive", async () => {

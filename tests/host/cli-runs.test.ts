@@ -749,6 +749,91 @@ describe("cli-runs route", () => {
     }
   });
 
+  it("POST re-review failure restores the interrupted run byte for byte", async () => {
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeaa";
+    const dir = join(home, "runs", runId);
+    mkdirSync(dir, { recursive: true });
+    const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const seat = {
+      attemptId: "attempt-security",
+      agentId: "sec",
+      agentName: "review-security",
+      driverId: "grok-stream-json",
+      modelId: "grok-4.6",
+      role: "attempt" as const,
+      status: "running" as const,
+      durationMs: null,
+      lastActivity: null,
+    };
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId,
+        startedAt: staleAt,
+        task: { task: "给结算页补一张失败态说明" },
+        attempts: [seat],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "adv",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      })}\n`,
+    );
+    const statusPath = join(dir, "status.json");
+    writeFileSync(
+      statusPath,
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "attempts", attempts: [seat], updatedAt: staleAt },
+        pipeline: null,
+      })}\n`,
+    );
+    writeFileSync(join(dir, "review.pid"), "2147483646\n");
+    const before = readFileSync(statusPath, "utf8");
+    host = await createTestHost({
+      routesFactory: (services) => {
+        services.cliRunLauncher = {
+          start: () => {
+            writeFileSync(join(dir, "pipeline.ready"), "1\n");
+            writeFileSync(
+              statusPath,
+              `${JSON.stringify({
+                version: 1,
+                status: "completed",
+                progress: { phase: "done", attempts: [], updatedAt: new Date().toISOString() },
+                pipeline: {
+                  phase: "done",
+                  round: 0,
+                  maxRounds: 2,
+                  planVerdict: null,
+                  applyStatus: "failure",
+                  followUpRunId: null,
+                  summary: "cannot read report.md",
+                  updatedAt: new Date().toISOString(),
+                },
+              })}\n`,
+            );
+            throw new Error("cannot read report.md for the killed review");
+          },
+        };
+        return cliRunsRoutes(services);
+      },
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${runId}/actions`, {
+      method: "POST",
+      headers: authedHeaders(host),
+      body: JSON.stringify({ action: "re-review" }),
+    });
+    expect(res.status).toBe(500);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+    expect(existsSync(join(dir, "pipeline.ready"))).toBe(false);
+  });
+
   it("POST re-review refuses while the previous review process is alive", async () => {
     for (const shape of ["pr", "task"] as const) {
       const runId = `ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee${shape === "pr" ? "e1" : "e2"}`;

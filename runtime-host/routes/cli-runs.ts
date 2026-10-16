@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,7 @@ import {
 } from "@shared/runtime/attempt-live-events";
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
 import {
+  CLI_RUN_PIPELINE_READY_FILE,
   CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunProgressPhase,
@@ -579,12 +581,27 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             }),
           );
         }
+        const statusPath = join(runDir, CLI_RUN_STATUS_FILE);
+        const readyPath = join(runDir, CLI_RUN_PIPELINE_READY_FILE);
+        const statusBefore = readStatusSnapshot(statusPath);
+        const readyBefore = existsSync(readyPath);
         if (!finished) markLostReviewInterrupted(runDir);
         const logPath = join(runDir, "pipeline.log");
+        const restoreFailedStart = (): void => {
+          restoreStatusSnapshot(statusPath, statusBefore);
+          if (!readyBefore) {
+            try {
+              unlinkSync(readyPath);
+            } catch {
+              // the child never created it
+            }
+          }
+        };
         let started: { pid: number };
         try {
           started = await Promise.resolve(launcher.start({ action: body.action, runId, logPath }));
         } catch (error) {
+          restoreFailedStart();
           throw httpError(
             500,
             makeError("DRIVER_SPAWN_FAILED", "dispatch", actionFailureMessage(body.action, error), {
@@ -594,6 +611,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         }
         const followUpRunId = body.action === "re-review" ? readFollowUpRunId(runDir) : null;
         if (body.action === "re-review" && followUpRunId === null) {
+          restoreFailedStart();
           throw httpError(
             500,
             makeError("DRIVER_SPAWN_FAILED", "dispatch", "复审进程没有开始审查", {
@@ -1303,6 +1321,23 @@ function readFollowUpRunId(runDir: string): string | null {
     return typeof id === "string" && id.startsWith("ck-review-") ? id : null;
   } catch {
     return null;
+  }
+}
+
+function readStatusSnapshot(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function restoreStatusSnapshot(path: string, snapshot: string | null): void {
+  try {
+    if (snapshot === null) unlinkSync(path);
+    else writeFileSync(path, snapshot, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // the failed action must not leave a half-written status behind
   }
 }
 
