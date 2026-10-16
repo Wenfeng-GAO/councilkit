@@ -13,12 +13,15 @@ export function ExecutionInterruptedCard({
   onReReview,
   heading,
   error = null,
+  errorDetail = null,
 }: {
   busy: boolean;
   onReReview: () => void;
   heading: "h1" | "h2";
   /** Shown immediately under the primary button. */
   error?: string | null;
+  /** Raw diagnostic inside「详情」, under the same alert. */
+  errorDetail?: string | null;
 }) {
   const Title = heading;
   const copy = EXECUTION_SERVICE_INTERRUPTION;
@@ -39,6 +42,12 @@ export function ExecutionInterruptedCard({
               <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
               {error}
             </p>
+          ) : null}
+          {errorDetail ? (
+            <details className="ck-action-detail">
+              <summary>详情</summary>
+              <pre>{errorDetail}</pre>
+            </details>
           ) : null}
         </div>
         <Link to="/reports" data-variant="ghost" className="ck-interrupt-secondary">

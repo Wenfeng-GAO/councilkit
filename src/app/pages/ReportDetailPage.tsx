@@ -6,6 +6,7 @@ import {
   FixPlanDocument,
   formatCliActionError,
   formatReReviewStartError,
+  reReviewStartErrorDetail,
 } from "@/components/report/FixPipeline";
 import { IdeateIntegrityCard } from "@/components/report/IdeateIntegrityCard";
 import { LiveReviewProgress } from "@/components/report/LiveReviewProgress";
@@ -43,6 +44,7 @@ export function ReportDetailPage() {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState<CopiedKind>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionErrorDetail, setActionErrorDetail] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"fix" | "re-review" | null>(null);
   const [watchUntil, setWatchUntil] = useState(0);
   const [inspectId, setInspectId] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export function ReportDetailPage() {
     mutationFn: (kind: "fix" | "re-review") => client.startCliRunAction(runId, kind),
     onMutate: (kind) => {
       setActionError(null);
+      setActionErrorDetail(null);
       setPendingAction(kind);
       setWatchUntil(Date.now() + 5 * 60 * 1000);
       if (kind === "re-review") {
@@ -94,9 +97,13 @@ export function ReportDetailPage() {
     onError: (error, kind) => {
       if (kind === "re-review") setPendingAction(null);
       else window.setTimeout(() => setPendingAction(null), 1500);
-      setActionError(
-        kind === "re-review" ? formatReReviewStartError(error) : formatCliActionError(error),
-      );
+      if (kind === "re-review") {
+        setActionError(formatReReviewStartError(error));
+        setActionErrorDetail(reReviewStartErrorDetail(error));
+      } else {
+        setActionError(formatCliActionError(error));
+        setActionErrorDetail(null);
+      }
     },
   });
   const followUpRunId = query.data?.pipeline?.followUpRunId ?? null;
@@ -286,6 +293,7 @@ export function ReportDetailPage() {
           busy: action.isPending || pendingAction !== null,
           pendingAction,
           error: actionError,
+          errorDetail: actionErrorDetail,
           followUpRun: run.pipeline?.followUpRunId
             ? (listQuery.data?.runs.find((row) => row.runId === run.pipeline?.followUpRunId) ??
               null)

@@ -36,6 +36,7 @@ export function OverviewView({
   onReReview,
   reReviewBusy = false,
   reReviewError = null,
+  reReviewErrorDetail = null,
   againstState = { status: "none" },
   filter,
   onFilterChange,
@@ -47,6 +48,7 @@ export function OverviewView({
   onReReview?: () => void;
   reReviewBusy?: boolean;
   reReviewError?: string | null;
+  reReviewErrorDetail?: string | null;
   againstState?: AgainstLedgerState;
   filter?: FindingListFilter;
   onFilterChange?: (filter: FindingListFilter) => void;
@@ -96,6 +98,7 @@ export function OverviewView({
           busy={reReviewBusy}
           onReReview={() => onReReview?.()}
           error={reReviewError}
+          errorDetail={reReviewErrorDetail}
         />
       ) : (
         <h1>{heading}</h1>

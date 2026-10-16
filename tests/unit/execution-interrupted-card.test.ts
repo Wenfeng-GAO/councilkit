@@ -1,9 +1,14 @@
 import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
+import { formatReReviewStartError } from "@/components/report/FixPipeline";
 import { OverviewView } from "@/components/report/workbench/OverviewView";
+import { RuntimeClientError } from "@/runtime/client";
 import {
   EXECUTION_SERVICE_INTERRUPTION,
   RE_REVIEW_STARTING_LABEL,
   reReviewStartFailure,
+  specOriginalMissingDetail,
+  specOriginalMissingLine,
+  specOriginalMissingLineFrom,
 } from "@shared/runtime/interruption-copy";
 import { cliRunDetailResponseSchema } from "@shared/runtime/schemas";
 import { createElement } from "react";
@@ -54,6 +59,66 @@ describe("ExecutionInterruptedCard", () => {
       rest.indexOf(EXECUTION_SERVICE_INTERRUPTION.secondaryAction),
     );
     expect(html).toContain(failure);
+    expect(html).not.toContain("<details");
+  });
+
+  it("puts the missing-spec sentence under the button and the raw error inside 详情", () => {
+    const stored = "../rs-spec.md";
+    const failure = specOriginalMissingLine(stored);
+    const detail = specOriginalMissingDetail(
+      { detail: { raw: `SPEC_ORIGINAL_UNPROVEN: relative spec "${stored}" has no recorded cwd` } },
+      failure,
+    );
+    const html = render(
+      createElement(ExecutionInterruptedCard, {
+        heading: "h1",
+        busy: false,
+        error: failure,
+        errorDetail: detail,
+        onReReview: () => {},
+      }),
+    );
+    const button = new RegExp(
+      `<button\\b[^>]*>${EXECUTION_SERVICE_INTERRUPTION.primaryAction}</button>`,
+    ).exec(html);
+    const rest = html.slice((button?.index ?? 0) + (button?.[0].length ?? 0)).trimStart();
+    expect(rest.startsWith('<p class="ck-action-error" role="alert">')).toBe(true);
+    expect(rest.indexOf(failure)).toBeLessThan(rest.indexOf("<details"));
+    expect(rest.indexOf("<summary>详情</summary>")).toBeLessThan(
+      rest.indexOf(EXECUTION_SERVICE_INTERRUPTION.secondaryAction),
+    );
+    expect(html).toContain(failure);
+    expect(html).not.toContain("可以再试一次");
+    expect(html.slice(html.indexOf('role="alert"'), html.indexOf("<details"))).not.toContain(
+      "DRIVER_SPAWN_FAILED",
+    );
+    expect(html).toContain("DRIVER_SPAWN_FAILED");
+    expect(html).toContain("SPEC_ORIGINAL_UNPROVEN");
+  });
+});
+
+describe("missing original spec copy", () => {
+  it("keeps the sentence when a log tail wraps it, and hides the raw code from the alert", () => {
+    const stored = "docs/plans/ck-legacy-plan.md";
+    const sentence = specOriginalMissingLine(stored);
+    const log = `error[2]: ${sentence}\n  detail: ${JSON.stringify({
+      code: "SPEC_ORIGINAL_UNPROVEN",
+      raw: `SPEC_ORIGINAL_UNPROVEN: relative spec "${stored}" has no recorded cwd`,
+      spec: stored,
+    })}`;
+    expect(specOriginalMissingLineFrom(log)).toBe(sentence);
+    expect(sentence).not.toContain("可以再试一次");
+    expect(sentence).not.toContain("DRIVER_SPAWN_FAILED");
+    expect(sentence).not.toContain("SPEC_VERIFY_UNBOUND");
+    const detail = specOriginalMissingDetail(new Error(log), log);
+    expect(detail).toContain("DRIVER_SPAWN_FAILED");
+    expect(detail).toContain("SPEC_ORIGINAL_UNPROVEN: relative spec");
+    expect(detail.startsWith("DRIVER_SPAWN_FAILED\n")).toBe(true);
+    const shown = formatReReviewStartError(
+      new RuntimeClientError(500, "DRIVER_SPAWN_FAILED", log, detail),
+    );
+    expect(shown).toBe(sentence);
+    expect(shown).not.toContain("可以再试一次");
   });
 });
 

@@ -35,6 +35,62 @@ export function isReReviewStartFailure(message: string | null | undefined): bool
   return Boolean(message?.startsWith("复审没有启动："));
 }
 
+const MISSING_SPEC_PREFIX = "复审没有启动：找不到原来的规格文件 `";
+const MISSING_SPEC_SUFFIX = "`。请重新指定规格后再审。";
+
+/**
+ * A legacy run stored a spec path we cannot prove. The sentence is the whole
+ * alert: it does not offer another try, and it quotes the stored path.
+ */
+export function specOriginalMissingLine(storedPath: string): string {
+  const room = 1024 - MISSING_SPEC_PREFIX.length - MISSING_SPEC_SUFFIX.length;
+  const shown =
+    storedPath.length <= room ? storedPath : `${storedPath.slice(0, Math.max(0, room - 1))}…`;
+  return `${MISSING_SPEC_PREFIX}${shown}${MISSING_SPEC_SUFFIX}`;
+}
+
+const SPEC_ORIGINAL_MISSING_RE =
+  /复审没有启动：找不到原来的规格文件 `([^`]*)`。请重新指定规格后再审。/;
+
+/** The exact alert sentence if `text` contains one, including inside a log tail. */
+export function specOriginalMissingLineFrom(text: string): string | null {
+  return SPEC_ORIGINAL_MISSING_RE.exec(text)?.[0] ?? null;
+}
+
+/**
+ * Raw diagnostic for the alert's「详情」. The main sentence stays free of
+ * DRIVER_SPAWN_FAILED and SPEC_VERIFY_UNBOUND.
+ */
+export function specOriginalMissingDetail(error: unknown, text: string): string {
+  const lines = ["DRIVER_SPAWN_FAILED"];
+  const raw = diagnosticRaw(error) ?? rawFromText(text);
+  if (raw) lines.push(raw);
+  const detail = lines.join("\n");
+  return detail.length <= 2048 ? detail : detail.slice(0, 2048);
+}
+
+function diagnosticRaw(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("detail" in error)) return null;
+  const detail = (error as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null || !("raw" in detail)) return null;
+  const raw = (detail as { raw?: unknown }).raw;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+function rawFromText(text: string): string | null {
+  const marker = text.indexOf("detail:");
+  const jsonStart = marker < 0 ? -1 : text.indexOf("{", marker);
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(text.slice(jsonStart)) as { raw?: unknown };
+      if (typeof parsed.raw === "string" && parsed.raw.trim().length > 0) return parsed.raw.trim();
+    } catch {
+      // the log tail may be clipped mid-JSON
+    }
+  }
+  return /SPEC_ORIGINAL_UNPROVEN:[^\n]*/.exec(text)?.[0] ?? null;
+}
+
 /**
  * A review the index marked interrupted because nothing finished it.
  * A recorded review.finished interruption has endedAt and keeps the short label.

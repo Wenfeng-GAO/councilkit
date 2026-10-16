@@ -4,12 +4,16 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { specOriginalMissingLine } from "@shared/runtime/interruption-copy";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunCommand } from "../src/auto/checkout-pr";
 import { DRIVER_PROBE_PROMPT, GROK_ISOLATED_HOME_DIR } from "../src/auto/driver-commands";
@@ -578,7 +582,8 @@ describe("cli fix command", () => {
 
   it("copies --spec onto a scratch re-review of a killed task", async () => {
     const task = "给结算页补一张失败态说明";
-    const spec = "/tmp/settlement-spec.md";
+    const spec = join(home, "settlement-spec.md");
+    writeFileSync(spec, "# 验收\n\n## 验收\n\n- [ ] AC-1\n");
     seedKilledMidway({ task });
     writeFileSync(
       join(home, "runs", RUN_ID, "invocation-manifest.v1.json"),
@@ -607,10 +612,10 @@ describe("cli fix command", () => {
     }).catch((error: unknown) => {
       if (!(error instanceof FixExit)) throw error;
     });
-    expect(seen[0]).toEqual(["--task", task, "--spec", spec]);
+    expect(seen[0]).toEqual(["--task", task, "--spec", realpathSync(spec)]);
   });
 
-  it("resolves a relative spec against the recorded cwd, then the repo root", async () => {
+  it("resolves a relative spec only against the recorded cwd", async () => {
     const task = "给结算页补一张失败态说明";
     const root = mkdtempSync(join(tmpdir(), "ck-rel-spec-"));
     const sub = join(root, "pkg");
@@ -662,9 +667,124 @@ describe("cli fix command", () => {
     };
     writeManifest("../spec.md", cwd, null);
     expect(await capture()).toEqual(["--task", task, "--spec", realpathSync(parentSpec)]);
+    const past = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    utimesSync(plan, past, past);
     writeManifest("docs/plans/demo-plan.md", null, repo);
-    expect(await capture()).toEqual(["--task", task, "--spec", realpathSync(plan)]);
+    await expect(
+      runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async () => {
+          throw new Error("re-review spawned");
+        },
+      }),
+    ).rejects.toMatchObject({
+      message: specOriginalMissingLine("docs/plans/demo-plan.md"),
+      detail: {
+        code: "SPEC_ORIGINAL_UNPROVEN",
+        raw: 'SPEC_ORIGINAL_UNPROVEN: relative spec "docs/plans/demo-plan.md" has no recorded cwd',
+      },
+    });
+    expect(statSync(plan).atimeMs).toBeLessThan(Date.now() - 24 * 60 * 60 * 1000);
+    const empty = join(root, "empty");
+    mkdirSync(empty);
+    utimesSync(plan, past, past);
+    writeManifest("docs/plans/demo-plan.md", realpathSync(empty), repo);
+    await expect(
+      runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async () => {
+          throw new Error("re-review spawned");
+        },
+      }),
+    ).rejects.toMatchObject({
+      message: specOriginalMissingLine("docs/plans/demo-plan.md"),
+      detail: {
+        raw: 'SPEC_ORIGINAL_UNPROVEN: relative spec "docs/plans/demo-plan.md" is not under the recorded cwd',
+      },
+    });
+    expect(statSync(plan).atimeMs).toBeLessThan(Date.now() - 24 * 60 * 60 * 1000);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  async function refuseLegacySpec(stored: string): Promise<void> {
+    const task = "给结算页补一张失败态说明";
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ck-legacy-decoy-")));
+    const hostCwd = stored.startsWith("..") ? join(root, "work", "pkg") : join(root, "host");
+    const repo = join(root, "repo");
+    mkdirSync(hostCwd, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const hostDecoy = resolve(hostCwd, stored);
+    const repoDecoy = resolve(repo, stored);
+    expect(hostDecoy).not.toBe(repoDecoy);
+    const past = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    for (const [path, body] of [
+      [hostDecoy, "AC-91 host decoy\n"],
+      [repoDecoy, "AC-92 repo decoy\n"],
+    ] as const) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+      utimesSync(path, past, past);
+    }
+    seedKilledMidway({ task });
+    writeFileSync(
+      join(home, "runs", RUN_ID, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId: RUN_ID,
+        task: { task, specSource: stored },
+        repoRealpath: repo,
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: true,
+        agents: [],
+        aggregator: { id: "a", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+    const statusPath = join(home, "runs", RUN_ID, "status.json");
+    const before = readFileSync(statusPath, "utf8");
+    const previous = process.cwd();
+    const sink = makeSink();
+    process.chdir(hostCwd);
+    let hostAtime = 0;
+    let repoAtime = 0;
+    try {
+      await expect(
+        runFix(["--run", RUN_ID, "--re-review-only"], sink, {
+          reviewImpl: async () => {
+            throw new Error("re-review spawned");
+          },
+        }),
+      ).rejects.toMatchObject({
+        message: specOriginalMissingLine(stored),
+        detail: {
+          code: "SPEC_ORIGINAL_UNPROVEN",
+          raw: `SPEC_ORIGINAL_UNPROVEN: relative spec "${stored}" has no recorded cwd`,
+        },
+      });
+      hostAtime = statSync(hostDecoy).atimeMs;
+      repoAtime = statSync(repoDecoy).atimeMs;
+    } finally {
+      process.chdir(previous);
+      rmSync(root, { recursive: true, force: true });
+    }
+    const stale = Date.now() - 24 * 60 * 60 * 1000;
+    expect(hostAtime).toBeLessThan(stale);
+    expect(repoAtime).toBeLessThan(stale);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+    expect(readdirSync(join(home, "runs"))).toEqual([RUN_ID]);
+    const progress = sink.lines.join("\n");
+    expect(progress).not.toContain("AC-91");
+    expect(progress).not.toContain("AC-92");
+    expect(specOriginalMissingLine(stored)).not.toContain("可以再试一次");
+  }
+
+  it("refuses a legacy relative --spec without reading a host-cwd or repo-root decoy", async () => {
+    await refuseLegacySpec("../rs-spec.md");
+  });
+
+  it("refuses a legacy auto-detected spec without reading a host-cwd or repo-root decoy", async () => {
+    await refuseLegacySpec("docs/plans/ck-legacy-plan.md");
   });
 
   it("copies --no-require-spec onto a scratch re-review", async () => {

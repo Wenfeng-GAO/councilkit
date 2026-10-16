@@ -95,6 +95,8 @@ export const runtimeErrorSchema = z
     /** The generation limit that fired (STREAM_IDLE_TIMEOUT / ONESHOT_TIMEOUT),
      * so the interruption copy can say the real threshold. */
     limitMs: z.number().int().positive().optional(),
+    /** Machine diagnostic hidden behind「详情」. Absent on older clients. */
+    detail: z.string().max(2048).optional(),
   })
   .strict();
 

@@ -434,6 +434,23 @@
   max-width: 36rem;
   color: var(--ck-error);
 }
+.ck-interrupt .ck-action-detail {
+  max-width: 36rem;
+  color: var(--ck-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+.ck-interrupt .ck-action-detail summary {
+  cursor: pointer;
+}
+.ck-interrupt .ck-action-detail pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+}
 .ck-interrupt-secondary {
   display: inline-flex;
   align-items: center;

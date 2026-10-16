@@ -35,7 +35,11 @@ import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-in
 import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { makeError } from "@shared/runtime/errors";
 import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
-import { REVIEW_STILL_RUNNING_REASON } from "@shared/runtime/interruption-copy";
+import {
+  REVIEW_STILL_RUNNING_REASON,
+  specOriginalMissingDetail,
+  specOriginalMissingLineFrom,
+} from "@shared/runtime/interruption-copy";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
   type RepairProfileRecord,
@@ -604,10 +608,12 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         } catch (error) {
           if (body.action === "re-review") discardNewFollowUp(statusBefore, runDir);
           restoreFailedStart();
+          const failure = actionFailure(body.action, error);
           throw httpError(
             500,
-            makeError("DRIVER_SPAWN_FAILED", "dispatch", actionFailureMessage(body.action, error), {
+            makeError("DRIVER_SPAWN_FAILED", "dispatch", failure.message, {
               retryable: false,
+              ...(failure.detail ? { detail: failure.detail } : {}),
             }),
           );
         }
@@ -1386,16 +1392,23 @@ function markLostReviewInterrupted(runDir: string): void {
   );
 }
 
-function actionFailureMessage(action: "fix" | "re-review", error: unknown): string {
+function actionFailure(
+  action: "fix" | "re-review",
+  error: unknown,
+): { message: string; detail?: string } {
   const raw = error instanceof Error ? error.message : "";
+  const missing = specOriginalMissingLineFrom(raw);
+  if (missing) return { message: missing, detail: specOriginalMissingDetail(error, raw) };
   if (/still running|already running|in progress|还在运行/i.test(raw)) {
-    return REVIEW_STILL_RUNNING_REASON;
+    return { message: REVIEW_STILL_RUNNING_REASON };
   }
   if (action === "re-review") {
-    if (/handshake timed out|HANDSHAKE_TIMEOUT/i.test(raw)) return "复审进程没有在时限内开始";
-    return "复审进程没有开始审查";
+    if (/handshake timed out|HANDSHAKE_TIMEOUT/i.test(raw)) {
+      return { message: "复审进程没有在时限内开始" };
+    }
+    return { message: "复审进程没有开始审查" };
   }
-  return raw.length > 0 ? raw : "failed to spawn councilkit";
+  return { message: raw.length > 0 ? raw : "failed to spawn councilkit" };
 }
 
 function writeStartingStatus(

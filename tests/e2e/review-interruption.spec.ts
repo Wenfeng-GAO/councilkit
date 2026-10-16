@@ -1,6 +1,9 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync, statSync } from "node:fs";
 import { type Locator, expect, test } from "@playwright/test";
-import { EXECUTION_SERVICE_INTERRUPTION } from "../../shared/runtime/interruption-copy";
+import {
+  EXECUTION_SERVICE_INTERRUPTION,
+  specOriginalMissingLine,
+} from "../../shared/runtime/interruption-copy";
 import {
   COMPLETED_REVIEW_RUN_ID,
   LOST_EXECUTION_PR,
@@ -512,4 +515,132 @@ test("复审席位起来后再失败，原 run 仍是中断", async ({ page }) =
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/reports/${followUp?.runId ?? ""}`);
   await expect(page.locator(".ck-wb-run-status")).toContainText("失败");
+});
+
+test("旧 run 找不到原来的规格时，复审不启动并保持中断", async ({ page }) => {
+  test.setTimeout(180_000);
+  mkdirSync(ARTIFACTS, { recursive: true });
+  await page.goto("/reports");
+  const decoys: string[] = [];
+  try {
+    for (const legacySpec of ["relative", "auto"] as const) {
+      const seeded = await page.request.post("/api/v1/__test__/seed-stale-review", {
+        data: { shape: "task", liveness: "dead", report: "absent", legacySpec },
+      });
+      expect(seeded.ok()).toBe(true);
+      const seededBody = (await seeded.json()) as {
+        ok: true;
+        data: { runId: string; specSource: string; decoy: string | null };
+      };
+      const { runId, specSource, decoy } = seededBody.data;
+      if (decoy) decoys.push(decoy);
+      const sentence = specOriginalMissingLine(specSource);
+      const decoyBefore = decoy ? statSync(decoy).atimeMs : null;
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`/reports/${runId}`);
+      await expect(page.locator(".ck-wb-run-status")).toContainText("中断");
+      await expect(page.locator(".ck-wb-run-status")).not.toContainText("失败");
+      const card = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+      await expect(card).toBeVisible();
+      await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+      await expectAmberInterrupt(card.locator("[data-interrupt-icon='circle-pause']"));
+      const summary = page.locator(".ck-wb-aggregate");
+      await expect(summary).toContainText("中断");
+      await expectAmberInterrupt(summary.locator("[data-interrupt-icon='circle-pause']"));
+      const button = card.getByRole("button", { name: "只再审一遍（不改代码）" });
+      const [response] = await Promise.all([
+        page.waitForResponse(
+          (item) => item.url().includes("/actions") && item.request().method() === "POST",
+        ),
+        button.click(),
+      ]);
+      expect(response.status()).toBe(500);
+      const payload = (await response.json()) as {
+        ok: boolean;
+        error?: { code?: string; message?: string; retryable?: boolean; detail?: string };
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.error?.code).toBe("DRIVER_SPAWN_FAILED");
+      expect(payload.error?.retryable).toBe(false);
+      expect(payload.error?.message).toBe(sentence);
+      expect(payload.error?.message ?? "").not.toContain("可以再试一次");
+      expect(payload.error?.message ?? "").not.toContain("DRIVER_SPAWN_FAILED");
+      expect(payload.error?.message ?? "").not.toContain("SPEC_VERIFY_UNBOUND");
+      expect(payload.error?.detail ?? "").toContain("DRIVER_SPAWN_FAILED");
+      expect(payload.error?.detail ?? "").toContain("SPEC_ORIGINAL_UNPROVEN");
+      if (decoy && decoyBefore !== null) {
+        expect(statSync(decoy).atimeMs).toBe(decoyBefore);
+      }
+
+      const alert = button.locator("xpath=following-sibling::*[1]");
+      await expect(alert).toHaveText(sentence);
+      await expect(alert).not.toContainText("可以再试一次");
+      await expect(alert).not.toContainText("DRIVER_SPAWN_FAILED");
+      await expect(alert).not.toContainText("SPEC_VERIFY_UNBOUND");
+      await card.locator("summary").click();
+      const raw = card.locator("details");
+      await expect(raw).toContainText("DRIVER_SPAWN_FAILED");
+      await expect(raw).toContainText("SPEC_ORIGINAL_UNPROVEN");
+      await expect(raw).not.toContainText("可以再试一次");
+      await expect(page.locator(".ck-wb-run-status")).toContainText("中断");
+      await expect(page.locator(".ck-wb-run-status")).not.toContainText("失败");
+      await expect(summary).toContainText("中断");
+      await card.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: `${ARTIFACTS}/rereview-legacy-${legacySpec}-1280.png` });
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.evaluate(() => {
+        const app = document.querySelector(".ck-wb-app") as HTMLElement | null;
+        const reader = document.querySelector(".ck-wb-reader") as HTMLElement | null;
+        const main = document.querySelector(".ck-wb-main") as HTMLElement | null;
+        const seats = document.querySelector(".ck-wb-seats") as HTMLElement | null;
+        for (const node of [document.documentElement, document.body, app, main, reader]) {
+          if (!node) continue;
+          node.style.height = "auto";
+          node.style.overflow = "visible";
+        }
+        if (app) app.style.gridTemplateRows = "auto auto auto";
+        if (reader) reader.style.flex = "none";
+        if (seats && main) {
+          seats.style.display = "flex";
+          seats.style.flexDirection = "column";
+          seats.style.position = "static";
+          seats.style.width = "100%";
+          main.appendChild(seats);
+        }
+      });
+      await expect(alert).toHaveText(sentence);
+      await expect(raw).toContainText("SPEC_ORIGINAL_UNPROVEN");
+      await expect(summary).toContainText("中断");
+      await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+      await page.screenshot({
+        path: `${ARTIFACTS}/rereview-legacy-${legacySpec}-390.png`,
+        fullPage: true,
+      });
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto("/reports");
+      await page.getByRole("button", { name: /全部案件/ }).click();
+      const listed = page.locator(".ck-case-card", {
+        has: page.locator(`a[href="/reports/${runId}"]`),
+      });
+      const listedStatus = listed.locator(".ck-case-status");
+      await expect(listedStatus).toContainText("中断");
+      await expect(listedStatus).not.toContainText("失败");
+      await expectAmberInterrupt(listed.locator("[data-interrupt-token='--ck-interrupt']"));
+
+      const listedRuns = await page.request.get("/api/v1/cli-runs");
+      expect(listedRuns.ok()).toBe(true);
+      const runs = (
+        (await listedRuns.json()) as {
+          ok: true;
+          data: { runs: Array<{ sourceRunId?: string | null }> };
+        }
+      ).data.runs;
+      expect(runs.some((run) => run.sourceRunId === runId)).toBe(false);
+    }
+  } finally {
+    for (const decoy of decoys) rmSync(decoy, { force: true });
+  }
 });

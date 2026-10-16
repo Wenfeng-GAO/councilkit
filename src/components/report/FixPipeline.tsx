@@ -7,6 +7,7 @@ import {
   RE_REVIEW_STARTING_LABEL,
   isReReviewStartFailure,
   reReviewStartFailure,
+  specOriginalMissingLineFrom,
 } from "@shared/runtime/interruption-copy";
 import type {
   CliRunDetailResponse,
@@ -261,7 +262,18 @@ function stepIndex(phase: CliRunPipelineDto["phase"]): number {
 }
 
 export function formatReReviewStartError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "";
+  const missing = specOriginalMissingLineFrom(raw);
+  if (missing) return missing;
   return reReviewStartFailure(reReviewFailureReason(error));
+}
+
+/** Raw diagnostic for the missing-spec alert. Other start failures have none. */
+export function reReviewStartErrorDetail(error: unknown): string | null {
+  if (!(error instanceof RuntimeClientError)) return null;
+  if (specOriginalMissingLineFrom(error.message) === null) return null;
+  const detail = error.detail?.trim() ?? "";
+  return detail.length > 0 ? detail : null;
 }
 
 function reReviewFailureReason(error: unknown): string {

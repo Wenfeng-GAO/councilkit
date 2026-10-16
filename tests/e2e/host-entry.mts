@@ -42,13 +42,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   DRIVER_IDS,
   type DispatchState,
@@ -974,6 +975,19 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
   return Promise.race([startedEarly, settled]);
 }
 
+function plantLegacyDecoy(stored: string): string | null {
+  const path = resolve(realpathSync(process.cwd()), stored);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `AC-91 decoy ${stored}\n`);
+    const past = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    utimesSync(path, past, past);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
 function seedStaleReview(input: {
   shape: "pr" | "task";
   liveness: "dead" | "alive";
@@ -981,8 +995,11 @@ function seedStaleReview(input: {
   failReReview?: boolean;
   spawnFail?: boolean;
   seatFail?: boolean;
+  legacySpec?: "relative" | "auto";
 }): {
   runId: string;
+  specSource?: string;
+  decoy?: string | null;
 } {
   const home = process.env.COUNCILKIT_HOME;
   if (home === undefined || home.length === 0) throw new Error("COUNCILKIT_HOME missing");
@@ -1074,7 +1091,31 @@ function seedStaleReview(input: {
       `# Frozen review context\n\n- head: \`c4e8b1a09f6d3e2c1b0a9876543210fedcba9876\`\n- base: \`${base}\`\n`,
     );
   }
-  if (killedMidway && input.shape === "task") {
+  let legacy: { specSource: string; decoy: string | null } | null = null;
+  if (killedMidway && input.shape === "task" && input.legacySpec) {
+    const specSource =
+      input.legacySpec === "relative"
+        ? "../ck-e2e-legacy-spec.md"
+        : "docs/plans/ck-e2e-legacy-plan.md";
+    legacy = { specSource, decoy: plantLegacyDecoy(specSource) };
+    writeFileSync(
+      join(dir, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task: { ...task, specSource },
+        repoRealpath: realpathSync(process.cwd()),
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: true,
+        agents: [],
+        aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+  } else if (killedMidway && input.shape === "task") {
     const spec = join(dir, "acceptance.md");
     writeFileSync(spec, "# 结算\n\n## 验收\n\n- [ ] 失败时展示说明\n");
     writeFileSync(
@@ -1112,7 +1153,7 @@ function seedStaleReview(input: {
   } else {
     writeFileSync(join(dir, "review.pid"), "2147483646\n");
   }
-  return { runId };
+  return { runId, specSource: legacy?.specSource, decoy: legacy?.decoy ?? null };
 }
 
 function testRoutes(
@@ -1142,6 +1183,7 @@ function testRoutes(
         failReReview: z.boolean().optional(),
         spawnFail: z.boolean().optional(),
         seatFail: z.boolean().optional(),
+        legacySpec: z.enum(["relative", "auto"]).optional(),
       }),
       handler: ({ body }) =>
         seedStaleReview(
@@ -1152,6 +1194,7 @@ function testRoutes(
             failReReview?: boolean;
             spawnFail?: boolean;
             seatFail?: boolean;
+            legacySpec?: "relative" | "auto";
           },
         ),
     },

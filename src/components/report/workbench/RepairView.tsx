@@ -8,6 +8,7 @@ export interface WorkbenchPipelineProps {
   busy: boolean;
   pendingAction: "fix" | "re-review" | null;
   error: string | null;
+  errorDetail?: string | null;
   followUpRun: Pick<CliRunSummaryDto, "runId" | "status"> | null;
   onFix: () => void;
   onReReview: () => void;
@@ -66,6 +67,9 @@ export function RepairView({
           busy={pipeline.busy || pipeline.pendingAction === "re-review"}
           onReReview={pipeline.onReReview}
           error={isReReviewStartFailure(pipeline.error) ? pipeline.error : null}
+          errorDetail={
+            isReReviewStartFailure(pipeline.error) ? (pipeline.errorDetail ?? null) : null
+          }
         />
       ) : null}
       <p className="ck-wb-source">

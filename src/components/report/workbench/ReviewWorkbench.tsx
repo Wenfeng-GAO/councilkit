@@ -293,6 +293,9 @@ export function ReviewWorkbench({
               onReReview={pipeline.onReReview}
               reReviewBusy={pipeline.busy || pipeline.pendingAction === "re-review"}
               reReviewError={isReReviewStartFailure(pipeline.error) ? pipeline.error : null}
+              reReviewErrorDetail={
+                isReReviewStartFailure(pipeline.error) ? (pipeline.errorDetail ?? null) : null
+              }
               againstState={againstState}
               filter={overviewFilter}
               onFilterChange={setOverviewFilter}

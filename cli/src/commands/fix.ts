@@ -22,6 +22,7 @@ import {
 } from "@shared/runtime/cli-run-progress";
 import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { replacePrivateFile } from "@shared/runtime/durable-write";
+import { specOriginalMissingLine } from "@shared/runtime/interruption-copy";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
@@ -1033,14 +1034,12 @@ function readScratchContract(runDir: string): {
   let specSource: string | null = null;
   let noRequireSpec = false;
   let invocationCwd: string | null = null;
-  let repoRealpath: string | null = null;
   try {
     const manifest = readInvocationManifest(runDir);
     const source = manifest?.task.specSource?.trim() ?? "";
     if (source.length > 0) specSource = source;
     noRequireSpec = manifest?.requireSpec === false;
     invocationCwd = manifest?.invocationCwd ?? null;
-    repoRealpath = manifest?.repoRealpath ?? null;
   } catch {
     specSource = null;
     noRequireSpec = false;
@@ -1057,7 +1056,7 @@ function readScratchContract(runDir: string): {
     }
   }
   if (specSource !== null) {
-    specSource = resolveRecordedSpec(specSource, invocationCwd, repoRealpath);
+    specSource = resolveRecordedSpec(specSource, invocationCwd);
   }
   let baseSha: string | null = null;
   try {
@@ -1108,30 +1107,50 @@ function writeReReviewOf(followUpId: string, sourceId: string): void {
 }
 
 /**
- * A spec recorded as a relative path is resolved against the original cwd,
- * then the repo root. New runs already store an absolute path.
+ * Prove the original spec file before a re-review starts.
+ * An absolute stored path must exist. A relative path resolves only against
+ * the absolute cwd recorded for that run. Repo root, the Host process cwd,
+ * and any other candidate are not bases — a legacy relative path with no
+ * recorded cwd fails before spawn.
  */
-function resolveRecordedSpec(
-  specSource: string,
-  invocationCwd: string | null,
-  repoRealpath: string | null,
-): string {
-  if (isAbsolute(specSource) && existsSync(specSource)) return absoluteExisting(specSource);
-  const bases = [invocationCwd, repoRealpath].filter(
-    (base): base is string => typeof base === "string" && base.length > 0,
-  );
-  for (const base of bases) {
-    const candidate = resolve(base, specSource);
-    if (existsSync(candidate)) return absoluteExisting(candidate);
+function resolveRecordedSpec(specSource: string, invocationCwd: string | null): string {
+  if (isAbsolute(specSource)) {
+    if (!existsSync(specSource)) {
+      throw unprovenSpec(specSource, "absolute spec is not readable");
+    }
+    return absoluteExisting(specSource, specSource);
   }
-  return specSource;
+  const cwd = recordedCwd(invocationCwd);
+  if (cwd === null) {
+    throw unprovenSpec(specSource, `relative spec "${specSource}" has no recorded cwd`);
+  }
+  const candidate = resolve(cwd, specSource);
+  if (!existsSync(candidate)) {
+    throw unprovenSpec(specSource, `relative spec "${specSource}" is not under the recorded cwd`);
+  }
+  return absoluteExisting(candidate, specSource);
 }
 
-function absoluteExisting(path: string): string {
+function recordedCwd(invocationCwd: string | null): string | null {
+  if (invocationCwd === null) return null;
+  const trimmed = invocationCwd.trim();
+  if (trimmed.length === 0 || !isAbsolute(trimmed)) return null;
+  return trimmed;
+}
+
+function unprovenSpec(storedPath: string, raw: string): CliError {
+  return errors.usage(specOriginalMissingLine(storedPath), {
+    code: "SPEC_ORIGINAL_UNPROVEN",
+    raw: `SPEC_ORIGINAL_UNPROVEN: ${raw}`,
+    spec: storedPath,
+  });
+}
+
+function absoluteExisting(path: string, storedPath: string): string {
   try {
     return realpathSync(path);
   } catch {
-    return path;
+    throw unprovenSpec(storedPath, "absolute spec is not readable");
   }
 }
 
