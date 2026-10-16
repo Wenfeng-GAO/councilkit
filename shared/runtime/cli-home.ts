@@ -24,3 +24,10 @@ export function resolveCouncilkitHome(env: NodeJS.ProcessEnv = process.env): str
 export function resolveCliRunsRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(resolveCouncilkitHome(env), "runs");
 }
+
+/**
+ * Per-run bare `--shared` clone (runs/<id>/source.git) that receives PR-mode
+ * fetches, so a review never writes into the user's .git (#273 SAFE-05).
+ * Written by the CLI review; read by the Host review explainer.
+ */
+export const ISOLATED_SOURCE_DIR = "source.git";
