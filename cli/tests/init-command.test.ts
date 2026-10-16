@@ -11,6 +11,9 @@ import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { dispatch } from "../src/cli";
 import { runInit } from "../src/commands/init";
 import { ReviewExit, runReview } from "../src/commands/review";
+import { CliError } from "../src/errors";
+import { publicMissingDrivers } from "../src/init/no-ai-cli";
+import { renderErrorHuman } from "../src/output";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -66,6 +69,10 @@ describe("councilkit init", () => {
   let oldPath: string | undefined;
   let oldCodex: string | undefined;
   let oldUserHome: string | undefined;
+  let oldLang: string | undefined;
+  let oldLcAll: string | undefined;
+  let oldLcMessages: string | undefined;
+  let oldLanguage: string | undefined;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ck-init-home-"));
@@ -75,6 +82,10 @@ describe("councilkit init", () => {
     oldPath = process.env.PATH;
     oldCodex = process.env.CODEX_HOME;
     oldUserHome = process.env.HOME;
+    oldLang = process.env.LANG;
+    oldLcAll = process.env.LC_ALL;
+    oldLcMessages = process.env.LC_MESSAGES;
+    oldLanguage = process.env.LANGUAGE;
     process.env.COUNCILKIT_HOME = home;
     process.env.CODEX_HOME = codexHome;
     process.env.HOME = home;
@@ -89,6 +100,14 @@ describe("councilkit init", () => {
     else process.env.CODEX_HOME = oldCodex;
     if (oldUserHome === undefined) process.env.HOME = undefined;
     else process.env.HOME = oldUserHome;
+    if (oldLang === undefined) process.env.LANG = undefined;
+    else process.env.LANG = oldLang;
+    if (oldLcAll === undefined) process.env.LC_ALL = undefined;
+    else process.env.LC_ALL = oldLcAll;
+    if (oldLcMessages === undefined) process.env.LC_MESSAGES = undefined;
+    else process.env.LC_MESSAGES = oldLcMessages;
+    if (oldLanguage === undefined) process.env.LANGUAGE = undefined;
+    else process.env.LANGUAGE = oldLanguage;
     rmSync(home, { recursive: true, force: true });
     rmSync(bin, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -109,6 +128,151 @@ describe("councilkit init", () => {
     await expect(runInit([], sink)).rejects.toMatchObject({ exitCode: 2 });
     expect(readMaybe(resolvePaths().agents)).toBeNull();
     expect(readMaybe(resolvePaths().councils)).toBeNull();
+  });
+
+  it("CLI-10 init without any AI CLI lists drivers from missingDrivers and points to demo", async () => {
+    process.env.PATH = bin;
+    process.env.LANG = "en_US.UTF-8";
+    process.env.LC_ALL = "en_US.UTF-8";
+    process.env.LC_MESSAGES = "en_US.UTF-8";
+    process.env.LANGUAGE = "en";
+    const sink = makeSink();
+    let caught: unknown;
+    try {
+      await runInit(["--json"], sink);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CliError);
+    const err = caught as CliError;
+    expect(err.exitCode).toBe(2);
+    const missing = (err.detail?.missingDrivers as string[]) ?? [];
+    const listed = publicMissingDrivers(missing);
+    expect([...listed].sort()).toEqual(["codex", "cursor-agent", "grok", "kimi"].sort());
+    for (const name of listed) expect(err.message).toContain(name);
+    expect(err.message).toContain("councilkit demo");
+    expect(err.message).not.toMatch(/\bcld\b/);
+    expect(err.message).not.toMatch(/\bcode\b/);
+    const json = JSON.stringify({
+      ok: false,
+      error: { code: err.exitCode, message: err.message, detail: err.detail ?? {} },
+    });
+    expect(json).toContain('"code"');
+    // CLI-10: listed tools == detail.missingDrivers, and neither contains cld.
+    expect(missing).toEqual(listed);
+    expect(missing).not.toContain("cld");
+    expect(missing).not.toContain("codex-model");
+    expect(err.message).toBe(
+      "No AI CLI found yet. Install and log in to any one of: grok, kimi, codex, cursor-agent — then run `councilkit init`. Or try `councilkit demo` first, no account needed.",
+    );
+    // The human line carries no error code and no detail dump.
+    const human = renderErrorHuman(err);
+    expect(human).toBe(err.message);
+    expect(human).not.toMatch(/error\[\d+\]/);
+    expect(human).not.toContain("detail:");
+  });
+
+  it("CLI-10 zh: clean HOME init prints the locked zh sentence only", async () => {
+    process.env.PATH = bin;
+    process.env.LANG = "zh_CN.UTF-8";
+    process.env.LC_ALL = "zh_CN.UTF-8";
+    process.env.LC_MESSAGES = "zh_CN.UTF-8";
+    process.env.LANGUAGE = "zh_CN";
+    let caught: unknown;
+    try {
+      await runInit([], makeSink());
+    } catch (error) {
+      caught = error;
+    }
+    const err = caught as CliError;
+    expect(err.exitCode).toBe(2);
+    expect(renderErrorHuman(err)).toBe(
+      "还没找到可用的 AI 命令行工具。装好并登录下面任意一个，再运行 `councilkit init`：grok、kimi、codex、cursor-agent。也可以先运行 `councilkit demo` 看一份示例报告，不需要任何账号。",
+    );
+    expect(err.detail).toEqual({ missingDrivers: ["grok", "kimi", "codex", "cursor-agent"] });
+  });
+
+  function expectCreatedCouncilAndNextAgree(
+    out: { createdCouncil: { name: string } | null; next: string },
+    store: Store,
+  ): void {
+    const names = store.listCouncils().map((c) => c.name);
+    if (
+      /\b--council product-jury\b/.test(out.next) ||
+      /ideate .*--council product-jury/.test(out.next)
+    ) {
+      expect(names).toContain("product-jury");
+    } else {
+      expect(out.next).not.toContain("--council product-jury");
+    }
+    if (out.next.includes("review --council pr-jury")) {
+      expect(names).toContain("pr-jury");
+    }
+    if (out.createdCouncil !== null) {
+      expect(names).toContain(out.createdCouncil.name);
+      expect(out.next).toContain(out.createdCouncil.name);
+    }
+  }
+
+  it("CK-1 BUG-01 only kimi: createdCouncil and next agree", async () => {
+    stub(["kimi"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdCouncil: { name: string } | null;
+      next: string;
+      missingDrivers: string[];
+    };
+    expectCreatedCouncilAndNextAgree(out, new Store());
+    expect(out.createdCouncil?.name).toBe("pr-jury");
+    expect(out.next).not.toContain("--council product-jury");
+    expect(out.next).toContain(
+      "Product ideation needs at least two AI CLIs; found only kimi. Install and log in to grok or codex, then run `councilkit init`.",
+    );
+    expect(out.missingDrivers).not.toContain("cld");
+    expect(out.missingDrivers).not.toContain("codex-model");
+    expect(() => new Store().getCouncil("product-jury")).toThrow(/no council/);
+  });
+
+  it("CK-1 BUG-01 only grok: createdCouncil and next agree", async () => {
+    stub(["grok"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdCouncil: { name: string } | null;
+      next: string;
+    };
+    expectCreatedCouncilAndNextAgree(out, new Store());
+    expect(out.createdCouncil?.name).toBe("pr-jury");
+    expect(out.next).not.toContain("--council product-jury");
+    expect(() => new Store().getCouncil("product-jury")).toThrow(/no council/);
+  });
+
+  it("CK-1 BUG-01 both: createdCouncil and next agree", async () => {
+    stub(["kimi", "grok"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdCouncil: { name: string } | null;
+      next: string;
+    };
+    expectCreatedCouncilAndNextAgree(out, new Store());
+    expect(out.createdCouncil?.name).toBe("pr-jury");
+    expect(out.next).toContain("--council product-jury");
+    expect(new Store().getCouncil("product-jury").name).toBe("product-jury");
+  });
+
+  it("CK-1 re-running init backfills product-jury", async () => {
+    stub(["kimi"]);
+    await runInit([], makeSink());
+    expect(() => new Store().getCouncil("product-jury")).toThrow(/no council/);
+    stub(["kimi", "grok"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as { createdCouncil: { name: string } | null; next: string };
+    expect(new Store().getCouncil("product-jury").name).toBe("product-jury");
+    expect(out.createdCouncil?.name).toBe("product-jury");
+    expect(out.next).toContain("--council product-jury");
   });
 
   it("creates four default agents and pr-jury when cld, kimi and grok exist", async () => {
@@ -177,7 +341,9 @@ describe("councilkit init", () => {
     const sink = makeSink();
     await runInit([], sink);
     const out = sink.finished as { missingDrivers: string[] };
-    expect(out.missingDrivers).toContain("codex-model");
+    expect(out.missingDrivers).toContain("codex");
+    expect(out.missingDrivers).not.toContain("codex-model");
+    expect(out.missingDrivers).not.toContain("cld");
     expect(new Store().listAgents().map((agent) => agent.name)).not.toContain("ideate-challenger");
   });
 
@@ -267,7 +433,8 @@ describe("councilkit init", () => {
       "review-maintainability",
     ]);
     expect(out.createdCouncil.reporter).toBe("review-maintainability");
-    expect(out.missingDrivers.sort()).toEqual(["cld", "codex", "cursor-agent", "grok"]);
+    expect([...out.missingDrivers].sort()).toEqual(["codex", "cursor-agent", "grok"]);
+    expect(out.missingDrivers).not.toContain("cld");
   });
 
   it("creates review-maintainability when kimi lives only in ~/.kimi-code/bin", async () => {

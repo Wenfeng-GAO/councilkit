@@ -28,17 +28,24 @@ export interface CliErrorOptions {
   /** Structured machine-readable detail for `--json` consumers (already redacted). */
   detail?: Record<string, unknown>;
   cause?: unknown;
+  /**
+   * CLI-10: a guided, user-facing message. Human mode prints only the sentence
+   * (no `error[N]:` prefix, no detail line); `--json` still carries code + detail.
+   */
+  plain?: boolean;
 }
 
 export class CliError extends Error {
   readonly exitCode: ExitCode;
   readonly detail: Record<string, unknown> | undefined;
+  readonly plain: boolean;
 
   constructor(options: CliErrorOptions) {
     super(options.message, { cause: options.cause });
     this.name = "CliError";
     this.exitCode = options.code;
     this.detail = options.detail;
+    this.plain = options.plain === true;
   }
 }
 
