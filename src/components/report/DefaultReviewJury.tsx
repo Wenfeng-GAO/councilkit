@@ -21,6 +21,15 @@ import {
 import type { ClaudeRoute, InstallationDto } from "@shared/runtime/schemas";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+/** UI-03 / #281: no jury yet is an empty state (grey info bar), never a red error. */
+export const NO_JURY_COPY =
+  "还没有审查团。点「先看示例」看一份示例报告，或在终端运行 `councilkit init`。";
+
+export function isJuryNotInitialized(error: unknown): boolean {
+  return error instanceof RuntimeClientError && error.status === 400 && error.code === "NOT_FOUND";
+}
 
 const KEY = ["cli-review-jury"];
 function jurySeatHeading(agentName: string, seat: ReviewJurySeat): string {
@@ -45,6 +54,7 @@ export function DefaultReviewJury({
   onStatusChange,
 }: { disabled: boolean; onStatusChange: (status: JuryStatus) => void }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const query = useQuery({
     queryKey: KEY,
     queryFn: () => readOrSaveReviewJury(),
@@ -74,6 +84,11 @@ export function DefaultReviewJury({
       setSeatsOpen(false);
     },
   });
+  const demo = useMutation({
+    mutationFn: () => getAppRuntime().client.createDemoRun(),
+    onSuccess: (result) => navigate(`/reports/${result.runId}`),
+  });
+  const notInitialized = query.isError && isJuryNotInitialized(query.error);
   const data = query.data;
   const seats = draft?.seats ?? data?.seats ?? [];
   const hasPinnedCursor = seats.some(
@@ -119,11 +134,13 @@ export function DefaultReviewJury({
   const summary =
     query.isFetching && !data
       ? "正在读取默认席位"
-      : query.isError
-        ? "默认席位读取失败，请重新加载"
-        : data
-          ? `${seats.length} 个默认席位 · ${reporterHeading}汇总`
-          : "正在读取默认席位";
+      : notInitialized
+        ? "还没有审查团，先看示例或运行 councilkit init"
+        : query.isError
+          ? "默认席位读取失败，请重新加载"
+          : data
+            ? `${seats.length} 个默认席位 · ${reporterHeading}汇总`
+            : "正在读取默认席位";
   useEffect(() => {
     onStatusChange({
       ready: !!data && !query.isError && !draft && !save.isPending && !cursorProblem,
@@ -148,7 +165,7 @@ export function DefaultReviewJury({
       <div className="ck-roster-heading">
         <div>
           <strong>默认审查席位</strong>
-          <span className="ck-jury-count">{data ? `${seats.length} / 8` : "尚未读取"}</span>
+          {data ? <span className="ck-jury-count">{`${seats.length} / 8`}</span> : null}
         </div>
         {data && !draft ? (
           <div className="ck-jury-heading-actions">
@@ -199,7 +216,27 @@ export function DefaultReviewJury({
       {query.isPending ? (
         <output className="ck-model-message">正在读取 pr-jury 默认席位…</output>
       ) : null}
-      {query.isError ? (
+      {notInitialized ? (
+        <div className="ck-jury-empty">
+          <p>
+            还没有审查团。点「先看示例」看一份示例报告，或在终端运行 <code>councilkit init</code>。
+          </p>
+          <div className="ck-jury-empty-actions">
+            <button
+              type="button"
+              className="ck-jury-empty-primary"
+              disabled={demo.isPending}
+              onClick={() => demo.mutate()}
+            >
+              {demo.isPending ? "正在打开示例…" : "先看示例"}
+            </button>
+            <button type="button" className="ck-text-button" onClick={() => void query.refetch()}>
+              已运行 init，重新检查
+            </button>
+          </div>
+          {demo.isError ? <p className="ck-jury-empty-detail">示例暂时打不开，请重试。</p> : null}
+        </div>
+      ) : query.isError ? (
         <div role="alert" className="ck-jury-error">
           <p>{juryReadError(query.error)}</p>
           <button type="button" className="ck-text-button" onClick={() => void query.refetch()}>

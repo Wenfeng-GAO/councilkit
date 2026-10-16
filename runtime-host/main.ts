@@ -7,6 +7,7 @@ import {
   type DriverId,
   TIMEOUTS,
 } from "@shared/runtime/contracts";
+import { createCliStateMonitor } from "./cli-state";
 import { checkNodeVersion, loadConfig } from "./config";
 import { createClaudeStreamJsonDriver } from "./drivers/claude-stream-json";
 import { createCodexAppServerDriver } from "./drivers/codex-app-server";
@@ -89,6 +90,7 @@ async function main(): Promise<void> {
   const installations = createInstallationRegistry({ logger });
   const executions = createExecutionRegistry({ logger });
   const reconciler = createSessionReconciler();
+  const cliStateMonitor = createCliStateMonitor({ checkoutPath: process.cwd() });
 
   const driverDeps: DriverDeps = {
     supervisor,
@@ -148,6 +150,7 @@ async function main(): Promise<void> {
     executionRegistry: executions,
     scopeManager,
     profileProbe,
+    cliStateMonitor,
     driverCapabilities: () =>
       DRIVER_IDS.map((driverId) => ({
         driverId,
@@ -219,6 +222,7 @@ async function main(): Promise<void> {
     void (async () => {
       await scopeManager.closeAll("host-shutdown").catch(() => undefined);
       await supervisor.shutdownAll().catch(() => undefined);
+      cliStateMonitor.close();
       await viteDevServer?.close().catch(() => undefined);
       await runtime.close().catch(() => undefined);
       process.exit(0);

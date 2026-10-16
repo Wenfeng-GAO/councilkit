@@ -336,10 +336,26 @@ describe("health + binding responses", () => {
       apiVersion: "v1",
       hostInstanceId: "host-1",
       node: { version: "v22.17.0", major: 22 },
+      checkoutPath: "/tmp/ck",
       drivers: [
-        { driverId: "claude-stream-json", capability: "checking" },
-        { driverId: "codex-app-server", capability: "ready" },
-        { driverId: "kimi-stream-json", capability: "checking" },
+        {
+          driverId: "claude-stream-json",
+          capability: "checking",
+          cliState: "checking",
+          fixCommand: "",
+        },
+        {
+          driverId: "codex-app-server",
+          capability: "ready",
+          cliState: "ready",
+          fixCommand: "",
+        },
+        {
+          driverId: "kimi-stream-json",
+          capability: "checking",
+          cliState: "checking",
+          fixCommand: "",
+        },
       ],
     };
     expect(healthResponseSchema.safeParse(health).success).toBe(true);

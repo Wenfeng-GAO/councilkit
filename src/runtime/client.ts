@@ -6,6 +6,7 @@ import {
   type CliRunActionRequest,
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
+  type CliRunDemoResponse,
   type CliRunDetailResponse,
   type CliRunListRepairProfilesResponse,
   type CliRunRepairStopResponse,
@@ -36,6 +37,7 @@ import {
   ackResponseSchema,
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
+  cliRunDemoResponseSchema,
   cliRunDetailResponseSchema,
   cliRunListRepairProfilesResponseSchema,
   cliRunRepairStopResponseSchema,
@@ -143,8 +145,12 @@ export class RuntimeClient {
     return options.schema.parse(envelope.data);
   }
 
-  health(): Promise<HealthResponse> {
-    return this.call("GET", "/api/v1/health", { schema: healthResponseSchema, auth: "session" });
+  health(options?: { refresh?: boolean }): Promise<HealthResponse> {
+    const query = options?.refresh ? "?refresh=1" : "";
+    return this.call("GET", `/api/v1/health${query}`, {
+      schema: healthResponseSchema,
+      auth: "session",
+    });
   }
 
   /** S6: sanitized same-machine diagnostics bundle (session read; Settings is
@@ -179,6 +185,15 @@ export class RuntimeClient {
     return this.call("POST", `/api/v1/cli-runs/${encodeURIComponent(runId)}/actions`, {
       body,
       schema: cliRunActionResponseSchema,
+      auth: "mutation",
+    });
+  }
+
+  /** UI-03 / #281: write (or reuse) the built-in sample review. */
+  createDemoRun(): Promise<CliRunDemoResponse> {
+    return this.call("POST", "/api/v1/cli-runs/demo", {
+      body: {},
+      schema: cliRunDemoResponseSchema,
       auth: "mutation",
     });
   }

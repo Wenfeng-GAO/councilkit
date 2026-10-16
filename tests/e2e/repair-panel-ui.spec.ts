@@ -13,6 +13,7 @@ const health = {
     apiVersion: "v1",
     hostInstanceId: "preview-ui",
     node: { version: "v22.0.0", major: 22 },
+    checkoutPath: "/tmp/ck",
     drivers: [],
   },
 };

@@ -8,14 +8,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -146,9 +139,7 @@ function removeWorktree(repo, work) {
     encoding: "utf8",
   });
   if (result.status !== 0) {
-    process.stderr.write(
-      `git worktree remove ${work} failed: ${(result.stderr || "").trim()}\n`,
-    );
+    process.stderr.write(`git worktree remove ${work} failed: ${(result.stderr || "").trim()}\n`);
   }
 }
 
@@ -160,7 +151,9 @@ async function baselineFromWorktree(repo, sha, cacheDir) {
     encoding: "utf8",
   });
   if (added.status !== 0) {
-    throw new Error(`git worktree add --detach ${work} ${sha} failed: ${(added.stderr || "").trim()}`);
+    throw new Error(
+      `git worktree add --detach ${work} ${sha} failed: ${(added.stderr || "").trim()}`,
+    );
   }
   try {
     const how = provisionDeps(repo, work);
@@ -259,7 +252,9 @@ async function main() {
     }
     cacheState = "miss-worktree";
   } else if (baselineNames == null) {
-    console.log("baseline cache miss; the HEAD vitest run is the merge-base result and will be cached");
+    console.log(
+      "baseline cache miss; the HEAD vitest run is the merge-base result and will be cached",
+    );
     cacheState = "miss-same-tree";
   }
 

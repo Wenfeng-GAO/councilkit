@@ -120,14 +120,7 @@ export function recordsFromNameStatusZ(text) {
 }
 
 export function changedRecords(repo, mergeBase) {
-  const diff = gitOutput(repo, [
-    "diff",
-    "-z",
-    "--name-status",
-    "-M",
-    "--find-renames",
-    mergeBase,
-  ]);
+  const diff = gitOutput(repo, ["diff", "-z", "--name-status", "-M", "--find-renames", mergeBase]);
   const untracked = gitOutput(repo, ["ls-files", "-z", "--others", "--exclude-standard"])
     .split("\0")
     .filter((path) => path.length > 0);
@@ -236,9 +229,7 @@ export function normalizeDiagPath(file, root) {
 export function diagnosticCounts(report, root) {
   const omitted = report?.summary?.diagnosticsNotPrinted ?? 0;
   if (omitted > 0) {
-    throw new Error(
-      `biome omitted ${omitted} diagnostics; rerun with --max-diagnostics=none`,
-    );
+    throw new Error(`biome omitted ${omitted} diagnostics; rerun with --max-diagnostics=none`);
   }
   const counts = new Map();
   for (const diagnostic of report?.diagnostics ?? []) {
@@ -435,7 +426,8 @@ export function e2eReportProblem(report, exitCode) {
   if (!report || typeof report !== "object") return "playwright JSON report is empty";
   const stats = report.stats;
   const counts = [stats?.expected, stats?.unexpected, stats?.skipped, stats?.flaky];
-  if (counts.some((value) => typeof value !== "number")) return "playwright JSON report has no stats";
+  if (counts.some((value) => typeof value !== "number"))
+    return "playwright JSON report has no stats";
   const total = counts.reduce((sum, value) => sum + value, 0);
   if (total === 0) return "playwright JSON report contains no tests";
   for (const suite of report.suites ?? []) {
@@ -577,7 +569,8 @@ function runSelfTest() {
   if (!isLintConfigPath("biome.json") || !isLintConfigPath("biome.jsonc")) {
     throw new Error("repo-root biome config is a lint config path");
   }
-  if (isLintConfigPath("src/biome.json")) throw new Error("nested biome.json is not the lint config");
+  if (isLintConfigPath("src/biome.json"))
+    throw new Error("nested biome.json is not the lint config");
   if (inLintScope("biome.json") || inLintScope("biome.jsonc")) {
     throw new Error("biome config itself is not a linted source");
   }
@@ -647,7 +640,14 @@ function runSelfTest() {
     },
     "/repo",
   );
-  assertEqual([...fromReport.entries()], [["src/a.ts", 1], ["src/b.ts", 1]], "error and fatal only");
+  assertEqual(
+    [...fromReport.entries()],
+    [
+      ["src/a.ts", 1],
+      ["src/b.ts", 1],
+    ],
+    "error and fatal only",
+  );
 
   const names = failingTestNames(
     {
@@ -692,7 +692,11 @@ function runSelfTest() {
   ]);
   assertEqual(tests.headFailed, 2, "head failed count");
   assertEqual(tests.baselineFailed, 2, "baseline failed count");
-  assertEqual(tests.newFailures, ["cli/tests/fix-command.test.ts :: <suite failed>"], "new failure");
+  assertEqual(
+    tests.newFailures,
+    ["cli/tests/fix-command.test.ts :: <suite failed>"],
+    "new failure",
+  );
   assertEqual(
     tests.resolvedFailures,
     ["cli/tests/review-title-format.test.ts :: review finding title format > extracts"],
@@ -751,12 +755,16 @@ function runSelfTest() {
           {
             title: "侧栏有「报告」",
             ok: true,
-            tests: [{ projectName: "chromium", status: "expected", results: [{ status: "passed" }] }],
+            tests: [
+              { projectName: "chromium", status: "expected", results: [{ status: "passed" }] },
+            ],
           },
           {
             title: "复制报告内容",
             ok: false,
-            tests: [{ projectName: "chromium", status: "unexpected", results: [{ status: "failed" }] }],
+            tests: [
+              { projectName: "chromium", status: "unexpected", results: [{ status: "failed" }] },
+            ],
           },
         ],
       },
@@ -773,18 +781,26 @@ function runSelfTest() {
                 title: "observer is fenced",
                 ok: false,
                 tests: [
-                  { projectName: "chromium", status: "unexpected", results: [{ status: "timedOut" }] },
+                  {
+                    projectName: "chromium",
+                    status: "unexpected",
+                    results: [{ status: "timedOut" }],
+                  },
                 ],
               },
               {
                 title: "skipped after failure",
                 ok: true,
-                tests: [{ projectName: "chromium", status: "skipped", results: [{ status: "skipped" }] }],
+                tests: [
+                  { projectName: "chromium", status: "skipped", results: [{ status: "skipped" }] },
+                ],
               },
               {
                 title: "flaky copy",
                 ok: true,
-                tests: [{ projectName: "chromium", status: "flaky", results: [{ status: "failed" }] }],
+                tests: [
+                  { projectName: "chromium", status: "flaky", results: [{ status: "failed" }] },
+                ],
               },
             ],
           },
@@ -837,27 +853,49 @@ function runSelfTest() {
     ],
     "new e2e ids",
   );
-  
+
   assertEqual(
     vitestDiscoveryProblem({ numTotalTests: 10 }, 100),
     "vitest discovered 10 tests but the baseline discovered 100",
     "truncated vitest discovery",
   );
-  assertEqual(vitestDiscoveryProblem({ numTotalTests: 100 }, 100), null, "matching vitest discovery");
-  assertEqual(vitestDiscoveryProblem({ numTotalTests: 120 }, 100), null, "expanded vitest discovery");
-  assertEqual(vitestDiscoveryProblem({ numTotalTests: 10 }, null), null, "unknown baseline discovery skipped");
   assertEqual(
-    e2eReportProblem({ stats: { expected: 2, unexpected: 0, skipped: 0, flaky: 0 }, suites: [{ specs: [] }] }, 1),
+    vitestDiscoveryProblem({ numTotalTests: 100 }, 100),
+    null,
+    "matching vitest discovery",
+  );
+  assertEqual(
+    vitestDiscoveryProblem({ numTotalTests: 120 }, 100),
+    null,
+    "expanded vitest discovery",
+  );
+  assertEqual(
+    vitestDiscoveryProblem({ numTotalTests: 10 }, null),
+    null,
+    "unknown baseline discovery skipped",
+  );
+  assertEqual(
+    e2eReportProblem(
+      { stats: { expected: 2, unexpected: 0, skipped: 0, flaky: 0 }, suites: [{ specs: [] }] },
+      1,
+    ),
     "playwright aborted with an unexplained nonzero exit",
     "unexplained playwright nonzero",
   );
   assertEqual(
-    e2eReportProblem({ stats: { expected: 1, unexpected: 1, skipped: 0, flaky: 0 }, suites: [{ specs: [] }] }, 1),
+    e2eReportProblem(
+      { stats: { expected: 1, unexpected: 1, skipped: 0, flaky: 0 }, suites: [{ specs: [] }] },
+      1,
+    ),
     null,
     "playwright nonzero explained by unexpected",
   );
 
-  assertEqual(e2eReportProblem({ stats: { expected: 0, unexpected: 0, skipped: 0, flaky: 0 }, suites: [] }), "playwright JSON report contains no tests", "empty e2e report");
+  assertEqual(
+    e2eReportProblem({ stats: { expected: 0, unexpected: 0, skipped: 0, flaky: 0 }, suites: [] }),
+    "playwright JSON report contains no tests",
+    "empty e2e report",
+  );
   assertEqual(
     e2eReportProblem({
       stats: { expected: 0, unexpected: 0, skipped: 1, flaky: 0 },
@@ -868,7 +906,13 @@ function runSelfTest() {
           specs: [
             {
               title: "stops",
-              tests: [{ projectName: "chromium", status: "skipped", results: [{ status: "interrupted" }] }],
+              tests: [
+                {
+                  projectName: "chromium",
+                  status: "skipped",
+                  results: [{ status: "interrupted" }],
+                },
+              ],
             },
           ],
         },
@@ -892,16 +936,28 @@ function runSelfTest() {
         failing: ["tests/e2e/a.spec.ts :: one"],
       }),
     );
-    if (!readBaselineCache(cacheFile, mergeBase, "v22.20.0", { suiteKey: "playwright.config.ts@isolated" })) {
+    if (
+      !readBaselineCache(cacheFile, mergeBase, "v22.20.0", {
+        suiteKey: "playwright.config.ts@isolated",
+      })
+    ) {
       throw new Error("suite cache should hit");
     }
-    if (readBaselineCache(cacheFile, mergeBase, "v22.20.0", { suiteKey: "playwright.preview.config.ts@fixed:4179" })) {
+    if (
+      readBaselineCache(cacheFile, mergeBase, "v22.20.0", {
+        suiteKey: "playwright.preview.config.ts@fixed:4179",
+      })
+    ) {
       throw new Error("a different suiteKey is a cache miss");
     }
     if (!readBaselineCache(cacheFile, mergeBase, "v22.20.0")) {
       throw new Error("omitting suiteKey still reads the file");
     }
-    if (readBaselineCache(cacheFile, mergeBase, "v22.21.0", { suiteKey: "playwright.config.ts@isolated" })) {
+    if (
+      readBaselineCache(cacheFile, mergeBase, "v22.21.0", {
+        suiteKey: "playwright.config.ts@isolated",
+      })
+    ) {
       throw new Error("a different node version is a cache miss");
     }
   } finally {
@@ -920,8 +976,7 @@ function runSelfTest() {
   process.stdout.write("baseline-lib self-test passed\n");
 }
 
-const invokedDirectly =
-  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const invokedDirectly = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
   if (process.argv.includes("--self-test")) runSelfTest();
   else {

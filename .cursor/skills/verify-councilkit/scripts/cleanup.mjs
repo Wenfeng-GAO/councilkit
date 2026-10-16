@@ -86,9 +86,7 @@ if (snapshot.length === 0) {
       ? "PID reused / start time mismatch"
       : "recorded supervisor is gone or no longer matches the verification host",
     supervisorPid: state.supervisorPid,
-    ...(starttimeMismatch
-      ? { expectedStarttime, actualStarttime: supervisorNow.starttime }
-      : {}),
+    ...(starttimeMismatch ? { expectedStarttime, actualStarttime: supervisorNow.starttime } : {}),
   });
   process.exit(0);
 }

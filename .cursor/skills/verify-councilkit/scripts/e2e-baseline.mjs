@@ -10,14 +10,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -99,9 +92,7 @@ function removeWorktree(repo, work) {
     encoding: "utf8",
   });
   if (result.status !== 0) {
-    process.stderr.write(
-      `git worktree remove ${work} failed: ${(result.stderr || "").trim()}\n`,
-    );
+    process.stderr.write(`git worktree remove ${work} failed: ${(result.stderr || "").trim()}\n`);
   }
 }
 
@@ -213,7 +204,9 @@ async function baselineFromWorktree(repo, sha, cacheDir, suite, portMode) {
     encoding: "utf8",
   });
   if (added.status !== 0) {
-    throw new Error(`git worktree add --detach ${work} ${sha} failed: ${(added.stderr || "").trim()}`);
+    throw new Error(
+      `git worktree add --detach ${work} ${sha} failed: ${(added.stderr || "").trim()}`,
+    );
   }
   try {
     if (!existsSync(join(work, suite))) {
@@ -321,7 +314,12 @@ async function main() {
   }
 
   console.log("running playwright at HEAD");
-  const { report: headReport, code: headCode } = await runPlaywright(repo, reportOut, suite, portMode);
+  const { report: headReport, code: headCode } = await runPlaywright(
+    repo,
+    reportOut,
+    suite,
+    portMode,
+  );
   const headNames = failingE2eNames(headReport, repo);
   console.log(`HEAD playwright exit ${headCode}; failing ids ${headNames.length}`);
   if (artifactsOut && artifactsOut !== true) copyArtifacts(repo, artifactsOut);
@@ -365,7 +363,8 @@ if (invokedDirectly) {
         headFailed: null,
         baselineFailed: null,
         newFailures: [],
-        suiteKey: typeof parsed.suite === "string" ? `${parsed.suite}@${parsed["port-mode"] ?? ""}` : null,
+        suiteKey:
+          typeof parsed.suite === "string" ? `${parsed.suite}@${parsed["port-mode"] ?? ""}` : null,
       });
     }
     process.exit(2);

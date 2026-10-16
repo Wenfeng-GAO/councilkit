@@ -30,11 +30,7 @@
   "font": {
     "ui": "InterVariable, \"PingFang SC\", \"Microsoft YaHei\", \"Noto Sans CJK SC\", system-ui, sans-serif",
     "mono": "\"SF Mono\", Menlo, Consolas, ui-monospace, monospace",
-    "weights": [
-      400,
-      500,
-      600
-    ],
+    "weights": [400, 500, 600],
     "cjkLetterSpacing": "normal",
     "opticalSizing": "auto",
     "numeric": "tabular-nums",
@@ -103,18 +99,7 @@
       "mobile": 640
     }
   },
-  "spacing": [
-    4,
-    8,
-    12,
-    16,
-    20,
-    24,
-    32,
-    40,
-    48,
-    64
-  ],
+  "spacing": [4, 8, 12, 16, 20, 24, 32, 40, 48, 64],
   "semantic": {
     "globalSelected": "neutral raised background",
     "seatSelected": "selected + 2px accent rule",

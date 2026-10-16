@@ -28,6 +28,7 @@ import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-in
 import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { makeError } from "@shared/runtime/errors";
 import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
+import { materializeDemo } from "@shared/runtime/materialize-demo";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
   type RepairProfileRecord,
@@ -52,6 +53,7 @@ import {
   type CliRunActionResponse,
   type CliRunAttemptLiveResponse,
   type CliRunAttemptResultResponse,
+  type CliRunDemoResponse,
   type CliRunDetailResponse,
   type CliRunListRepairProfilesResponse,
   type CliRunRepairStopResponse,
@@ -66,6 +68,8 @@ import {
   cliRunActionResponseSchema,
   cliRunAttemptLiveResponseSchema,
   cliRunAttemptResultResponseSchema,
+  cliRunDemoRequestSchema,
+  cliRunDemoResponseSchema,
   cliRunDetailResponseSchema,
   cliRunListRepairProfilesResponseSchema,
   cliRunRepairControlRequestSchema,
@@ -167,6 +171,18 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         }
         writeRunningStub(runId, "preflight");
         return { runId, started: true };
+      },
+    },
+    {
+      // UI-03 / #281: 「先看示例」 on a fresh machine. No model, no network, no repo read.
+      method: "POST",
+      pattern: "/api/v1/cli-runs/demo",
+      auth: "mutation",
+      bodySchema: cliRunDemoRequestSchema,
+      responseSchema: cliRunDemoResponseSchema,
+      handler: (): CliRunDemoResponse => {
+        const result = materializeDemo();
+        return { runId: result.runId, demo: true, reused: result.reused };
       },
     },
     {

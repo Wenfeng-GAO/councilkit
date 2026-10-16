@@ -76,18 +76,7 @@
     "headerGap": 24,
     "sectionGap": 32
   },
-  "spacing": [
-    4,
-    8,
-    12,
-    16,
-    20,
-    24,
-    32,
-    40,
-    48,
-    64
-  ],
+  "spacing": [4, 8, 12, 16, 20, 24, 32, 40, 48, 64],
   "radius": {
     "control": 6,
     "surface": 6,

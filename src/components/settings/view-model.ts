@@ -1,6 +1,7 @@
 import type { ExecutionProfileRecord } from "@/models/execution-profile";
 import type { RepairAction, SettingsReadinessModel } from "@/runtime/readiness";
 import type {
+  CliState,
   DriverCapabilityState,
   DriverId,
   InstallationState,
@@ -31,6 +32,76 @@ export const CLAUDE_ROUTE_LABELS: Record<string, string> = {
 
 export function driverDisplayName(driverId: DriverId): string {
   return DRIVER_DISPLAY_NAMES[driverId] ?? driverId;
+}
+
+/** Settings 「本机 AI 工具」 row order — locked mock after2-settings.html. */
+/** External V1 list — no cld (#309 designer reject / #280). */
+export const AI_TOOL_ORDER: readonly DriverId[] = [
+  "grok-stream-json",
+  "kimi-stream-json",
+  "codex-app-server",
+  "cursor-stream-json",
+];
+
+export const AI_TOOL_SHORT_NAMES: Record<DriverId, string> = {
+  "grok-stream-json": "Grok",
+  "kimi-stream-json": "Kimi K3",
+  "codex-app-server": "Codex",
+  "claude-stream-json": "Claude",
+  "cursor-stream-json": "Cursor",
+};
+
+export const AI_TOOL_BINS: Record<DriverId, string> = {
+  "grok-stream-json": "grok",
+  "kimi-stream-json": "kimi",
+  "codex-app-server": "codex",
+  "claude-stream-json": "cld",
+  "cursor-stream-json": "cursor-agent",
+};
+
+export function cliStateFromCapability(capability: DriverCapabilityState): CliState {
+  switch (capability) {
+    case "ready":
+      return "ready";
+    case "auth_required":
+      return "not_logged_in";
+    case "incompatible":
+      return "check_failed";
+    case "checking":
+      return "checking";
+  }
+}
+
+/** Exact CliState vocabulary → (Chinese tag, pill tone). */
+export function cliStateView(state: CliState): {
+  label: string;
+  tone: "muted" | "info" | "success" | "error" | "warn";
+} {
+  switch (state) {
+    case "ready":
+      return { label: "就绪", tone: "success" };
+    case "not_logged_in":
+      return { label: "未登录", tone: "warn" };
+    case "not_installed":
+      return { label: "未安装", tone: "muted" };
+    case "checking":
+      return { label: "检查中", tone: "info" };
+    case "check_failed":
+      return { label: "检查失败", tone: "error" };
+  }
+}
+
+export function aiToolActionLabel(state: CliState): string {
+  switch (state) {
+    case "ready":
+      return "建 Agent";
+    case "check_failed":
+      return "重新检查";
+    case "checking":
+    case "not_installed":
+    case "not_logged_in":
+      return "重新检查";
+  }
 }
 
 const KIMI_EMPTY_OPTIONS_NOTE =

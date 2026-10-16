@@ -623,6 +623,56 @@
   font-size: 12px;
   line-height: 1.7;
 }
+/* UI-03 / #281: grey info bar for the fresh-machine empty state. */
+.ck-jury-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-2, var(--color-surface));
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ck-jury-empty code {
+  color: var(--color-fg);
+}
+.ck-jury-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+.ck-jury-empty-primary {
+  padding: 8px 16px;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ck-jury-empty-primary:hover {
+  opacity: 0.9;
+}
+.ck-jury-empty-primary:disabled {
+  opacity: 0.6;
+}
+/* 开始审查 stays muted while the jury is missing (disabled). */
+.ck-composer-footer .ck-start-button:disabled {
+  background: var(--color-surface-2);
+  color: var(--color-muted);
+  border-color: var(--color-border);
+  opacity: 1;
+}
+.ck-jury-empty-detail {
+  flex-basis: 100%;
+  font-size: 12px;
+}
 .ck-model-message {
   display: block;
   padding: 14px 0;

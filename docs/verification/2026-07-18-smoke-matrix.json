@@ -20,19 +20,11 @@
       "models": {
         "claude": {
           "requested": "GLM-5.2[1m]",
-          "effective": [
-            "GLM-5.2[1m]",
-            "GLM-5.2[1m]"
-          ]
+          "effective": ["GLM-5.2[1m]", "GLM-5.2[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -51,14 +43,8 @@
         "codex": 5014
       },
       "warmFirstDeltaMs": {
-        "claude": [
-          2063
-        ],
-        "codex": [
-          1759,
-          1779,
-          1349
-        ]
+        "claude": [2063],
+        "codex": [1759, 1779, 1349]
       },
       "ackLeaks": 0,
       "closeClean": true,
@@ -89,19 +75,11 @@
       "models": {
         "claude": {
           "requested": "Kimi-K3[1m]",
-          "effective": [
-            "Kimi-K3[1m]",
-            "Kimi-K3[1m]"
-          ]
+          "effective": ["Kimi-K3[1m]", "Kimi-K3[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -120,14 +98,8 @@
         "codex": 4347
       },
       "warmFirstDeltaMs": {
-        "claude": [
-          1852
-        ],
-        "codex": [
-          1698,
-          2129,
-          1478
-        ]
+        "claude": [1852],
+        "codex": [1698, 2129, 1478]
       },
       "ackLeaks": 0,
       "closeClean": true,
@@ -158,19 +130,11 @@
       "models": {
         "claude": {
           "requested": "deepseek-v4-pro[1m]",
-          "effective": [
-            "deepseek-v4-pro[1m]",
-            "deepseek-v4-pro[1m]"
-          ]
+          "effective": ["deepseek-v4-pro[1m]", "deepseek-v4-pro[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -189,14 +153,8 @@
         "codex": 4180
       },
       "warmFirstDeltaMs": {
-        "claude": [
-          4023
-        ],
-        "codex": [
-          1436,
-          3948,
-          2120
-        ]
+        "claude": [4023],
+        "codex": [1436, 3948, 2120]
       },
       "ackLeaks": 0,
       "closeClean": true,

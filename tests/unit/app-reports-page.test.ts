@@ -181,8 +181,13 @@ describe("ReportsPage", () => {
     mounted.splice(0);
 
     const empty = await openWith({ runs: [] });
-    await waitForText(empty.container, "第一份报告，从一个 PR 开始");
-    expect(empty.container.textContent).toContain("在上方粘贴 PR 链接，选择模型即可开始。");
+    await waitForText(
+      empty.container,
+      "还没有报告。先看一份示例，或运行 `councilkit init` 后回来。",
+    );
+    expect(empty.container.textContent).toContain(
+      "上方的「先看示例」不需要账号；初始化后再粘贴 PR 链接开始真实审查。",
+    );
   });
 
   it("filters, searches, expands history, and refreshes the library", async () => {

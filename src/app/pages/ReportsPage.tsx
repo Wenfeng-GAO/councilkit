@@ -229,8 +229,8 @@ export function ReportsPage() {
         ) : null}
         {query.isSuccess && runs.length === 0 ? (
           <EmptyState
-            title="第一份报告，从一个 PR 开始"
-            hint="在上方粘贴 PR 链接，选择模型即可开始。"
+            title="还没有报告。先看一份示例，或运行 `councilkit init` 后回来。"
+            hint="上方的「先看示例」不需要账号；初始化后再粘贴 PR 链接开始真实审查。"
           />
         ) : null}
         {query.isSuccess && runs.length > 0 && visible.length === 0 ? (

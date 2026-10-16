@@ -48,10 +48,13 @@ it("surfaces a corrupt councils.json instead of telling the operator to init", a
   });
 }, 20_000);
 
-it("still tells the operator to init when pr-jury is absent", async () => {
+it("UI-03 #281 a missing pr-jury is an empty state (NOT_FOUND + designer copy), not a red error", async () => {
   await expect(runJuryCli()).rejects.toMatchObject({
     status: 400,
-    message: "无法读取或保存默认席位。请检查 CLI 配置；尚未初始化时先运行 councilkit init。",
+    runtimeError: {
+      code: "NOT_FOUND",
+      message: "还没有审查团。点「先看示例」看一份示例报告，或在终端运行 `councilkit init`。",
+    },
   });
 }, 20_000);
 

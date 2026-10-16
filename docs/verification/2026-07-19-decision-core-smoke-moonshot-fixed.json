@@ -20,18 +20,11 @@
       "models": {
         "claude": {
           "requested": "k3",
-          "effective": [
-            "k3"
-          ]
+          "effective": ["k3"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -51,11 +44,7 @@
       },
       "warmFirstDeltaMs": {
         "claude": [],
-        "codex": [
-          9719,
-          6216,
-          6305
-        ]
+        "codex": [9719, 6216, 6305]
       },
       "ackLeaks": 0,
       "closeClean": true,

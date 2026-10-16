@@ -7,7 +7,7 @@
  * This file never clicks 开始审查 and never calls a model.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -117,7 +117,8 @@ async function driveHome(origin) {
       action: "click",
       role: "link",
       name: "贴 URL 开审查",
-      result: "URL /reports#review, heading 发起 PR 审查, #review-pr-url focused, 开始审查 visible and not clicked",
+      result:
+        "URL /reports#review, heading 发起 PR 审查, #review-pr-url focused, 开始审查 visible and not clicked",
       screenshot: reviewShot,
     });
   });
@@ -155,7 +156,8 @@ async function driveSettings(origin) {
         {
           action: "goto",
           url: `${origin}/settings`,
-          result: "heading 设置, heading 1. Host, text 本地执行服务在线, same hostInstanceId as GET /api/v1/health",
+          result:
+            "heading 设置, heading 1. Host, text 本地执行服务在线, same hostInstanceId as GET /api/v1/health",
           screenshot: path,
         },
       ],
@@ -176,7 +178,9 @@ async function driveReports(origin) {
     await page.getByText("第一份报告，从一个 PR 开始").waitFor();
     const queryShot = await shot(page, "02-search-empty-library.png");
     await page.getByRole("button", { name: /全部案件/ }).click();
-    const pressed = await page.getByRole("button", { name: /全部案件/ }).getAttribute("aria-pressed");
+    const pressed = await page
+      .getByRole("button", { name: /全部案件/ })
+      .getAttribute("aria-pressed");
     if (pressed !== "true") throw new Error("全部案件 filter did not become aria-pressed");
     const aria = await ariaDump(page);
     writeFileSync(join(outDir, "reports.aria.txt"), aria);
@@ -360,10 +364,7 @@ async function driveCliInit() {
     listNames,
     touchedUserHome,
     home: scratch,
-    commands: [
-      "pnpm exec councilkit init --json",
-      "pnpm exec councilkit council list --json",
-    ],
+    commands: ["pnpm exec councilkit init --json", "pnpm exec councilkit council list --json"],
   });
   if (!ok) {
     process.stderr.write(

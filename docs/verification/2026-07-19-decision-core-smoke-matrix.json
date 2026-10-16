@@ -20,18 +20,11 @@
       "models": {
         "claude": {
           "requested": "GLM-5.2[1m]",
-          "effective": [
-            "GLM-5.2[1m]"
-          ]
+          "effective": ["GLM-5.2[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -51,11 +44,7 @@
       },
       "warmFirstDeltaMs": {
         "claude": [],
-        "codex": [
-          15119,
-          5200,
-          3612
-        ]
+        "codex": [15119, 5200, 3612]
       },
       "ackLeaks": 0,
       "closeClean": true,
@@ -142,18 +131,11 @@
       "models": {
         "claude": {
           "requested": "deepseek-v4-pro[1m]",
-          "effective": [
-            "deepseek-v4-pro[1m]"
-          ]
+          "effective": ["deepseek-v4-pro[1m]"]
         },
         "codex": {
           "requested": "gpt-5.6-sol",
-          "effective": [
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol",
-            "gpt-5.6-sol"
-          ]
+          "effective": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"]
         }
       },
       "rounds": {
@@ -173,11 +155,7 @@
       },
       "warmFirstDeltaMs": {
         "claude": [],
-        "codex": [
-          15739,
-          7624,
-          3899
-        ]
+        "codex": [15739, 7624, 3899]
       },
       "ackLeaks": 0,
       "closeClean": true,
