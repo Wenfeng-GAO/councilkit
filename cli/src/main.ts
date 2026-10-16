@@ -17,6 +17,7 @@ import { RunExit } from "./commands/run";
  */
 import { CliError, EXIT, errors } from "./errors";
 import { partitionGlobalArgs } from "./global-args";
+import { REVIEW_HELP } from "./help";
 import { createOutput, renderErrorHuman } from "./output";
 import { redact } from "./redact";
 
@@ -51,6 +52,9 @@ Commands:
       [--timeout 45m] [--codex-timeout 90m] [--concurrency 10]
       [--against <run-id>]            Incremental jury vs that run's findings.json.
       [--repair-package <file>]       Verify the immutable selected repair task with --against.
+      [--no-require-spec]             Review without a bound spec contract (legacy mode).
+      [--allow-write]                 Let seats edit files / run commands (default: read-only).
+                                      Run \`councilkit review --help\` for every review flag.
   review --review-models '<json>'      Per-run {models, aggregatorIndex}; does not change saved agents.
   review --council <ref>              Map a stored council (agents→attempts, reporter→aggregator).
   repair export --run <id> --out <file> [--cluster <id>|--selected]
@@ -90,7 +94,9 @@ function main(argv: string[]): void {
   const { json, help, version, command, rest } = partitionGlobalArgs(argv.slice(2));
 
   if (help) {
-    process.stdout.write(HELP);
+    // `councilkit review --help` lists every review flag (QA #293: --allow-write
+    // was accepted but documented nowhere).
+    process.stdout.write(command === "review" ? REVIEW_HELP : HELP);
     process.exit(0);
   }
   if (version) {
