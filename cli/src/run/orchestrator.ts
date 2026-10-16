@@ -32,9 +32,12 @@
  * same via the `persist` hook on each TurnRequest.
  */
 import { randomUUID } from "node:crypto";
+import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { CLI_RUN_REVIEW_PID_FILE } from "@shared/runtime/cli-run-progress";
 import { CREDENTIAL_MODE, QUOTAS } from "@shared/runtime/contracts";
 import type { AckDisposition, DispatchState, ToolState } from "@shared/runtime/contracts";
+import { replacePrivateFile } from "@shared/runtime/durable-write";
 import type { ModelVerdict, Usage } from "@shared/runtime/events";
 import {
   type GenerationRule,
@@ -229,9 +232,12 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
 
   const emit = (ev: RunProgressEvent) => deps.onProgress?.(ev);
 
+  let discussPidDir: string | null = null;
   try {
     // --- create run dir + write run.started ----------------------------------
     const runDir = ensureRunDir(runId, deps.env);
+    discussPidDir = runDir;
+    writeDiscussPid(runDir);
     // B4 #279: a slow-gen (fake model) run is a demo run, marked before any turn.
     if (input.demo === true) atomicWriteJson(join(runDir, "demo.json"), { demo: true });
     const startedRec: RunStartedRecord = {
@@ -515,6 +521,7 @@ export async function runCouncil(input: RunInput, deps: OrchestratorDeps): Promi
       failure = toFailure("run", "RUN_ERROR", error);
     }
   } finally {
+    if (discussPidDir !== null) clearDiscussPid(discussPidDir);
     // --- close scope exactly once, bounded by the run-level cleanup budget (F3).
     // arm() is idempotent: if the in-flight turn already armed the shared budget
     // (SIGINT cleanup), close continues on the SAME remaining ≤10s window;
@@ -1062,6 +1069,24 @@ function patchLastTurnDuration(
       rewriteTranscript(path.transcript(runId), transcript);
       return;
     }
+  }
+}
+
+function writeDiscussPid(runDir: string): void {
+  try {
+    replacePrivateFile(join(runDir, CLI_RUN_REVIEW_PID_FILE), `${String(process.pid)}\n`);
+  } catch {
+    // Observational. A kill -9 still leaves the last write, or none.
+  }
+}
+
+function clearDiscussPid(runDir: string): void {
+  const path = join(runDir, CLI_RUN_REVIEW_PID_FILE);
+  try {
+    if (readFileSync(path, "utf8").trim() !== String(process.pid)) return;
+    unlinkSync(path);
+  } catch {
+    // Missing file, or the process was killed before finally ran.
   }
 }
 

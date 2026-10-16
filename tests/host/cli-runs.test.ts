@@ -834,6 +834,83 @@ describe("cli-runs route", () => {
     expect(existsSync(join(dir, "pipeline.ready"))).toBe(false);
   });
 
+  it("POST re-review spawn failure deletes the follow-up and keeps the original bytes", async () => {
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeab";
+    const followUpId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeab";
+    const dir = join(home, "runs", runId);
+    mkdirSync(dir, { recursive: true });
+    const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    writeFileSync(
+      join(dir, "transcript.jsonl"),
+      `${JSON.stringify({
+        kind: "review.started",
+        version: 1,
+        runId,
+        startedAt: staleAt,
+        task: { task: "给结算页补一张失败态说明" },
+        attempts: [],
+        aggregator: {
+          attemptId: "aggregator",
+          agentId: "adv",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      })}\n`,
+    );
+    const statusPath = join(dir, "status.json");
+    writeFileSync(
+      statusPath,
+      `${JSON.stringify({
+        version: 1,
+        status: "running",
+        progress: { phase: "attempts", attempts: [], updatedAt: staleAt },
+        pipeline: null,
+      })}\n`,
+    );
+    writeFileSync(join(dir, "review.pid"), "2147483646\n");
+    const before = readFileSync(statusPath, "utf8");
+    host = await createTestHost({
+      routesFactory: (services) => {
+        services.cliRunLauncher = {
+          start: () => {
+            const followDir = join(home, "runs", followUpId);
+            mkdirSync(followDir, { recursive: true });
+            writeFileSync(join(followDir, "status.json"), '{"status":"failed"}\n');
+            writeFileSync(
+              statusPath,
+              `${JSON.stringify({
+                version: 1,
+                status: "failed",
+                progress: { phase: "done", attempts: [], updatedAt: new Date().toISOString() },
+                pipeline: {
+                  phase: "done",
+                  round: 0,
+                  maxRounds: 2,
+                  planVerdict: null,
+                  applyStatus: null,
+                  followUpRunId: followUpId,
+                  summary: "DRIVER_SPAWN_FAILED",
+                  updatedAt: new Date().toISOString(),
+                },
+              })}\n`,
+            );
+            throw new Error("DRIVER_SPAWN_FAILED");
+          },
+        };
+        return cliRunsRoutes(services);
+      },
+    });
+    const res = await fetch(`${host.baseUrl}/api/v1/cli-runs/${runId}/actions`, {
+      method: "POST",
+      headers: authedHeaders(host),
+      body: JSON.stringify({ action: "re-review" }),
+    });
+    expect(res.status).toBe(500);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+    expect(existsSync(join(home, "runs", followUpId))).toBe(false);
+  });
+
   it("POST re-review refuses while the previous review process is alive", async () => {
     for (const shape of ["pr", "task"] as const) {
       const runId = `ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeee${shape === "pr" ? "e1" : "e2"}`;

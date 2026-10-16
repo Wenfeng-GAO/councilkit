@@ -127,10 +127,11 @@ export function isPidAlive(pid: number): boolean {
  * Read-time overlay for an autonomous run still marked running.
  * A dead pid interrupts once the heartbeat is at least STALE_HEARTBEAT_MS old.
  * A live pid (including SIGSTOP) interrupts once progress is at least
- * STALE_RUNNING_MS old. A missing pid uses that same five-minute fallback.
- * Squad and discussion runs are unchanged: they have no review pid, and a
- * discussion turn may not touch the transcript for up to ten minutes.
- * Exactly the boundary counts. The result is interrupted, never failed.
+ * STALE_RUNNING_MS old. A missing pid uses that same five-minute fallback,
+ * except a discussion: a live discussion pid stays running through a quiet
+ * turn, and a dead or missing discussion pid interrupts at the 30s heartbeat.
+ * Squad sidecars are unchanged. Exactly the boundary counts. The result is
+ * interrupted, never failed.
  */
 export function reconcileRunningStatus(input: {
   status: CliRunLiveStatus;
@@ -142,15 +143,20 @@ export function reconcileRunningStatus(input: {
   heartbeatMs?: number;
 }): CliRunLiveStatus {
   if (input.status !== "running") return input.status;
-  // Squad sidecars and Host discussion runs do not carry the autonomous
-  // review pid/heartbeat this overlay reads. A discussion turn can stay quiet
-  // in the transcript for the whole one-shot limit (10 min).
-  if (input.kind === "squad" || input.kind === "discuss") return input.status;
+  // Squad observe sidecars are not this overlay's autonomous runs.
+  if (input.kind === "squad") return input.status;
   const updated = Date.parse(input.updatedAt ?? "");
   const now = input.nowMs ?? Date.now();
   const age = Number.isFinite(updated) ? now - updated : null;
   const staleMs = input.staleMs ?? STALE_RUNNING_MS;
   const heartbeatMs = input.heartbeatMs ?? STALE_HEARTBEAT_MS;
+  if (input.kind === "discuss") {
+    // A live discussion process may stay quiet for a whole turn. A dead
+    // process, including one that left no pid file, interrupts at 30s.
+    if (input.pid !== null && isPidAlive(input.pid)) return input.status;
+    if (age === null || age >= heartbeatMs) return "interrupted";
+    return "running";
+  }
   if (input.pid !== null) {
     if (!isPidAlive(input.pid)) {
       if (age === null || age >= heartbeatMs) return "interrupted";

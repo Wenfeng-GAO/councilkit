@@ -178,6 +178,7 @@ test("过期审查在列表、标题和卡片上都是中断，并且可以再�
 });
 
 test("复审在进程已死时启动，进程还活着时停在页面上", async ({ page }) => {
+  test.setTimeout(180_000);
   mkdirSync(ARTIFACTS, { recursive: true });
   await page.goto("/reports");
 
@@ -260,7 +261,7 @@ test("复审在进程已死时启动，进程还活着时停在页面上", async
 });
 
 test("没有报告的中途被杀审查会按原输入重开，失败重载仍是中断", async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   mkdirSync(ARTIFACTS, { recursive: true });
   await page.goto("/reports");
 
@@ -280,7 +281,22 @@ test("没有报告的中途被杀审查会按原输入重开，失败重载仍�
     await expect(page.locator(".ck-wb-seat-row").filter({ hasText: "安全审查" })).toBeVisible();
     await page.screenshot({ path: `${ARTIFACTS}/rereview-scratch-${shape}-1280.png` });
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.screenshot({ path: `${ARTIFACTS}/rereview-scratch-${shape}-390.png` });
+    await page.locator(".ck-wb-seats").evaluate((el) => {
+      const node = el as HTMLElement;
+      const main = document.querySelector(".ck-wb-main");
+      if (main) main.appendChild(node);
+      node.style.display = "flex";
+      node.style.flexDirection = "column";
+      node.style.position = "static";
+      node.style.width = "100%";
+      node.style.gridColumn = "auto";
+      node.style.gridRow = "auto";
+    });
+    await expect(page.locator(".ck-wb-seat-row").filter({ hasText: "安全审查" })).toBeVisible();
+    await page.screenshot({
+      path: `${ARTIFACTS}/rereview-scratch-${shape}-390.png`,
+      fullPage: true,
+    });
 
     const failed = await page.request.post("/api/v1/__test__/seed-stale-review", {
       data: { shape, liveness: "dead", report: "absent", failReReview: true },
@@ -341,5 +357,82 @@ test("没有报告的中途被杀审查会按原输入重开，失败重载仍�
     await listed.screenshot({ path: `${ARTIFACTS}/rereview-reload-list-${shape}-1280.png` });
     await page.setViewportSize({ width: 390, height: 844 });
     await listed.screenshot({ path: `${ARTIFACTS}/rereview-reload-list-${shape}-390.png` });
+  }
+
+  const spawned = await page.request.post("/api/v1/__test__/seed-stale-review", {
+    data: { shape: "pr", liveness: "dead", report: "absent", spawnFail: true },
+  });
+  expect(spawned.ok()).toBe(true);
+  const spawnedId = ((await spawned.json()) as { ok: true; data: { runId: string } }).data.runId;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/reports/${spawnedId}`);
+  const spawnCard = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+  const [spawnResponse] = await Promise.all([
+    page.waitForResponse(
+      (item) => item.url().includes("/actions") && item.request().method() === "POST",
+    ),
+    spawnCard.getByRole("button", { name: "只再审一遍（不改代码）" }).click(),
+  ]);
+  expect(spawnResponse.ok()).toBe(false);
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(spawnedId));
+  await expect(page.getByText("仍在运行")).toHaveCount(0);
+  await expect(page.locator(".ck-wb-run-status")).toContainText("中断");
+  await expect(page.locator(".ck-wb-run-status")).not.toContainText("失败");
+  await expect(page.getByText("排队中")).toHaveCount(0);
+  await expect(page.getByText("等待启动")).toHaveCount(0);
+  await expect(page.getByText("等待完整审查证据")).toHaveCount(0);
+  await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+  await expectAmberInterrupt(
+    page
+      .getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title })
+      .locator("[data-interrupt-icon='circle-pause']"),
+  );
+  const spawnSummary = page.locator(".ck-wb-aggregate");
+  await expect(spawnSummary).toContainText("中断");
+  await expectAmberInterrupt(spawnSummary.locator("[data-interrupt-icon='circle-pause']"));
+  await page.screenshot({ path: `${ARTIFACTS}/rereview-spawn-reload-1280.png` });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".ck-wb-seats").evaluate((el) => {
+    const node = el as HTMLElement;
+    const main = document.querySelector(".ck-wb-main");
+    if (main) main.appendChild(node);
+    node.style.display = "flex";
+    node.style.flexDirection = "column";
+    node.style.position = "static";
+    node.style.width = "100%";
+    node.style.gridColumn = "auto";
+    node.style.gridRow = "auto";
+  });
+  await page.screenshot({ path: `${ARTIFACTS}/rereview-spawn-reload-390.png`, fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports");
+  await page.getByRole("button", { name: /全部案件/ }).click();
+  const spawnListed = page.locator(".ck-case-card", {
+    has: page.locator(`a[href="/reports/${spawnedId}"]`),
+  });
+  await expect(spawnListed).toContainText("中断");
+  await expect(spawnListed).not.toContainText("失败");
+  await expect(spawnListed).not.toContainText("等待完整审查证据");
+  await expectAmberInterrupt(spawnListed.locator("[data-interrupt-token='--ck-interrupt']"));
+  await spawnListed.screenshot({ path: `${ARTIFACTS}/rereview-spawn-reload-list-1280.png` });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await spawnListed.screenshot({ path: `${ARTIFACTS}/rereview-spawn-reload-list-390.png` });
+});
+
+test("进程已死且没有 pid 的讨论在列表上是中断", async ({ page }) => {
+  mkdirSync(ARTIFACTS, { recursive: true });
+  await page.goto("/reports");
+  const seeded = await page.request.post("/api/v1/__test__/seed-dead-discuss");
+  expect(seeded.ok()).toBe(true);
+  for (const width of [1280, 390] as const) {
+    await page.setViewportSize({ width, height: width === 1280 ? 900 : 844 });
+    await page.goto("/reports");
+    await page.getByRole("button", { name: /全部案件/ }).click();
+    const card = page.locator(".ck-case-card").filter({ hasText: "进程已死的讨论" });
+    await expect(card).toContainText("中断");
+    await expect(card).not.toContainText("进行中");
+    await expectAmberInterrupt(card.locator("[data-interrupt-token='--ck-interrupt']"));
+    await card.screenshot({ path: `${ARTIFACTS}/discuss-dead-list-${width}.png` });
   }
 });

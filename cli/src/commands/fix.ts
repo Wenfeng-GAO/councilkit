@@ -3,7 +3,7 @@
  * until consensus (or max rounds), apply that plan, then optionally start a
  * follow-up PR jury. The Host may spawn this command; agents still bypass Host.
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { FULL_COMMIT_SHA, nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import {
@@ -720,7 +720,7 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         timeoutFlag: values.timeout as string | undefined,
         codexTimeoutFlag: values["codex-timeout"] as string | undefined,
         mode: "against",
-        onFollowUp: (id) => {
+        onRunCreated: (id) => {
           followUpRunId = id;
           persist("running", "re-reviewing", {
             followUpRunId: id,
@@ -807,6 +807,8 @@ async function runReReviewOnly(input: {
   if (report !== null) {
     ensureFindings({ runDir: input.runDir, runId: input.runId, markdown: report });
   }
+  const statusPath = join(input.runDir, CLI_RUN_STATUS_FILE);
+  const statusBefore = readStatusSnapshot(statusPath);
   const controller = input.deps.abortController ?? new AbortController();
   let signaled = false;
   const onSignal = (): void => {
@@ -817,6 +819,7 @@ async function runReReviewOnly(input: {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   let followUpRunId: string | null = null;
+  let seatsStarted = false;
   let summary = "";
   const persist = (
     status: CliRunLiveState["status"],
@@ -895,12 +898,25 @@ async function runReReviewOnly(input: {
       codexTimeoutFlag: input.codexTimeoutFlag,
       mode: scratch ? "scratch" : "against",
       head: scratch ? readOriginalHead(input.runDir) : null,
-      onFollowUp: (id) => {
+      contract: scratch ? readScratchContract(input.runDir) : null,
+      onRunCreated: (id) => {
         followUpRunId = id;
-        persist("running", { followUpRunId: id, summary: "正在启动复审（不再改代码）…" });
+      },
+      onSeatsStarted: () => {
+        seatsStarted = true;
+        if (followUpRunId !== null) {
+          persist("running", { followUpRunId, summary: "正在启动复审（不再改代码）…" });
+        }
       },
     });
     followUpRunId = followUp.runId;
+    if (!followUp.seatsStarted && !seatsStarted) {
+      discardUnstartedFollowUp(followUp.runId);
+      restoreStatusSnapshot(statusPath, statusBefore);
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+      throw errors.runFailed("follow-up review did not start a seat");
+    }
     summary = `follow-up review ${followUp.runId}`;
     if (followUp.exitCode !== EXIT.ok) {
       await finish({
@@ -916,6 +932,13 @@ async function runReReviewOnly(input: {
     await finish({ status: "completed", exitCode: EXIT.ok, failure: null });
   } catch (error) {
     if (error instanceof FixExit) throw error;
+    if (!seatsStarted) {
+      discardUnstartedFollowUp(followUpRunId);
+      restoreStatusSnapshot(statusPath, statusBefore);
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+      throw error;
+    }
     if (followUpRunId === null) {
       process.removeListener("SIGINT", onSignal);
       process.removeListener("SIGTERM", onSignal);
@@ -974,6 +997,70 @@ function readOriginalHead(runDir: string): { repo: string; sha: string } | null 
   return { repo, sha };
 }
 
+/** Spec flag and PR base frozen by the killed review. Scratch reruns copy them. */
+function readScratchContract(runDir: string): {
+  specSource: string | null;
+  noRequireSpec: boolean;
+  baseSha: string | null;
+} {
+  let specSource: string | null = null;
+  let noRequireSpec = false;
+  try {
+    const manifest = readInvocationManifest(runDir);
+    const source = manifest?.task.specSource?.trim() ?? "";
+    if (source.length > 0) specSource = source;
+    noRequireSpec = manifest?.requireSpec === false;
+  } catch {
+    specSource = null;
+    noRequireSpec = false;
+  }
+  if (specSource === null) {
+    try {
+      const started = readReviewTranscript(join(runDir, "transcript.jsonl")).find(
+        (record) => record.kind === "review.started",
+      );
+      const source = started?.task.specSource?.trim() ?? "";
+      if (source.length > 0) specSource = source;
+    } catch {
+      specSource = null;
+    }
+  }
+  let baseSha: string | null = null;
+  try {
+    const match = readFileSync(join(runDir, REVIEW_CONTEXT_MD), "utf8").match(
+      /^- base: `([0-9a-f]{40})`/m,
+    );
+    baseSha = match?.[1] ?? null;
+  } catch {
+    baseSha = null;
+  }
+  return { specSource, noRequireSpec, baseSha };
+}
+
+function readStatusSnapshot(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function restoreStatusSnapshot(path: string, snapshot: string | null): void {
+  try {
+    if (snapshot === null) rmSync(path, { force: true });
+    else atomicWriteFile(path, snapshot);
+  } catch {
+    // the failed start must not leave a half-written status behind
+  }
+}
+
+/** A follow-up that never spawned a seat must not become the case's latest run. */
+function discardUnstartedFollowUp(runId: string | null): void {
+  if (runId === null || !runId.startsWith("ck-review-")) return;
+  const dir = resolvePaths().runDir(runId);
+  rmSync(dir, { recursive: true, force: true });
+}
+
 async function startFollowUpReview(input: {
   pr: string | null;
   task: string | null;
@@ -986,13 +1073,19 @@ async function startFollowUpReview(input: {
   codexTimeoutFlag?: string;
   mode: "against" | "scratch";
   head?: { repo: string; sha: string } | null;
-  onFollowUp?: (runId: string) => void;
-}): Promise<{ runId: string; exitCode: number }> {
+  contract?: { specSource: string | null; noRequireSpec: boolean; baseSha: string | null } | null;
+  onRunCreated?: (runId: string) => void;
+  onSeatsStarted?: () => void;
+}): Promise<{ runId: string; exitCode: number; seatsStarted: boolean }> {
   let created: string | null = null;
+  let seatsStarted = false;
   let argv: string[];
   if (input.mode === "scratch") {
     argv = input.pr !== null && input.pr.length > 0 ? [input.pr] : ["--task", input.task ?? ""];
     if (input.head) argv.push("--repo", input.head.repo, "--pin-sha", input.head.sha);
+    if (input.contract?.baseSha && input.head) argv.push("--base-sha", input.contract.baseSha);
+    if (input.contract?.specSource) argv.push("--spec", input.contract.specSource);
+    if (input.contract?.noRequireSpec) argv.push("--no-require-spec");
   } else {
     let planExcerpt = "";
     try {
@@ -1027,7 +1120,11 @@ async function startFollowUpReview(input: {
       abortController: input.controller,
       onRunCreated: (id) => {
         created = id;
-        input.onFollowUp?.(id);
+        input.onRunCreated?.(id);
+      },
+      onSeatsStarted: () => {
+        seatsStarted = true;
+        input.onSeatsStarted?.();
       },
     });
   } catch (error) {
@@ -1036,12 +1133,12 @@ async function startFollowUpReview(input: {
       if (created === null) {
         throw errors.runFailed("follow-up review did not assign a run id");
       }
-      return { runId: created, exitCode: error.exitCode };
+      return { runId: created, exitCode: error.exitCode, seatsStarted };
     }
     throw error;
   }
   if (created === null) throw errors.runFailed("follow-up review did not assign a run id");
-  return { runId: created, exitCode: EXIT.ok };
+  return { runId: created, exitCode: EXIT.ok, seatsStarted };
 }
 
 function resolvePlanner(store: Store, ref: string | undefined): AgentRecord {

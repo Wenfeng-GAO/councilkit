@@ -12,6 +12,7 @@
 export const COMMAND_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "--against",
   "--agent",
+  "--base-sha",
   "--agents",
   "--aggregator",
   "--background",

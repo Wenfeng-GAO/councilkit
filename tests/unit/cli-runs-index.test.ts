@@ -663,8 +663,9 @@ describe("listCliRuns stale running boundary", () => {
     expect(run?.status).toBe("running");
   });
 
-  it("keeps a discussion run running when its transcript has been quiet for 10 minutes", () => {
-    const dir = join(home, "runs", "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5");
+  it("interrupts a discussion with no pid after 30 seconds, and keeps a live pid running", () => {
+    const id = "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5";
+    const dir = join(home, "runs", id);
     mkdirSync(dir, { recursive: true });
     const path = join(dir, "transcript.jsonl");
     const startedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
@@ -673,16 +674,25 @@ describe("listCliRuns stale running boundary", () => {
       `${JSON.stringify({
         kind: "run.started",
         version: 1,
-        runId: "ck-run-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee5",
+        runId: id,
         startedAt,
         council: { topic: "quiet discussion" },
       })}\n`,
     );
-    const mtime = new Date(Date.now() - 10 * 60 * 1000);
-    utimesSync(path, mtime, mtime);
-    const run = listCliRuns(process.env)[0];
-    expect(run?.kind).toBe("discuss");
-    expect(run?.status).toBe("running");
+    const quiet = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(path, quiet, quiet);
+    const dead = listCliRuns(process.env)[0];
+    expect(dead?.kind).toBe("discuss");
+    expect(dead?.status).toBe("interrupted");
+
+    writeFileSync(join(dir, "review.pid"), `${String(process.pid)}\n`);
+    const live = listCliRuns(process.env)[0];
+    expect(live?.status).toBe("running");
+
+    rmSync(join(dir, "review.pid"));
+    const fresh = new Date(Date.now() - 20_000);
+    utimesSync(path, fresh, fresh);
+    expect(listCliRuns(process.env)[0]?.status).toBe("running");
   });
 
   function seedStuckStatus(updatedAt: string) {

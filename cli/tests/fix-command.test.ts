@@ -477,6 +477,7 @@ describe("cli fix command", () => {
         reviewImpl: async (argv, _out, deps) => {
           seen.push(argv);
           deps?.onRunCreated?.(followUpId);
+          deps?.onSeatsStarted?.();
         },
       });
     } catch (error) {
@@ -498,6 +499,7 @@ describe("cli fix command", () => {
         reviewImpl: async (argv, _out, deps) => {
           seen.push(argv);
           deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2");
+          deps?.onSeatsStarted?.();
         },
       });
     } catch (error) {
@@ -518,6 +520,7 @@ describe("cli fix command", () => {
         reviewImpl: async (argv, _out, deps) => {
           seen.push(argv);
           deps?.onRunCreated?.(followUpId);
+          deps?.onSeatsStarted?.();
         },
       });
     } catch (error) {
@@ -544,6 +547,7 @@ describe("cli fix command", () => {
         reviewImpl: async (argv, _out, deps) => {
           seen.push(argv);
           deps?.onRunCreated?.(followUpId);
+          deps?.onSeatsStarted?.();
         },
       });
     } catch (error) {
@@ -569,6 +573,117 @@ describe("cli fix command", () => {
     expect(readFileSync(statusPath, "utf8")).toBe(before);
     expect(existsSync(join(home, "runs", RUN_ID, "pipeline.ready"))).toBe(false);
     expect(existsSync(join(home, "runs", RUN_ID, "report.md"))).toBe(false);
+  });
+
+  it("copies --spec onto a scratch re-review of a killed task", async () => {
+    const task = "给结算页补一张失败态说明";
+    const spec = "/tmp/settlement-spec.md";
+    seedKilledMidway({ task });
+    writeFileSync(
+      join(home, "runs", RUN_ID, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId: RUN_ID,
+        task: { task, specSource: spec },
+        repoRealpath: null,
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: true,
+        agents: [],
+        aggregator: { id: "a", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+    const seen: string[][] = [];
+    await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+      reviewImpl: async (argv, _out, deps) => {
+        seen.push(argv);
+        deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee4");
+        deps?.onSeatsStarted?.();
+      },
+    }).catch((error: unknown) => {
+      if (!(error instanceof FixExit)) throw error;
+    });
+    expect(seen[0]).toEqual(["--task", task, "--spec", spec]);
+  });
+
+  it("copies --no-require-spec onto a scratch re-review", async () => {
+    const task = "给结算页补一张失败态说明";
+    seedKilledMidway({ task });
+    writeFileSync(
+      join(home, "runs", RUN_ID, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId: RUN_ID,
+        task: { task },
+        repoRealpath: null,
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: false,
+        agents: [],
+        aggregator: { id: "a", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+    const seen: string[][] = [];
+    await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+      reviewImpl: async (argv, _out, deps) => {
+        seen.push(argv);
+        deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee5");
+        deps?.onSeatsStarted?.();
+      },
+    }).catch((error: unknown) => {
+      if (!(error instanceof FixExit)) throw error;
+    });
+    expect(seen[0]).toEqual(["--task", task, "--no-require-spec"]);
+  });
+
+  it("pins a scratch PR re-review to the stored base commit", async () => {
+    const sha = "a".repeat(40);
+    const base = "b".repeat(40);
+    const repo = "/tmp/acme-repo";
+    seedKilledMidway({ head: { repo, sha } });
+    writeFileSync(
+      join(home, "runs", RUN_ID, "review-context.md"),
+      `# Frozen review context\n\n- head: \`${sha}\`\n- base: \`${base}\`\n`,
+    );
+    const seen: string[][] = [];
+    await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+      reviewImpl: async (argv, _out, deps) => {
+        seen.push(argv);
+        deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee6");
+        deps?.onSeatsStarted?.();
+      },
+    }).catch((error: unknown) => {
+      if (!(error instanceof FixExit)) throw error;
+    });
+    expect(seen[0]).toEqual([PR_URL, "--repo", repo, "--pin-sha", sha, "--base-sha", base]);
+    expect(seen[0]?.join("\n")).not.toContain("--against");
+  });
+
+  it("restores the killed run when a follow-up directory exists but no seat starts", async () => {
+    seedKilledMidway({ task: "给结算页补一张失败态说明" });
+    const statusPath = join(home, "runs", RUN_ID, "status.json");
+    const before = readFileSync(statusPath, "utf8");
+    const followUpId = "ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee7";
+    await expect(
+      runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async (_argv, _out, deps) => {
+          const followDir = join(home, "runs", followUpId);
+          mkdirSync(followDir, { recursive: true });
+          writeFileSync(join(followDir, "status.json"), '{"status":"failed"}\n');
+          deps?.onRunCreated?.(followUpId);
+          throw new CliError({ code: 5, message: "DRIVER_SPAWN_FAILED" });
+        },
+      }),
+    ).rejects.toBeInstanceOf(CliError);
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+    expect(existsSync(join(home, "runs", followUpId))).toBe(false);
+    expect(existsSync(join(home, "runs", RUN_ID, "pipeline.ready"))).toBe(false);
   });
 
   it("refuses re-review while the previous review process is still alive", async () => {
@@ -599,6 +714,7 @@ describe("cli fix command", () => {
         spawnImpl: fakeSpawn().impl,
         reviewImpl: async (_argv, _out, deps) => {
           deps?.onRunCreated?.(followUpId);
+          deps?.onSeatsStarted?.();
           throw new ReviewExit(4);
         },
       });
@@ -726,6 +842,7 @@ describe("cli fix command", () => {
           const at = argv.indexOf("--focus");
           focus = argv[at + 1] ?? "";
           deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee2");
+          deps?.onSeatsStarted?.();
         },
       });
     } catch (error) {

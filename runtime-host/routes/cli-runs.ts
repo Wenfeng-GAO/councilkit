@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -601,6 +602,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         try {
           started = await Promise.resolve(launcher.start({ action: body.action, runId, logPath }));
         } catch (error) {
+          if (body.action === "re-review") discardNewFollowUp(statusBefore, runDir);
           restoreFailedStart();
           throw httpError(
             500,
@@ -611,6 +613,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         }
         const followUpRunId = body.action === "re-review" ? readFollowUpRunId(runDir) : null;
         if (body.action === "re-review" && followUpRunId === null) {
+          discardNewFollowUp(statusBefore, runDir);
           restoreFailedStart();
           throw httpError(
             500,
@@ -1314,14 +1317,29 @@ function reviewFinishedOnDisk(runDir: string): boolean {
 
 function readFollowUpRunId(runDir: string): string | null {
   try {
-    const parsed = JSON.parse(readFileSync(join(runDir, "status.json"), "utf8")) as {
-      pipeline?: { followUpRunId?: unknown };
-    };
+    return followUpIdFromStatusText(readFileSync(join(runDir, "status.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function followUpIdFromStatusText(text: string | null): string | null {
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text) as { pipeline?: { followUpRunId?: unknown } };
     const id = parsed.pipeline?.followUpRunId;
     return typeof id === "string" && id.startsWith("ck-review-") ? id : null;
   } catch {
     return null;
   }
+}
+
+/** Drop a follow-up this attempt created when the re-review never stayed up. */
+function discardNewFollowUp(statusBefore: string | null, runDir: string): void {
+  const previous = followUpIdFromStatusText(statusBefore);
+  const created = readFollowUpRunId(runDir);
+  if (created === null || created === previous) return;
+  rmSync(join(resolveCliRunsRoot(), created), { recursive: true, force: true });
 }
 
 function readStatusSnapshot(path: string): string | null {

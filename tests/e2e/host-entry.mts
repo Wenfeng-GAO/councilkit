@@ -795,6 +795,13 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
       if (existsSync(join(sourceDir, "e2e-rereview-fail"))) {
         throw errors.io("forced re-review failure");
       }
+      if (existsSync(join(sourceDir, "e2e-rereview-spawn-fail"))) {
+        const followUpRunId = `ck-review-${randomUUID()}`;
+        mkdirSync(join(home, "runs", followUpRunId), { recursive: true });
+        writeFileSync(join(home, "runs", followUpRunId, "status.json"), '{"status":"failed"}\n');
+        deps?.onRunCreated?.(followUpRunId);
+        throw new Error("DRIVER_SPAWN_FAILED");
+      }
       let hasReport = false;
       try {
         hasReport = readFileSync(join(sourceDir, "report.md"), "utf8").trim().length > 0;
@@ -803,6 +810,29 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
       }
       if (!hasReport && (argv.includes("--against") || argv.includes("--focus"))) {
         throw new Error("scratch re-review referenced a prior report");
+      }
+      const manifestPath = join(sourceDir, "invocation-manifest.v1.json");
+      if (!hasReport && existsSync(manifestPath)) {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+          task?: { specSource?: string };
+          requireSpec?: boolean;
+        };
+        if (manifest.task?.specSource && !argv.includes(manifest.task.specSource)) {
+          throw new Error("scratch re-review dropped --spec");
+        }
+        if (manifest.requireSpec === false && !argv.includes("--no-require-spec")) {
+          throw new Error("scratch re-review dropped --no-require-spec");
+        }
+      }
+      const contextPath = join(sourceDir, "review-context.md");
+      if (!hasReport && existsSync(contextPath)) {
+        const base = readFileSync(contextPath, "utf8").match(/^- base: `([0-9a-f]{40})`/m)?.[1];
+        if (base && !argv.includes("--base-sha")) {
+          throw new Error("scratch re-review dropped --base-sha");
+        }
+        if (base && !argv.includes(base)) {
+          throw new Error("scratch re-review dropped the stored base");
+        }
       }
       const followUpRunId = `ck-review-${randomUUID()}`;
       const followDir = join(home, "runs", followUpRunId);
@@ -855,6 +885,7 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
         })}\n`,
       );
       deps?.onRunCreated?.(followUpRunId);
+      deps?.onSeatsStarted?.();
     },
   });
   return review.then(
@@ -871,6 +902,7 @@ function seedStaleReview(input: {
   liveness: "dead" | "alive";
   report?: "present" | "absent";
   failReReview?: boolean;
+  spawnFail?: boolean;
 }): {
   runId: string;
 } {
@@ -941,6 +973,7 @@ function seedStaleReview(input: {
     })}\n`,
   );
   if (killedMidway && input.shape === "pr") {
+    const base = "b4e8b1a09f6d3e2c1b0a9876543210fedcba9876";
     writeFileSync(
       join(dir, "invocation-manifest.v1.json"),
       `${JSON.stringify({
@@ -952,6 +985,32 @@ function seedStaleReview(input: {
         reviewedSha: "c4e8b1a09f6d3e2c1b0a9876543210fedcba9876",
         timeoutMs: 1000,
         concurrency: 1,
+        requireSpec: false,
+        agents: [],
+        aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+    writeFileSync(
+      join(dir, "review-context.md"),
+      `# Frozen review context\n\n- head: \`c4e8b1a09f6d3e2c1b0a9876543210fedcba9876\`\n- base: \`${base}\`\n`,
+    );
+  }
+  if (killedMidway && input.shape === "task") {
+    const spec = join(dir, "acceptance.md");
+    writeFileSync(spec, "# 结算\n\n## 验收\n\n- [ ] 失败时展示说明\n");
+    writeFileSync(
+      join(dir, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task: { ...task, specSource: spec },
+        repoRealpath: null,
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: true,
         agents: [],
         aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
         tools: [],
@@ -963,6 +1022,9 @@ function seedStaleReview(input: {
   }
   if (input.failReReview === true) {
     writeFileSync(join(dir, "e2e-rereview-fail"), "1\n");
+  }
+  if (input.spawnFail === true) {
+    writeFileSync(join(dir, "e2e-rereview-spawn-fail"), "1\n");
   }
   if (input.liveness === "alive") {
     writeFileSync(join(dir, "review.pid"), `${String(process.pid)}\n`);
@@ -997,6 +1059,7 @@ function testRoutes(
         liveness: z.enum(["dead", "alive"]),
         report: z.enum(["present", "absent"]).optional(),
         failReReview: z.boolean().optional(),
+        spawnFail: z.boolean().optional(),
       }),
       handler: ({ body }) =>
         seedStaleReview(
@@ -1005,8 +1068,35 @@ function testRoutes(
             liveness: "dead" | "alive";
             report?: "present" | "absent";
             failReReview?: boolean;
+            spawnFail?: boolean;
           },
         ),
+    },
+    {
+      method: "POST",
+      pattern: `${TEST_BASE}/seed-dead-discuss`,
+      auth: "session",
+      handler: () => {
+        const home = process.env.COUNCILKIT_HOME;
+        if (home === undefined || home.length === 0) throw new Error("COUNCILKIT_HOME missing");
+        const runId = `ck-run-${randomUUID()}`;
+        const dir = join(home, "runs", runId);
+        mkdirSync(dir, { recursive: true });
+        const path = join(dir, "transcript.jsonl");
+        writeFileSync(
+          path,
+          `${JSON.stringify({
+            kind: "run.started",
+            version: 1,
+            runId,
+            startedAt: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+            council: { topic: "进程已死的讨论" },
+          })}\n`,
+        );
+        const quiet = new Date(Date.now() - 16 * 60 * 1000);
+        utimesSync(path, quiet, quiet);
+        return { runId };
+      },
     },
     {
       method: "POST",

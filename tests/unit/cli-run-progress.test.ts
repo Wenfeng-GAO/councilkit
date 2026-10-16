@@ -669,16 +669,64 @@ describe("reconcileRunningStatus", () => {
     ).toBe("running");
   });
 
-  it("does not interrupt a live discussion run that has no pid", () => {
+  it("keeps a live discussion pid running through a long quiet turn", () => {
     expect(
       reconcileRunningStatus({
         status: "running",
         kind: "discuss",
         updatedAt: new Date(T0 - 10 * 60 * 1000).toISOString(),
+        pid: process.pid,
+        nowMs: T0,
+      }),
+    ).toBe("running");
+  });
+
+  it("interrupts a discussion with no pid once the heartbeat is 30 seconds old", () => {
+    const base = {
+      status: "running" as const,
+      kind: "discuss",
+      pid: null,
+      nowMs: T0,
+    };
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 29_000).toISOString(),
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 30_000).toISOString(),
+      }),
+    ).toBe("interrupted");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 16 * 60 * 1000).toISOString(),
+      }),
+    ).toBe("interrupted");
+  });
+
+  it("leaves ideate on the five-minute missing-pid rule", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "ideate",
+        updatedAt: new Date(T0 - 31_000).toISOString(),
         pid: null,
         nowMs: T0,
       }),
     ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "ideate",
+        updatedAt: new Date(T0 - 5 * 60 * 1000).toISOString(),
+        pid: null,
+        nowMs: T0,
+      }),
+    ).toBe("interrupted");
   });
 });
 
