@@ -155,6 +155,17 @@ async function waitForSeat(home: string, child: ChildProcess): Promise<string> {
         const dir = join(runs, name);
         if (!existsSync(join(dir, "review.pid"))) continue;
         if (!existsSync(join(dir, "status.json"))) continue;
+        // Preflight marks a probe "running" before review.started is flushed.
+        // Killing in that window leaves a manifest and no transcript.
+        const transcriptPath = join(dir, "transcript.jsonl");
+        if (!existsSync(transcriptPath)) continue;
+        let started = false;
+        try {
+          started = readFileSync(transcriptPath, "utf8").includes('"kind":"review.started"');
+        } catch {
+          started = false;
+        }
+        if (!started) continue;
         const live = JSON.parse(readFileSync(join(dir, "status.json"), "utf8")) as {
           progress?: { attempts?: Array<{ role?: string; status?: string }> };
         };
