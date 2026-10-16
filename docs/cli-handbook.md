@@ -1,6 +1,6 @@
 # CLI 手册
 
-`councilkit` CLI 让 coding agent 或脚本在**浏览器关闭**时也能查看模型、管理 Agent/Council、发起多 Agent 多轮讨论并拿到 Markdown 报告。CLI 与浏览器**数据不互通**：它有自己的本地存储（`~/.config/councilkit/`），不读写浏览器的 Dexie 数据。
+`councilkit` CLI 让 coding agent 或脚本在**浏览器关闭**时也能查看模型、管理 Agent/Council、发起多 Agent 多轮讨论并拿到 Markdown 报告。CLI 有自己的本地存储（`~/.config/councilkit/`），不读写浏览器的 Dexie 数据；反过来，浏览器的「报告」「产品创意」页直接读 CLI 的运行记录（`runs/`）。CLI 的 Agent/Council 配置与浏览器的 Room/Profile/Agent 互不同步。
 
 ## 目录
 

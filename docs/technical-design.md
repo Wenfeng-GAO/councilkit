@@ -1,3 +1,5 @@
+> **历史文档（2026-06 MVP 原始技术设计，已过时）**。这里的 SwiftUI / SwiftData / Keychain 方案已否决（CR1，2026-06-24），实际交付为浏览器 Web UI + 本机 Runtime Host，不保存 API Key。当前架构见 [runtime-host-design.md](runtime-host-design.md)、[CONTEXT.md](../CONTEXT.md) 与 [roadmap.md](roadmap.md)。
+
 # Technical Design: CouncilKit MVP
 
 ## 1. Technical Goal
