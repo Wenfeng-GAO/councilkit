@@ -73,6 +73,11 @@ export interface ReviewTask {
    * When false (`--no-require-spec`), run continues in non-contract / legacy mode.
    */
   requireSpec?: boolean;
+  /**
+   * Seat permissions (SAFE-01..04). Omitted / "read-only" = default: no
+   * permission-skip flags. "write" only via `--allow-write`.
+   */
+  seatAccess?: "read-only" | "write";
   /** Injected only under `--council` when the Council has a non-empty topic. */
   councilTopic?: string;
   /** Prior run id whose findings.json this review classifies against. */

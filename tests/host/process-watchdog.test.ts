@@ -1,5 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -371,6 +371,34 @@ describe("driver lifecycle", () => {
         envSet: {},
       }),
     ).rejects.toMatchObject({ code: "DRIVER_SPAWN_FAILED" });
+    expect(supervisor.liveCount()).toBe(0);
+  });
+
+  it("rejects a driver cwd reached through an ancestor symlink", async () => {
+    const supervisor = createSupervisor();
+    const outside = join(tempRoot, "outside");
+    const nested = join(outside, "nested");
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, "keep.txt"), "SECRET\n");
+    const work = join(tempRoot, "work");
+    await mkdir(work);
+    await symlink(outside, join(work, "link"));
+    await expect(
+      supervisor.spawnDriver({
+        participantId: "gamma",
+        executable: process.execPath,
+        argv: [TOY_DRIVER],
+        cwd: join(work, "link", "nested"),
+        envInherit: ["PATH"],
+        envSet: {},
+      }),
+    ).rejects.toMatchObject({
+      code: "DRIVER_SPAWN_FAILED",
+      message: "driver cwd must not be a symlink",
+    });
+    expect((await lstat(join(work, "link"))).isSymbolicLink()).toBe(true);
+    expect(await readdir(nested)).toEqual(["keep.txt"]);
+    expect(await readFile(join(nested, "keep.txt"), "utf8")).toBe("SECRET\n");
     expect(supervisor.liveCount()).toBe(0);
   });
 

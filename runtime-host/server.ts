@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { type ReadStream, createReadStream, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createServer } from "node:http";
@@ -298,20 +298,63 @@ export function createRuntimeServer(options: RuntimeServerOptions): RuntimeServe
     if (candidate !== distRoot && !candidate.startsWith(distRoot + sep)) {
       return false;
     }
-    if (!existsSync(candidate) || !statSync(candidate).isFile()) {
+    let size: number;
+    try {
+      const stat = statSync(candidate);
+      if (!stat.isFile()) return false;
+      size = stat.size;
+    } catch {
       return false;
     }
     const type = STATIC_CONTENT_TYPES[extname(candidate)] ?? "application/octet-stream";
     const immutable = pathname.startsWith("/assets/");
-    res.writeHead(200, {
-      "Content-Type": type,
-      "X-Content-Type-Options": "nosniff",
-      "Referrer-Policy": "no-referrer",
-      "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
-      "Content-Length": statSync(candidate).size,
-      ETag: `W/"${createHash("sha256").update(candidate).digest("hex").slice(0, 16)}-${statSync(candidate).size}"`,
+    // pipe() does not listen for a read error, so a failed open crashes the
+    // process, and it does not close the file when the client leaves.
+    const stream: ReadStream = createReadStream(candidate);
+    let failed = false;
+    const release = (): void => {
+      if (!stream.destroyed) stream.destroy();
+    };
+    const fail = (): void => {
+      if (failed) return;
+      failed = true;
+      release();
+      if (res.writableEnded || res.destroyed || res.socket?.destroyed) return;
+      try {
+        if (!res.headersSent) {
+          sendRuntimeError(
+            res,
+            500,
+            makeError("INTERNAL", "security", "Failed to read a static file."),
+          );
+          return;
+        }
+        res.destroy();
+      } catch {
+        // The client is already gone.
+      }
+    };
+    stream.on("error", fail);
+    res.on("close", release);
+    stream.once("open", () => {
+      if (failed || res.destroyed || res.headersSent) {
+        release();
+        return;
+      }
+      try {
+        res.writeHead(200, {
+          "Content-Type": type,
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer",
+          "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
+          "Content-Length": size,
+          ETag: `W/"${createHash("sha256").update(candidate).digest("hex").slice(0, 16)}-${size}"`,
+        });
+        stream.pipe(res);
+      } catch {
+        fail();
+      }
     });
-    createReadStream(candidate).pipe(res);
     return true;
   }
 

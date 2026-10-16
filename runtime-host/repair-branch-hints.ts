@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import { jsonParse } from "@shared/runtime/json-parse";
 import {
   type RepairBranchHints,
@@ -98,7 +99,9 @@ function readFrozenHints(runId: string, env: NodeJS.ProcessEnv): RepairBranchHin
   const path = join(resolveCliRunsRoot(env), runId, "review-context.md");
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) return emptyHints();
+    if (!stat.isFile() || stat.isSymbolicLink() || directoryEscapes(dirname(path))) {
+      return emptyHints();
+    }
     return repairBranchHintsFromFrozenContext(readFileSync(path, "utf8"));
   } catch {
     return emptyHints();
@@ -109,7 +112,14 @@ function readInvocationRepo(runId: string, env: NodeJS.ProcessEnv): string | nul
   const path = join(resolveCliRunsRoot(env), runId, "invocation-manifest.v1.json");
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 256 * 1024) return null;
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size > 256 * 1024 ||
+      directoryEscapes(dirname(path))
+    ) {
+      return null;
+    }
     const rec = jsonParse(readFileSync(path, "utf8"));
     if (rec === null || typeof rec !== "object") return null;
     const repo = (rec as { repoRealpath?: unknown }).repoRealpath;
