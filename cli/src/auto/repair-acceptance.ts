@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { LedgerFinding } from "@shared/runtime/cli-ledger";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import { type RepairPackage, repairPackageSchema } from "@shared/runtime/repair-package";
 import { canonicalPr } from "@shared/runtime/review-explainer/pr-decisions";
 import { errors } from "../errors";
@@ -16,7 +18,12 @@ export function readReviewRepairPackage(input: {
 }): RepairPackage {
   try {
     const stat = lstatSync(input.path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4 * 1024 * 1024) {
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size > 4 * 1024 * 1024 ||
+      directoryEscapes(dirname(input.path))
+    ) {
       throw new Error("修复任务包必须是 4 MiB 内的普通 JSON 文件");
     }
     const pkg = repairPackageSchema.parse(JSON.parse(readFileSync(input.path, "utf8")));

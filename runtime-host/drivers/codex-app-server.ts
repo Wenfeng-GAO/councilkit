@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { DispatchState, ToolState } from "@shared/runtime/contracts";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { sanitizeString } from "../logging";
@@ -471,6 +472,9 @@ export function createCodexAppServerDriver(
         });
       }
       const cwd = join(workRoot, participantId);
+      if (directoryEscapes(workRoot) || directoryEscapes(cwd)) {
+        throw Object.assign(new Error("participant cwd must not be a symlink"), { code: "ELOOP" });
+      }
       await mkdir(cwd, { recursive: true });
       // H3 (kimi pre-spawn guard, fix-2): the LAST lifecycle check before
       // spawning. close() can complete during the mkdir await above (or before

@@ -1,4 +1,6 @@
+import { ReviewReportView } from "@/components/report/ReviewReportView";
 import {
+  FINDING_SEVERITY_LABEL,
   conclusionSectionVerdict,
   formatFindingSeverityStats,
   parseFindingGroups,
@@ -8,6 +10,8 @@ import {
   splitH3Blocks,
 } from "@/lib/review-report";
 import { markdownLines, markdownLinesLf } from "@shared/runtime/aggregator-verdict";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 const SAMPLE = `# Autonomous Review Report
@@ -436,15 +440,31 @@ describe("sortReviewFindings", () => {
   });
 
   it("summarizes non-zero severity counts in Chinese", () => {
-    expect(
-      formatFindingSeverityStats([
-        { severity: "major", qualifier: null, text: "a" },
-        { severity: "major", qualifier: null, text: "b" },
-        { severity: "nit", qualifier: null, text: "c" },
-        { severity: null, qualifier: null, text: "skip" },
-      ]),
-    ).toBe("2 重大 · 1 琐碎");
+    const summary = formatFindingSeverityStats([
+      { severity: "major", qualifier: null, text: "a" },
+      { severity: "major", qualifier: null, text: "b" },
+      { severity: "nit", qualifier: null, text: "c" },
+      { severity: null, qualifier: null, text: "skip" },
+    ]);
+    expect(summary).toBe(`2 ${FINDING_SEVERITY_LABEL.major} · 1 ${FINDING_SEVERITY_LABEL.nit}`);
+    expect(summary).toBe("2 重大 · 1 琐碎");
+    expect(FINDING_SEVERITY_LABEL).toEqual({
+      critical: "致命",
+      major: "重大",
+      minor: "次要",
+      nit: "琐碎",
+    });
     expect(formatFindingSeverityStats([{ severity: null, qualifier: null, text: "x" }])).toBeNull();
+  });
+
+  it("renders finding cards with those same labels", () => {
+    const parsed = parseReviewReport(SAMPLE);
+    expect(parsed).not.toBeNull();
+    if (!parsed) return;
+    const html = renderToStaticMarkup(createElement(ReviewReportView, { report: parsed }));
+    expect(html).toContain(`ck-sev-major">${FINDING_SEVERITY_LABEL.major}<span`);
+    expect(html).toContain(`ck-sev-minor">${FINDING_SEVERITY_LABEL.minor}<span`);
+    expect(html).toContain("1 重大 · 1 次要");
   });
 });
 

@@ -8,9 +8,10 @@
  * missing or malformed file never hides anything — it fails open.
  */
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { resolveCouncilkitHome } from "./cli-home";
 import { isCliRunId } from "./cli-runs-index";
+import { directoryEscapes } from "./durable-write";
 
 export const ARCHIVED_RUNS_FILE = "archived-runs.json";
 
@@ -49,7 +50,12 @@ export function readArchivedRunIds(env: NodeJS.ProcessEnv = process.env): Set<st
   const path = join(resolveCouncilkitHome(env), ARCHIVED_RUNS_FILE);
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ARCHIVED_RUNS_BYTES) {
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size > MAX_ARCHIVED_RUNS_BYTES ||
+      directoryEscapes(dirname(path))
+    ) {
       return new Set();
     }
     const parsed = parseArchivedRunsFile(readFileSync(path, "utf8"));

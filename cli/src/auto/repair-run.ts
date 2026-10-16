@@ -24,8 +24,10 @@ import {
   goalIdentityFingerprint,
 } from "@shared/runtime/repair-contract";
 import {
+  type ExecutionState,
   canStartWriter,
   createExecutionIntent,
+  isTerminalRepairExecution,
   markExecutionStarted,
 } from "@shared/runtime/repair-execution";
 import {
@@ -88,6 +90,7 @@ import {
   readRepairChain,
 } from "./repair-chain-store";
 import {
+  decideExecutionRecord,
   executionRecordPath,
   readExecutionRecord,
   spawnDeadlineSupervisor,
@@ -576,6 +579,18 @@ export async function executeRepairLoop(input: {
     if (cycle?.phase === "reviewed" || cycle?.phase === "published") {
       taskId = cycle.squadTaskId ?? taskId;
     } else if (taskId) {
+      const terminalResume = readExecutionRecord(
+        executionRecordPath(input.runDir, executionIdFor(input.runId, cycleN)),
+      );
+      if (terminalResume !== null && isTerminalRepairExecution(terminalResume.state)) {
+        const refusal = terminalLaunchRefusal(terminalResume.state, "resume");
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: refusal.reasonCode,
+          message: refusal.message,
+          outerUsed: state.outerUsed,
+        });
+      }
       writeRepairLive(input.runDir, { status: "running", phase: "repair-squad-repair" });
       input.out.progress(`repair outer ${cycleN}/${state.outerMax}`);
       let snapshot: ReturnType<SquadBridge["status"]>;
@@ -640,15 +655,19 @@ export async function executeRepairLoop(input: {
           outerUsed: state.outerUsed,
         });
       }
+      const settledResume = settleLaunchedWriter({
+        bridge,
+        taskId,
+        runDir: input.runDir,
+        executionId: executionIdFor(input.runId, cycleN),
+        nowMs: nowMsOrNow(deps),
+        verb: "resume",
+        outerUsed: state.outerUsed,
+        loop: input,
+      });
+      if (!settledResume.ok) return settledResume.outcome;
       if (bridge.writerPids) {
-        const pids = bridge.writerPids();
-        state = patchState(input.runDir, { ...state, writerPids: pids });
-        bindExecutionPids(
-          input.runDir,
-          executionIdFor(input.runId, cycleN),
-          pids,
-          nowMsOrNow(deps),
-        );
+        state = patchState(input.runDir, { ...state, writerPids: settledResume.pids });
       }
       const boundResume = bindOfficialExpectedPolicy(bridge, taskId, input.runDir, state);
       if (!boundResume.ok) {
@@ -746,6 +765,18 @@ export async function executeRepairLoop(input: {
         cycleN,
         history,
       });
+      const terminalStart = readExecutionRecord(
+        executionRecordPath(input.runDir, executionIdFor(input.runId, cycleN)),
+      );
+      if (terminalStart !== null && isTerminalRepairExecution(terminalStart.state)) {
+        const refusal = terminalLaunchRefusal(terminalStart.state, "start");
+        return finish(input, {
+          businessResult: "needs_attention",
+          reasonCode: refusal.reasonCode,
+          message: refusal.message,
+          outerUsed: state.outerUsed,
+        });
+      }
       const started = bridge.start({
         requestedVersion: SQUAD_BRIDGE_CONTRACT_VERSION,
         packageFields: {},
@@ -791,15 +822,19 @@ export async function executeRepairLoop(input: {
           });
         }
       }
+      const settledStart = settleLaunchedWriter({
+        bridge,
+        taskId: started.taskId,
+        runDir: input.runDir,
+        executionId: executionIdFor(input.runId, cycleN),
+        nowMs: nowMsOrNow(deps),
+        verb: "start",
+        outerUsed: state.outerUsed,
+        loop: input,
+      });
+      if (!settledStart.ok) return settledStart.outcome;
       if (bridge.writerPids) {
-        const pids = bridge.writerPids();
-        state = patchState(input.runDir, { ...state, writerPids: pids });
-        bindExecutionPids(
-          input.runDir,
-          executionIdFor(input.runId, cycleN),
-          pids,
-          nowMsOrNow(deps),
-        );
+        state = patchState(input.runDir, { ...state, writerPids: settledStart.pids });
       }
       const boundStart = bindOfficialExpectedPolicy(bridge, started.taskId, input.runDir, state);
       if (!boundStart.ok) {
@@ -1950,27 +1985,83 @@ function nowMsOrNow(deps: RepairLoopDeps): number {
   return (deps.nowMs ?? Date.now)();
 }
 
+function terminalLaunchRefusal(
+  state: ExecutionState,
+  verb: "resume" | "start",
+): { reasonCode: string; message: string } {
+  return {
+    reasonCode: state === "deadline_enforced" ? "deadline" : state,
+    message: `refusing to ${verb} a ${state} execution`,
+  };
+}
+
+function settleLaunchedWriter(input: {
+  bridge: SquadBridge;
+  taskId: string;
+  runDir: string;
+  executionId: string;
+  nowMs: number;
+  verb: "resume" | "start";
+  outerUsed: number;
+  loop: { runId: string; runDir: string; sourceRunId: string };
+}): { ok: true; pids: number[] } | { ok: false; outcome: RepairLoopOutcome } {
+  const reported = input.bridge.writerPids?.();
+  const bound = bindExecutionPids(
+    input.runDir,
+    input.executionId,
+    reported ?? [],
+    input.nowMs,
+    reported !== undefined,
+  );
+  if (bound.status !== "already_terminal") return { ok: true, pids: reported ?? [] };
+  const refusal = terminalLaunchRefusal(bound.state, input.verb);
+  let message = refusal.message;
+  try {
+    input.bridge.stop({ taskId: input.taskId });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "stop failed";
+    message = `${refusal.message}; ${detail}`;
+  }
+  return {
+    ok: false,
+    outcome: finish(input.loop, {
+      businessResult: "needs_attention",
+      reasonCode: refusal.reasonCode,
+      message,
+      outerUsed: input.outerUsed,
+    }),
+  };
+}
+
 function bindExecutionPids(
   runDir: string,
   executionId: string,
   pids: number[],
   nowMs: number,
-): void {
+  publish: boolean,
+):
+  | { status: "absent" }
+  | { status: "bound" }
+  | { status: "already_terminal"; state: ExecutionState } {
   const path = executionRecordPath(runDir, executionId);
-  const existing = readExecutionRecord(path);
-  if (existing === null) return;
-  const allowed = canStartWriter({
-    existing,
-    writerKnown: pids.length > 0 || existing.pids.length === 0,
-    writerAlive: false,
+  const decision = decideExecutionRecord(path, (existing) => {
+    if (existing === null || !publish) return null;
+    const allowed = canStartWriter({
+      existing,
+      writerKnown: pids.length > 0 || existing.pids.length === 0,
+      writerAlive: false,
+    });
+    if (!allowed.ok && allowed.reason === "unknown_writer") {
+      throw errors.runFailed("refusing a new writer while a previous writer is unknown");
+    }
+    if (!allowed.ok) return null;
+    return markExecutionStarted(existing, pids.length > 0 ? pids : existing.pids, nowMs);
   });
-  if (!allowed.ok && allowed.reason === "unknown_writer") {
-    throw errors.runFailed("refusing a new writer while a previous writer is unknown");
+  if (decision.execution === null) return { status: "absent" };
+  if (isTerminalRepairExecution(decision.execution.state)) {
+    return { status: "already_terminal", state: decision.execution.state };
   }
-  writeExecutionRecord(
-    path,
-    markExecutionStarted(existing, pids.length > 0 ? pids : existing.pids, nowMs),
-  );
+  return { status: "bound" };
 }
 
 function runIdFromArgv(argv: string[]): string | null {

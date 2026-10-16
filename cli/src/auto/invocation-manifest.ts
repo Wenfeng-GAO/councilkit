@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { fullSha } from "@shared/runtime/repair-identity";
 import { shellSingleQuote } from "@shared/runtime/shell-quote";
 import { z } from "zod";
 import { errors } from "../errors";
@@ -268,10 +269,7 @@ export function buildInvocationManifest(input: {
       ...(input.councilTargetOutput ? { councilTargetOutput: input.councilTargetOutput } : {}),
     },
     repoRealpath: input.repoRealpath,
-    reviewedSha:
-      input.reviewedSha && /^[0-9a-f]{40}$/i.test(input.reviewedSha)
-        ? input.reviewedSha.toLowerCase()
-        : null,
+    reviewedSha: fullSha(input.reviewedSha),
     timeoutMs: input.timeoutMs,
     concurrency: input.concurrency,
     agents: input.agents.map((agent) => ({

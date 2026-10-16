@@ -17,6 +17,7 @@ import {
 import { dirname, join } from "node:path";
 import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import { appendPrivateFile, mkdirPrivate, replacePrivateFile } from "@shared/runtime/durable-write";
+import { fullSha } from "@shared/runtime/repair-identity";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import {
   type RunCommand,
@@ -631,7 +632,7 @@ function preserveUnpushedApplyWorkspace(runDir: string, workspace: string): void
     return;
   }
   if (previous?.pushed !== false || typeof previous.commit !== "string") return;
-  if (!/^[0-9a-f]{40}$/i.test(previous.commit)) return;
+  if (fullSha(previous.commit) === null) return;
   let dest = join(dirname(workspace), `apply-unpushed-${previous.commit.slice(0, 12)}`);
   if (existsSync(dest)) dest = `${dest}-${Date.now()}`;
   try {

@@ -1,5 +1,6 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import {
+  FINDING_SEVERITY_LABEL,
   type ParsedReviewReport,
   type ReviewAttemptRow,
   type ReviewFinding,
@@ -18,13 +19,6 @@ const VERDICT_LABEL: Record<NonNullable<ParsedReviewReport["verdict"]>, string> 
   approve: "Approve",
   "changes-requested": "Changes requested",
   comment: "Comment",
-};
-
-const SEVERITY_LABEL: Record<NonNullable<ReviewFinding["severity"]>, string> = {
-  critical: "致命",
-  major: "重大",
-  minor: "次要",
-  nit: "琐碎",
 };
 
 export function ReviewReportView({
@@ -505,7 +499,7 @@ function FindingCard({ finding }: { finding: ReviewFinding }) {
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         {finding.severity ? (
           <span className={`ck-sev ck-sev-${finding.severity}`}>
-            {SEVERITY_LABEL[finding.severity]}
+            {FINDING_SEVERITY_LABEL[finding.severity]}
             <span className="ck-sev-en">{finding.severity}</span>
           </span>
         ) : null}
