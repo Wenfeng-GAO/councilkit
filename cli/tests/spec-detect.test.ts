@@ -1,7 +1,7 @@
 /**
  * Spec-contract hard gate: no-spec refuse, with-spec auto-bind, verify schedule.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -107,7 +107,7 @@ describe("with-spec auto-bind", () => {
       searchText: "Spec contract: PRD.md",
       repoRoot: root,
     });
-    expect(detected?.source).toBe(rel);
+    expect(detected?.source).toBe(realpathSync(join(root, rel)));
     expect(detected?.text).toContain("cancel deregisters waiters");
     expect(
       autoDetectSpec({
@@ -129,6 +129,23 @@ describe("with-spec auto-bind", () => {
     });
     expect(detected?.origin).toBe("explicit-flag");
     expect(detected?.text).toContain("A01");
+    expect(detected?.source).toBe(realpathSync(join(root, rel)));
+  });
+
+  it("records --spec ../spec.md as an absolute path from the caller's cwd", () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-spec-parent-"));
+    const sub = join(root, "pkg");
+    mkdirSync(sub);
+    writeFileSync(join(root, "spec.md"), "# Acc\n\n## 验收\n\n- [ ] AC-1 holds\n", "utf8");
+    const previous = process.cwd();
+    process.chdir(sub);
+    try {
+      const detected = resolveSpecContract({ explicitSpec: "../spec.md", repoRoot: null });
+      expect(detected?.source).toBe(realpathSync(join(root, "spec.md")));
+      expect(detected?.text).toContain("AC-1");
+    } finally {
+      process.chdir(previous);
+    }
   });
 });
 

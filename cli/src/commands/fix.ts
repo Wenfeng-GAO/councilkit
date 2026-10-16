@@ -3,11 +3,12 @@
  * until consensus (or max rounds), apply that plan, then optionally start a
  * follow-up PR jury. The Host may spawn this command; agents still bypass Host.
  */
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { FULL_COMMIT_SHA, nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import {
   CLI_RUN_PIPELINE_READY_FILE,
+  CLI_RUN_REREVIEW_OF_FILE,
   CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunApplyStatus,
@@ -852,7 +853,7 @@ async function runReReviewOnly(input: {
       // sidecar
     }
   };
-  const finish = async (partial: {
+  const reportOutcome = async (partial: {
     status: FixOutcome["status"];
     exitCode: number;
     failure: FixOutcome["failure"];
@@ -870,6 +871,14 @@ async function runReReviewOnly(input: {
       summary,
       failure: partial.failure,
     };
+    await input.out.finish(outcome, renderFixHuman);
+    throw new FixExit(outcome.exitCode);
+  };
+  const finish = async (partial: {
+    status: FixOutcome["status"];
+    exitCode: number;
+    failure: FixOutcome["failure"];
+  }): Promise<never> => {
     persist(
       partial.status === "interrupted"
         ? "interrupted"
@@ -877,11 +886,20 @@ async function runReReviewOnly(input: {
           ? "failed"
           : "completed",
       {
-        summary: outcome.summary || partial.failure?.message || null,
+        summary: partial.failure?.message ?? (summary.length > 0 ? summary : null),
       },
     );
-    await input.out.finish(outcome, renderFixHuman);
-    throw new FixExit(outcome.exitCode);
+    return reportOutcome(partial);
+  };
+  // A failed or aborted follow-up must not rewrite the original run. The
+  // failure stays on the follow-up directory.
+  const releaseOriginal = async (partial: {
+    status: FixOutcome["status"];
+    exitCode: number;
+    failure: FixOutcome["failure"];
+  }): Promise<never> => {
+    restoreStatusSnapshot(statusPath, statusBefore);
+    return reportOutcome(partial);
   };
   try {
     input.out.progress(`fix ${input.runId} starting`);
@@ -901,6 +919,7 @@ async function runReReviewOnly(input: {
       contract: scratch ? readScratchContract(input.runDir) : null,
       onRunCreated: (id) => {
         followUpRunId = id;
+        writeReReviewOf(id, input.runId);
       },
       onSeatsStarted: () => {
         seatsStarted = true;
@@ -919,13 +938,16 @@ async function runReReviewOnly(input: {
     }
     summary = `follow-up review ${followUp.runId}`;
     if (followUp.exitCode !== EXIT.ok) {
-      await finish({
-        status: "failed",
+      await releaseOriginal({
+        status: followUp.exitCode === EXIT.interrupted ? "interrupted" : "failed",
         exitCode: followUp.exitCode,
         failure: {
           phase: "re-review",
-          code: "REVIEW_FAILED",
-          message: "follow-up review did not complete",
+          code: followUp.exitCode === EXIT.interrupted ? "ABORTED" : "REVIEW_FAILED",
+          message:
+            followUp.exitCode === EXIT.interrupted
+              ? "follow-up review aborted"
+              : "follow-up review did not complete",
         },
       });
     }
@@ -944,19 +966,24 @@ async function runReReviewOnly(input: {
       process.removeListener("SIGTERM", onSignal);
       throw error;
     }
-    if (error instanceof ReviewExit && error.exitCode === EXIT.interrupted) {
-      await finish({
-        status: "interrupted",
-        exitCode: EXIT.interrupted,
-        failure: { phase: "re-review", code: "ABORTED", message: "follow-up review aborted" },
+    if (error instanceof ReviewExit) {
+      await releaseOriginal({
+        status: error.exitCode === EXIT.interrupted ? "interrupted" : "failed",
+        exitCode: error.exitCode,
+        failure: {
+          phase: "re-review",
+          code: error.exitCode === EXIT.interrupted ? "ABORTED" : "REVIEW_FAILED",
+          message:
+            error.exitCode === EXIT.interrupted
+              ? "follow-up review aborted"
+              : "follow-up review did not complete",
+        },
       });
     }
-    const message = error instanceof Error ? error.message : String(error);
-    await finish({
-      status: "failed",
-      exitCode: error instanceof CliError ? error.exitCode : EXIT.runFailed,
-      failure: { phase: "re-review", code: "REVIEW_FAILED", message },
-    });
+    restoreStatusSnapshot(statusPath, statusBefore);
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    throw error;
   }
   throw new Error("re-review ended without an outcome");
 }
@@ -1005,11 +1032,15 @@ function readScratchContract(runDir: string): {
 } {
   let specSource: string | null = null;
   let noRequireSpec = false;
+  let invocationCwd: string | null = null;
+  let repoRealpath: string | null = null;
   try {
     const manifest = readInvocationManifest(runDir);
     const source = manifest?.task.specSource?.trim() ?? "";
     if (source.length > 0) specSource = source;
     noRequireSpec = manifest?.requireSpec === false;
+    invocationCwd = manifest?.invocationCwd ?? null;
+    repoRealpath = manifest?.repoRealpath ?? null;
   } catch {
     specSource = null;
     noRequireSpec = false;
@@ -1024,6 +1055,9 @@ function readScratchContract(runDir: string): {
     } catch {
       specSource = null;
     }
+  }
+  if (specSource !== null) {
+    specSource = resolveRecordedSpec(specSource, invocationCwd, repoRealpath);
   }
   let baseSha: string | null = null;
   try {
@@ -1059,6 +1093,46 @@ function discardUnstartedFollowUp(runId: string | null): void {
   if (runId === null || !runId.startsWith("ck-review-")) return;
   const dir = resolvePaths().runDir(runId);
   rmSync(dir, { recursive: true, force: true });
+}
+
+/** Name the source run so a failed follow-up does not become the case face. */
+function writeReReviewOf(followUpId: string, sourceId: string): void {
+  if (!followUpId.startsWith("ck-review-")) return;
+  const dir = resolvePaths().runDir(followUpId);
+  try {
+    mkdirSync(dir, { recursive: true });
+    replacePrivateFile(join(dir, CLI_RUN_REREVIEW_OF_FILE), `${sourceId}\n`);
+  } catch {
+    // The follow-up directory is the review's; a missing marker only affects the case face.
+  }
+}
+
+/**
+ * A spec recorded as a relative path is resolved against the original cwd,
+ * then the repo root. New runs already store an absolute path.
+ */
+function resolveRecordedSpec(
+  specSource: string,
+  invocationCwd: string | null,
+  repoRealpath: string | null,
+): string {
+  if (isAbsolute(specSource) && existsSync(specSource)) return absoluteExisting(specSource);
+  const bases = [invocationCwd, repoRealpath].filter(
+    (base): base is string => typeof base === "string" && base.length > 0,
+  );
+  for (const base of bases) {
+    const candidate = resolve(base, specSource);
+    if (existsSync(candidate)) return absoluteExisting(candidate);
+  }
+  return specSource;
+}
+
+function absoluteExisting(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 async function startFollowUpReview(input: {

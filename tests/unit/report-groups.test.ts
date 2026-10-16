@@ -1,5 +1,6 @@
 import {
   OTHER_SQUADS_KEY,
+  caseFace,
   caseMatchesStatusFilter,
   caseNeedsAttention,
   caseStatusAxis,
@@ -305,6 +306,32 @@ describe("caseStatusAxis / caseViewOf (representative semantics)", () => {
     const reviewView = caseViewOf(group, "review");
     expect(reviewView?.representative.status).toBe("failed");
     expect(reviewView?.status.attention).toBe(true);
+  });
+
+  it("keeps an interrupted original as the case face when its re-review failed", () => {
+    const original = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1";
+    const followUp = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2";
+    const groups = groupCliRuns([
+      run({
+        runId: original,
+        title: "给结算页补一张失败态说明",
+        status: "interrupted",
+        startedAt: "2026-10-16T01:00:00.000Z",
+      }),
+      run({
+        runId: followUp,
+        title: "给结算页补一张失败态说明",
+        status: "failed",
+        startedAt: "2026-10-16T02:00:00.000Z",
+        endedAt: "2026-10-16T02:05:00.000Z",
+        sourceRunId: original,
+      }),
+    ]);
+    const view = caseViewOf(groups[0] as (typeof groups)[number], "all");
+    expect(caseFace(groups[0]?.runs ?? [])?.runId).toBe(original);
+    expect(view?.representative.runId).toBe(original);
+    expect(view?.representative.status).toBe("interrupted");
+    expect(view?.scopedRuns).toHaveLength(2);
   });
 
   it("maps status filters onto the case axis", () => {

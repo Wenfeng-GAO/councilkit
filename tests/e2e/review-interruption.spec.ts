@@ -436,3 +436,80 @@ test("进程已死且没有 pid 的讨论在列表上是中断", async ({ page }
     await card.screenshot({ path: `${ARTIFACTS}/discuss-dead-list-${width}.png` });
   }
 });
+
+test("复审席位起来后再失败，原 run 仍是中断", async ({ page }) => {
+  test.setTimeout(120_000);
+  mkdirSync(ARTIFACTS, { recursive: true });
+  await page.goto("/reports");
+  const seeded = await page.request.post("/api/v1/__test__/seed-stale-review", {
+    data: { shape: "task", liveness: "dead", report: "absent", seatFail: true },
+  });
+  expect(seeded.ok()).toBe(true);
+  const runId = ((await seeded.json()) as { ok: true; data: { runId: string } }).data.runId;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/reports/${runId}`);
+  const card = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (item) => item.url().includes("/actions") && item.request().method() === "POST",
+    ),
+    card.getByRole("button", { name: "只再审一遍（不改代码）" }).click(),
+  ]);
+  expect(response.ok()).toBe(true);
+  await page.goto(`/reports/${runId}`);
+  await expect(page.locator(".ck-wb-run-status")).toContainText("中断", { timeout: 15_000 });
+  await expect(page.locator(".ck-wb-run-status")).not.toContainText("失败");
+  await expect(page.getByText("仍在运行")).toHaveCount(0);
+  await expect(page.getByText("排队中")).toHaveCount(0);
+  await expect(page.getByText("等待启动")).toHaveCount(0);
+  const failedCard = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+  await expect(failedCard).toBeVisible();
+  await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+  await expectAmberInterrupt(failedCard.locator("[data-interrupt-icon='circle-pause']"));
+  const summary = page.locator(".ck-wb-aggregate");
+  await expect(summary).toContainText("中断");
+  await expectAmberInterrupt(summary.locator("[data-interrupt-icon='circle-pause']"));
+  await page.screenshot({ path: `${ARTIFACTS}/rereview-seat-fail-1280.png` });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".ck-wb-seats").evaluate((el) => {
+    const node = el as HTMLElement;
+    const main = document.querySelector(".ck-wb-main");
+    if (main) main.appendChild(node);
+    node.style.display = "flex";
+    node.style.flexDirection = "column";
+    node.style.position = "static";
+    node.style.width = "100%";
+    node.style.gridColumn = "auto";
+    node.style.gridRow = "auto";
+  });
+  await expect(summary).toContainText("中断");
+  await page.screenshot({ path: `${ARTIFACTS}/rereview-seat-fail-390.png`, fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports");
+  await page.getByRole("button", { name: /全部案件/ }).click();
+  const listed = page.locator(".ck-case-card", {
+    has: page.locator(`a[href="/reports/${runId}"]`),
+  });
+  const listedStatus = listed.locator(".ck-case-status");
+  await expect(listedStatus).toContainText("中断");
+  await expect(listedStatus).not.toContainText("失败");
+  await expect(listed.locator(".ck-case-meta")).toContainText("2 份记录");
+  await expectAmberInterrupt(listed.locator("[data-interrupt-token='--ck-interrupt']"));
+  await listed.screenshot({ path: `${ARTIFACTS}/rereview-seat-fail-list-1280.png` });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await listed.screenshot({ path: `${ARTIFACTS}/rereview-seat-fail-list-390.png` });
+
+  const listedRuns = await page.request.get("/api/v1/cli-runs");
+  expect(listedRuns.ok()).toBe(true);
+  const runs = (
+    (await listedRuns.json()) as {
+      ok: true;
+      data: { runs: Array<{ runId: string; status: string; sourceRunId?: string | null }> };
+    }
+  ).data.runs;
+  const followUp = runs.find((run) => run.sourceRunId === runId);
+  expect(followUp?.status).toBe("failed");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/reports/${followUp?.runId ?? ""}`);
+  await expect(page.locator(".ck-wb-run-status")).toContainText("失败");
+});

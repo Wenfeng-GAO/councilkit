@@ -789,6 +789,10 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
     diag() {},
     finish: () => Promise.resolve(),
   };
+  let releaseStarted: (value: { pid: number }) => void = () => {};
+  const startedEarly = new Promise<{ pid: number }>((resolve) => {
+    releaseStarted = resolve;
+  });
   const review = runFix(["--run", sourceRunId, "--re-review-only"], sink, {
     reviewImpl: async (argv, _out, deps) => {
       const sourceDir = join(home, "runs", sourceRunId);
@@ -801,6 +805,75 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
         writeFileSync(join(home, "runs", followUpRunId, "status.json"), '{"status":"failed"}\n');
         deps?.onRunCreated?.(followUpRunId);
         throw new Error("DRIVER_SPAWN_FAILED");
+      }
+      if (existsSync(join(sourceDir, "e2e-rereview-seat-fail"))) {
+        const followUpRunId = `ck-review-${randomUUID()}`;
+        const followDir = join(home, "runs", followUpRunId);
+        mkdirSync(followDir, { recursive: true });
+        let task: { pr?: string; task?: string } = {};
+        try {
+          const first =
+            readFileSync(join(sourceDir, "transcript.jsonl"), "utf8").split("\n")[0] ?? "";
+          task = (JSON.parse(first) as { task?: { pr?: string; task?: string } }).task ?? {};
+        } catch {
+          task = {};
+        }
+        const now = new Date().toISOString();
+        const seat = {
+          attemptId: "attempt-security",
+          agentId: "sec",
+          agentName: "review-security",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        };
+        const aggregator = {
+          attemptId: "aggregator",
+          agentId: "adv",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        };
+        writeFileSync(
+          join(followDir, "transcript.jsonl"),
+          `${JSON.stringify({
+            kind: "review.started",
+            version: 1,
+            runId: followUpRunId,
+            startedAt: now,
+            task,
+            attempts: [seat],
+            aggregator,
+          })}\n${JSON.stringify({
+            kind: "review.finished",
+            version: 1,
+            status: "failed",
+            endedAt: now,
+            incomplete: true,
+          })}\n`,
+        );
+        writeFileSync(
+          join(followDir, "status.json"),
+          `${JSON.stringify({
+            version: 1,
+            status: "failed",
+            progress: { phase: "done", attempts: [], updatedAt: now },
+            pipeline: null,
+          })}\n`,
+        );
+        deps?.onRunCreated?.(followUpRunId);
+        deps?.onSeatsStarted?.();
+        releaseStarted({ pid: process.pid });
+        const statusPath = join(sourceDir, "status.json");
+        const deadline = Date.now() + 3_000;
+        while (Date.now() < deadline) {
+          try {
+            if (readFileSync(statusPath, "utf8").includes("只重新审查当前 PR")) break;
+          } catch {
+            // status is rewritten by the host after the 200 returns
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error("follow-up seat failed");
       }
       let hasReport = false;
       try {
@@ -888,13 +961,17 @@ function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: num
       deps?.onSeatsStarted?.();
     },
   });
-  return review.then(
+  const settled = review.then(
     () => ({ pid: process.pid }),
     (error: unknown) => {
       if (error instanceof FixExit && error.exitCode === 0) return { pid: process.pid };
       throw error;
     },
   );
+  void settled.catch(() => {
+    // A seat-fail resolves startedEarly first. Swallow the later rejection.
+  });
+  return Promise.race([startedEarly, settled]);
 }
 
 function seedStaleReview(input: {
@@ -903,6 +980,7 @@ function seedStaleReview(input: {
   report?: "present" | "absent";
   failReReview?: boolean;
   spawnFail?: boolean;
+  seatFail?: boolean;
 }): {
   runId: string;
 } {
@@ -1026,6 +1104,9 @@ function seedStaleReview(input: {
   if (input.spawnFail === true) {
     writeFileSync(join(dir, "e2e-rereview-spawn-fail"), "1\n");
   }
+  if (input.seatFail === true) {
+    writeFileSync(join(dir, "e2e-rereview-seat-fail"), "1\n");
+  }
   if (input.liveness === "alive") {
     writeFileSync(join(dir, "review.pid"), `${String(process.pid)}\n`);
   } else {
@@ -1060,6 +1141,7 @@ function testRoutes(
         report: z.enum(["present", "absent"]).optional(),
         failReReview: z.boolean().optional(),
         spawnFail: z.boolean().optional(),
+        seatFail: z.boolean().optional(),
       }),
       handler: ({ body }) =>
         seedStaleReview(
@@ -1069,6 +1151,7 @@ function testRoutes(
             report?: "present" | "absent";
             failReReview?: boolean;
             spawnFail?: boolean;
+            seatFail?: boolean;
           },
         ),
     },

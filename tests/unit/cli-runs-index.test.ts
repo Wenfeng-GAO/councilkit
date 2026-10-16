@@ -658,6 +658,33 @@ describe("listCliRuns stale running boundary", () => {
     expect(due?.progress?.attempts.every((row) => row.status === "cancelled")).toBe(true);
   });
 
+  it("cancels seats left running when a review is already marked interrupted", () => {
+    const dir = join(home, "runs", BOUNDARY_REVIEW);
+    mkdirSync(dir, { recursive: true });
+    writeReviewTranscript(dir, "2026-09-08T00:00:00.000Z");
+    const status = JSON.parse(runningStatus("2026-09-08T00:00:00.000Z", "attempts")) as {
+      status: string;
+      progress: { attempts: Array<Record<string, unknown>> };
+    };
+    status.status = "interrupted";
+    status.progress.attempts.push({
+      attemptId: "aggregator",
+      agentName: "review-adversarial",
+      driverId: "grok-stream-json",
+      modelId: "grok-4.6",
+      role: "aggregator",
+      status: "running",
+      durationMs: 1000,
+      lastActivity: null,
+    });
+    writeFileSync(join(dir, "status.json"), `${JSON.stringify(status)}\n`);
+    const run = listCliRuns(process.env)[0];
+    expect(run?.status).toBe("interrupted");
+    expect(run?.endedAt).toBeNull();
+    expect(run?.pipeline?.phase).toBe("done");
+    expect(run?.progress?.attempts.every((row) => row.status === "cancelled")).toBe(true);
+  });
+
   it("leaves a just-written transcript-only review running", () => {
     const run = seedTranscriptOnly(new Date());
     expect(run?.status).toBe("running");

@@ -2,8 +2,7 @@
  * Scratch re-review keeps the killed review's spec contract and PR base.
  * The first review is a real CLI process, killed -9 while a seat is running.
  */
-import { type ChildProcess, spawn } from "node:child_process";
-import { execFileSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -11,12 +10,17 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { primaryRunStatus } from "@/lib/cli-run-status";
+import { caseFace, groupCliRuns } from "@/lib/report-groups";
 import { listCliRuns } from "@shared/runtime/cli-runs-index";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import { afterEach, describe, expect, it } from "vitest";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
@@ -24,6 +28,9 @@ import { FixExit, runFix } from "../src/commands/fix";
 import { Store } from "../src/store/store";
 
 const REPO_ROOT = join(import.meta.dirname, "../..");
+const require = createRequire(join(REPO_ROOT, "package.json"));
+const TSX_LOADER = require.resolve("tsx");
+const HANG_SEAT = join(REPO_ROOT, "cli/tests/support/hang-review-seat.ts");
 
 function envelope(text: string): SpawnOutput {
   return {
@@ -118,20 +125,17 @@ function prepareHome(): { home: string; bin: string } {
   return { home, bin };
 }
 
-function startReview(home: string, bin: string, args: string[]): ChildProcess {
-  return spawn(
-    process.execPath,
-    ["--import", "tsx", "cli/tests/support/hang-review-seat.ts", ...args],
-    {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        COUNCILKIT_HOME: home,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+function startReview(home: string, bin: string, args: string[], cwd = REPO_ROOT): ChildProcess {
+  return spawn(process.execPath, ["--import", TSX_LOADER, HANG_SEAT, ...args], {
+    cwd,
+    env: {
+      ...process.env,
+      COUNCILKIT_HOME: home,
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      TSX_TSCONFIG_PATH: join(REPO_ROOT, "cli/tsconfig.json"),
     },
-  );
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 async function waitForSeat(home: string, child: ChildProcess): Promise<string> {
@@ -186,10 +190,11 @@ describe("scratch re-review keeps the original contract", () => {
 
   async function killMidSeat(
     args: string[],
+    cwd = REPO_ROOT,
   ): Promise<{ home: string; bin: string; runId: string }> {
     const { home, bin } = prepareHome();
     cleanups.push(() => rmSync(home, { recursive: true, force: true }));
-    const child = startReview(home, bin, args);
+    const child = startReview(home, bin, args, cwd);
     cleanups.push(() => {
       if (child.exitCode === null && child.pid !== undefined) {
         try {
@@ -337,5 +342,117 @@ describe("scratch re-review keeps the original contract", () => {
     );
     expect(followContext).toContain(`- head: \`${head}\``);
     expect(followContext).toContain(`- base: \`${base}\``);
+  });
+
+  it("restarts a killed --spec ../spec.md review from another cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-parent-spec-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const sub = join(root, "pkg");
+    mkdirSync(sub);
+    const spec = join(root, "spec.md");
+    writeFileSync(spec, "# 结算\n\n## 验收\n\n- [ ] 失败时展示说明 AC-1\n");
+    const absolute = realpathSync(spec);
+    const { home, bin, runId } = await killMidSeat(
+      ["--task", "给结算页补一张失败态说明", "--spec", "../spec.md"],
+      sub,
+    );
+    const manifest = JSON.parse(
+      readFileSync(join(home, "runs", runId, "invocation-manifest.v1.json"), "utf8"),
+    ) as { task: { specSource?: string }; invocationCwd?: string };
+    expect(manifest.task.specSource).toBe(absolute);
+    expect(manifest.invocationCwd).toBe(realpathSync(sub));
+
+    const { lines, calls } = await rerun(home, bin, runId);
+    const text = lines.join("\n");
+    expect(text).toContain(`spec: ${absolute}`);
+    expect(text).not.toContain("SPEC_VERIFY_UNBOUND");
+    expect(text).not.toContain("SPEC_REQUIRED");
+    expect(text).not.toContain("DRIVER_SPAWN_FAILED");
+    expect(calls.some((call) => call.prompt !== DRIVER_PROBE_PROMPT)).toBe(true);
+  });
+
+  it("restarts a killed auto-detected spec from another cwd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ck-auto-spec-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, "docs", "plans"), { recursive: true });
+    const spec = join(root, "docs", "plans", "demo-plan.md");
+    writeFileSync(spec, "# Demo\n\n## 验收\n\n- [ ] AC-12 cancel deregisters waiters\n");
+    const absolute = realpathSync(spec);
+    const { home, bin, runId } = await killMidSeat(
+      ["--task", "请按 docs/plans/demo-plan.md 审查结算失败态"],
+      root,
+    );
+    const manifest = JSON.parse(
+      readFileSync(join(home, "runs", runId, "invocation-manifest.v1.json"), "utf8"),
+    ) as { task: { specSource?: string } };
+    expect(manifest.task.specSource).toBe(absolute);
+
+    const { lines, calls } = await rerun(home, bin, runId);
+    const text = lines.join("\n");
+    expect(text).toContain(`spec: ${absolute}`);
+    expect(text).not.toContain("SPEC_VERIFY_UNBOUND");
+    expect(text).not.toContain("SPEC_REQUIRED");
+    expect(text).not.toContain("DRIVER_SPAWN_FAILED");
+    expect(calls.some((call) => call.prompt !== DRIVER_PROBE_PROMPT)).toBe(true);
+  });
+
+  it("keeps the original interrupted when follow-up seats start and then fail", async () => {
+    const { home, bin, runId } = await killMidSeat([
+      "--task",
+      "给结算页补一张失败态说明",
+      "--no-require-spec",
+    ]);
+    const statusPath = join(home, "runs", runId, "status.json");
+    const before = readFileSync(statusPath, "utf8");
+    process.env.COUNCILKIT_HOME = home;
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    const sink = {
+      json: false,
+      progress() {},
+      diag() {},
+      finish() {
+        return Promise.resolve();
+      },
+    };
+    try {
+      await runFix(["--run", runId, "--re-review-only"], sink, {
+        spawnImpl: async (input) => {
+          if (input.prompt === DRIVER_PROBE_PROMPT) return envelope("ok");
+          return { stdout: "", exitCode: 1, timedOut: false, aborted: false };
+        },
+      });
+      throw new Error("expected the follow-up to fail");
+    } catch (error) {
+      if (!(error instanceof FixExit) || error.exitCode === 0) {
+        throw new Error(
+          `expected a failed follow-up (${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+    expect(readFileSync(statusPath, "utf8")).toBe(before);
+    process.env.COUNCILKIT_HOME = home;
+    const listed = listCliRuns(process.env);
+    const original = listed.find((run) => run.runId === runId);
+    expect(original?.status).toBe("interrupted");
+    expect(original && isLostExecutionReview(original)).toBe(true);
+    expect(original ? primaryRunStatus(original).text : "").toBe("中断");
+    const followUps = readdirSync(join(home, "runs")).filter(
+      (name) => name.startsWith("ck-review-") && name !== runId,
+    );
+    expect(followUps).toHaveLength(1);
+    const followUpId = followUps[0] as string;
+    const follow = listed.find((run) => run.runId === followUpId);
+    expect(follow?.status).toBe("failed");
+    expect(follow ? primaryRunStatus(follow).text : "").toBe("失败");
+    expect(follow?.sourceRunId).toBe(runId);
+    expect(readFileSync(join(home, "runs", followUpId, "re-review-of"), "utf8").trim()).toBe(runId);
+    const pair = listed.filter((run) => run.runId === runId || run.runId === followUpId);
+    const face = caseFace(groupCliRuns(pair)[0]?.runs ?? []);
+    expect(face?.runId).toBe(runId);
+    expect(face?.status).toBe("interrupted");
   });
 });

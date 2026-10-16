@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -609,6 +610,63 @@ describe("cli fix command", () => {
     expect(seen[0]).toEqual(["--task", task, "--spec", spec]);
   });
 
+  it("resolves a relative spec against the recorded cwd, then the repo root", async () => {
+    const task = "给结算页补一张失败态说明";
+    const root = mkdtempSync(join(tmpdir(), "ck-rel-spec-"));
+    const sub = join(root, "pkg");
+    mkdirSync(sub);
+    mkdirSync(join(root, "docs", "plans"), { recursive: true });
+    const parentSpec = join(root, "spec.md");
+    const plan = join(root, "docs", "plans", "demo-plan.md");
+    writeFileSync(parentSpec, "# 验收\n\n## 验收\n\n- [ ] AC-1\n");
+    writeFileSync(plan, "# Plan\n\n## 验收\n\n- [ ] AC-2\n");
+    const cwd = realpathSync(sub);
+    const repo = realpathSync(root);
+    seedKilledMidway({ task });
+    const writeManifest = (
+      specSource: string,
+      invocationCwd: string | null,
+      repoRealpath: string | null,
+    ) => {
+      writeFileSync(
+        join(home, "runs", RUN_ID, "invocation-manifest.v1.json"),
+        `${JSON.stringify({
+          version: 1,
+          kind: "councilkit-invocation-manifest",
+          runId: RUN_ID,
+          task: { task, specSource },
+          repoRealpath,
+          ...(invocationCwd ? { invocationCwd } : {}),
+          reviewedSha: null,
+          timeoutMs: 1000,
+          concurrency: 1,
+          requireSpec: true,
+          agents: [],
+          aggregator: { id: "a", driverId: "grok-stream-json", modelId: "grok-4.6" },
+          tools: [],
+        })}\n`,
+      );
+    };
+    const capture = async (): Promise<string[]> => {
+      const seen: string[][] = [];
+      await runFix(["--run", RUN_ID, "--re-review-only"], makeSink(), {
+        reviewImpl: async (argv, _out, deps) => {
+          seen.push(argv);
+          deps?.onRunCreated?.("ck-review-bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeee4");
+          deps?.onSeatsStarted?.();
+        },
+      }).catch((error: unknown) => {
+        if (!(error instanceof FixExit)) throw error;
+      });
+      return seen[0] ?? [];
+    };
+    writeManifest("../spec.md", cwd, null);
+    expect(await capture()).toEqual(["--task", task, "--spec", realpathSync(parentSpec)]);
+    writeManifest("docs/plans/demo-plan.md", null, repo);
+    expect(await capture()).toEqual(["--task", task, "--spec", realpathSync(plan)]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("copies --no-require-spec onto a scratch re-review", async () => {
     const task = "给结算页补一张失败态说明";
     seedKilledMidway({ task });
@@ -732,12 +790,7 @@ describe("cli fix command", () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.followUpRunId).toBe(followUpId);
     expect(outcome.failure?.phase).toBe("re-review");
-    const status = JSON.parse(readFileSync(join(home, "runs", RUN_ID, "status.json"), "utf8")) as {
-      status: string;
-      pipeline: { followUpRunId: string | null; applyStatus: string | null };
-    };
-    expect(status.status).toBe("failed");
-    expect(status.pipeline.followUpRunId).toBe(followUpId);
+    expect(existsSync(join(home, "runs", RUN_ID, "status.json"))).toBe(false);
   });
 
   it("refuses to apply when a repair writer already holds the branch", async () => {

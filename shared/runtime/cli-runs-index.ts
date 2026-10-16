@@ -36,6 +36,7 @@ import {
 } from "./cli-ledger";
 import {
   CLI_RUN_PIPELINE_PID_FILE,
+  CLI_RUN_REREVIEW_OF_FILE,
   CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunLiveStatus,
@@ -305,8 +306,13 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
           nowMs,
         })
       : observed;
+  const endedAt = parsed.endedAt ?? statusExtras.endedAt;
   const abandoned = observed === "running" && reconciled === "interrupted";
-  const progress = abandoned ? releaseAbandonedSeats(derived) : derived;
+  // markLost writes status interrupted while seats are still "running".
+  // A lost review has not finished, so those seats are not still executing.
+  const lostReview =
+    parsed.kind === "review" && reconciled === "interrupted" && (endedAt ?? null) === null;
+  const progress = abandoned || lostReview ? releaseAbandonedSeats(derived) : derived;
   const reviewEvidence =
     parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null;
   const status = mapSquadObserveStatus({
@@ -315,7 +321,7 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
     progress,
   });
   const pipeline =
-    abandoned && live?.pipeline && live.pipeline.phase !== "done"
+    (abandoned || lostReview) && live?.pipeline && live.pipeline.phase !== "done"
       ? { ...live.pipeline, phase: "done" as const }
       : (live?.pipeline ?? null);
   return {
@@ -324,7 +330,7 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
     status,
     title: parsed.title !== runId ? parsed.title : (statusExtras.title ?? parsed.title),
     startedAt: parsed.startedAt ?? statusExtras.startedAt,
-    endedAt: parsed.endedAt ?? statusExtras.endedAt,
+    endedAt,
     demo: statusExtras.demo || readDemoSentinel(dir),
     hasReport,
     hasPlan,
@@ -338,6 +344,7 @@ function inspectRunDir(root: string, runId: string, nowMs: number): CliRunSummar
     attention: parsed.kind === "review" ? readRunAttention(dir, reviewEvidence, derived) : null,
     ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
     ...readRepairProjection(dir, parsed.kind),
+    ...(parsed.kind === "review" ? readReReviewOf(dir) : {}),
   };
 }
 
@@ -353,6 +360,16 @@ function releaseAbandonedSeats(progress: CliRunProgress | null): CliRunProgress 
     return { ...row, status: "cancelled" as const, lastActivity: null };
   });
   return changed ? { ...progress, attempts } : progress;
+}
+
+/** A failed 只再审一遍 names its source so the case face can stay the interrupted run. */
+function readReReviewOf(dir: string): { sourceRunId: string } | Record<string, never> {
+  const path = join(dir, CLI_RUN_REREVIEW_OF_FILE);
+  const stat = safeLstat(path);
+  if (stat === null || !stat.isFile() || stat.isSymbolicLink()) return {};
+  const id = readCapped(path, 80).text.trim();
+  if (!id.startsWith("ck-review-") || id.length > 80) return {};
+  return { sourceRunId: id };
 }
 
 function readRepairProjection(

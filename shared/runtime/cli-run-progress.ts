@@ -24,6 +24,8 @@ export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
 /** Review process pid. A fix pipeline uses pipeline.pid and wins when both exist. */
 export const CLI_RUN_REVIEW_PID_FILE = "review.pid";
+/** Source run id of a follow-up started by 只再审一遍. One line, no newline required. */
+export const CLI_RUN_REREVIEW_OF_FILE = "re-review-of";
 /** Written by `councilkit fix` after it passes the still-running guard. */
 export const CLI_RUN_PIPELINE_READY_FILE = "pipeline.ready";
 export const STALE_RUNNING_MS = 5 * 60 * 1000;
