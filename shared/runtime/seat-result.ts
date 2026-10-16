@@ -22,7 +22,12 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
     return { parseStatus: "empty", summary: null, findingCount: null, blockingCount: null };
   }
   const visible = textOutsideFences(text);
-  const matches = [...visible.matchAll(SEVERITY_RE)];
+  // QA-PR295-OBS3 (#288): only a severity tag that STARTS a finding item counts.
+  // Tags quoted in prose / inline code (「review-adversarial 标 `[critical]`」 in
+  // ## 分歧) are not findings and must not inflate findingCount / blockingCount.
+  const matches = [...visible.matchAll(SEVERITY_RE)].filter((row) =>
+    startsFindingItem(visible, row.index ?? 0),
+  );
   const findingCount = matches.length;
   const blockingCount = matches.filter((row, index) => {
     const severity = row[1]?.toLowerCase();
@@ -47,6 +52,14 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
     return { parseStatus: "parsed", summary, findingCount, blockingCount };
   }
   return { parseStatus: "unparsed", summary, findingCount: null, blockingCount: null };
+}
+
+const FINDING_ITEM_PREFIX_RE = /^\s*(?:[-*+]|\d+[.)]|#{1,6})?\s*(?:\*\*)?$/;
+
+/** True when the tag at `index` is the first thing on its line after an optional list / heading marker. */
+function startsFindingItem(text: string, index: number): boolean {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  return FINDING_ITEM_PREFIX_RE.test(text.slice(lineStart, index));
 }
 
 export function clipSeatSummary(value: string | null): string | null {

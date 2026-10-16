@@ -1,12 +1,3 @@
-/**
- * Read-only index of CLI runs under COUNCILKIT_HOME/runs.
- *
- * Used by `councilkit runs list|open` and by the Host GET /api/v1/cli-runs
- * surface so the browser can open the same report.md the CLI wrote.
- *
- * Safety: never follow symlinks; runId is a closed token; a single corrupt
- * directory is skipped on list (detail of a bad id is not-found).
- */
 import { createHash } from "node:crypto";
 import {
   constants,
@@ -20,6 +11,16 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { clipUtf16 } from "../text/clip-utf16";
+/**
+ * Read-only index of CLI runs under COUNCILKIT_HOME/runs.
+ *
+ * Used by `councilkit runs list|open` and by the Host GET /api/v1/cli-runs
+ * surface so the browser can open the same report.md the CLI wrote.
+ *
+ * Safety: never follow symlinks; runId is a closed token; a single corrupt
+ * directory is skipped on list (detail of a bad id is not-found).
+ */
+import { type RunAttentionCounts, computeRunAttention } from "./attention-counts";
 import { resolveCliRunsRoot } from "./cli-home";
 import {
   CLI_RUN_FINDINGS_FILE,
@@ -113,6 +114,8 @@ export interface CliRunSummary {
   pipeline: CliRunPipeline | null;
   handoff: CliRunHandoffDto | null;
   reviewEvidence?: ReviewEvidence | null;
+  /** #289: the one 需要处理 / 阻塞 count shared by list, report page and `runs list`. */
+  attention?: RunAttentionCounts | null;
   ideateIntegrity?: IdeateIntegrityDto | null;
   businessResult?: "approved" | "needs_attention" | "stopped" | null;
   reasonCode?: string | null;
@@ -281,6 +284,8 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
           pid: readPipelinePid(dir),
         })
       : rawStatus;
+  const reviewEvidence =
+    parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null;
   const status = mapSquadObserveStatus({
     kind: parsed.kind,
     status: reconciled,
@@ -309,8 +314,8 @@ function inspectRunDir(root: string, runId: string): CliRunSummary | null {
     progress: derived,
     pipeline,
     handoff: live?.handoff ?? null,
-    reviewEvidence:
-      parsed.kind === "review" ? readReviewEvidence(dir, runId, transcriptText) : null,
+    reviewEvidence,
+    attention: parsed.kind === "review" ? readRunAttention(dir, reviewEvidence, derived) : null,
     ideateIntegrity: parsed.kind === "ideate" ? parsed.ideateIntegrity : null,
     ...readRepairProjection(dir, parsed.kind),
   };
@@ -817,6 +822,23 @@ function readCapped(
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+function readRunAttention(
+  dir: string,
+  evidence: ReviewEvidence | null,
+  progress: CliRunProgress | null,
+): RunAttentionCounts | null {
+  const findingsText = readFindingsText(join(dir, CLI_RUN_FINDINGS_FILE));
+  const ledger = findingsText ? parseFindingsFile(findingsText) : null;
+  if (!ledger) return null;
+  const groups = readOptionalFindingGroups(join(dir, FINDING_GROUPS_FILE), ledger, findingsText);
+  return computeRunAttention({
+    findings: ledger.findings,
+    sha: evidence?.sha ?? null,
+    groups: groups.groups,
+    progress,
+  });
 }
 
 function readReviewEvidence(dir: string, runId: string, head: string): ReviewEvidence {

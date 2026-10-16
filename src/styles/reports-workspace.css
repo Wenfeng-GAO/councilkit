@@ -207,6 +207,18 @@
   justify-content: space-between;
   gap: 16px;
 }
+.ck-case-status {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+.ck-case-counts {
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .ck-case-card-title h3 {
   font-size: 14px;
   font-weight: 550;

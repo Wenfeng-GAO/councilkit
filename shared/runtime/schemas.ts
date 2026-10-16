@@ -624,6 +624,16 @@ export type IdeateIntegrityDto = z.infer<typeof ideateIntegritySchema>;
 export const CLI_RUN_GOAL_SUMMARY_MAX = 400;
 export const CLI_RUN_LAST_ERROR_MAX = 2000;
 
+export const runAttentionCountsSchema = z
+  .object({
+    problems: z.number().int().nonnegative(),
+    findings: z.number().int().nonnegative(),
+    needsAttention: z.number().int().nonnegative(),
+    blocking: z.number().int().nonnegative(),
+    aggregatorBlocking: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
 export const cliRunSummarySchema = z
   .object({
     runId: z.string().min(1),
@@ -636,6 +646,8 @@ export const cliRunSummarySchema = z
     hasPlan: z.boolean().default(false),
     hasFindings: z.boolean().default(false),
     reviewEvidence: reviewEvidenceSchema.nullable().optional(),
+    /** #289: shared 需要处理 / 阻塞 counts (review runs only). */
+    attention: runAttentionCountsSchema.nullable().optional(),
     ideateIntegrity: ideateIntegritySchema.nullable().optional(),
     hasPlanLock: z.boolean().default(false),
     reportUrl: z.string().min(1),
