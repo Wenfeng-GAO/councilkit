@@ -1,6 +1,10 @@
 import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { OverviewView } from "@/components/report/workbench/OverviewView";
-import { EXECUTION_SERVICE_INTERRUPTION } from "@shared/runtime/interruption-copy";
+import {
+  EXECUTION_SERVICE_INTERRUPTION,
+  RE_REVIEW_STARTING_LABEL,
+  reReviewStartFailure,
+} from "@shared/runtime/interruption-copy";
 import { cliRunDetailResponseSchema } from "@shared/runtime/schemas";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -30,6 +34,26 @@ describe("ExecutionInterruptedCard", () => {
     expect(html).toContain(`data-variant="ghost"`);
     expect(html).toContain(EXECUTION_SERVICE_INTERRUPTION.secondaryAction);
     expect(html).toContain('href="/reports"');
+  });
+
+  it("puts the start-failure line immediately after the primary button and disables it while starting", () => {
+    const failure = reReviewStartFailure("上一次审查还在运行");
+    const html = render(
+      createElement(ExecutionInterruptedCard, {
+        heading: "h2",
+        busy: true,
+        error: failure,
+        onReReview: () => {},
+      }),
+    );
+    const button = new RegExp(`<button\\b[^>]*>${RE_REVIEW_STARTING_LABEL}</button>`).exec(html);
+    expect(button?.[0]).toContain("disabled");
+    const rest = html.slice((button?.index ?? 0) + (button?.[0].length ?? 0)).trimStart();
+    expect(rest.startsWith('<p class="ck-action-error" role="alert">')).toBe(true);
+    expect(rest.indexOf(failure)).toBeLessThan(
+      rest.indexOf(EXECUTION_SERVICE_INTERRUPTION.secondaryAction),
+    );
+    expect(html).toContain(failure);
   });
 });
 

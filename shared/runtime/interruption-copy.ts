@@ -31,6 +31,10 @@ export function reReviewStartFailure(reason: string): string {
   return `复审没有启动：${reason}。可以再试一次。`;
 }
 
+export function isReReviewStartFailure(message: string | null | undefined): boolean {
+  return Boolean(message?.startsWith("复审没有启动："));
+}
+
 /**
  * A review the index marked interrupted because nothing finished it.
  * A recorded review.finished interruption has endedAt and keeps the short label.

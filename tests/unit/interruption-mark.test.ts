@@ -113,5 +113,14 @@ describe("interruption mark", () => {
     expect(sidebar).toContain("中断");
     expect(sidebar).not.toContain("已取消");
     expect(sidebar).toContain("执行完成");
+    const topBar = surfaces[1] ?? "";
+    expect(topBar).toContain('class="ck-wb-run-status"');
+    expect(topBar).toContain(">中断<");
+  });
+
+  it("keeps the top-bar interruption mark out of the grey context span color", () => {
+    const css = readFileSync("src/styles/review-workbench.css", "utf8");
+    expect(css).toContain(".ck-wb-context-right span:not(.ck-interrupt-mark)");
+    expect(css).not.toMatch(/\.ck-wb-context-right span \{\s*color:/);
   });
 });

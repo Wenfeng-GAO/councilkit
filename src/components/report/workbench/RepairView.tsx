@@ -1,7 +1,7 @@
 import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { FixPipeline } from "@/components/report/FixPipeline";
 import { type RepairProfileSummary, RepairRunPanel } from "@/components/report/RepairRunPanel";
-import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
+import { isLostExecutionReview, isReReviewStartFailure } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse, CliRunSummaryDto } from "@shared/runtime/schemas";
 
 export interface WorkbenchPipelineProps {
@@ -65,6 +65,7 @@ export function RepairView({
           heading="h2"
           busy={pipeline.busy || pipeline.pendingAction === "re-review"}
           onReReview={pipeline.onReReview}
+          error={isReReviewStartFailure(pipeline.error) ? pipeline.error : null}
         />
       ) : null}
       <p className="ck-wb-source">

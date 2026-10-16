@@ -5,6 +5,7 @@ import { isDemoRun } from "@shared/runtime/demo-report";
 import {
   REVIEW_STILL_RUNNING_REASON,
   RE_REVIEW_STARTING_LABEL,
+  isReReviewStartFailure,
   reReviewStartFailure,
 } from "@shared/runtime/interruption-copy";
 import type {
@@ -13,7 +14,6 @@ import type {
   CliRunSummaryDto,
 } from "@shared/runtime/schemas";
 import { Link } from "react-router-dom";
-import { CircleAlertIcon } from "./workbench/icons";
 
 const STEPS: Array<{ phase: CliRunPipelineDto["phase"]; label: string }> = [
   { phase: "planning", label: "起草方案" },
@@ -66,7 +66,7 @@ export function FixPipeline({
     pipeline?.applyStatus === "failure" ||
     followUpFailed ||
     (pipeline?.phase === "done" && Boolean(pipeline.summary?.includes("failed")));
-  const startError = error?.startsWith("复审没有启动：") ? error : null;
+  const startError = isReReviewStartFailure(error) ? error : null;
   const liveHint = fixPipelineLiveStatus({
     busy,
     pendingAction,
@@ -142,12 +142,6 @@ export function FixPipeline({
           </Link>
         ) : null}
       </div>
-      {startError ? (
-        <p className="ck-action-error" role="alert">
-          <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
-          {startError}
-        </p>
-      ) : null}
     </section>
   );
 }

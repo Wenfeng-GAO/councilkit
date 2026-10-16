@@ -5,16 +5,20 @@ import {
   RE_REVIEW_STARTING_LABEL,
 } from "@shared/runtime/interruption-copy";
 import { Link } from "react-router-dom";
+import { CircleAlertIcon } from "./workbench/icons";
 
 /** Calm interruption card. The title is the page heading when `heading` is h1. */
 export function ExecutionInterruptedCard({
   busy,
   onReReview,
   heading,
+  error = null,
 }: {
   busy: boolean;
   onReReview: () => void;
   heading: "h1" | "h2";
+  /** Shown immediately under the primary button. */
+  error?: string | null;
 }) {
   const Title = heading;
   const copy = EXECUTION_SERVICE_INTERRUPTION;
@@ -26,9 +30,17 @@ export function ExecutionInterruptedCard({
       </Title>
       <p>{copy.detail}</p>
       <div className="ck-interrupt-actions">
-        <Button onClick={onReReview} disabled={busy}>
-          {busy ? RE_REVIEW_STARTING_LABEL : copy.primaryAction}
-        </Button>
+        <div className="ck-interrupt-primary">
+          <Button onClick={onReReview} disabled={busy}>
+            {busy ? RE_REVIEW_STARTING_LABEL : copy.primaryAction}
+          </Button>
+          {error ? (
+            <p className="ck-action-error" role="alert">
+              <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
+              {error}
+            </p>
+          ) : null}
+        </div>
         <Link to="/reports" data-variant="ghost" className="ck-interrupt-secondary">
           {copy.secondaryAction}
         </Link>

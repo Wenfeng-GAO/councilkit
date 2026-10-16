@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { expect, test } from "@playwright/test";
+import { type Locator, expect, test } from "@playwright/test";
 import { EXECUTION_SERVICE_INTERRUPTION } from "../../shared/runtime/interruption-copy";
 import {
   COMPLETED_REVIEW_RUN_ID,
@@ -10,6 +10,20 @@ import {
 const ARTIFACTS = "/opt/cursor/artifacts/screenshots";
 
 test.use({ locale: "zh-CN" });
+
+async function expectAmberInterrupt(mark: Locator): Promise<void> {
+  await expect(mark).toHaveAttribute("data-interrupt-token", "--ck-interrupt");
+  await expect(mark).toHaveAttribute("data-interrupt-icon", "circle-pause");
+  const colors = await mark.evaluate((el) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--ck-interrupt)";
+    document.body.appendChild(probe);
+    const token = getComputedStyle(probe).color;
+    probe.remove();
+    return { actual: getComputedStyle(el).color, token };
+  });
+  expect(colors.actual).toBe(colors.token);
+}
 
 test("过期审查在列表、标题和卡片上都是中断，并且可以再审一遍", async ({ page }) => {
   mkdirSync(ARTIFACTS, { recursive: true });
@@ -73,9 +87,10 @@ test("过期审查在列表、标题和卡片上都是中断，并且可以再�
     await expect(page.getByText(EXECUTION_SERVICE_INTERRUPTION.detail)).toBeVisible();
     await expect(page.locator(".ck-wb-run-status")).toBeVisible();
     await expect(page.locator(".ck-wb-run-status")).toContainText("中断");
-    await expect(
-      page.locator(".ck-wb-run-status [data-interrupt-icon='circle-pause']"),
-    ).toBeVisible();
+    await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
+    await page.locator(".ck-wb-context").screenshot({
+      path: `${ARTIFACTS}/topbar-interrupt-${width}.png`,
+    });
     await expect(page.locator(".ck-wb-context")).not.toContainText("席位审查中");
     await expect(
       page.locator(".ck-ledger-title", { hasText: "超时分支在收到渠道失败之前写入了 paid" }),
@@ -176,10 +191,8 @@ test("复审在进程已死时启动，进程还活着时停在页面上", async
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/reports/${runId}`);
     await page.getByRole("button", { name: "当前修复" }).click();
-    const reReviewButton = page
-      .locator("section")
-      .filter({ hasText: "修复闭环" })
-      .getByRole("button", { name: /只再审一遍|正在启动复审/ });
+    const card = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+    const cardButton = card.getByRole("button", { name: /只再审一遍|正在启动复审/ });
     if (shape === "pr") {
       let release = () => {};
       const gate = new Promise<void>((resolve) => {
@@ -196,20 +209,18 @@ test("复审在进程已死时启动，进程还活着时停在页面上", async
       const pending = page.waitForResponse(
         (item) => item.url().includes("/actions") && item.request().method() === "POST",
       );
-      await reReviewButton.click();
-      await expect(reReviewButton).toHaveText("正在启动复审…");
-      await expect(reReviewButton).toBeDisabled();
-      await page.screenshot({ path: `${ARTIFACTS}/rereview-starting-1280.png` });
+      await cardButton.click();
+      await expect(cardButton).toHaveText("正在启动复审…");
+      await expect(cardButton).toBeDisabled();
+      await card.screenshot({ path: `${ARTIFACTS}/rereview-starting-1280.png` });
       await page.setViewportSize({ width: 390, height: 844 });
-      await reReviewButton.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${ARTIFACTS}/rereview-starting-390.png` });
-      await page.locator("h1", { hasText: "当前修复" }).scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${ARTIFACTS}/fix-tab-top-390.png` });
+      await expect(cardButton).toBeDisabled();
+      await card.screenshot({ path: `${ARTIFACTS}/rereview-starting-390.png` });
       release();
       expect((await pending).ok()).toBe(true);
       await page.unroute("**/api/v1/cli-runs/**/actions");
     } else {
-      await reReviewButton.click();
+      await cardButton.click();
     }
     await expect(page).not.toHaveURL(new RegExp(runId), { timeout: 15_000 });
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -223,10 +234,8 @@ test("复审在进程已死时启动，进程还活着时停在页面上", async
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/reports/${aliveBody.data.runId}`);
     await page.getByRole("button", { name: "当前修复" }).click();
-    const refused = page
-      .locator("section")
-      .filter({ hasText: "修复闭环" })
-      .getByRole("button", { name: "只再审一遍（不改代码）" });
+    const refusedCard = page.getByRole("region", { name: EXECUTION_SERVICE_INTERRUPTION.title });
+    const refused = refusedCard.getByRole("button", { name: "只再审一遍（不改代码）" });
     const [response] = await Promise.all([
       page.waitForResponse(
         (item) => item.url().includes("/actions") && item.request().method() === "POST",
@@ -234,16 +243,18 @@ test("复审在进程已死时启动，进程还活着时停在页面上", async
       refused.click(),
     ]);
     expect(response.ok()).toBe(false);
-    const alert = page.getByRole("alert");
+    const alert = refused.locator("xpath=following-sibling::*[1]");
     await expect(alert).toHaveText("复审没有启动：上一次审查还在运行。可以再试一次。");
     await expect(refused).toBeEnabled();
+    await expect(page.locator("section").filter({ hasText: "修复闭环" })).not.toContainText(
+      "复审没有启动",
+    );
     await expect(page).toHaveURL(new RegExp(aliveBody.data.runId));
     if (shape === "pr") {
-      await alert.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${ARTIFACTS}/rereview-failed-1280.png` });
+      await refusedCard.screenshot({ path: `${ARTIFACTS}/rereview-failed-1280.png` });
       await page.setViewportSize({ width: 390, height: 844 });
-      await alert.scrollIntoViewIfNeeded();
-      await page.screenshot({ path: `${ARTIFACTS}/rereview-failed-390.png` });
+      await expect(alert).toHaveText("复审没有启动：上一次审查还在运行。可以再试一次。");
+      await refusedCard.screenshot({ path: `${ARTIFACTS}/rereview-failed-390.png` });
     }
   }
 });

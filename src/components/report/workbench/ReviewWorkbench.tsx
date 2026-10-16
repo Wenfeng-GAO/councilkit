@@ -8,7 +8,7 @@ import {
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { reviewSeatTitle } from "@/lib/seat-label";
 import { exportRunMarkdown, isDemoRun } from "@shared/runtime/demo-report";
-import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
+import { isLostExecutionReview, isReReviewStartFailure } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { type Ref, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -292,6 +292,7 @@ export function ReviewWorkbench({
               onOpenRepair={() => select("repair")}
               onReReview={pipeline.onReReview}
               reReviewBusy={pipeline.busy || pipeline.pendingAction === "re-review"}
+              reReviewError={isReReviewStartFailure(pipeline.error) ? pipeline.error : null}
               againstState={againstState}
               filter={overviewFilter}
               onFilterChange={setOverviewFilter}

@@ -177,7 +177,7 @@
   font-size: 13px;
   white-space: nowrap;
 }
-.ck-wb-context-right span {
+.ck-wb-context-right span:not(.ck-interrupt-mark) {
   color: var(--ck-secondary);
 }
 .ck-wb-context-right .ck-wb-running {
@@ -411,8 +411,28 @@
 .ck-interrupt-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 8px;
   margin: 16px 0 20px;
+}
+.ck-interrupt-primary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.ck-interrupt button:disabled {
+  background: transparent;
+  color: var(--ck-secondary);
+  border: 1px solid var(--ck-controlBorder);
+  opacity: 1;
+  cursor: not-allowed;
+}
+.ck-interrupt .ck-action-error {
+  margin: 0;
+  max-width: 36rem;
+  color: var(--ck-error);
 }
 .ck-interrupt-secondary {
   display: inline-flex;
