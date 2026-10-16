@@ -254,6 +254,7 @@ describe("scratch re-review keeps the original contract", () => {
     cleanups.push(() => rmSync(specDir, { recursive: true, force: true }));
     const spec = join(specDir, "acceptance.md");
     writeFileSync(spec, "# 结算\n\n## 验收\n\n- [ ] 失败时展示说明 AC-1\n");
+    const absolute = realpathSync(spec);
     const { home, bin, runId } = await killMidSeat([
       "--task",
       "给结算页补一张失败态说明",
@@ -263,12 +264,12 @@ describe("scratch re-review keeps the original contract", () => {
     const manifest = JSON.parse(
       readFileSync(join(home, "runs", runId, "invocation-manifest.v1.json"), "utf8"),
     ) as { task: { specSource?: string }; requireSpec?: boolean };
-    expect(manifest.task.specSource).toBe(spec);
+    expect(manifest.task.specSource).toBe(absolute);
     expect(manifest.requireSpec).not.toBe(false);
 
     const { lines, calls } = await rerun(home, bin, runId);
     const text = lines.join("\n");
-    expect(text).toContain(`spec: ${spec}`);
+    expect(text).toContain(`spec: ${absolute}`);
     expect(text).not.toContain("SPEC_REQUIRED");
     expect(text).not.toContain("DRIVER_SPAWN_FAILED");
     expect(text).not.toContain("(unbound)");
