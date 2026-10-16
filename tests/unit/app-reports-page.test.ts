@@ -363,4 +363,27 @@ describe("ReportsPage", () => {
     expect(view.container.textContent).toContain("acme/sample #8");
     expect(view.container.querySelector(".ck-demo-tag")?.textContent).toBe("示例");
   });
+
+  it("#304 case card shows 「N 需要处理 · M 阻塞」 next to 已完成 from the shared count", async () => {
+    const view = await openWith({
+      runs: [
+        run({
+          runId: "ck-review-188cdfd8-2e7e-482a-af6e-87141ce17a91",
+          title: "真实任务审查",
+          hasFindings: true,
+          attention: {
+            problems: 7,
+            findings: 7,
+            needsAttention: 6,
+            blocking: 0,
+            aggregatorBlocking: 4,
+          },
+        }),
+      ],
+    });
+    await waitForText(view.container, "真实任务审查");
+    const status = view.container.querySelector(".ck-case-status");
+    expect(status?.textContent).toContain("已完成");
+    expect(status?.querySelector(".ck-case-counts")?.textContent).toBe("6 需要处理 · 0 阻塞");
+  });
 });

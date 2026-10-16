@@ -10,17 +10,7 @@ import {
   type WorkbenchIconProps,
   WrenchIcon,
 } from "./icons";
-import { type WorkbenchAttempt, useWorkbenchSelection } from "./selection";
-
-/** 执行状态 → 状态文字（DETAIL-SPEC §4：中性表述，执行完成绝不暗示审查通过）。 */
-const STATUS_TEXT: Record<WorkbenchAttempt["status"], string> = {
-  pending: "等待启动",
-  queued: "排队中",
-  running: "执行中",
-  success: "执行完成",
-  failure: "执行失败",
-  cancelled: "已取消",
-};
+import { SEAT_STATUS_TEXT, type WorkbenchAttempt, useWorkbenchSelection } from "./selection";
 
 /** 按 agentName/角色关键词匹配职责图标；匹配不到退回 CircleHelp。 */
 function seatRoleIcon(agentName: string): ComponentType<WorkbenchIconProps> {
@@ -56,7 +46,7 @@ function SeatRow({
           <StatusIcon
             className={`ck-wb-icon ck-wb-icon-state${attempt.status === "running" ? " ck-wb-running-icon" : ""}`}
           />
-          {STATUS_TEXT[attempt.status]}
+          {SEAT_STATUS_TEXT[attempt.status]}
           {attempt.durationMs !== null ? (
             <span className="ck-wb-time">{formatAttemptMs(attempt.durationMs)}</span>
           ) : null}

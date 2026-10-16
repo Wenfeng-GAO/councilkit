@@ -4,8 +4,9 @@
  */
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { FindingsFile, LedgerFinding } from "@shared/runtime/cli-ledger";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import {
   FINDING_GROUPS_FILE,
   FINDING_GROUPS_KIND,
@@ -111,7 +112,7 @@ export function readFindingGroupsFile(path: string): FindingGroupsFile {
     if (code === "ENOENT") throw new FindingGroupsError("finding-groups sidecar is missing");
     throw new FindingGroupsError("finding-groups sidecar is unreadable");
   }
-  if (!stat.isFile() || stat.isSymbolicLink()) {
+  if (!stat.isFile() || stat.isSymbolicLink() || directoryEscapes(dirname(path))) {
     throw new FindingGroupsError("finding-groups sidecar is not a regular file");
   }
   let raw: string;

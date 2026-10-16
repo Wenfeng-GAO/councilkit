@@ -12,6 +12,8 @@ export function PrCaseSummary({
 }) {
   if (runs.length > 0 && runs.every((run) => isDemoRun(run))) return null;
   const state = summarizePrCase(runs);
+  // #289: 未决重大项 = the shared 需要处理 count of the baseline review.
+  const unresolved = state.baseline?.attention?.needsAttention ?? state.blockingCount;
   if (!state.prUrl) return null;
   const inline = variant === "inline";
   return (
@@ -28,8 +30,8 @@ export function PrCaseSummary({
             {state.baseline?.reviewEvidence?.sha?.slice(0, 12) ?? "尚无完整证据"}
           </code>
         </span>
-        <span className={state.blockingCount ? "text-warn" : "text-muted"}>
-          未决重大项：{state.blockingCount ?? "未知"}
+        <span className={unresolved ? "text-warn" : "text-muted"}>
+          未决重大项：{unresolved ?? "未知"}
         </span>
         <span className="text-muted">未验证修复：{state.unverifiedFixCount ?? "未知"}</span>
       </div>

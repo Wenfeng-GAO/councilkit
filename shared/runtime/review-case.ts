@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { type FindingsFile, isFindingBlocking, isFindingVerifiedClosed } from "./cli-ledger";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "./pr-url";
+import { fullSha } from "./repair-identity";
 
 /** Compact evidence only: list responses never carry entire ledgers/reports. */
 export const reviewEvidenceSchema = z
@@ -42,7 +43,9 @@ export function summarizeReviewEvidence(input: {
   uncoveredIds?: string[];
 }): ReviewEvidence {
   const ledger = input.ledger?.runId === input.runId ? input.ledger : null;
-  const sha = /^[0-9a-f]{40}$/i.test(ledger?.sha ?? "") ? (ledger?.sha ?? null) : null;
+  const rawSha = ledger?.sha ?? null;
+  // Keep the ledger's own spelling. fullSha only accepts or rejects it.
+  const sha = fullSha(rawSha) === null ? null : rawSha;
   const rows = ledger?.findings ?? [];
   const unresolved = rows.filter((row) => !isFindingVerifiedClosed(row, sha));
   return {
@@ -70,6 +73,7 @@ export interface ReviewCaseRun {
   status: string;
   startedAt: string | null;
   reviewEvidence?: ReviewEvidence | null;
+  attention?: { needsAttention: number } | null;
 }
 
 export function isCompleteReviewRun(run: ReviewCaseRun | null | undefined): boolean {

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { LIMITS } from "@shared/runtime/contracts";
 import type { ToolState } from "@shared/runtime/contracts";
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
+import { directoryEscapes } from "@shared/runtime/durable-write";
 import { makeError } from "@shared/runtime/errors";
 import { jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { repairModelReceiptMatches } from "@shared/runtime/squad-repair-runtime";
@@ -241,6 +242,9 @@ export function createCursorStreamJsonDriver(deps: DriverDeps) {
 
     async function ensureLayout(): Promise<string> {
       const cwd = join(workRoot, participantId);
+      if (directoryEscapes(workRoot) || directoryEscapes(cwd)) {
+        throw Object.assign(new Error("participant cwd must not be a symlink"), { code: "ELOOP" });
+      }
       await mkdir(cwd, { recursive: true });
       return cwd;
     }

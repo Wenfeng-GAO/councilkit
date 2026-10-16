@@ -17,6 +17,11 @@ import {
   severityLabel,
 } from "@/lib/finding-list";
 import {
+  type RunAttentionCounts,
+  computeRunAttention,
+  formatAttentionLabel,
+} from "@shared/runtime/attention-counts";
+import {
   FINDING_SEVERITIES,
   type LedgerFinding,
   isFindingBlocking,
@@ -83,14 +88,25 @@ export function FindingLedger({
       : { status: "none" as const };
   const countNote = formatFindingCountNote(projection);
   const comparisonNote = formatLedgerComparison(comparison);
-  const summary = formatProblemSummary(projection, nextCluster?.id ?? null);
+  // #289: the Host-computed shared count; same function as a local fallback.
+  const attention =
+    run.attention ??
+    computeRunAttention({
+      findings: run.findings,
+      sha: candidateSha,
+      groups: run.findingGroups,
+    });
+  const summary = formatProblemSummary(projection, nextCluster?.id ?? null, attention);
   const againstId = run.reviewEvidence?.againstRunId ?? null;
   const prUrl = run.reviewEvidence?.prUrl ?? null;
 
   return (
     <section className="ck-finding-list" aria-labelledby="ck-ledger">
       <h2 id="ck-ledger">问题清单</h2>
-      <p className="ck-finding-list-summary">{summary}</p>
+      <div className="ck-finding-list-summary">
+        <p className="ck-finding-list-summary-primary">{summary.primary}</p>
+        <p className="ck-finding-list-summary-secondary">{summary.secondary}</p>
+      </div>
       {projection.blockingCount > 0 ? (
         run.demo === true ? (
           // Designer (#295): in the sample report this rule text is noise for a
@@ -315,24 +331,25 @@ function MemberEvidence({
   );
 }
 
+/**
+ * Designer (#304): two lines. Line 1 (accent) is the shared 需要处理 / 阻塞
+ * count the run list and `runs list` show; line 2 (grey) is the problem and
+ * severity breakdown. 规格外 / 建议修订规格 stay per-finding tags only.
+ */
 function formatProblemSummary(
   projection: ReturnType<typeof projectFindingList>,
   nextClusterId: string | null,
-): string {
+  attention: RunAttentionCounts,
+): { primary: string; secondary: string } {
+  const primary = formatAttentionLabel(attention);
   const parts: string[] = [`${projection.displayCount} 个问题`];
-  const statuses = new Map<string, number>();
-  for (const problem of projection.problems) {
-    statuses.set(problem.statusLabel, (statuses.get(problem.statusLabel) ?? 0) + 1);
-  }
-  for (const [label, count] of statuses) parts.push(`${count} ${label}`);
   for (const severity of FINDING_SEVERITIES) {
     const n = projection.problems.filter((row) => row.severity === severity).length;
     if (n === 0) continue;
     parts.push(`${n} ${severityLabel(severity)}`);
   }
-  parts.push(`${projection.blockingCount} 阻塞`);
   if (nextClusterId) parts.push(`下一刀 ${nextClusterId}`);
-  return parts.join(" · ");
+  return { primary, secondary: parts.join(" · ") };
 }
 
 function statusTone(problem: FindingListProblem): "open" | "closed" | "accepted" | "regress" {

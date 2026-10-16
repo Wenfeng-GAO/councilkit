@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -88,6 +96,22 @@ describe("readArchivedRunIds", () => {
     writeFileSync(target, JSON.stringify({ version: 1, runIds: [RUN_A] }));
     symlinkSync(target, join(home, ARCHIVED_RUNS_FILE));
     expect(readArchivedRunIds(env()).size).toBe(0);
+  });
+
+  it("does not read an archive reached through an ancestor symlink", () => {
+    const outside = join(home, "outside");
+    const nested = join(outside, "nested");
+    mkdirSync(nested, { recursive: true });
+    const body = `${JSON.stringify({ version: 1, runIds: [RUN_A] })}\n`;
+    writeFileSync(join(nested, ARCHIVED_RUNS_FILE), body);
+    const managed = join(home, "managed");
+    symlinkSync(outside, managed);
+
+    expect(
+      readArchivedRunIds({ ...process.env, COUNCILKIT_HOME: join(managed, "nested") }).size,
+    ).toBe(0);
+    expect(readFileSync(join(nested, ARCHIVED_RUNS_FILE), "utf8")).toBe(body);
+    expect(lstatSync(managed).isSymbolicLink()).toBe(true);
   });
 
   it("ignores an oversized archive file", () => {

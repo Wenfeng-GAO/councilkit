@@ -650,6 +650,15 @@
   min-width: 0;
 }
 
+.ck-finding-list-summary-primary {
+  color: var(--color-accent);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.ck-finding-list-summary-secondary {
+  margin-top: 0.25rem;
+}
 .ck-finding-list-summary,
 .ck-finding-list-note,
 .ck-finding-empty {
