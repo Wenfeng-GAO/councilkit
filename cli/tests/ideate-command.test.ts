@@ -225,14 +225,22 @@ describe("councilkit ideate", () => {
     expect(seen.some((row) => row.argv.includes("--always-approve"))).toBe(false);
   });
 
-  it("aborts in-flight proposals when the shared run deadline expires", async () => {
+  it("IDEATE-DL-01 run deadline aborts in-flight proposals (deterministic)", async () => {
+    // Do not rely on wall-clock 200ms: on a slow runner the budget can expire
+    // during probe/setup before any proposal starts. Start proposals first,
+    // then advance an injected clock past the deadline so abort is deterministic.
     seedRoster();
     let proposalsStarted = 0;
+    let releaseProposals: (() => void) | undefined;
+    const proposalsGate = new Promise<void>((resolve) => {
+      releaseProposals = resolve;
+    });
     const spawnImpl: SpawnImpl = async (input) => {
       if (input.prompt.includes(DRIVER_PROBE_PROMPT)) {
         return envelope(input.driverId ?? "", "ok");
       }
       proposalsStarted += 1;
+      if (proposalsStarted === 1) releaseProposals?.();
       await new Promise<void>((resolve) => {
         if (input.signal.aborted) {
           resolve();
@@ -247,17 +255,36 @@ describe("councilkit ideate", () => {
         aborted: true,
       };
     };
+    let nowMs = 1_000;
+    const timers: Array<{ at: number; fn: () => void }> = [];
     const sink = makeSink();
-    try {
-      await runIdeate(
-        ["deadline idea", "--debate-rounds", "0", "--run-timeout", "200ms", "--timeout", "30s"],
-        sink,
-        { spawnImpl },
-      );
-    } catch (error) {
-      if (!(error instanceof IdeateExit)) throw error;
-      expect(error.exitCode).toBe(130);
-    }
+    const runPromise = runIdeate(
+      ["deadline idea", "--debate-rounds", "0", "--run-timeout", "5s", "--timeout", "30s"],
+      sink,
+      {
+        spawnImpl,
+        now: () => nowMs,
+        timers: {
+          now: () => nowMs,
+          setInterval(fn: () => void, _ms?: number) {
+            const handle = { at: nowMs, fn };
+            timers.push(handle);
+            return handle;
+          },
+          clearInterval(handle: unknown) {
+            const idx = timers.indexOf(handle as (typeof timers)[number]);
+            if (idx >= 0) timers.splice(idx, 1);
+          },
+        },
+      },
+    ).catch((error: unknown) => error);
+    await proposalsGate;
+    expect(proposalsStarted).toBeGreaterThan(0);
+    nowMs += 6_000;
+    for (const timer of [...timers]) timer.fn();
+    const caught = await runPromise;
+    expect(caught).toBeInstanceOf(IdeateExit);
+    expect((caught as IdeateExit).exitCode).toBe(130);
     const out = sink.finished as { status: string; failure?: { code: string } };
     expect(out.status).toBe("interrupted");
     expect(proposalsStarted).toBeGreaterThan(0);
