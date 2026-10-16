@@ -571,6 +571,8 @@ describe("mapSquadObserveStatus", () => {
 });
 
 describe("reconcileRunningStatus", () => {
+  const T0 = Date.parse("2026-10-16T12:00:00.000Z");
+
   it("keeps a fresh heartbeat without pid as running", () => {
     expect(
       reconcileRunningStatus({
@@ -583,16 +585,31 @@ describe("reconcileRunningStatus", () => {
     ).toBe("running");
   });
 
-  it("fails a running review with a stale heartbeat and no pid", () => {
+  it("keeps a review at 4:59 running and marks 5:00 as interrupted, never failed", () => {
+    const base = {
+      status: "running" as const,
+      kind: "review",
+      pid: null,
+      nowMs: T0,
+    };
     expect(
       reconcileRunningStatus({
-        status: "running",
-        kind: "review",
-        updatedAt: "2026-09-08T10:00:00.000Z",
-        pid: null,
-        nowMs: Date.parse("2026-09-20T00:00:00.000Z"),
+        ...base,
+        updatedAt: new Date(T0 - (5 * 60 * 1000 - 1000)).toISOString(),
       }),
-    ).toBe("failed");
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 5 * 60 * 1000).toISOString(),
+      }),
+    ).toBe("interrupted");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - (5 * 60 * 1000 + 1)).toISOString(),
+      }),
+    ).toBe("interrupted");
   });
 
   it("does not remap squad running status", () => {

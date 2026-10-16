@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -477,7 +477,7 @@ describe("listCliRuns stale running overlay", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("maps a review with a stale running sidecar to failed and stops pipeline polling", () => {
+  it("maps a review with a stale running sidecar to interrupted and stops pipeline polling", () => {
     const dir = join(home, "runs", REVIEW_ID);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
@@ -517,8 +517,9 @@ describe("listCliRuns stale running overlay", () => {
       })}\n`,
     );
     const runs = listCliRuns(process.env);
-    expect(runs[0]?.status).toBe("failed");
+    expect(runs[0]?.status).toBe("interrupted");
     expect(runs[0]?.pipeline?.phase).toBe("done");
+    expect(runs[0]?.status).not.toBe("failed");
   });
 
   it("does not treat a malformed pipeline.pid prefix as a live process", () => {
@@ -552,9 +553,156 @@ describe("listCliRuns stale running overlay", () => {
     );
     writeFileSync(join(dir, "pipeline.pid"), "1.9\n");
     const runs = listCliRuns(process.env);
-    expect(runs[0]?.status).toBe("failed");
+    expect(runs[0]?.status).toBe("interrupted");
+  });
+
+  it("keeps a live pid running even when the heartbeat is old", () => {
+    const dir = join(home, "runs", REVIEW_ID);
+    mkdirSync(dir, { recursive: true });
+    writeReviewTranscript(dir, "2026-09-08T00:00:00.000Z");
+    writeFileSync(join(dir, "status.json"), runningStatus("2020-01-01T00:00:00.000Z", "attempts"));
+    writeFileSync(join(dir, "pipeline.pid"), `${process.pid}\n`);
+    expect(listCliRuns(process.env)[0]?.status).toBe("running");
   });
 });
+
+const STALE_MS = 5 * 60 * 1000;
+const BOUNDARY_REVIEW = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee4";
+
+describe("listCliRuns stale running boundary", () => {
+  let home: string;
+  let oldHome: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "ck-stale-boundary-"));
+    oldHome = process.env.COUNCILKIT_HOME;
+    process.env.COUNCILKIT_HOME = home;
+  });
+
+  afterEach(() => {
+    if (oldHome === undefined) process.env.COUNCILKIT_HOME = undefined;
+    else process.env.COUNCILKIT_HOME = oldHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("keeps a status.json heartbeat at 4:59 running and interrupts at 5:00", () => {
+    const now = Date.now();
+    const fresh = seedStuckStatus(new Date(now - (STALE_MS - 1000)).toISOString());
+    expect(fresh?.status).toBe("running");
+    rmSync(join(home, "runs"), { recursive: true, force: true });
+    const due = seedStuckStatus(new Date(now - STALE_MS).toISOString());
+    expect(due?.status).toBe("interrupted");
+    expect(due?.status).not.toBe("failed");
+    expect(due?.pipeline?.phase).toBe("done");
+    expect(due?.progress?.attempts.find((row) => row.attemptId === "attempt-0")?.status).toBe(
+      "cancelled",
+    );
+    expect(fresh?.progress?.attempts.find((row) => row.attemptId === "attempt-0")?.status).toBe(
+      "running",
+    );
+  });
+
+  it("keeps a fresh status.json running", () => {
+    const run = seedStuckStatus(new Date(Date.now() - 30_000).toISOString());
+    expect(run?.status).toBe("running");
+  });
+
+  it("interrupts a transcript-only review once the file is 5:00 old, and not at 4:59", () => {
+    const now = Date.now();
+    const young = seedTranscriptOnly(new Date(now - (STALE_MS - 1000)));
+    expect(young?.status).toBe("running");
+    rmSync(join(home, "runs"), { recursive: true, force: true });
+    const due = seedTranscriptOnly(new Date(now - STALE_MS));
+    expect(due?.status).toBe("interrupted");
+    expect(due?.status).not.toBe("failed");
+    expect(due?.endedAt).toBeNull();
+    expect(due?.progress?.attempts.every((row) => row.status === "cancelled")).toBe(true);
+  });
+
+  it("leaves a just-written transcript-only review running", () => {
+    const run = seedTranscriptOnly(new Date());
+    expect(run?.status).toBe("running");
+  });
+
+  function seedStuckStatus(updatedAt: string) {
+    const dir = join(home, "runs", BOUNDARY_REVIEW);
+    mkdirSync(dir, { recursive: true });
+    writeReviewTranscript(dir, "2026-10-16T11:00:00.000Z");
+    writeFileSync(join(dir, "status.json"), runningStatus(updatedAt, "attempts"));
+    return listCliRuns(process.env)[0];
+  }
+
+  function seedTranscriptOnly(mtime: Date) {
+    const dir = join(home, "runs", BOUNDARY_REVIEW);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "transcript.jsonl");
+    writeReviewTranscript(dir, "2026-10-16T11:00:00.000Z");
+    utimesSync(path, mtime, mtime);
+    return listCliRuns(process.env)[0];
+  }
+});
+
+function writeReviewTranscript(dir: string, startedAt: string): void {
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId: BOUNDARY_REVIEW,
+      startedAt,
+      task: { pr: "https://github.com/acme/payments/pull/348" },
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          agentId: "sec",
+          agentName: "review-security",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        },
+      ],
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: "adv",
+        agentName: "review-adversarial",
+        driverId: "grok-stream-json",
+        modelId: "grok-4.6",
+      },
+    })}\n`,
+  );
+}
+
+function runningStatus(updatedAt: string, phase: string): string {
+  return `${JSON.stringify({
+    version: 1,
+    status: "running",
+    progress: {
+      phase,
+      attempts: [
+        {
+          attemptId: "attempt-0",
+          agentName: "review-security",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+          role: "attempt",
+          status: "running",
+          durationMs: 1200,
+          lastActivity: "read src/pay.ts",
+        },
+      ],
+      updatedAt,
+    },
+    pipeline: {
+      phase: "re-reviewing",
+      round: 0,
+      maxRounds: 2,
+      planVerdict: null,
+      applyStatus: null,
+      followUpRunId: null,
+      summary: null,
+      updatedAt,
+    },
+  })}\n`;
+}
 
 describe("readCliRun seat progress from a long transcript", () => {
   let home: string;
