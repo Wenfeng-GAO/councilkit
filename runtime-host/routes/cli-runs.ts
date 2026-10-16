@@ -12,6 +12,8 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,11 +25,21 @@ import {
   parseAttemptLiveEventLine,
 } from "@shared/runtime/attempt-live-events";
 import { resolveCliRunsRoot, resolveCouncilkitHome } from "@shared/runtime/cli-home";
-import { CLI_RUN_STATUS_FILE, type CliRunProgressPhase } from "@shared/runtime/cli-run-progress";
+import {
+  CLI_RUN_PIPELINE_READY_FILE,
+  CLI_RUN_REVIEW_PID_FILE,
+  CLI_RUN_STATUS_FILE,
+  type CliRunProgressPhase,
+} from "@shared/runtime/cli-run-progress";
 import { isCliRunId, listCliRuns, readCliRun } from "@shared/runtime/cli-runs-index";
 import { parseCanonicalInt, parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { makeError } from "@shared/runtime/errors";
 import { resolveAttemptExecution } from "@shared/runtime/execution-ref";
+import {
+  REVIEW_STILL_RUNNING_REASON,
+  specOriginalMissingDetail,
+  specOriginalMissingLineFrom,
+} from "@shared/runtime/interruption-copy";
 import { parseApplyPrUrl, projectKeyFromPr } from "@shared/runtime/pr-url";
 import {
   type RepairProfileRecord,
@@ -543,6 +555,19 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             makeError("NOT_FOUND", "discovery", "CLI run not found.", { retryable: false }),
           );
         }
+        const body = ctx.body as { action: "fix" | "re-review" };
+        const home = resolveCouncilkitHome(process.env);
+        const runDir = join(home, "runs", runId);
+        const finished = reviewFinishedOnDisk(runDir);
+        const reviewPid = readPid(join(runDir, CLI_RUN_REVIEW_PID_FILE));
+        if (!finished && reviewPid !== null && isPidAlive(reviewPid)) {
+          throw httpError(
+            409,
+            makeError("EXECUTION_CONFLICT", "dispatch", REVIEW_STILL_RUNNING_REASON, {
+              retryable: true,
+            }),
+          );
+        }
         if (detail.status === "running") {
           throw httpError(
             409,
@@ -551,9 +576,6 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             }),
           );
         }
-        const body = ctx.body as { action: "fix" | "re-review" };
-        const home = resolveCouncilkitHome(process.env);
-        const runDir = join(home, "runs", runId);
         const pidPath = join(runDir, PIPELINE_PID_FILE);
         const existing = readPid(pidPath);
         if (existing !== null && isPidAlive(existing)) {
@@ -564,20 +586,46 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
             }),
           );
         }
+        const statusPath = join(runDir, CLI_RUN_STATUS_FILE);
+        const readyPath = join(runDir, CLI_RUN_PIPELINE_READY_FILE);
+        const statusBefore = readStatusSnapshot(statusPath);
+        const readyBefore = existsSync(readyPath);
+        if (!finished) markLostReviewInterrupted(runDir);
         const logPath = join(runDir, "pipeline.log");
-        writeStartingStatus(runDir, body.action);
+        const restoreFailedStart = (): void => {
+          restoreStatusSnapshot(statusPath, statusBefore);
+          if (!readyBefore) {
+            try {
+              unlinkSync(readyPath);
+            } catch {
+              // the child never created it
+            }
+          }
+        };
         let started: { pid: number };
         try {
           started = await Promise.resolve(launcher.start({ action: body.action, runId, logPath }));
         } catch (error) {
+          if (body.action === "re-review") discardNewFollowUp(statusBefore, runDir);
+          restoreFailedStart();
+          const failure = actionFailure(body.action, error);
           throw httpError(
             500,
-            makeError(
-              "DRIVER_SPAWN_FAILED",
-              "dispatch",
-              error instanceof Error ? error.message : "failed to spawn councilkit",
-              { retryable: false },
-            ),
+            makeError("DRIVER_SPAWN_FAILED", "dispatch", failure.message, {
+              retryable: false,
+              ...(failure.detail ? { detail: failure.detail } : {}),
+            }),
+          );
+        }
+        const followUpRunId = body.action === "re-review" ? readFollowUpRunId(runDir) : null;
+        if (body.action === "re-review" && followUpRunId === null) {
+          discardNewFollowUp(statusBefore, runDir);
+          restoreFailedStart();
+          throw httpError(
+            500,
+            makeError("DRIVER_SPAWN_FAILED", "dispatch", "复审进程没有开始审查", {
+              retryable: false,
+            }),
           );
         }
         try {
@@ -585,6 +633,7 @@ export function cliRunsRoutes(services?: HostServices): Route[] {
         } catch {
           // best-effort lock; the child is already running
         }
+        writeStartingStatus(runDir, body.action, followUpRunId);
         return { action: body.action, runId, started: true };
       },
     },
@@ -1255,7 +1304,118 @@ function resolveBridgeProbe(
   return probeSquadBridge;
 }
 
-function writeStartingStatus(runDir: string, action: "fix" | "re-review"): void {
+function reviewFinishedOnDisk(runDir: string): boolean {
+  try {
+    const text = readFileSync(join(runDir, "transcript.jsonl"), "utf8");
+    return text.split("\n").some((line) => {
+      const trimmed = line.trim();
+      if (!trimmed.includes("review.finished")) return false;
+      try {
+        return (JSON.parse(trimmed) as { kind?: unknown }).kind === "review.finished";
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function readFollowUpRunId(runDir: string): string | null {
+  try {
+    return followUpIdFromStatusText(readFileSync(join(runDir, "status.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function followUpIdFromStatusText(text: string | null): string | null {
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text) as { pipeline?: { followUpRunId?: unknown } };
+    const id = parsed.pipeline?.followUpRunId;
+    return typeof id === "string" && id.startsWith("ck-review-") ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drop a follow-up this attempt created when the re-review never stayed up. */
+function discardNewFollowUp(statusBefore: string | null, runDir: string): void {
+  const previous = followUpIdFromStatusText(statusBefore);
+  const created = readFollowUpRunId(runDir);
+  if (created === null || created === previous) return;
+  rmSync(join(resolveCliRunsRoot(), created), { recursive: true, force: true });
+}
+
+function readStatusSnapshot(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function restoreStatusSnapshot(path: string, snapshot: string | null): void {
+  try {
+    if (snapshot === null) unlinkSync(path);
+    else writeFileSync(path, snapshot, { encoding: "utf8", mode: 0o600 });
+  } catch {
+    // the failed action must not leave a half-written status behind
+  }
+}
+
+function markLostReviewInterrupted(runDir: string): void {
+  const path = join(runDir, "status.json");
+  let current: Record<string, unknown> = {};
+  try {
+    current = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch {
+    current = {};
+  }
+  if (
+    current.status === "interrupted" ||
+    current.status === "completed" ||
+    current.status === "failed"
+  ) {
+    return;
+  }
+  const now = new Date().toISOString();
+  const progress =
+    current.progress !== null && typeof current.progress === "object"
+      ? { ...(current.progress as Record<string, unknown>), updatedAt: now }
+      : { phase: "done", attempts: [], updatedAt: now };
+  writeFileSync(
+    path,
+    `${JSON.stringify({ ...current, version: 1, status: "interrupted", progress })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
+function actionFailure(
+  action: "fix" | "re-review",
+  error: unknown,
+): { message: string; detail?: string } {
+  const raw = error instanceof Error ? error.message : "";
+  const missing = specOriginalMissingLineFrom(raw);
+  if (missing) return { message: missing, detail: specOriginalMissingDetail(error, raw) };
+  if (/still running|already running|in progress|还在运行/i.test(raw)) {
+    return { message: REVIEW_STILL_RUNNING_REASON };
+  }
+  if (action === "re-review") {
+    if (/handshake timed out|HANDSHAKE_TIMEOUT/i.test(raw)) {
+      return { message: "复审进程没有在时限内开始" };
+    }
+    return { message: "复审进程没有开始审查" };
+  }
+  return { message: raw.length > 0 ? raw : "failed to spawn councilkit" };
+}
+
+function writeStartingStatus(
+  runDir: string,
+  action: "fix" | "re-review",
+  followUpRunId: string | null,
+): void {
   const now = new Date().toISOString();
   const phase = action === "re-review" ? "re-reviewing" : "planning";
   const live = {
@@ -1268,7 +1428,7 @@ function writeStartingStatus(runDir: string, action: "fix" | "re-review"): void 
       maxRounds: 2,
       planVerdict: null,
       applyStatus: action === "fix" ? "pending" : null,
-      followUpRunId: null,
+      followUpRunId,
       summary:
         action === "fix"
           ? "正在启动修复：先探测模型（约 1 分钟），请留在此页查看进度。"

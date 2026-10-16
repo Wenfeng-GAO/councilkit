@@ -3,10 +3,13 @@
  * until consensus (or max rounds), apply that plan, then optionally start a
  * follow-up PR jury. The Host may spawn this command; agents still bypass Host.
  */
-import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { nextUnlandedCluster } from "@shared/runtime/cli-ledger";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
+import { FULL_COMMIT_SHA, nextUnlandedCluster } from "@shared/runtime/cli-ledger";
 import {
+  CLI_RUN_PIPELINE_READY_FILE,
+  CLI_RUN_REREVIEW_OF_FILE,
+  CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunApplyStatus,
   type CliRunAttemptProgress,
@@ -15,8 +18,11 @@ import {
   type CliRunPipelinePhase,
   type CliRunPlanVerdict,
   type CliRunProgressPhase,
+  isPidAlive,
 } from "@shared/runtime/cli-run-progress";
+import { parseCanonicalPositiveInt } from "@shared/runtime/decimal-int";
 import { replacePrivateFile } from "@shared/runtime/durable-write";
+import { specOriginalMissingLine } from "@shared/runtime/interruption-copy";
 import { writerRepoFromPrUrl } from "@shared/runtime/repair-lease";
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { type RunCommand, defaultRunCommand, inspectPullRequest } from "../auto/checkout-pr";
@@ -29,6 +35,7 @@ import {
 } from "../auto/driver-commands";
 import { runDriverProbe } from "../auto/driver-probe";
 import { formatDurationMs } from "../auto/duration";
+import { readInvocationManifest } from "../auto/invocation-manifest";
 import {
   attachClosesFromFindings,
   ensureFindings,
@@ -38,6 +45,7 @@ import {
   writePlanLock,
 } from "../auto/ledger";
 import { acquireWriterLease, releaseWriterLease } from "../auto/repair-lease";
+import { REVIEW_CONTEXT_MD } from "../auto/review-context";
 import { reviewModelAgents } from "../auto/review-models";
 import { type SpawnImpl, runAttempts, spawnOnce } from "../auto/runner";
 import {
@@ -161,13 +169,31 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
     throw errors.usage(`run ${runId} has no review.started record`);
   }
   const finished = records.find((r) => r.kind === "review.finished");
-  if (finished === undefined) {
+  if (finished === undefined && reviewProcessAlive(runDir)) {
     throw errors.usage("review is still running; wait for it to finish before fix");
   }
-  const pr = started.task.pr?.trim();
-  if (pr === undefined || pr.length === 0) {
+  const pr = started.task.pr?.trim() ?? "";
+  const taskText = started.task.task?.trim() ?? "";
+  if (reReviewOnly) {
+    if (pr.length === 0 && taskText.length === 0) {
+      throw errors.usage("re-review needs the original PR URL or task text");
+    }
+    await runReReviewOnly({
+      runId,
+      runDir,
+      reportPath,
+      planPath,
+      pr,
+      taskText,
+      out,
+      deps,
+      timeoutFlag: values.timeout as string | undefined,
+      codexTimeoutFlag: values["codex-timeout"] as string | undefined,
+    });
+  } else if (pr.length === 0) {
     throw errors.usage("fix requires a PR URL in the review transcript (this run used --task)");
   }
+  replacePrivateFile(join(runDir, CLI_RUN_PIPELINE_READY_FILE), `${String(process.pid)}\n`);
   const report = readRequired(reportPath, `report.md for ${runId}`);
   const findings = ensureFindings({ runDir, runId, markdown: report });
 
@@ -322,48 +348,6 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
       existingLock !== null &&
       existingLock.verdict === "approve" &&
       nextCluster !== null;
-
-    if (reReviewOnly) {
-      persist("running", "re-reviewing", { applyStatus: null });
-      const followUp = await startFollowUpReview({
-        pr,
-        sourceRunId: runId,
-        planPath,
-        out: nested,
-        deps,
-        controller,
-        timeoutFlag: values.timeout as string | undefined,
-        codexTimeoutFlag: values["codex-timeout"] as string | undefined,
-        onFollowUp: (id) => {
-          followUpRunId = id;
-          persist("running", "re-reviewing", {
-            followUpRunId: id,
-            applyStatus: applied ? "success" : null,
-          });
-        },
-      });
-      followUpRunId = followUp.runId;
-      summary = `follow-up review ${followUp.runId}`;
-      if (followUp.exitCode !== EXIT.ok) {
-        await finish({
-          status: "failed",
-          exitCode: followUp.exitCode,
-          failure: {
-            phase: "re-review",
-            code: "REVIEW_FAILED",
-            message: "follow-up review did not complete",
-          },
-          extra: { summary, followUpRunId },
-        });
-      }
-      persist("completed", "done", { followUpRunId, summary });
-      await finish({
-        status: "completed",
-        exitCode: EXIT.ok,
-        failure: null,
-        extra: { summary, followUpRunId },
-      });
-    }
 
     const spawnImpl = deps.spawnImpl;
     if (skipPlan && nextCluster && existingLock) {
@@ -728,7 +712,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         progressPhase: "re-reviewing",
       });
       const followUp = await startFollowUpReview({
-        pr,
+        pr: pr.length > 0 ? pr : null,
+        task: taskText.length > 0 ? taskText : null,
         sourceRunId: runId,
         planPath,
         out: nested,
@@ -736,7 +721,8 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
         controller,
         timeoutFlag: values.timeout as string | undefined,
         codexTimeoutFlag: values["codex-timeout"] as string | undefined,
-        onFollowUp: (id) => {
+        mode: "against",
+        onRunCreated: (id) => {
           followUpRunId = id;
           persist("running", "re-reviewing", {
             followUpRunId: id,
@@ -795,8 +781,382 @@ export async function runFix(argv: string[], out: OutputSink, deps: FixDeps = {}
   }
 }
 
-async function startFollowUpReview(input: {
+function reviewProcessAlive(runDir: string): boolean {
+  try {
+    const pid = parseCanonicalPositiveInt(
+      readFileSync(join(runDir, CLI_RUN_REVIEW_PID_FILE), "utf8").trim(),
+    );
+    return pid !== null && isPidAlive(pid);
+  } catch {
+    return false;
+  }
+}
+
+async function runReReviewOnly(input: {
+  runId: string;
+  runDir: string;
+  reportPath: string;
+  planPath: string;
   pr: string;
+  taskText: string;
+  out: OutputSink;
+  deps: FixDeps;
+  timeoutFlag?: string;
+  codexTimeoutFlag?: string;
+}): Promise<never> {
+  const report = readReportIfPresent(input.reportPath);
+  const scratch = report === null;
+  if (report !== null) {
+    ensureFindings({ runDir: input.runDir, runId: input.runId, markdown: report });
+  }
+  const statusPath = join(input.runDir, CLI_RUN_STATUS_FILE);
+  const statusBefore = readStatusSnapshot(statusPath);
+  const controller = input.deps.abortController ?? new AbortController();
+  let signaled = false;
+  const onSignal = (): void => {
+    if (signaled) return;
+    signaled = true;
+    controller.abort("SIGINT");
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  let followUpRunId: string | null = null;
+  let seatsStarted = false;
+  let summary = "";
+  const persist = (
+    status: CliRunLiveState["status"],
+    extra: { followUpRunId?: string | null; summary?: string | null } = {},
+  ): void => {
+    const now = new Date().toISOString();
+    const id = extra.followUpRunId ?? followUpRunId;
+    const live: CliRunLiveState = {
+      version: 1,
+      status,
+      progress: {
+        phase: status === "running" ? "re-reviewing" : "done",
+        attempts: [],
+        updatedAt: now,
+      },
+      pipeline: {
+        phase: status === "running" ? "re-reviewing" : "done",
+        round: 0,
+        maxRounds: DEFAULT_MAX_PLAN_ROUNDS,
+        planVerdict: null,
+        applyStatus: null,
+        followUpRunId: id,
+        summary: extra.summary ?? (summary.length > 0 ? summary : null),
+        updatedAt: now,
+      },
+    };
+    try {
+      atomicWriteFile(join(input.runDir, CLI_RUN_STATUS_FILE), `${JSON.stringify(live)}\n`);
+    } catch {
+      // sidecar
+    }
+  };
+  const reportOutcome = async (partial: {
+    status: FixOutcome["status"];
+    exitCode: number;
+    failure: FixOutcome["failure"];
+  }): Promise<never> => {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    const outcome: FixOutcome = {
+      status: partial.status,
+      exitCode: partial.exitCode,
+      reviewRunId: input.runId,
+      planVerdict: null,
+      planRounds: 0,
+      applied: false,
+      followUpRunId,
+      summary,
+      failure: partial.failure,
+    };
+    await input.out.finish(outcome, renderFixHuman);
+    throw new FixExit(outcome.exitCode);
+  };
+  const finish = async (partial: {
+    status: FixOutcome["status"];
+    exitCode: number;
+    failure: FixOutcome["failure"];
+  }): Promise<never> => {
+    persist(
+      partial.status === "interrupted"
+        ? "interrupted"
+        : partial.status === "failed"
+          ? "failed"
+          : "completed",
+      {
+        summary: partial.failure?.message ?? (summary.length > 0 ? summary : null),
+      },
+    );
+    return reportOutcome(partial);
+  };
+  // A failed or aborted follow-up must not rewrite the original run. The
+  // failure stays on the follow-up directory.
+  const releaseOriginal = async (partial: {
+    status: FixOutcome["status"];
+    exitCode: number;
+    failure: FixOutcome["failure"];
+  }): Promise<never> => {
+    restoreStatusSnapshot(statusPath, statusBefore);
+    return reportOutcome(partial);
+  };
+  try {
+    input.out.progress(`fix ${input.runId} starting`);
+    input.out.progress(`  pr: ${input.pr}`);
+    const followUp = await startFollowUpReview({
+      pr: input.pr.length > 0 ? input.pr : null,
+      task: input.taskText.length > 0 ? input.taskText : null,
+      sourceRunId: input.runId,
+      planPath: input.planPath,
+      out: progressOnlySink(input.out),
+      deps: input.deps,
+      controller,
+      timeoutFlag: input.timeoutFlag,
+      codexTimeoutFlag: input.codexTimeoutFlag,
+      mode: scratch ? "scratch" : "against",
+      head: scratch ? readOriginalHead(input.runDir) : null,
+      contract: scratch ? readScratchContract(input.runDir) : null,
+      onRunCreated: (id) => {
+        followUpRunId = id;
+        writeReReviewOf(id, input.runId);
+      },
+      onSeatsStarted: () => {
+        seatsStarted = true;
+        if (followUpRunId !== null) {
+          persist("running", { followUpRunId, summary: "正在启动复审（不再改代码）…" });
+        }
+      },
+    });
+    followUpRunId = followUp.runId;
+    if (!followUp.seatsStarted && !seatsStarted) {
+      discardUnstartedFollowUp(followUp.runId);
+      restoreStatusSnapshot(statusPath, statusBefore);
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+      throw errors.runFailed("follow-up review did not start a seat");
+    }
+    summary = `follow-up review ${followUp.runId}`;
+    if (followUp.exitCode !== EXIT.ok) {
+      await releaseOriginal({
+        status: followUp.exitCode === EXIT.interrupted ? "interrupted" : "failed",
+        exitCode: followUp.exitCode,
+        failure: {
+          phase: "re-review",
+          code: followUp.exitCode === EXIT.interrupted ? "ABORTED" : "REVIEW_FAILED",
+          message:
+            followUp.exitCode === EXIT.interrupted
+              ? "follow-up review aborted"
+              : "follow-up review did not complete",
+        },
+      });
+    }
+    await finish({ status: "completed", exitCode: EXIT.ok, failure: null });
+  } catch (error) {
+    if (error instanceof FixExit) throw error;
+    if (!seatsStarted) {
+      discardUnstartedFollowUp(followUpRunId);
+      restoreStatusSnapshot(statusPath, statusBefore);
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+      throw error;
+    }
+    if (followUpRunId === null) {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+      throw error;
+    }
+    if (error instanceof ReviewExit) {
+      await releaseOriginal({
+        status: error.exitCode === EXIT.interrupted ? "interrupted" : "failed",
+        exitCode: error.exitCode,
+        failure: {
+          phase: "re-review",
+          code: error.exitCode === EXIT.interrupted ? "ABORTED" : "REVIEW_FAILED",
+          message:
+            error.exitCode === EXIT.interrupted
+              ? "follow-up review aborted"
+              : "follow-up review did not complete",
+        },
+      });
+    }
+    restoreStatusSnapshot(statusPath, statusBefore);
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
+    throw error;
+  }
+  throw new Error("re-review ended without an outcome");
+}
+
+function readReportIfPresent(path: string): string | null {
+  try {
+    const text = readFileSync(path, "utf8");
+    return text.trim().length > 0 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Head frozen by the killed review. Scratch reruns pin it; a missing repo cannot. */
+function readOriginalHead(runDir: string): { repo: string; sha: string } | null {
+  let sha: string | null = null;
+  let repo: string | null = null;
+  try {
+    const manifest = readInvocationManifest(runDir);
+    sha = manifest?.reviewedSha ?? null;
+    repo = manifest?.repoRealpath ?? null;
+  } catch {
+    sha = null;
+    repo = null;
+  }
+  if (sha === null) {
+    try {
+      const match = readFileSync(join(runDir, REVIEW_CONTEXT_MD), "utf8").match(
+        /^- head: `([0-9a-f]{40})`/m,
+      );
+      sha = match?.[1] ?? null;
+    } catch {
+      sha = null;
+    }
+  }
+  if (sha === null || !FULL_COMMIT_SHA.test(sha)) return null;
+  if (repo === null || repo.trim().length === 0) return null;
+  return { repo, sha };
+}
+
+/** Spec flag and PR base frozen by the killed review. Scratch reruns copy them. */
+function readScratchContract(runDir: string): {
+  specSource: string | null;
+  noRequireSpec: boolean;
+  baseSha: string | null;
+} {
+  let specSource: string | null = null;
+  let noRequireSpec = false;
+  let invocationCwd: string | null = null;
+  try {
+    const manifest = readInvocationManifest(runDir);
+    const source = manifest?.task.specSource?.trim() ?? "";
+    if (source.length > 0) specSource = source;
+    noRequireSpec = manifest?.requireSpec === false;
+    invocationCwd = manifest?.invocationCwd ?? null;
+  } catch {
+    specSource = null;
+    noRequireSpec = false;
+  }
+  if (specSource === null) {
+    try {
+      const started = readReviewTranscript(join(runDir, "transcript.jsonl")).find(
+        (record) => record.kind === "review.started",
+      );
+      const source = started?.task.specSource?.trim() ?? "";
+      if (source.length > 0) specSource = source;
+    } catch {
+      specSource = null;
+    }
+  }
+  if (specSource !== null) {
+    specSource = resolveRecordedSpec(specSource, invocationCwd);
+  }
+  let baseSha: string | null = null;
+  try {
+    const match = readFileSync(join(runDir, REVIEW_CONTEXT_MD), "utf8").match(
+      /^- base: `([0-9a-f]{40})`/m,
+    );
+    baseSha = match?.[1] ?? null;
+  } catch {
+    baseSha = null;
+  }
+  return { specSource, noRequireSpec, baseSha };
+}
+
+function readStatusSnapshot(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function restoreStatusSnapshot(path: string, snapshot: string | null): void {
+  try {
+    if (snapshot === null) rmSync(path, { force: true });
+    else atomicWriteFile(path, snapshot);
+  } catch {
+    // the failed start must not leave a half-written status behind
+  }
+}
+
+/** A follow-up that never spawned a seat must not become the case's latest run. */
+function discardUnstartedFollowUp(runId: string | null): void {
+  if (runId === null || !runId.startsWith("ck-review-")) return;
+  const dir = resolvePaths().runDir(runId);
+  rmSync(dir, { recursive: true, force: true });
+}
+
+/** Name the source run so a failed follow-up does not become the case face. */
+function writeReReviewOf(followUpId: string, sourceId: string): void {
+  if (!followUpId.startsWith("ck-review-")) return;
+  const dir = resolvePaths().runDir(followUpId);
+  try {
+    mkdirSync(dir, { recursive: true });
+    replacePrivateFile(join(dir, CLI_RUN_REREVIEW_OF_FILE), `${sourceId}\n`);
+  } catch {
+    // The follow-up directory is the review's; a missing marker only affects the case face.
+  }
+}
+
+/**
+ * Prove the original spec file before a re-review starts.
+ * An absolute stored path must exist. A relative path resolves only against
+ * the absolute cwd recorded for that run. Repo root, the Host process cwd,
+ * and any other candidate are not bases — a legacy relative path with no
+ * recorded cwd fails before spawn.
+ */
+function resolveRecordedSpec(specSource: string, invocationCwd: string | null): string {
+  if (isAbsolute(specSource)) {
+    if (!existsSync(specSource)) {
+      throw unprovenSpec(specSource, "absolute spec is not readable");
+    }
+    return absoluteExisting(specSource, specSource);
+  }
+  const cwd = recordedCwd(invocationCwd);
+  if (cwd === null) {
+    throw unprovenSpec(specSource, `relative spec "${specSource}" has no recorded cwd`);
+  }
+  const candidate = resolve(cwd, specSource);
+  if (!existsSync(candidate)) {
+    throw unprovenSpec(specSource, `relative spec "${specSource}" is not under the recorded cwd`);
+  }
+  return absoluteExisting(candidate, specSource);
+}
+
+function recordedCwd(invocationCwd: string | null): string | null {
+  if (invocationCwd === null) return null;
+  const trimmed = invocationCwd.trim();
+  if (trimmed.length === 0 || !isAbsolute(trimmed)) return null;
+  return trimmed;
+}
+
+function unprovenSpec(storedPath: string, raw: string): CliError {
+  return errors.usage(specOriginalMissingLine(storedPath), {
+    code: "SPEC_ORIGINAL_UNPROVEN",
+    raw: `SPEC_ORIGINAL_UNPROVEN: ${raw}`,
+    spec: storedPath,
+  });
+}
+
+function absoluteExisting(path: string, storedPath: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    throw unprovenSpec(storedPath, "absolute spec is not readable");
+  }
+}
+
+async function startFollowUpReview(input: {
+  pr: string | null;
+  task: string | null;
   sourceRunId: string;
   planPath: string;
   out: OutputSink;
@@ -804,24 +1164,41 @@ async function startFollowUpReview(input: {
   controller: AbortController;
   timeoutFlag?: string;
   codexTimeoutFlag?: string;
-  onFollowUp?: (runId: string) => void;
-}): Promise<{ runId: string; exitCode: number }> {
+  mode: "against" | "scratch";
+  head?: { repo: string; sha: string } | null;
+  contract?: { specSource: string | null; noRequireSpec: boolean; baseSha: string | null } | null;
+  onRunCreated?: (runId: string) => void;
+  onSeatsStarted?: () => void;
+}): Promise<{ runId: string; exitCode: number; seatsStarted: boolean }> {
   let created: string | null = null;
-  let planExcerpt = "";
-  try {
-    planExcerpt = clipUtf16(readFileSync(input.planPath, "utf8").trim(), PLAN_EXCERPT_MAX);
-  } catch {
-    planExcerpt = "";
+  let seatsStarted = false;
+  let argv: string[];
+  if (input.mode === "scratch") {
+    argv = input.pr !== null && input.pr.length > 0 ? [input.pr] : ["--task", input.task ?? ""];
+    if (input.head) argv.push("--repo", input.head.repo, "--pin-sha", input.head.sha);
+    if (input.contract?.baseSha && input.head) argv.push("--base-sha", input.contract.baseSha);
+    if (input.contract?.specSource) argv.push("--spec", input.contract.specSource);
+    if (input.contract?.noRequireSpec) argv.push("--no-require-spec");
+  } else {
+    let planExcerpt = "";
+    try {
+      planExcerpt = clipUtf16(readFileSync(input.planPath, "utf8").trim(), PLAN_EXCERPT_MAX);
+    } catch {
+      planExcerpt = "";
+    }
+    const focus = [
+      `这是对 ${input.sourceRunId} 落地后的复审。`,
+      "只报告：(1) 共识方案声称关闭但现在仍不成立的不变量；(2) 本次 apply 新引入的缺陷。",
+      "不要把方案「本轮不落地」的项再标成阻塞，除非实现偏离了已接受的合同。",
+      planExcerpt.length > 0 ? `上一轮共识方案摘要：\n${planExcerpt}` : "",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n");
+    argv =
+      input.pr !== null && input.pr.length > 0
+        ? [input.pr, "--against", input.sourceRunId, "--focus", focus]
+        : ["--task", input.task ?? "", "--against", input.sourceRunId, "--focus", focus];
   }
-  const focus = [
-    `这是对 ${input.sourceRunId} 落地后的复审。`,
-    "只报告：(1) 共识方案声称关闭但现在仍不成立的不变量；(2) 本次 apply 新引入的缺陷。",
-    "不要把方案「本轮不落地」的项再标成阻塞，除非实现偏离了已接受的合同。",
-    planExcerpt.length > 0 ? `上一轮共识方案摘要：\n${planExcerpt}` : "",
-  ]
-    .filter((line) => line.length > 0)
-    .join("\n");
-  const argv = [input.pr, "--against", input.sourceRunId, "--focus", focus];
   const source = readReviewTranscript(resolvePaths().transcript(input.sourceRunId)).find(
     (r) => r.kind === "review.started",
   );
@@ -836,7 +1213,11 @@ async function startFollowUpReview(input: {
       abortController: input.controller,
       onRunCreated: (id) => {
         created = id;
-        input.onFollowUp?.(id);
+        input.onRunCreated?.(id);
+      },
+      onSeatsStarted: () => {
+        seatsStarted = true;
+        input.onSeatsStarted?.();
       },
     });
   } catch (error) {
@@ -845,12 +1226,12 @@ async function startFollowUpReview(input: {
       if (created === null) {
         throw errors.runFailed("follow-up review did not assign a run id");
       }
-      return { runId: created, exitCode: error.exitCode };
+      return { runId: created, exitCode: error.exitCode, seatsStarted };
     }
     throw error;
   }
   if (created === null) throw errors.runFailed("follow-up review did not assign a run id");
-  return { runId: created, exitCode: EXIT.ok };
+  return { runId: created, exitCode: EXIT.ok, seatsStarted };
 }
 
 function resolvePlanner(store: Store, ref: string | undefined): AgentRecord {

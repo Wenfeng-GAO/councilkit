@@ -177,7 +177,7 @@
   font-size: 13px;
   white-space: nowrap;
 }
-.ck-wb-context-right span {
+.ck-wb-context-right span:not(.ck-interrupt-mark) {
   color: var(--ck-secondary);
 }
 .ck-wb-context-right .ck-wb-running {
@@ -401,6 +401,66 @@
   line-height: 34px;
   font-weight: 600;
   margin: 0 0 12px;
+}
+.ck-interrupt p {
+  margin: 0;
+  color: var(--ck-secondary);
+  font-size: 15px;
+  line-height: 24px;
+}
+.ck-interrupt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 16px 0 20px;
+}
+.ck-interrupt-primary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.ck-interrupt button:disabled {
+  background: transparent;
+  color: var(--ck-secondary);
+  border: 1px solid var(--ck-controlBorder);
+  opacity: 1;
+  cursor: not-allowed;
+}
+.ck-interrupt .ck-action-error {
+  margin: 0;
+  max-width: 36rem;
+  color: var(--ck-error);
+}
+.ck-interrupt .ck-action-detail {
+  max-width: 36rem;
+  color: var(--ck-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+.ck-interrupt .ck-action-detail summary {
+  cursor: pointer;
+}
+.ck-interrupt .ck-action-detail pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+}
+.ck-interrupt-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ck-controlBorder);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
 }
 .ck-wb-report-meta {
   display: flex;
@@ -724,7 +784,7 @@
   .ck-wb-context-right {
     gap: 10px;
   }
-  .ck-wb-context-right > span:not(.ck-wb-running):not(.ck-wb-design-tag) {
+  .ck-wb-context-right > span:not(.ck-wb-running):not(.ck-wb-design-tag):not(.ck-wb-run-status) {
     display: none;
   }
 }

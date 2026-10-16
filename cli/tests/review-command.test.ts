@@ -909,9 +909,48 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     }
     expect(exitCode).toBe(0);
     expect(created).toBe(runId);
+    expect(existsSync(join(resolvePaths().runDir(runId), "review.pid"))).toBe(false);
     const outcome = sink.finished as { runId: string; reportPath: string };
     expect(outcome.runId).toBe(runId);
     expect(outcome.reportPath).toContain(runId);
+  });
+
+  it("records review.pid while seats run and removes it after exit", async () => {
+    const { agentIds, aggregatorName } = seed();
+    const runId = "ck-review-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeea1";
+    let pidDuringSeat = "";
+    try {
+      await runReview(
+        [
+          "--agents",
+          JSON.stringify(agentIds),
+          "--aggregator",
+          aggregatorName,
+          "--task",
+          "pid",
+          "--no-require-spec",
+          "--run-id",
+          runId,
+        ],
+        makeSink(),
+        {
+          spawnImpl: async (input) => {
+            if (pidDuringSeat.length === 0) {
+              pidDuringSeat = readFileSync(
+                join(resolvePaths().runDir(runId), "review.pid"),
+                "utf8",
+              ).trim();
+            }
+            return fakeSpawn()(input);
+          },
+        },
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExit);
+      expect((error as ReviewExit).exitCode).toBe(0);
+    }
+    expect(pidDuringSeat).toBe(String(process.pid));
+    expect(existsSync(join(resolvePaths().runDir(runId), "review.pid"))).toBe(false);
   });
 
   it("positional PR URL uses default pr-jury", async () => {

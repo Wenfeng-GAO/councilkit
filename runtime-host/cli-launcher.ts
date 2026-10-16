@@ -9,7 +9,11 @@ import { closeSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCliRunsRoot } from "@shared/runtime/cli-home";
-import { isPidAlive } from "@shared/runtime/cli-run-progress";
+import {
+  CLI_RUN_PIPELINE_READY_FILE,
+  CLI_RUN_STATUS_FILE,
+  isPidAlive,
+} from "@shared/runtime/cli-run-progress";
 import { withDriverWellKnownPath } from "@shared/runtime/driver-bins";
 import { openNoFollowAppend } from "@shared/runtime/durable-write";
 import type { IdeateModels, ReviewModels } from "@shared/runtime/schemas";
@@ -54,6 +58,7 @@ export interface CliRunLauncher {
 }
 
 const REVIEW_HANDSHAKE_MS = 20_000;
+const FOLLOW_UP_HANDSHAKE_MS = 60_000;
 const REVIEW_HANDSHAKE_POLL_MS = 80;
 const LOG_TAIL_MAX = 1024;
 
@@ -114,6 +119,12 @@ export function defaultCliRunLauncher(): CliRunLauncher {
         const pid = child.pid;
         if (pid === undefined) {
           throw new Error("failed to spawn councilkit (no pid)");
+        }
+        if (input.action === "re-review") {
+          return handshakeReReview(child, input, pid);
+        }
+        if (input.action === "fix") {
+          return handshakeFixBoot(child, input, pid);
         }
         if (!needsHandshake(input.action)) {
           child.unref();
@@ -225,6 +236,107 @@ export async function handshakeReview(
       code: "HANDSHAKE_TIMEOUT",
     },
   );
+}
+
+function watchChildExit(child: ChildProcess): {
+  exited: () => boolean;
+  exitCode: () => number | null;
+} {
+  let exited = child.exitCode !== null;
+  let exitCode: number | null = child.exitCode;
+  child.once("exit", (code) => {
+    exited = true;
+    exitCode = code;
+  });
+  return {
+    exited: () => exited,
+    exitCode: () => exitCode,
+  };
+}
+
+/**
+ * `fix` / `re-review` already have a run directory, so the review handshake
+ * would return before the child can fail the still-running guard. Wait until
+ * the child proves it got past that guard, or until it exits.
+ */
+export async function handshakeFixBoot(
+  child: ChildProcess,
+  input: CliRunLaunchRequest,
+  pid: number,
+  handshakeMs = REVIEW_HANDSHAKE_MS,
+): Promise<{ pid: number }> {
+  const watched = watchChildExit(child);
+  const readyPath = join(resolveCliRunsRoot(), input.runId, CLI_RUN_PIPELINE_READY_FILE);
+  const deadline = Date.now() + handshakeMs;
+  while (Date.now() < deadline) {
+    if (watched.exited()) {
+      throw new Error(
+        logTail(input.logPath) || `councilkit fix exited ${String(watched.exitCode())}`,
+      );
+    }
+    if (fileContainsPid(readyPath, pid) && isPidAlive(pid)) {
+      child.unref();
+      return { pid };
+    }
+    await sleep(REVIEW_HANDSHAKE_POLL_MS);
+  }
+  stopDetachedChild(child);
+  throw Object.assign(new Error("fix handshake timed out before the pipeline was ready"), {
+    code: "HANDSHAKE_TIMEOUT",
+  });
+}
+
+/** Succeeds once the follow-up run directory exists and the child is still alive. */
+export async function handshakeReReview(
+  child: ChildProcess,
+  input: CliRunLaunchRequest,
+  pid: number,
+  handshakeMs = FOLLOW_UP_HANDSHAKE_MS,
+): Promise<{ pid: number }> {
+  const watched = watchChildExit(child);
+  const sourceDir = join(resolveCliRunsRoot(), input.runId);
+  const deadline = Date.now() + handshakeMs;
+  while (Date.now() < deadline) {
+    if (watched.exited()) {
+      throw new Error(
+        logTail(input.logPath) || `councilkit re-review exited ${String(watched.exitCode())}`,
+      );
+    }
+    const followUpRunId = readFollowUpRunId(sourceDir);
+    if (
+      followUpRunId !== null &&
+      isRealDir(join(resolveCliRunsRoot(), followUpRunId)) &&
+      isPidAlive(pid)
+    ) {
+      child.unref();
+      return { pid };
+    }
+    await sleep(REVIEW_HANDSHAKE_POLL_MS);
+  }
+  stopDetachedChild(child);
+  throw Object.assign(new Error("re-review handshake timed out before a follow-up run existed"), {
+    code: "HANDSHAKE_TIMEOUT",
+  });
+}
+
+function readFollowUpRunId(runDir: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(runDir, CLI_RUN_STATUS_FILE), "utf8")) as {
+      pipeline?: { followUpRunId?: unknown };
+    };
+    const id = parsed.pipeline?.followUpRunId;
+    return typeof id === "string" && id.startsWith("ck-review-") ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function fileContainsPid(path: string, pid: number): boolean {
+  try {
+    return readFileSync(path, "utf8").trim() === String(pid);
+  } catch {
+    return false;
+  }
 }
 
 function stopDetachedChild(child: ChildProcess): void {

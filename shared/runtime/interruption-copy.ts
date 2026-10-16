@@ -3,6 +3,9 @@
  * browser card and the `councilkit run` CLI so both say the same thing.
  * Durations follow the limit that actually fired (`limitMs` on the error, or
  * the Host's configured limit) through formatLimitZh.
+ *
+ * Review runs that lose their local execution service use a separate card
+ * (`EXECUTION_SERVICE_INTERRUPTION`). That copy is not a report-generation code.
  */
 import {
   GENERATION_TIMEOUTS,
@@ -10,6 +13,95 @@ import {
   formatLimitEn,
   formatLimitZh,
 } from "./generation-timeouts";
+
+/** Copy for a review that lost its local execution service. One source for every surface. */
+export const EXECUTION_SERVICE_INTERRUPTION = {
+  title: "审查被中断（本地执行服务重启或断开）",
+  detail: "和本地执行服务的连接断了，这次审查没有完成。",
+  primaryAction: "只再审一遍（不改代码）",
+  secondaryAction: "返回报告列表",
+} as const;
+
+/** Shown when 只再审一遍 is refused because the previous review process is still alive. */
+export const REVIEW_STILL_RUNNING_REASON = "上一次审查还在运行";
+
+export const RE_REVIEW_STARTING_LABEL = "正在启动复审…";
+
+export function reReviewStartFailure(reason: string): string {
+  return `复审没有启动：${reason}。可以再试一次。`;
+}
+
+export function isReReviewStartFailure(message: string | null | undefined): boolean {
+  return Boolean(message?.startsWith("复审没有启动："));
+}
+
+const MISSING_SPEC_PREFIX = "复审没有启动：找不到原来的规格文件 `";
+const MISSING_SPEC_SUFFIX = "`。请重新指定规格后再审。";
+
+/**
+ * A legacy run stored a spec path we cannot prove. The sentence is the whole
+ * alert: it does not offer another try, and it quotes the stored path.
+ */
+export function specOriginalMissingLine(storedPath: string): string {
+  const room = 1024 - MISSING_SPEC_PREFIX.length - MISSING_SPEC_SUFFIX.length;
+  const shown =
+    storedPath.length <= room ? storedPath : `${storedPath.slice(0, Math.max(0, room - 1))}…`;
+  return `${MISSING_SPEC_PREFIX}${shown}${MISSING_SPEC_SUFFIX}`;
+}
+
+const SPEC_ORIGINAL_MISSING_RE =
+  /复审没有启动：找不到原来的规格文件 `([^`]*)`。请重新指定规格后再审。/;
+
+/** The exact alert sentence if `text` contains one, including inside a log tail. */
+export function specOriginalMissingLineFrom(text: string): string | null {
+  return SPEC_ORIGINAL_MISSING_RE.exec(text)?.[0] ?? null;
+}
+
+/**
+ * Raw diagnostic for the alert's「详情」. The main sentence stays free of
+ * DRIVER_SPAWN_FAILED and SPEC_VERIFY_UNBOUND.
+ */
+export function specOriginalMissingDetail(error: unknown, text: string): string {
+  const lines = ["DRIVER_SPAWN_FAILED"];
+  const raw = diagnosticRaw(error) ?? rawFromText(text);
+  if (raw) lines.push(raw);
+  const detail = lines.join("\n");
+  return detail.length <= 2048 ? detail : detail.slice(0, 2048);
+}
+
+function diagnosticRaw(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("detail" in error)) return null;
+  const detail = (error as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null || !("raw" in detail)) return null;
+  const raw = (detail as { raw?: unknown }).raw;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+function rawFromText(text: string): string | null {
+  const marker = text.indexOf("detail:");
+  const jsonStart = marker < 0 ? -1 : text.indexOf("{", marker);
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(text.slice(jsonStart)) as { raw?: unknown };
+      if (typeof parsed.raw === "string" && parsed.raw.trim().length > 0) return parsed.raw.trim();
+    } catch {
+      // the log tail may be clipped mid-JSON
+    }
+  }
+  return /SPEC_ORIGINAL_UNPROVEN:[^\n]*/.exec(text)?.[0] ?? null;
+}
+
+/**
+ * A review the index marked interrupted because nothing finished it.
+ * A recorded review.finished interruption has endedAt and keeps the short label.
+ */
+export function isLostExecutionReview(run: {
+  kind: string;
+  status: string;
+  endedAt?: string | null;
+}): boolean {
+  return run.kind === "review" && run.status === "interrupted" && (run.endedAt ?? null) === null;
+}
 
 export const REPORT_INTERRUPTION_CODES = [
   "INTERRUPTED_UNKNOWN",

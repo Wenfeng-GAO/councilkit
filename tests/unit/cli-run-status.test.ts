@@ -60,6 +60,20 @@ describe("reviewOverviewHeading", () => {
         status: "failed",
       }),
     ).toBe("失败");
+    expect(
+      reviewOverviewHeading({
+        kind: "review",
+        status: "interrupted",
+        endedAt: null,
+      }),
+    ).toBe("审查被中断（本地执行服务重启或断开）");
+    expect(
+      reviewOverviewHeading({
+        kind: "review",
+        status: "interrupted",
+        endedAt: "2026-10-16T12:00:00.000Z",
+      }),
+    ).toBe("中断");
   });
 });
 

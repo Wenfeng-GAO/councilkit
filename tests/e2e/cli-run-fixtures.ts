@@ -190,3 +190,221 @@ export function seedReportCaseFixtures(home: string, nowIso: string): void {
     `${JSON.stringify({ version: 1, runIds: [ARCHIVED_JUNK_RUN_ID] })}\n`,
   );
 }
+
+export const LOST_EXECUTION_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000348";
+export const COMPLETED_REVIEW_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000351";
+export const LOST_EXECUTION_PR = "https://github.com/acme/payments/pull/348";
+export const COMPLETED_REVIEW_PR = "https://github.com/acme/payments/pull/351";
+
+/** Stale review (lost local execution) plus a finished review, for the interruption e2e. */
+export function seedLostExecutionFixtures(home: string): void {
+  const sha = "c4e8b1a09f6d3e2c1b0a9876543210fedcba9876";
+  const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const interruptedDir = join(home, "runs", LOST_EXECUTION_RUN_ID);
+  mkdirSync(interruptedDir, { recursive: true });
+  const seat = {
+    attemptId: "attempt-security",
+    agentId: "sec",
+    agentName: "review-security",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  const aggregator = {
+    attemptId: "aggregator",
+    agentId: "adv",
+    agentName: "review-adversarial",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  writeFileSync(
+    join(interruptedDir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId: LOST_EXECUTION_RUN_ID,
+      startedAt: "2026-10-16T07:40:00.000Z",
+      task: { pr: LOST_EXECUTION_PR },
+      attempts: [seat],
+      aggregator,
+    })}\n${JSON.stringify({
+      kind: "attempt.finished",
+      version: 1,
+      attemptId: "attempt-security",
+      agentName: "review-security",
+      driverId: "grok-stream-json",
+      status: "success",
+      output: "支付回调超时后仍把订单标成已支付。",
+      exitCode: 0,
+      durationMs: 42000,
+    })}\n`,
+  );
+  writeFileSync(
+    join(interruptedDir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "running",
+      progress: {
+        phase: "aggregating",
+        updatedAt: staleAt,
+        attempts: [
+          {
+            ...seat,
+            role: "attempt",
+            status: "success",
+            durationMs: 42000,
+            lastActivity: null,
+          },
+          {
+            ...aggregator,
+            role: "aggregator",
+            status: "running",
+            durationMs: 8000,
+            lastActivity: "汇总支付回调路径",
+          },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(
+    join(interruptedDir, "findings.json"),
+    `${JSON.stringify({
+      version: 1,
+      runId: LOST_EXECUTION_RUN_ID,
+      extractedAt: staleAt,
+      sha,
+      againstRunId: null,
+      againstRange: null,
+      findings: [
+        {
+          id: "pay-timeout",
+          severity: "major",
+          status: "open",
+          title: "支付回调超时后仍把订单标成已支付",
+          text: "超时分支在收到渠道失败之前写入了 paid，用户会被多扣一次。",
+          source: "consensus",
+          reviewer: "review-security",
+          files: ["src/pay.ts"],
+        },
+        {
+          id: "pay-log",
+          severity: "nit",
+          status: "open",
+          title: "回调日志带了完整卡号",
+          text: "失败日志把 PAN 打进了 info。",
+          source: "unique",
+          reviewer: "review-security",
+          files: ["src/pay-log.ts"],
+        },
+      ],
+    })}\n`,
+  );
+  writeFileSync(
+    join(interruptedDir, "report.md"),
+    [
+      "# Autonomous Review Report",
+      "",
+      "---",
+      "",
+      "## 概览",
+      "",
+      "安全席已经看完支付回调。汇总还没写完，本地执行服务就断开了。",
+      "主要问题是超时后仍把订单标成已支付。",
+      "",
+    ].join("\n"),
+  );
+
+  const completedDir = join(home, "runs", COMPLETED_REVIEW_RUN_ID);
+  mkdirSync(completedDir, { recursive: true });
+  writeFileSync(
+    join(completedDir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId: COMPLETED_REVIEW_RUN_ID,
+      startedAt: "2026-10-15T09:00:00.000Z",
+      task: { pr: COMPLETED_REVIEW_PR },
+      attempts: [seat],
+      aggregator,
+    })}\n${JSON.stringify({
+      kind: "attempt.finished",
+      version: 1,
+      attemptId: "attempt-security",
+      agentName: "review-security",
+      driverId: "grok-stream-json",
+      status: "success",
+      output: "支付幂等键已经补上。",
+      exitCode: 0,
+      durationMs: 60000,
+    })}\n${JSON.stringify({
+      kind: "review.finished",
+      version: 1,
+      status: "completed",
+      endedAt: "2026-10-15T09:18:00.000Z",
+      incomplete: false,
+      failure: null,
+    })}\n`,
+  );
+  writeFileSync(
+    join(completedDir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "completed",
+      progress: {
+        phase: "done",
+        updatedAt: "2026-10-15T09:18:00.000Z",
+        attempts: [
+          { ...seat, role: "attempt", status: "success", durationMs: 60000, lastActivity: null },
+          {
+            ...aggregator,
+            role: "aggregator",
+            status: "success",
+            durationMs: 20000,
+            lastActivity: null,
+          },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  writeFileSync(
+    join(completedDir, "findings.json"),
+    `${JSON.stringify({
+      version: 1,
+      runId: COMPLETED_REVIEW_RUN_ID,
+      extractedAt: "2026-10-15T09:18:00.000Z",
+      sha,
+      againstRunId: null,
+      againstRange: null,
+      findings: [
+        {
+          id: "idem-note",
+          severity: "nit",
+          status: "open",
+          title: "幂等键注释还写着旧渠道名",
+          text: "注释仍提到已下线的渠道，不影响正确性。",
+          source: "unique",
+          reviewer: "review-maintainability",
+          files: ["src/idempotency.ts"],
+        },
+      ],
+    })}\n`,
+  );
+  writeFileSync(
+    join(completedDir, "report.md"),
+    [
+      "# Autonomous Review Report",
+      "",
+      "---",
+      "",
+      "## 概览",
+      "",
+      "支付幂等键已经补上。本轮没有新的阻塞项，只剩一处过期注释。",
+      "",
+      "## 结论",
+      "",
+      "approve",
+      "",
+    ].join("\n"),
+  );
+}

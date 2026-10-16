@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fullSha } from "@shared/runtime/repair-identity";
 import { shellSingleQuote } from "@shared/runtime/shell-quote";
 import { z } from "zod";
@@ -48,6 +48,8 @@ export const invocationManifestSchema = z
       })
       .strict(),
     repoRealpath: z.string().max(4096).nullable(),
+    /** Absolute cwd of the process that started the review. Old manifests omit it. */
+    invocationCwd: z.string().min(1).max(4096).optional(),
     reviewedSha: z
       .string()
       .regex(/^[0-9a-f]{40}$/)
@@ -235,6 +237,17 @@ export function writeInvocationManifest(runDir: string, manifest: InvocationMani
   atomicWriteJson(join(runDir, INVOCATION_MANIFEST_FILE), invocationManifestSchema.parse(manifest));
 }
 
+function currentInvocationCwd(): { invocationCwd: string } | Record<string, never> {
+  let cwd = "";
+  try {
+    cwd = realpathSync(process.cwd());
+  } catch {
+    cwd = resolve(process.cwd());
+  }
+  if (cwd.length === 0 || cwd.length > 4096) return {};
+  return { invocationCwd: cwd };
+}
+
 export function buildInvocationManifest(input: {
   runId: string;
   task: ReviewTask;
@@ -269,6 +282,7 @@ export function buildInvocationManifest(input: {
       ...(input.councilTargetOutput ? { councilTargetOutput: input.councilTargetOutput } : {}),
     },
     repoRealpath: input.repoRealpath,
+    ...currentInvocationCwd(),
     reviewedSha: fullSha(input.reviewedSha),
     timeoutMs: input.timeoutMs,
     concurrency: input.concurrency,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type FindingsFile, isFindingBlocking, isFindingVerifiedClosed } from "./cli-ledger";
+import { EXECUTION_SERVICE_INTERRUPTION, isLostExecutionReview } from "./interruption-copy";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "./pr-url";
 import { fullSha } from "./repair-identity";
 
@@ -72,6 +73,7 @@ export interface ReviewCaseRun {
   kind: string;
   status: string;
   startedAt: string | null;
+  endedAt?: string | null;
   reviewEvidence?: ReviewEvidence | null;
   attention?: { needsAttention: number } | null;
 }
@@ -115,6 +117,7 @@ export function summarizePrCase(runs: readonly ReviewCaseRun[]) {
   }
   const previous = byId.get(baseline?.reviewEvidence?.againstRunId ?? "") ?? null;
   const needsRecovery = Boolean(latest && !isCompleteReviewRun(latest));
+  const lostLatest = latest !== null && isLostExecutionReview(latest);
   const evidence = baseline?.reviewEvidence;
   const repeatedIds = (evidence?.openIds ?? []).filter((id) => (repeated.get(id) ?? 0) >= 2);
   return {
@@ -129,16 +132,18 @@ export function summarizePrCase(runs: readonly ReviewCaseRun[]) {
     blockingCount: evidence?.blockingIds.length ?? null,
     unverifiedFixCount: evidence?.unverifiedFixIds.length ?? null,
     repeatedIds,
-    nextAction: !baseline
-      ? "等待完整审查证据"
-      : needsRecovery
-        ? "恢复最新审查，确认当前 PR SHA"
-        : (evidence?.unverifiedFixIds.length ?? 0) > 0
-          ? "复审候选，核实修复声明"
-          : repeatedIds.length > 0
-            ? "同一问题再次出现，先检查根因与验收条件"
-            : (evidence?.blockingIds.length ?? 0) > 0
-              ? "导出修复任务，处理未决重大项"
-              : "核对验收和当前 PR SHA 后决定下一步",
+    nextAction: lostLatest
+      ? EXECUTION_SERVICE_INTERRUPTION.primaryAction
+      : !baseline
+        ? "等待完整审查证据"
+        : needsRecovery
+          ? "恢复最新审查，确认当前 PR SHA"
+          : (evidence?.unverifiedFixIds.length ?? 0) > 0
+            ? "复审候选，核实修复声明"
+            : repeatedIds.length > 0
+              ? "同一问题再次出现，先检查根因与验收条件"
+              : (evidence?.blockingIds.length ?? 0) > 0
+                ? "导出修复任务，处理未决重大项"
+                : "核对验收和当前 PR SHA 后决定下一步",
   };
 }

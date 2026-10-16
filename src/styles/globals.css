@@ -31,6 +31,8 @@
   --ck-success: #8aae9b;
   --ck-error: #ed969b;
   --ck-warning: #d6b27a;
+  /* 中断琥珀色。列表原来的 --color-warn 色值提到这里，四处「中断」都引用它。 */
+  --ck-interrupt: #d29922;
   --ck-focus: #acc9f3;
   --ck-ui-font: InterVariable, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui,
     sans-serif;
@@ -52,7 +54,7 @@
   --color-accent: #6366f1;
   --color-border: #232830;
   --color-success: #22c55e;
-  --color-warn: #d29922;
+  --color-warn: var(--ck-interrupt);
   --color-error: #f85149;
   --color-info: #58a6ff;
   --color-brass: #c4a574;
@@ -105,6 +107,29 @@
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+.ck-interrupt-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ck-interrupt);
+}
+
+.ck-interrupt-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ck-action-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--ck-error);
+  font-size: 14px;
+  line-height: 22px;
 }
 
 /* 示例报告（councilkit demo）：琥珀色标签和横幅。列表、报告头、工作台共用。 */
