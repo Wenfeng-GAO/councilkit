@@ -9,7 +9,9 @@ import {
   startGenerationWatchdog,
 } from "@shared/runtime/generation-timeouts";
 import {
+  isHostDisconnectFailure,
   oneShotGeneratingNote,
+  reportFailureCopy,
   reportInterruptionCopy,
   reportInterruptionLine,
 } from "@shared/runtime/interruption-copy";
@@ -200,5 +202,22 @@ describe("interruption copy (browser card + CLI)", () => {
     ).toBe("报告生成被中断（模型 10 分钟没有写完）：Kimi 超过 10 分钟没有返回结果。");
     expect(reportInterruptionLine({ code: "ONESHOT_TIMEOUT", role: "message" })).toBeNull();
     expect(reportInterruptionLine({ code: "BAD_REQUEST", role: "report" })).toBeNull();
+  });
+
+  it("#351 a CLI stream disconnect on the report turn reads as the Host restart card", () => {
+    const disconnect = { code: "RUNTIME_UNAVAILABLE", phase: "stream", role: "report" } as const;
+    expect(isHostDisconnectFailure(disconnect)).toBe(true);
+    expect(reportFailureCopy(disconnect)).toEqual(
+      reportInterruptionCopy({ code: "SAFE_INTERRUPTION" }),
+    );
+    expect(reportInterruptionLine(disconnect)).toBe(
+      "报告生成被中断（本地执行服务重启或断开）：和本地执行服务的连接断了，这次生成没有完成。",
+    );
+    // Pre-run readiness / dispatch faults are not a disconnect.
+    expect(isHostDisconnectFailure({ code: "RUNTIME_UNAVAILABLE", phase: "dispatch" })).toBe(false);
+    expect(
+      reportFailureCopy({ code: "RUNTIME_UNAVAILABLE", phase: "scope", role: "report" }),
+    ).toBeNull();
+    expect(reportFailureCopy({ ...disconnect, role: "message" })).toBeNull();
   });
 });

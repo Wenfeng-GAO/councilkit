@@ -15,6 +15,7 @@ import type {
   ScopeStatus,
 } from "@shared/runtime/schemas";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHuman } from "../src/commands/run";
 import { CliError, EXIT } from "../src/errors";
 import type { TerminalEvidence, TurnResult } from "../src/host/execute-turn";
 import {
@@ -1005,6 +1006,56 @@ describe("run council coverage", () => {
     expect(readFileSync(paths.report(RUN_ID), "utf8")).toBe(
       expectedPartial(failure, ONE_SPEECH, NOW, interruption),
     );
+  });
+
+  it("#351 the Host goes away mid-report: zh card lines, code kept, exit 4", async () => {
+    const { outcome, paths } = await runAt(home, {
+      driver: async (req) => {
+        if (req.role === "message") {
+          await req.persist(evidence("alpha speech"));
+          return completed(req.executionId, "alpha speech");
+        }
+        // What executeTurn returns when the SSE read dies with the Host.
+        return failedTurn(req.executionId, "failed", {
+          phase: "stream",
+          code: "RUNTIME_UNAVAILABLE",
+          message: "event stream read failed",
+          retryable: false,
+        });
+      },
+    });
+    expect(outcome.status).toBe("failed");
+    expect(outcome.exitCode).toBe(EXIT.runFailed);
+    expect(EXIT.runFailed).toBe(4);
+    expect(outcome.failure).toMatchObject({ code: "RUNTIME_UNAVAILABLE", role: "report" });
+    const human = renderHuman(outcome).split("\n");
+    const at = human.indexOf("  报告生成被中断（本地执行服务重启或断开）");
+    expect(at).toBeGreaterThan(0);
+    expect(human.slice(at, at + 3)).toEqual([
+      "  报告生成被中断（本地执行服务重启或断开）",
+      "  和本地执行服务的连接断了，这次生成没有完成。",
+      "  RUNTIME_UNAVAILABLE",
+    ]);
+    expect(human.join("\n")).not.toContain("event stream read failed");
+    expect(readFileSync(paths.report(RUN_ID), "utf8")).toContain(
+      "- 报告生成被中断（本地执行服务重启或断开）：和本地执行服务的连接断了，这次生成没有完成。",
+    );
+  });
+
+  it("#351 a message-turn stream failure keeps the plain failure line", async () => {
+    const { outcome } = await runAt(home, {
+      driver: async (req) =>
+        failedTurn(req.executionId, "failed", {
+          phase: "stream",
+          code: "RUNTIME_UNAVAILABLE",
+          message: "event stream read failed",
+          retryable: false,
+        }),
+    });
+    expect(outcome.failure).toMatchObject({ code: "RUNTIME_UNAVAILABLE", role: "message" });
+    const human = renderHuman(outcome);
+    expect(human).not.toContain("报告生成被中断");
+    expect(human).toContain("  failure: [stream] RUNTIME_UNAVAILABLE — event stream read failed");
   });
 
   it("uses REPORTER_NOT_COMPLETED when the reporter returns no error", async () => {

@@ -91,16 +91,37 @@ export function oneShotGeneratingNote(
   return `${tool} 写完后会一次性给出报告，中途不会逐字显示，最长等 ${formatLimitZh(limitMs)}。`;
 }
 
+/** The CLI lost its event stream to the Host mid-turn (the Host restarted or
+ * went away): `RUNTIME_UNAVAILABLE` in the stream phase. Same card as the
+ * page's SAFE_INTERRUPTION (#351). */
+export function isHostDisconnectFailure(failure: { code: string; phase?: string }): boolean {
+  return failure.code === "RUNTIME_UNAVAILABLE" && failure.phase === "stream";
+}
+
+/** Card copy for a CLI run failure, or null unless the report turn was cut
+ * off by one of the interruption codes or a Host disconnect. */
+export function reportFailureCopy(failure: {
+  code: string;
+  phase?: string;
+  role?: string;
+  driverId?: string;
+  limitMs?: number;
+}): InterruptionCopy | null {
+  if (failure.role !== "report") return null;
+  const code = isHostDisconnectFailure(failure) ? "SAFE_INTERRUPTION" : failure.code;
+  return reportInterruptionCopy({ ...failure, code });
+}
+
 /** One-line CLI form of the card (`councilkit run`), same wording as the UI:
  * 「报告生成被中断（模型 10 分钟没有写完）：Kimi 超过 10 分钟没有返回结果。」.
  * Null unless the report turn was cut off by one of the interruption codes. */
 export function reportInterruptionLine(failure: {
   code: string;
+  phase?: string;
   role?: string;
   driverId?: string;
   limitMs?: number;
 }): string | null {
-  if (failure.role !== "report") return null;
-  const copy = reportInterruptionCopy(failure);
+  const copy = reportFailureCopy(failure);
   return copy ? `${copy.title}：${copy.detail}` : null;
 }
