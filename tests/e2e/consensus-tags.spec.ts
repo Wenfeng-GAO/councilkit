@@ -8,7 +8,9 @@ import {
   ABSENT_TAG_TITLE,
   CONSENSUS_TAG_TITLE,
   PENDING_TAG_TITLE,
+  SKIPPED_TAG_TITLE,
   SPEC_TAG_TITLE,
+  UNRECORDED_TAG_TITLE,
 } from "./consensus-tag-fixtures";
 
 const OUT = "/opt/cursor/artifacts/screenshots";
@@ -18,6 +20,7 @@ const CASES = [
     title: SPEC_TAG_TITLE,
     tag: ".ck-tag-spec",
     text: "违反规格 · AC-3",
+    basis: "违反了规格里的 AC-3：空串输入必须问候",
     file: "spec-violation",
     verdict: "ck-verdict-changes",
   },
@@ -39,8 +42,25 @@ const CASES = [
   {
     title: ABSENT_TAG_TITLE,
     tag: ".ck-wb-absence",
-    text: "缺席：review-security（未找到 cld）",
+    text: "缺席：review-cursor（cursor-agent）：运行失败，退出码 1。",
+    note: "这份报告只汇总了其余 2 席的结果，缺席的这几席负责查的问题可能没被发现。",
     file: "absent-seat",
+    verdict: null,
+  },
+  {
+    title: SKIPPED_TAG_TITLE,
+    tag: ".ck-wb-absence",
+    text: "缺席：review-correctness（grok）：没有安装 grok。",
+    note: "这份报告只汇总了其余 3 席的结果，缺席的这几席负责查的问题可能没被发现。",
+    file: "init-skipped-seat",
+    verdict: null,
+  },
+  {
+    title: UNRECORDED_TAG_TITLE,
+    tag: ".ck-wb-absence",
+    text: "缺席：review-maintainability（kimi）：原因未记录，重新运行 `councilkit init` 可以看到原因。",
+    note: "这份报告只汇总了其余 2 席的结果，缺席的这几席负责查的问题可能没被发现。",
+    file: "old-config-unrecorded",
     verdict: null,
   },
 ] as const;
@@ -74,7 +94,10 @@ test.describe("locked report labels", () => {
           await expect(page.getByText("规格合同减法")).toHaveCount(0);
         }
         if (item.file === "spec-violation") {
-          await expect(page.getByText(/阻塞依据（规格合同减法）/)).toBeVisible();
+          await expect(page.getByText(/阻塞依据：这条问题违反了规格里写明的验收/)).toBeVisible();
+          await expect(page.getByText("规格合同减法")).toHaveCount(0);
+          await expect(page.getByText("合同内 Act On")).toHaveCount(0);
+          await expect(page.getByText("不变量 ID")).toHaveCount(0);
           await expect(page.getByText("未绑定规格")).toHaveCount(0);
         }
         if ("basis" in item && item.basis) {
@@ -88,6 +111,11 @@ test.describe("locked report labels", () => {
         if (item.file === "pending-single-seat") {
           await expect(page.locator(".ck-tag-spec")).toHaveCount(0);
           await expect(page.locator(".ck-tag-consensus")).toHaveCount(0);
+          await expect(
+            page.getByText("没有需要处理的问题，另有 1 条待确认（只有一席提出）。"),
+          ).toBeVisible();
+          await expect(page.getByText("0 个问题")).toHaveCount(0);
+          await expect(page.getByText("这份审查还没有问题记录。")).toHaveCount(0);
           await expect(page.getByText("账本无阻塞")).toBeVisible();
           await expect(page.getByText("账本未生成")).toHaveCount(0);
           const card = page.getByRole("region", { name: "待确认" });
@@ -98,11 +126,13 @@ test.describe("locked report labels", () => {
             false,
           );
         }
-        if (item.file === "absent-seat") {
+        if ("note" in item && item.note) {
           const decision = page.getByRole("region", { name: "审查结论" });
-          await expect(decision.getByText("缺席：review-security（未找到 cld）")).toBeVisible();
-          await expect(decision.getByText("缺席：cursor（运行失败，退出码 1）")).toBeVisible();
-          await expect(decision.getByText(/non-zero|exit/i)).toHaveCount(0);
+          const row = decision.locator(".ck-wb-absence").filter({ hasText: item.text });
+          await expect(row).toBeVisible();
+          await expect(row).toHaveAttribute("data-absence-icon", "circle-alert");
+          await expect(decision.locator(".ck-wb-absence-note")).toHaveText(item.note);
+          await expect(decision.getByText(/review-security|未找到 cld|cld/)).toHaveCount(0);
         }
         await tag.scrollIntoViewIfNeeded();
         await page.screenshot({

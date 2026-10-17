@@ -50,7 +50,7 @@ import { shellSingleQuote } from "@shared/runtime/shell-quote";
  * Exit codes follow the existing table (0/2/4/5/130).
  */
 import { z } from "zod";
-import { collectReportAbsences } from "../auto/absences";
+import { type AbsenceRoster, collectReportAbsences, toolNameForSelection } from "../auto/absences";
 import {
   renderReviewReport,
   writeCanonicalReviewReport,
@@ -395,6 +395,7 @@ export async function runReview(
   }
   let attemptAgents!: AgentRecord[];
   let aggregatorAgent!: AgentRecord;
+  let skippedSeats: AbsenceRoster["skippedSeats"];
   let councilTopic: string | undefined;
   let councilBackground: string | undefined;
   let councilTargetOutput: string | undefined;
@@ -459,6 +460,7 @@ export async function runReview(
     task.councilTopic = councilTopic;
     councilBackground = council.background.trim().length > 0 ? council.background : undefined;
     councilTargetOutput = council.targetOutput.trim().length > 0 ? council.targetOutput : undefined;
+    skippedSeats = council.skippedSeats;
     attemptAgents = store.councilAgents(council);
     aggregatorAgent = attemptAgents.find(
       (agent) => agent.id === council.reporterAgentId,
@@ -1500,6 +1502,13 @@ export async function runReview(
       runCommand,
       reviewedSha,
       attemptAgents,
+      absenceRoster: {
+        skippedSeats,
+        definedSeats: attemptAgents.map((agent) => ({
+          name: agent.name,
+          tool: toolNameForSelection(agent.driverSelection),
+        })),
+      },
       frozenTools,
       executionRevision,
       extraAssessments: replayAcceptedCorrections({
@@ -1569,6 +1578,7 @@ interface ExecuteParams {
   runCommand: RunCommand;
   reviewedSha: string | null;
   attemptAgents: AgentRecord[];
+  absenceRoster: AbsenceRoster;
   frozenTools: readonly ToolFingerprint[];
   executionRevision: ExecutionRevision | null;
   extraAssessments: DiagnosedAssessment[];
@@ -1796,7 +1806,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       markdown: aggregation.output,
       task: p.task,
       attempts: results,
-      absences: collectReportAbsences(results, { env: process.env }),
+      absences: collectReportAbsences(results, p.absenceRoster),
     });
   }
 
@@ -1916,7 +1926,7 @@ async function finalize(
     incomplete: spec.incomplete,
     reason,
     failurePhase: spec.failure?.phase,
-    absences: collectReportAbsences(results, { env: process.env }),
+    absences: collectReportAbsences(results, p.absenceRoster),
   });
 
   // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then

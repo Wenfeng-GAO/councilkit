@@ -207,7 +207,7 @@ councilkit review <pr-url> --against <ck-review-id> --repair-package <file> [--j
 
 审查默认按**规格合同减法**分类（自动检测或 `--spec` 绑定；UI「强制按 spec review」/ CLI `--require-spec` 默认开启——无合同时软启动后在审查阶段拒绝，可用 `--no-require-spec` / 取消勾选进入非合同模式）：
 
-- **合同内 Act On**：违反绑定规格具名不变量，且含可复现反例 → 可阻塞合并（critical/major）
+- **违反规格**：报告写成「违反了规格里的 {编号}：{验收原文}」。重大或致命、还没验证解决或接受不修的，可以阻塞合并
 - **建议修订规格（out-of-spec）**：规格未覆盖的重大问题 → 展示但不默认阻塞
 - **nit / 风格**：不阻塞
 - **Verify**：对照绑定规格中的验收点 / agentverify 场景写入「验证」

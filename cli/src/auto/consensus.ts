@@ -14,7 +14,7 @@
  */
 import { markdownLines } from "@shared/runtime/aggregator-verdict";
 import { summarizeSeatOutput } from "@shared/runtime/seat-result";
-import { type ReportAbsence, formatAbsence } from "./absences";
+import { type ReportAbsence, formatAbsence, formatAbsenceNote } from "./absences";
 import type { ReviewTask } from "./templates/review";
 
 export interface ConsensusSeat {
@@ -115,7 +115,7 @@ interface FindingCluster {
 
 export function shapeAggregateDeliverable(input: {
   markdown: string;
-  task: Pick<ReviewTask, "specSource">;
+  task: Pick<ReviewTask, "specSource" | "specText">;
   attempts: readonly ConsensusSeat[];
   absences?: readonly ReportAbsence[];
 }): string {
@@ -123,8 +123,9 @@ export function shapeAggregateDeliverable(input: {
   const drafted = !specBound
     ? (synthesizeNoSpecAggregate(input.markdown, input.attempts) ??
       promoteConclusion(input.markdown))
-    : annotateSpecViolations(promoteConclusion(input.markdown));
-  return applyDesignerOrder(drafted, specBound, input.absences ?? []);
+    : annotateSpecViolations(promoteConclusion(input.markdown), input.task.specText);
+  const presentCount = input.attempts.filter((seat) => seat.status === "success").length;
+  return applyDesignerOrder(drafted, specBound, input.absences ?? [], presentCount);
 }
 
 /** More than half of the completed seats, and at least two. */
@@ -438,6 +439,7 @@ export function applyDesignerOrder(
   markdown: string,
   specBound: boolean,
   absences: readonly ReportAbsence[],
+  presentCount = 0,
 ): string {
   const split = splitH2(markdown);
   const buckets: Record<"blocking" | "actionable" | "pending", string[]> = {
@@ -472,7 +474,7 @@ export function applyDesignerOrder(
       rest.push(section);
     }
   }
-  const withAbsences = injectAbsences(conclusion?.body ?? "", absences);
+  const withAbsences = injectAbsences(conclusion?.body ?? "", absences, presentCount);
   const ordered: H2Section[] = [
     { title: "结论", body: withAbsences },
     { title: "阻塞问题", body: buckets.blocking.join("\n\n") || "无" },
@@ -509,14 +511,26 @@ function classifyDesignerItem(
   return "actionable";
 }
 
-function injectAbsences(body: string, absences: readonly ReportAbsence[]): string {
-  const lines = absences.map(formatAbsence).filter((line) => !body.includes(line));
-  if (lines.length === 0) return body.trim();
-  const block = lines.join("\n");
-  if (/阻塞\s*\d+/.test(body)) {
-    return body.replace(/阻塞\s*\d+。?/, `${block}\n\n$&`).trim();
+function injectAbsences(
+  body: string,
+  absences: readonly ReportAbsence[],
+  presentCount: number,
+): string {
+  const cleaned = body
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !trimmed.startsWith("缺席：") && !trimmed.startsWith("这份报告只汇总了其余");
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (absences.length === 0) return cleaned;
+  const block = [...absences.map(formatAbsence), formatAbsenceNote(presentCount)].join("\n");
+  if (/阻塞\s*\d+/.test(cleaned)) {
+    return cleaned.replace(/阻塞\s*\d+。?/, `${block}\n\n$&`).trim();
   }
-  return `${body.trim()}\n\n${block}`.trim();
+  return `${cleaned}\n\n${block}`.trim();
 }
 
 function refreshBlockingCount(markdown: string): string {
@@ -591,13 +605,13 @@ function severityRank(item: string): number {
   return SEVERITY_RANK[severity];
 }
 
-function annotateSpecViolations(markdown: string): string {
+function annotateSpecViolations(markdown: string, specText: string | undefined): string {
   const split = splitH2(markdown);
   const sections = split.sections.map((section) => {
-    if (!/^(?:共识发现|独有发现)$/.test(section.title)) return section;
+    if (!/^(?:共识发现|独有发现|阻塞问题|需处理的问题)$/.test(section.title)) return section;
     const items = splitTopLevelItems(section.body);
     if (items.length === 0) return section;
-    const next = items.map(annotateSpecItem);
+    const next = items.map((item) => annotateSpecItem(item, specText));
     return { title: section.title, body: next.join("\n") };
   });
   const body = sections
@@ -610,17 +624,90 @@ function annotateSpecViolations(markdown: string): string {
     .trim();
 }
 
-function annotateSpecItem(item: string): string {
-  if (!/\[act-on\]/i.test(item)) return item;
-  if (/suggest-amend-spec/i.test(item)) return item;
-  const id = /(?:不变量|不变式|invariant)\s*[:：]\s*`?([A-Za-z][A-Za-z0-9_-]{0,40})`?/i.exec(item);
-  const acceptanceId = id?.[1]?.trim();
-  if (!acceptanceId) return item;
+function annotateSpecItem(item: string, specText: string | undefined): string {
+  if (!/\[act-on\]/i.test(item)) return stripReportJargon(item);
+  if (/suggest-amend-spec/i.test(item)) return stripReportJargon(item);
+  const labeled = /(?:不变量|不变式|invariant)\s*[:：]\s*`?([A-Za-z][A-Za-z0-9_-]{0,40})`?/i.exec(
+    item,
+  );
+  const tagged = /违反规格\s*·\s*([A-Za-z][A-Za-z0-9_-]*)/.exec(item);
+  const acceptanceId = labeled?.[1]?.trim() || tagged?.[1]?.trim();
+  if (!acceptanceId) return stripReportJargon(item);
+  const acceptance = specText ? acceptanceTextForId(specText, acceptanceId) : null;
+  const basis = acceptance ? `违反了规格里的 ${acceptanceId}：${acceptance}` : null;
+  const existingBasis = item
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("违反了规格里的"));
+  const lines = item.split("\n").filter((line) => {
+    if (basis && /^\s*(?:不变量|不变式|invariant)\s*[:：]/i.test(line)) return false;
+    if (/违反了规格里的/.test(line)) return false;
+    return true;
+  });
   const label = `违反规格 · ${acceptanceId}`;
-  if (item.includes(label)) return item;
-  const lines = item.split("\n");
-  lines.splice(1, 0, `  ${label}`);
-  return lines.join("\n");
+  if (!lines.some((line) => line.includes(label))) lines.splice(1, 0, `  ${label}`);
+  const keptBasis = basis ?? existingBasis ?? null;
+  if (keptBasis) lines.splice(1, 0, `  ${keptBasis.replace(/^\s+/, "")}`);
+  return stripReportJargon(lines.join("\n"));
+}
+
+/** The acceptance sentence that follows an id in the bound spec. */
+export function acceptanceTextForId(specText: string, id: string): string | null {
+  for (const raw of specText.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (findId(line, id) < 0) continue;
+    if (line.includes("|")) {
+      const cells = line
+        .replace(/^\|/, "")
+        .replace(/\|$/, "")
+        .split("|")
+        .map((cell) => cell.trim());
+      const index = cells.findIndex((cell) => findId(cell, id) >= 0);
+      const next = cells
+        .slice(index + 1)
+        .find((cell) => cell.length > 0 && !/^:?-{3,}:?$/.test(cell));
+      if (next) return cleanAcceptance(next);
+    }
+    const withoutMarks = line
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[-*]\s+\[[ xX]\]\s+/, "")
+      .replace(/^[-*]\s+/, "");
+    const start = findId(withoutMarks, id);
+    if (start < 0) continue;
+    const rest = withoutMarks
+      .slice(start + id.length)
+      .replace(/^[\s：:.\-·—|]+/, "")
+      .trim();
+    if (rest.length > 0) return cleanAcceptance(rest);
+  }
+  return null;
+}
+
+function findId(line: string, id: string): number {
+  let from = 0;
+  while (from < line.length) {
+    const at = line.indexOf(id, from);
+    if (at < 0) return -1;
+    const before = at === 0 ? "" : (line[at - 1] ?? "");
+    const after = line[at + id.length] ?? "";
+    if (!/[\w-]/.test(before) && !/[\w-]/.test(after)) return at;
+    from = at + id.length;
+  }
+  return -1;
+}
+
+function cleanAcceptance(text: string): string {
+  return text
+    .replace(/[`*_]/g, "")
+    .replace(/[。．.]\s*$/, "")
+    .trim();
+}
+
+function stripReportJargon(text: string): string {
+  return text
+    .replace(/规格合同减法/g, "对照规格")
+    .replace(/合同内\s*Act On/gi, "违反规格")
+    .replace(/不变量\s*ID/g, "验收编号");
 }
 
 function splitH2(markdown: string): { lead: string; sections: H2Section[] } {

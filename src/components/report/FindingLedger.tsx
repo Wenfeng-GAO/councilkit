@@ -11,12 +11,14 @@ import {
   filterFindingProblems,
   formatFindingCountNote,
   formatLedgerComparison,
+  pendingOnlyLedgerCopy,
   projectFindingList,
   reviewCoverageLabel,
   reviewRelationLabel,
   severityLabel,
 } from "@/lib/finding-list";
-import { findingDisplayMark } from "@/lib/finding-marks";
+import { findingDisplayMark, findingMarkdown, textWithoutBasis } from "@/lib/finding-marks";
+import { countActionablePendingFindings } from "@/lib/review-report";
 import {
   type RunAttentionCounts,
   computeRunAttention,
@@ -31,7 +33,7 @@ import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useMemo, useState } from "react";
 
 const SPEC_BLOCKING_RULE =
-  "阻塞依据（规格合同减法）：合同内 Act On——重大/致命且引用具名不变量 ID + 可复现反例，尚未验证解决或接受不修。标为规格外 / 建议修订规格的项默认不阻塞；nit 不阻塞。报告中的“本轮不阻塞”不会自动改变这项门禁。";
+  "阻塞依据：这条问题违反了规格里写明的验收，严重度是重大或致命，并且还没有验证解决或接受不修。建议修订规格的项和 nit 不阻塞。报告里写“本轮不阻塞”不会自动改这项门禁。";
 
 export const NO_SPEC_BLOCKING_RULE =
   "阻塞依据：未绑定规格；多数席位各自指出同一高严重度缺陷即阻塞，单席问题进「待确认」。";
@@ -104,7 +106,12 @@ export function FindingLedger({
       sha: candidateSha,
       groups: run.findingGroups,
     });
-  const summary = formatProblemSummary(projection, nextCluster?.id ?? null, attention);
+  const pendingCount = useMemo(() => countActionablePendingFindings(run.markdown), [run.markdown]);
+  const pendingOnly =
+    attention.needsAttention === 0 && pendingCount >= 1 && projection.displayCount === 0;
+  const summary = pendingOnly
+    ? { primary: formatAttentionLabel(attention), secondary: pendingOnlyLedgerCopy(pendingCount) }
+    : formatProblemSummary(projection, nextCluster?.id ?? null, attention);
   const blockingRule = blockingRuleForReport(run.markdown);
   const againstId = run.reviewEvidence?.againstRunId ?? null;
   const prUrl = run.reviewEvidence?.prUrl ?? null;
@@ -182,7 +189,7 @@ export function FindingLedger({
             <p className="ck-finding-empty">{emptyFindingListCopy(effectiveFilter)}</p>
           )}
         </>
-      ) : (
+      ) : pendingOnly ? null : (
         <p className="ck-finding-empty">{emptyFindingListCopy("all")}</p>
       )}
       {run.landings.length > 0 ? (
@@ -327,7 +334,20 @@ function MemberEvidence({
           ))}
         </p>
       ) : null}
-      <SafeMarkdown className="text-sm" variant="document" content={member.text} />
+      <SafeMarkdown
+        className="text-sm"
+        variant="document"
+        content={findingMarkdown(
+          textWithoutBasis(
+            member.text,
+            findingDisplayMark({
+              text: member.text,
+              invariantId: member.invariantId,
+              contractClass: member.contractClass ?? null,
+            })?.basis ?? null,
+          ),
+        )}
+      />
       {member.acceptedReason ? (
         <p className="ck-finding-member-meta">接受不修：{member.acceptedReason}</p>
       ) : null}

@@ -402,6 +402,23 @@
   font-weight: 600;
   margin: 0 0 12px;
 }
+.ck-wb-absence {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--ck-interrupt);
+}
+.ck-wb-absence .ck-wb-icon {
+  flex: none;
+  margin-top: 2px;
+}
+.ck-wb-absence-note {
+  margin: 6px 0 0;
+  color: var(--ck-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
 .ck-interrupt p {
   margin: 0;
   color: var(--ck-secondary);

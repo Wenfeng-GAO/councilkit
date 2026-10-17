@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { isFindingBlocking } from "@shared/runtime/cli-ledger";
 import { summarizeSeatOutput } from "@shared/runtime/seat-result";
 import { describe, expect, it } from "vitest";
-import { collectReportAbsences, failureAbsenceReason } from "../src/auto/absences";
+import { collectReportAbsences, failureAbsenceReason, formatAbsence } from "../src/auto/absences";
 import { type ReviewReportInput, renderReviewReport } from "../src/auto/aggregate";
 import { shapeAggregateDeliverable } from "../src/auto/consensus";
 import { persistFindingsFromReport } from "../src/auto/ledger";
@@ -49,10 +49,15 @@ const BAD_COMMENT = [
   "comment",
 ].join("\n");
 
-function shape(markdown: string, attempts: AttemptResult[], specSource?: string): string {
+function shape(
+  markdown: string,
+  attempts: AttemptResult[],
+  specSource?: string,
+  specText?: string,
+): string {
   return shapeAggregateDeliverable({
     markdown,
-    task: specSource ? { specSource } : {},
+    task: specSource ? { specSource, specText } : {},
     attempts,
   });
 }
@@ -141,10 +146,20 @@ describe("no-spec majority aggregation", () => {
       seat("cursor", finding("Add 从 a + b 改为 a - b，加法被换成减法", "critical")),
       seat("codex", finding("函数 Add 的加法被改成减法 a - b", "critical")),
     ];
-    const body = shape(specBody, attempts, "docs/design/toy.md");
+    const body = shape(
+      specBody,
+      attempts,
+      "docs/design/toy.md",
+      "## 验收\n- AC-3：空串输入必须问候\n",
+    );
     expect(firstH2(body)).toBe("## 结论");
     expect(body).toMatch(/## 结论\n+changes-requested/);
     expect(body).toContain("违反规格 · AC-3");
+    expect(body).toContain("违反了规格里的 AC-3：空串输入必须问候");
+    expect(body).not.toMatch(/^\s*不变量：/m);
+    expect(body).not.toContain("规格合同减法");
+    expect(body).not.toContain("合同内 Act On");
+    expect(body).not.toContain("不变量 ID");
     expect(body).not.toContain("无规格依据，依据是");
     expect(body).toContain("[suggest-amend-spec]");
     const downgraded = [
@@ -192,21 +207,47 @@ describe("report structure", () => {
 });
 
 describe("missing seats", () => {
-  it("names a failed seat and a seat left out because its driver was missing, without failing the report", () => {
+  it("names an init-skipped seat and a runtime failure, and keeps a cfuse seat that ran", () => {
     const attempts = [
+      {
+        ...seat("review-security", "## 发现\n无\n\n## 结论\napprove\n"),
+        driverId: "claude-stream-json",
+      },
       seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法")),
       {
-        ...seat("cursor", "## 发现\n无\n\n## 结论\nchanges-requested\n", "failure"),
+        ...seat("review-cursor", "## 发现\n无\n\n## 结论\nchanges-requested\n", "failure"),
+        driverId: "cursor-stream-json",
         failure: { code: "EXIT", message: "non-zero exit 1" },
       },
     ];
     const absences = collectReportAbsences(attempts, {
-      driverFound: (executable) => executable !== "cld",
+      skippedSeats: [
+        {
+          seat: "review-correctness",
+          driver: "grok",
+          reason: "missing",
+          next: "Install grok, then run councilkit init.",
+        },
+      ],
+      definedSeats: [
+        { name: "review-security", tool: "cfuse" },
+        { name: "kimi", tool: "kimi" },
+        { name: "review-cursor", tool: "cursor-agent" },
+      ],
     });
-    expect(absences).toContainEqual({ name: "review-security", reason: "未找到 cld" });
-    expect(absences).toContainEqual({ name: "cursor", reason: "运行失败，退出码 1" });
+    expect(absences).toContainEqual({
+      name: "review-correctness",
+      tool: "grok",
+      reason: "没有安装 grok",
+    });
+    expect(absences).toContainEqual({
+      name: "review-cursor",
+      tool: "cursor-agent",
+      reason: "运行失败，退出码 1",
+    });
+    expect(absences.some((row) => row.name === "review-security")).toBe(false);
     expect(absences.some((row) => row.name === "kimi")).toBe(false);
-    expect(absences.some((row) => row.reason.startsWith("未找到 grok"))).toBe(false);
+    expect(collectReportAbsences([seat("kimi", "ok")])).toEqual([]);
     expect(
       failureAbsenceReason({ code: "EXIT", message: "please login", errorClass: "auth" }),
     ).toBe("未登录");
@@ -240,12 +281,43 @@ describe("missing seats", () => {
     expect(md).not.toContain("- Status: failed");
     expect(md).toContain("failed:EXIT");
     const conclusion = md.slice(md.indexOf("## 结论"), md.indexOf("## 阻塞问题"));
-    expect(conclusion).toContain("缺席：review-security（未找到 cld）");
-    expect(conclusion).toContain("缺席：cursor（运行失败，退出码 1）");
-    expect(conclusion).not.toMatch(/non-zero|exit \d/i);
+    expect(conclusion).toContain("缺席：review-correctness（grok）：没有安装 grok。");
+    expect(conclusion).toContain("缺席：review-cursor（cursor-agent）：运行失败，退出码 1。");
+    expect(conclusion).toContain(
+      "这份报告只汇总了其余 2 席的结果，缺席的这几席负责查的问题可能没被发现。",
+    );
+    expect(conclusion).not.toContain("review-security");
+    expect(conclusion).not.toMatch(/未找到/);
+    expect(conclusion).not.toMatch(/non-zero/i);
     const titles = [...md.matchAll(/^## .+$/gm)].map((match) => match[0]);
     expect(titles.slice(0, 4)).toEqual(["## 结论", "## 阻塞问题", "## 需处理的问题", "## 待确认"]);
     expect(titles.at(-1)).toBe("## 附录:各审查者交付物");
+  });
+
+  it("lists a defined seat whose reason was never recorded when skippedSeats is absent", () => {
+    const attempts = [
+      {
+        ...seat("review-security", "## 发现\n无\n\n## 结论\napprove\n"),
+        driverId: "claude-stream-json",
+      },
+    ];
+    const absences = collectReportAbsences(attempts, {
+      definedSeats: [
+        { name: "review-security", tool: "cfuse" },
+        { name: "review-maintainability", tool: "kimi" },
+      ],
+    });
+    expect(absences).toEqual([
+      {
+        name: "review-maintainability",
+        tool: "kimi",
+        reason: "原因未记录，重新运行 `councilkit init` 可以看到原因",
+      },
+    ]);
+    expect(formatAbsence(absences[0]!)).toBe(
+      "缺席：review-maintainability（kimi）：原因未记录，重新运行 `councilkit init` 可以看到原因。",
+    );
+    expect(absences.some((row) => row.name === "review-security")).toBe(false);
   });
 });
 

@@ -40,14 +40,14 @@ const header = "# Autonomous Review Report\n\n- Status: completed\n\n---\n\n";
 describe("report label shapes", () => {
   it("renders a solid spec tag and keeps changes-requested red", () => {
     const html = page(
-      `${header}## 结论\n\nchanges-requested\n\n阻塞 1。\n\n## 共识发现\n\n- [major][act-on] 空串分支被删除\n  违反规格 · AC-3\n  不变量：\`AC-3\`\n`,
+      `${header}## 结论\n\nchanges-requested\n\n阻塞 1。\n\n## 共识发现\n\n- [major][act-on] 空串分支被删除\n  违反了规格里的 AC-3：空串输入必须问候\n  违反规格 · AC-3\n  不变量：\`AC-3\`\n`,
       [
         {
           id: "f-ac-3",
           severity: "major",
           status: "open",
           title: "空串分支被删除",
-          text: '空串分支被删除\n违反规格 · AC-3\n不变量：AC-3\n反例：Greet("") 不再问候',
+          text: '空串分支被删除\n违反了规格里的 AC-3：空串输入必须问候\n违反规格 · AC-3\n不变量：AC-3\n反例：Greet("") 不再问候',
           source: "consensus",
           reviewer: "kimi",
           files: ["toy.go"],
@@ -59,8 +59,13 @@ describe("report label shapes", () => {
     );
     expect(html).toContain("ck-tag-spec");
     expect(html).toContain("违反规格 · AC-3");
+    expect(html).toContain("违反了规格里的 AC-3：空串输入必须问候");
     expect(html).toContain("ck-verdict-changes");
-    expect(html).toContain("阻塞依据（规格合同减法）");
+    expect(html).toContain("阻塞依据：这条问题违反了规格里写明的验收");
+    expect(html).not.toContain("规格合同减法");
+    expect(html).not.toContain("合同内 Act On");
+    expect(html).not.toContain("不变量 ID");
+    expect(html).not.toContain("不变量：");
     expect(html).not.toContain("未绑定规格");
     expect(html).not.toContain("ck-tag-consensus");
     expect(html).not.toContain("ck-tag-pending");
@@ -103,6 +108,9 @@ describe("report label shapes", () => {
     );
     expect(html).toContain("ck-tag-pending");
     expect(html).toContain("待确认 · kimi");
+    expect(html).toContain("没有需要处理的问题，另有 1 条待确认（只有一席提出）。");
+    expect(html).not.toContain("0 个问题");
+    expect(html).not.toContain("这份审查还没有问题记录。");
     expect(html).toContain("账本无阻塞");
     expect(html).not.toContain("账本未生成");
     expect(html).not.toContain("尚无法判断阻塞");
@@ -113,13 +121,20 @@ describe("report label shapes", () => {
     expect(html).not.toContain("ck-verdict-changes");
   });
 
-  it("lists absent seats in the conclusion block", () => {
+  it("lists absent seats in amber with the circle-alert icon", () => {
     const html = page(
-      `${header}## 结论\n\ncomment\n\n缺席：review-security（未找到 cld）\n\n阻塞 0。\n`,
+      `${header}## 结论\n\ncomment\n\n缺席：review-cursor（cursor-agent）：运行失败，退出码 1。\n这份报告只汇总了其余 2 席的结果，缺席的这几席负责查的问题可能没被发现。\n\n阻塞 0。\n`,
       [],
     );
     const decision = html.slice(html.indexOf("审查结论"), html.indexOf("原始汇总报告"));
-    expect(decision).toContain("缺席：review-security（未找到 cld）");
+    expect(decision).toContain("缺席：review-cursor（cursor-agent）：运行失败，退出码 1。");
+    expect(decision).toContain(
+      "这份报告只汇总了其余 2 席的结果，缺席的这几席负责查的问题可能没被发现。",
+    );
+    expect(decision).toContain('data-absence-icon="circle-alert"');
+    expect(decision).toContain("ck-wb-absence");
+    expect(decision).not.toContain("review-security");
+    expect(decision).not.toContain("cld");
     expect(decision).toContain("账本无阻塞");
   });
 });

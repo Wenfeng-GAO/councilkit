@@ -186,6 +186,7 @@ describe("#295 designer: blocking rule folded in the sample report", () => {
       }),
     );
     expect(html).not.toContain("阻塞是怎么判的");
-    expect(html).toContain("阻塞依据（规格合同减法）");
+    expect(html).toContain("阻塞依据：这条问题违反了规格里写明的验收");
+    expect(html).not.toContain("规格合同减法");
   });
 });

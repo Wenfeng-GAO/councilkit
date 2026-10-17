@@ -1,21 +1,61 @@
 /**
- * Seats that did not take part. The conclusion names each one and why:
- * the driver was missing when the default roster was built, the seat was
- * not logged in, or the seat failed mid-run.
+ * Seats that did not take part.
+ *
+ * Source of truth is the council record's `skippedSeats` (written by
+ * `councilkit init`, #380) plus seats that failed while running. There is
+ * no report-time PATH probe: a seat that ran, including review-security on
+ * standalone cfuse, is not absent.
+ *
+ * A council saved before `skippedSeats` existed has no field. Each defined
+ * seat that never produced an attempt is still listed, with an unrecorded
+ * reason, so a seat is never dropped silently.
  */
-import { DEFAULT_AGENT_SPECS } from "../init/defaults";
-import { findExecutable } from "./driver-commands";
+import type { SkippedSeat } from "../store/schemas";
+import { executableForDriver } from "./driver-commands";
 import type { AttemptResult } from "./runner";
 
 export interface ReportAbsence {
   name: string;
-  /** Text inside the parentheses, e.g. 「未找到 cld」. */
+  /** Tool the seat runs on, e.g. grok, cursor-agent, cfuse. */
+  tool: string;
   reason: string;
 }
 
+export interface DefinedSeat {
+  name: string;
+  tool: string;
+}
+
+export interface AbsenceRoster {
+  /**
+   * Undefined when the council file has no `skippedSeats` field.
+   * An empty array means init recorded that nothing was skipped.
+   */
+  skippedSeats?: readonly SkippedSeat[];
+  definedSeats?: readonly DefinedSeat[];
+}
+
+type AbsenceAttempt = Pick<AttemptResult, "agentName" | "status" | "failure" | "driverId">;
+
+const UNRECORDED_REASON = "原因未记录，重新运行 `councilkit init` 可以看到原因";
+
 export function formatAbsence(absence: ReportAbsence): string {
   const reason = absence.reason.replace(/\s+/g, " ").trim() || "失败";
-  return `缺席：${absence.name}（${reason}）`;
+  const tool = absence.tool.replace(/\s+/g, " ").trim() || "未知工具";
+  return `缺席：${absence.name}（${tool}）：${reason}。`;
+}
+
+/** Grey line under the absence list. M is the number of seats that finished. */
+export function formatAbsenceNote(presentCount: number): string {
+  return `这份报告只汇总了其余 ${presentCount} 席的结果，缺席的这几席负责查的问题可能没被发现。`;
+}
+
+export function toolNameForSelection(selection: {
+  driverId: string;
+  options: object;
+}): string {
+  if ("route" in selection.options && selection.options.route === "cfuse") return "cfuse";
+  return executableForDriver(selection.driverId) ?? selection.driverId;
 }
 
 const NOT_LOGGED_IN =
@@ -45,27 +85,55 @@ export function failureAbsenceReason(
   return "运行失败";
 }
 
+export function skippedSeatReason(seat: Pick<SkippedSeat, "driver" | "reason">): string {
+  if (seat.reason === "missing") return `没有安装 ${seat.driver}`;
+  if (seat.reason === "logged-out") return "未登录";
+  return `没有配置 ${seat.driver} 模型`;
+}
+
+function toolForAttempt(attempt: AbsenceAttempt, roster: AbsenceRoster): string {
+  const defined = roster.definedSeats?.find((seat) => seat.name === attempt.agentName);
+  if (defined?.tool) return defined.tool;
+  return executableForDriver(attempt.driverId) ?? attempt.driverId;
+}
+
 /**
- * Default jury seats whose driver was not on PATH (so init never put them in
- * the council) plus seats that ran and failed. A successful seat is not listed.
+ * `skippedSeats` plus runtime failures. When the field is missing, defined
+ * seats with no attempt are listed too. A successful attempt is never absent.
  */
 export function collectReportAbsences(
-  attempts: readonly Pick<AttemptResult, "agentName" | "status" | "failure">[],
-  options: { env?: NodeJS.ProcessEnv; driverFound?: (executable: string) => boolean } = {},
+  attempts: readonly AbsenceAttempt[],
+  roster: AbsenceRoster = {},
 ): ReportAbsence[] {
-  const driverFound =
-    options.driverFound ??
-    ((executable: string) => findExecutable(executable, options.env) !== null);
-  const present = new Set(attempts.map((attempt) => attempt.agentName));
+  const byName = new Map<string, AbsenceAttempt>();
+  for (const attempt of attempts) byName.set(attempt.agentName, attempt);
+
   const absences: ReportAbsence[] = [];
-  for (const spec of DEFAULT_AGENT_SPECS) {
-    if (present.has(spec.name)) continue;
-    if (driverFound(spec.executable)) continue;
-    absences.push({ name: spec.name, reason: `未找到 ${spec.executable}` });
+  const named = new Set<string>();
+
+  for (const seat of roster.skippedSeats ?? []) {
+    const ran = byName.get(seat.seat);
+    if (ran?.status === "success" || ran?.status === "failure") continue;
+    if (named.has(seat.seat)) continue;
+    absences.push({ name: seat.seat, tool: seat.driver, reason: skippedSeatReason(seat) });
+    named.add(seat.seat);
   }
+
   for (const attempt of attempts) {
-    if (attempt.status !== "failure") continue;
-    absences.push({ name: attempt.agentName, reason: failureAbsenceReason(attempt.failure) });
+    if (attempt.status !== "failure" || named.has(attempt.agentName)) continue;
+    absences.push({
+      name: attempt.agentName,
+      tool: toolForAttempt(attempt, roster),
+      reason: failureAbsenceReason(attempt.failure),
+    });
+    named.add(attempt.agentName);
   }
+
+  for (const seat of roster.definedSeats ?? []) {
+    if (named.has(seat.name) || byName.has(seat.name)) continue;
+    absences.push({ name: seat.name, tool: seat.tool, reason: UNRECORDED_REASON });
+    named.add(seat.name);
+  }
+
   return absences;
 }

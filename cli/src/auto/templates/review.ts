@@ -403,7 +403,7 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "每条发现遵守以下标题与正文格式：",
     FINDING_FORMAT,
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
-    "章节顺序固定：结论、阻塞问题、需处理的问题、待确认，然后才是分歧。结论是全文第一个二级标题。先写单行英文 verdict token：approve | changes-requested | comment，再写原因。未能参加的席位在结论里逐条写「缺席：席位名（原因）」，原因用未找到的驱动名、未登录，或失败原因。再写阻塞数。",
+    "章节顺序固定：结论、阻塞问题、需处理的问题、待确认，然后才是分歧。结论是全文第一个二级标题。先写单行英文 verdict token：approve | changes-requested | comment，再写原因。不要编造缺席行；汇总程序会按席位配置和运行结果写入「缺席：席位（工具）：原因。」再写阻塞数。",
     specBound
       ? "仅当仍存在合同内 Act On（critical/major + 不变量 + 反例）时用 changes-requested；只有 nit / 规格外建议时用 comment，不得因规格外或 nit 阻塞合并。"
       : "未绑定规格时：多数席位（已完成席位的过半，且至少 2 席）各自指出同一缺陷，并且至少一席把它标为 critical 或 major，汇总结论必须是 changes-requested，不能降成 comment。只有一席提出的问题不阻塞。",

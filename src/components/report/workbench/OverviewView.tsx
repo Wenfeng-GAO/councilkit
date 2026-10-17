@@ -15,7 +15,13 @@ import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useState } from "react";
-import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
+import {
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleHelpIcon,
+  Clock3Icon,
+  STATUS_ICONS,
+} from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
 
@@ -50,6 +56,15 @@ export function conclusionAbsences(parsed: ParsedReviewReport | null): string[] 
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("缺席："));
+}
+
+export function conclusionAbsenceNote(parsed: ParsedReviewReport | null): string | null {
+  const body = parsed?.sections.find((section) => section.title === "结论")?.body ?? "";
+  const line = body
+    .split("\n")
+    .map((item) => item.trim())
+    .find((item) => item.startsWith("这份报告只汇总了其余"));
+  return line && line.length > 0 ? line : null;
 }
 
 /**
@@ -119,6 +134,7 @@ export function OverviewView({
     reportSaysClear: reportSaysClear(parsed, run.status),
   });
   const absences = conclusionAbsences(parsed);
+  const absenceNote = conclusionAbsenceNote(parsed);
   const overview = parsed?.sections.find((section) => section.title === "概览");
   const disagreement = parsed?.sections.find((section) => section.title === "分歧");
   const overviewBody = [parsed?.preface, overview?.body]
@@ -167,10 +183,12 @@ export function OverviewView({
             )}
           </p>
           {absences.map((line) => (
-            <p key={line} className="ck-wb-absence">
-              {line}
+            <p key={line} className="ck-wb-absence" data-absence-icon="circle-alert">
+              <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
+              <span>{line}</span>
             </p>
           ))}
+          {absenceNote ? <p className="ck-wb-absence-note">{absenceNote}</p> : null}
           {decisionConflict ? (
             <p className="ck-wb-decision-conflict">
               报告意见与账本门禁尚未对齐。请核对问题的适用范围和处置依据，再判断是否可以通过。

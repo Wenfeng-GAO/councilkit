@@ -16,6 +16,7 @@ const CONSENSUS_QUALIFIER = /^多席一致\s*(\d+\/\d+)$/;
 const PENDING_QUALIFIER = /待确认\s*·\s*(.+)$/;
 const BASIS_LINE = /无规格依据，依据是\s*(\d+\/\d+)\s*席一致：\s*([^\n]+)/;
 const SPEC_LABEL = /违反规格\s*·\s*([A-Za-z][A-Za-z0-9_-]*)/;
+const SPEC_BASIS = /违反了规格里的\s*([A-Za-z][A-Za-z0-9_-]*)\s*[：:]\s*([^\n]+)/;
 const INVARIANT_LINE = /(?:不变量|不变式|invariant)\s*[:：]\s*`?([A-Za-z][A-Za-z0-9_-]{0,40})`?/i;
 
 export function findingDisplayMark(input: {
@@ -48,12 +49,18 @@ export function findingDisplayMark(input: {
   }
   if (input.contractClass === "out_of_spec") return null;
   const explicit = SPEC_LABEL.exec(qualifier) ?? SPEC_LABEL.exec(text);
+  const specBasis = SPEC_BASIS.exec(text);
   const invariant = input.invariantId?.trim() || INVARIANT_LINE.exec(text)?.[1]?.trim() || "";
   const actOn = /act-on|合同内/i.test(qualifier) || input.contractClass === "in_contract";
-  const id = explicit?.[1] ?? (actOn ? invariant : "");
+  const id = explicit?.[1] ?? specBasis?.[1] ?? (actOn ? invariant : "");
   if (!id) return null;
-  if (!actOn && !explicit) return null;
-  return { kind: "spec", label: `违反规格 · ${id}`, basis: null };
+  if (!actOn && !explicit && !specBasis) return null;
+  const acceptance = specBasis?.[2]?.trim().replace(/[。．.]\s*$/, "") ?? "";
+  return {
+    kind: "spec",
+    label: `违反规格 · ${id}`,
+    basis: acceptance.length > 0 ? `违反了规格里的 ${id}：${acceptance}` : null,
+  };
 }
 
 export function textWithoutBasis(text: string, basis: string | null): string {
@@ -71,5 +78,7 @@ export function findingMarkdown(text: string): string {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
+    .filter((line) => !/^(?:不变量|不变式|invariant)\s*[:：]/i.test(line))
+    .filter((line) => !/规格合同减法|合同内\s*Act On|不变量\s*ID/.test(line))
     .join("\n\n");
 }
