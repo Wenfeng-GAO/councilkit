@@ -2,8 +2,8 @@
  * Default product-jury roster. Names and personas are the product contract
  * `councilkit init` writes for `councilkit ideate`. Model ids for grok/kimi
  * reuse the existing review literals. Codex uses the top-level config.toml
- * `model` when set. Without that key, ideate-challenger is not created
- * (review-codex still stores `default` and spawn omits `-m`).
+ * `model` when set; otherwise ideate-challenger stores `default` and spawn
+ * omits `-m`, the same rule as review-codex.
  */
 import type { DriverSelection } from "../store/schemas";
 

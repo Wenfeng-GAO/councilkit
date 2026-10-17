@@ -52,7 +52,7 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——**大部分命令*
 
 driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out`；旧文件里还可能有 `no-model`）和 `next`。人读输出先写一行总览（`init: N councils · M seats ready, K skipped`；1 个时用单数 council / seat），再按 Council 分组。每组标题是 `name · R ready, S skipped`；Council 已落盘且有 reporter 时写成 `name (reporter X) · R ready, S skipped`。行首符号不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。同一 Council 里 driver 和原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时保持一行 `✗ <seat>  skipped: …` 加一行命令。版本列在知道版本时写出，`cursor-agent` 可以不写版本。`? cld` 这类全局说明放在两组之后。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。成功时 `next:` 后面仍有 `open reports:`。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）和 Codex 模型覆盖说明只出现在 `--json` 的 `next` 和 README。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
 
-Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `model`，也会创建 `review-codex`，`modelId` 为 `default`。审查和 probe 都不传 `-m`，由 Codex CLI 使用自己的默认模型。`ideate-challenger` 只在顶层 `model` 已配置时创建，并记下该 id、传 `-m`；没有顶层 model 时不把这一席写成缺席。若席上留下的 `modelId` 仍是 `default`，再次 init 会把它移出 `product-jury`。顶层 `model = "..."` 存在时，`review-codex` 也记下该 id 并传 `-m`。`models_cache.json` 不算用户配置。
+Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `model`，也会创建 `review-codex` 和 `ideate-challenger`，`modelId` 为 `default`。审查和 probe 都不传 `-m`，由 Codex CLI 使用自己的默认模型。顶层 `model = "..."` 存在时，两席都记下该 id 并传 `-m`。`models_cache.json` 不算用户配置。每个默认席位要么创建，要么写入 `skippedSeats`，不会悄悄消失。
 
 `review-security` 在 PATH 上有 `cld` 时走 `cld cfuse`（`cfuse-claude-code` 或 `cfuse-claude` 会写入 `CLD_CFUSE_BIN`）。没有 `cld` 但有独立 `cfuse` 时，同一席位改为运行 `cfuse -p … --output-format text --skip-update`。只有 `cfuse-claude` / `cfuse-claude-code`、没有 `cld` 也没有独立 `cfuse` 时，不建这一席，并说明需要 `cld`。
 
@@ -66,7 +66,7 @@ Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `
 
 - **默认 Council**：
   - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 和 `review-codex` 不是 preferred reporter）
-  - `product-jury`（PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 在 PATH 有 `codex`、不是明确未登录、且顶层 `config.toml` 有 `model` 时创建；人数不足 2 不落盘，人读标题也不写 reporter；Reporter 优先 Codex）
+  - `product-jury`（PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 在 PATH 有 `codex` 且不是明确未登录时创建，没有顶层 `model` 时 model = `default`、不传 `-m`；人数不足 2 不落盘，人读标题也不写 reporter；Reporter 优先 Codex）
 
 - **行为**：
   - 已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）

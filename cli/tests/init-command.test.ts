@@ -20,6 +20,8 @@ import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { dispatch } from "../src/cli";
 import { runInit } from "../src/commands/init";
 import { ReviewExit, runReview } from "../src/commands/review";
+import { DEFAULT_AGENT_NAMES } from "../src/init/defaults";
+import { IDEATE_AGENT_NAMES } from "../src/init/ideate-defaults";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -284,41 +286,39 @@ exit 1
     const store = new Store();
     expect(out.missingDrivers).not.toContain("codex-model");
     expect(store.getAgent("review-codex").modelId).toBe("default");
-    expect(store.listAgents().map((agent) => agent.name)).not.toContain("ideate-challenger");
+    expect(store.getAgent("ideate-challenger").modelId).toBe("default");
     expect(store.getCouncil("pr-jury").agentIds).toContain(store.getAgent("review-codex").id);
-    expect(
-      store
-        .getCouncil("product-jury")
-        .agentIds.map((id) => store.getAgent(id).name)
-        .sort(),
-    ).toEqual(["ideate-engineering", "ideate-product"]);
+    expect(store.getCouncil("product-jury").agentIds).toContain(
+      store.getAgent("ideate-challenger").id,
+    );
     const codex = out.drivers.find((row) => row.driver === "codex");
     expect(codex?.next).toContain('model = "<model-id>"');
     expect(codex?.next).toContain("-m");
     expect(codex?.next).not.toContain(">>");
     expect(sink.human).toContain("✓ review-codex");
+    expect(sink.human).toContain("✓ ideate-challenger");
     expect(sink.human).toContain("logged in · default model");
-    expect(sink.human).not.toContain("ideate-challenger");
     expect(sink.human).not.toContain("config.toml");
     expect(sink.human).not.toContain(">>");
     expect(sink.human).not.toContain("seat not created");
   });
 
-  it("drops a default-alias ideate-challenger once no top-level model remains", async () => {
+  it("keeps ideate-challenger on the CLI default model when the top-level model disappears", async () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-6-astra"\n');
     stub(["kimi", "grok", "codex"], LOGGED_IN);
     await runInit([], makeSink());
     const seeded = new Store();
-    const challenger = seeded.getAgent("ideate-challenger");
-    expect(seeded.getCouncil("product-jury").agentIds).toContain(challenger.id);
-    seeded.updateAgent(challenger.id, { modelId: "default" });
+    expect(seeded.getCouncil("product-jury").agentIds).toContain(
+      seeded.getAgent("ideate-challenger").id,
+    );
     rmSync(join(codexHome, "config.toml"));
     await runInit([], makeSink());
     const store = new Store();
-    expect(store.getCouncil("product-jury").agentIds).not.toContain(
+    expect(store.getAgent("ideate-challenger").modelId).toBe("default");
+    expect(store.getAgent("review-codex").modelId).toBe("default");
+    expect(store.getCouncil("product-jury").agentIds).toContain(
       store.getAgent("ideate-challenger").id,
     );
-    expect(store.getAgent("review-codex").modelId).toBe("default");
   });
 
   it("does not write an existing codex config.toml and still uses the default model", async () => {
@@ -888,6 +888,69 @@ exit 1
     expect(loaded.skippedSeats).toBeUndefined();
   });
 
+  it("lists every default seat as created or skipped", async () => {
+    const names = [...DEFAULT_AGENT_NAMES, ...IDEATE_AGENT_NAMES];
+    const accounted = (input: {
+      createdAgents?: Array<{ name: string }>;
+      reusedAgents?: Array<{ name: string }>;
+      skippedSeats?: Array<{ seat: string }>;
+    }) => {
+      const created = new Set([
+        ...(input.createdAgents ?? []).map((agent) => agent.name),
+        ...(input.reusedAgents ?? []).map((agent) => agent.name),
+      ]);
+      const skipped = new Set((input.skippedSeats ?? []).map((seat) => seat.seat));
+      for (const name of names) {
+        expect(created.has(name) !== skipped.has(name), name).toBe(true);
+      }
+    };
+
+    process.env.PATH = bin;
+    delete process.env.CURSOR_API_KEY;
+    const missing = await runInit([], makeSink()).then(
+      () => null,
+      (error: { detail?: { skippedSeats?: Array<{ seat: string }> } }) => error,
+    );
+    accounted({ skippedSeats: missing?.detail?.skippedSeats });
+
+    stub(["kimi"]);
+    const kimiOnly = makeSink();
+    await runInit([], kimiOnly);
+    accounted(
+      kimiOnly.finished as {
+        createdAgents: Array<{ name: string }>;
+        reusedAgents: Array<{ name: string }>;
+        skippedSeats: Array<{ seat: string }>;
+      },
+    );
+
+    stub(["cfuse", "kimi", "cursor-agent", "codex"], LOGGED_IN);
+    const codexDefault = makeSink();
+    await runInit([], codexDefault);
+    const codexOut = codexDefault.finished as {
+      createdAgents: Array<{ name: string; modelId: string }>;
+      reusedAgents: Array<{ name: string }>;
+      skippedSeats: Array<{ seat: string }>;
+    };
+    accounted(codexOut);
+    expect(
+      codexOut.createdAgents.find((agent) => agent.name === "ideate-challenger")?.modelId,
+    ).toBe("default");
+    expect(codexOut.skippedSeats.map((seat) => seat.seat)).not.toContain("ideate-challenger");
+    expect(codexOut.skippedSeats.map((seat) => seat.seat)).not.toContain("review-codex");
+
+    stub(["cld", "kimi", "grok", "cursor-agent", "codex"], LOGGED_OUT);
+    const signedOut = makeSink();
+    await runInit([], signedOut);
+    accounted(
+      signedOut.finished as {
+        createdAgents: Array<{ name: string }>;
+        reusedAgents: Array<{ name: string }>;
+        skippedSeats: Array<{ seat: string }>;
+      },
+    );
+  });
+
   it("prints the symbol layout for a mixed PATH", async () => {
     const script = (version: string) => `#!/bin/sh
 if [ "$1" = "--version" ]; then echo "${version}"; exit 0; fi
@@ -909,7 +972,7 @@ exit 0
     process.env.PATH = bin;
     const sink = makeSink();
     await runInit([], sink);
-    expect(sink.human).toBe(`init: 2 councils · 5 seats ready, 3 skipped
+    expect(sink.human).toBe(`init: 2 councils · 6 seats ready, 3 skipped
 
 pr-jury (reporter review-security) · 4 ready, 2 skipped
   ✓ review-security        cfuse 2.6.43   login not checked
@@ -920,8 +983,9 @@ pr-jury (reporter review-security) · 4 ready, 2 skipped
       review-correctness, review-adversarial
       install grok so it's on PATH, then: grok login
 
-product-jury · 1 ready, 1 skipped
+product-jury (reporter ideate-challenger) · 2 ready, 1 skipped
   ✓ ideate-engineering     kimi 2.1.1     logged in
+  ✓ ideate-challenger      codex 0.161.0  logged in · default model
   ✗ ideate-product  skipped: grok not installed
       install grok so it's on PATH, then: grok login
 

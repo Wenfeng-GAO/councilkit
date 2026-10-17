@@ -236,24 +236,17 @@ export class Store {
 
   /** Add missing roster agents and set the reporter. Used by `init` to keep
    * pr-jury aligned with discovered drivers without `--force`. Pass
-   * `skippedSeats` to record default seats this init left off the council.
-   * `removeAgentIds` drops seats that must leave (a default-alias Codex
-   * ideate seat once no top-level model is configured). */
+   * `skippedSeats` to record default seats this init left off the council. */
   syncCouncilRoster(
     councilRef: string,
     roster: AgentRecord[],
     reporterId: string,
     skippedSeats?: SkippedSeat[],
-    removeAgentIds: readonly string[] = [],
   ): CouncilRecord {
     const council = this.getCouncil(councilRef);
-    const remove = new Set(removeAgentIds);
-    const ids = council.agentIds.filter((id) => !remove.has(id));
+    const ids = [...council.agentIds];
     for (const agent of roster) {
       if (!ids.includes(agent.id)) ids.push(agent.id);
-    }
-    if (ids.length === 0) {
-      throw errors.usage("council must keep at least one agent");
     }
     if (!ids.includes(reporterId)) {
       throw errors.usage("reporter must be among council agents");

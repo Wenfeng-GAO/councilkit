@@ -3,7 +3,6 @@
  * homes `~/.kimi-code/bin` / `~/.grok/bin`) and write the default PR-jury
  * roster into the CLI store. Does not talk to the Runtime Host.
  */
-import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { errors } from "../errors";
 import {
   DEFAULT_AGENT_NAMES,
@@ -180,14 +179,9 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   }
 
   const ideateRoster: AgentRecord[] = [];
-  const dropAgentIds: string[] = [];
   for (const spec of ideateAvailable) {
     const existing = findByName(store, spec.name);
-    const modelId = ideateModelId(spec, existing, env);
-    if (modelId === null) {
-      if (existing !== null) dropAgentIds.push(existing.id);
-      continue;
-    }
+    const modelId = ideateModelId(spec, env);
     if (existing !== null) {
       const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
       const sameModel = existing.modelId === modelId;
@@ -215,21 +209,13 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     ideateRoster.push(created);
   }
   let productReporterName: string | null = null;
-  const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
-  const persistProduct = ideateRoster.length >= 2;
-  const dropFromProduct =
-    existingProduct !== null && dropAgentIds.some((id) => existingProduct.agentIds.includes(id));
-  if (persistProduct || dropFromProduct) {
-    const productReporter = pickProductReporter(store, ideateRoster, existingProduct, dropAgentIds);
-    if (productReporter !== null && existingProduct !== null) {
-      store.syncCouncilRoster(
-        existingProduct.id,
-        ideateRoster,
-        productReporter.id,
-        ideateSkips,
-        dropAgentIds,
-      );
-    } else if (productReporter !== null && persistProduct) {
+  if (ideateRoster.length >= 2) {
+    const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+    const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
+    productReporterName = productReporter.name;
+    if (existingProduct !== null) {
+      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id, ideateSkips);
+    } else {
       store.createCouncil({
         name: PRODUCT_JURY_COUNCIL_NAME,
         topic: PRODUCT_JURY_TOPIC,
@@ -241,7 +227,6 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
         skippedSeats: ideateSkips,
       });
     }
-    if (persistProduct && productReporter !== null) productReporterName = productReporter.name;
   }
 
   const outcome: InitOutcome = {
@@ -305,30 +290,11 @@ function reviewModelId(spec: DefaultAgentSpec, env: NodeJS.ProcessEnv): string {
   return configuredCodexModel(env) ?? spec.modelId;
 }
 
-function ideateModelId(
-  spec: IdeateAgentSpec,
-  existing: AgentRecord | null,
-  env: NodeJS.ProcessEnv,
-): string | null {
+function ideateModelId(spec: IdeateAgentSpec, env: NodeJS.ProcessEnv): string {
   if (spec.modelId !== null) return spec.modelId;
-  if (existing !== null && !isExactDefaultModelAlias(existing.modelId)) return existing.modelId;
-  // No top-level model: leave ideate-challenger uncreated. review-codex still
-  // stores `default` and omits `-m`. Do not record a no-model skip.
-  return configuredCodexModel(env);
-}
-
-function pickProductReporter(
-  store: Store,
-  roster: readonly AgentRecord[],
-  existing: CouncilRecord | null,
-  dropAgentIds: readonly string[],
-): AgentRecord | null {
-  if (roster.length > 0) return pickIdeateReporter(roster, existing);
-  if (existing === null) return null;
-  const drop = new Set(dropAgentIds);
-  const remaining = existing.agentIds.filter((id) => !drop.has(id)).map((id) => store.getAgent(id));
-  if (remaining.length === 0) return null;
-  return remaining.find((agent) => agent.id === existing.reporterAgentId) ?? remaining[0];
+  // Same rule as review-codex: a logged-in Codex with no top-level model still
+  // becomes a seat. Spawn omits `-m` when the id is the default alias.
+  return configuredCodexModel(env) ?? "default";
 }
 
 function noteCodexDefaultModel(drivers: DriverStatus[], env: NodeJS.ProcessEnv): void {
