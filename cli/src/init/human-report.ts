@@ -1,8 +1,9 @@
 /**
  * Human layout for `councilkit init`. Symbols carry status (not colour).
- * The summary counts councils that were actually written. Each council is its
- * own group. A council that was not written says so and lists the missing
- * seats; its next command is omitted. Skips that share a driver and reason
+ * The summary counts councils that were actually written. When one was
+ * written, seat totals count only that council and name the others. Each
+ * council is its own group. A council that was not written says so, lists the
+ * missing seats, and gets a `to create` line under `next:`. Skips that share a driver and reason
  * merge only inside that group; a single skip stays one line. Global notes
  * (standalone cfuse filling cld) come after both groups. Long driver notes
  * stay in `--json` `next` and the README. Every line stays within 80 columns.
@@ -170,14 +171,32 @@ function councilSection(council: HumanCouncil): string {
 }
 
 function summaryLine(councils: readonly HumanCouncil[]): string {
+  const created = councils.filter((council) => council.created);
+  const uncreated = councils.filter((council) => !council.created).map((council) => council.name);
+  // A created council's overview ignores seats that belong to an uncreated
+  // council. When nothing was written, the empty-PATH report still totals
+  // every displayed seat.
+  const counted = created.length > 0 ? created : councils;
   let ready = 0;
   let skipped = 0;
-  for (const council of councils) {
+  for (const council of counted) {
     ready += council.ready.length;
     skipped += council.skipped.filter((seat) => seat.reason !== "no-model").length;
   }
-  const created = councils.filter((council) => council.created).length;
-  return `init: ${countable(created, "council", "councils")} · ${countable(ready, "seat", "seats")} ready, ${skipped} skipped`;
+  const base = `init: ${countable(created.length, "council", "councils")} · ${countable(ready, "seat", "seats")} ready, ${skipped} skipped`;
+  if (created.length === 0 || uncreated.length === 0) return base;
+  return `${base} · ${uncreated.join(", ")} not created`;
+}
+
+function installNames(council: HumanCouncil): string {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const seat of council.skipped) {
+    if (seat.reason === "no-model" || seen.has(seat.driver)) continue;
+    seen.add(seat.driver);
+    names.push(seat.driver);
+  }
+  return names.join(" or ");
 }
 
 function nextLines(councils: readonly HumanCouncil[]): string[] {
@@ -190,19 +209,34 @@ function nextLines(councils: readonly HumanCouncil[]): string[] {
   }
   if (lines.length === 1) {
     lines.push("  install a logged-in CLI, then run: councilkit init");
+    return lines;
+  }
+  for (const council of councils) {
+    if (council.created) continue;
+    const tools = installNames(council);
+    const list = tools.length > 0 ? tools : "a logged-in CLI";
+    lines.push(
+      `  to create ${council.name}, install ${list} (see above), then rerun: councilkit init`,
+    );
   }
   return lines;
 }
 
 function wrapLine(line: string): string {
   if (line.length <= LINE_WIDTH) return line;
+  const indent = /^ */.exec(line)?.[0] ?? "";
   const parts: string[] = [];
   let rest = line;
   while (rest.length > LINE_WIDTH) {
     let cut = rest.lastIndexOf(" ", LINE_WIDTH);
-    if (cut <= 0) cut = LINE_WIDTH;
+    if (cut <= indent.length) cut = LINE_WIDTH;
     parts.push(rest.slice(0, cut));
-    rest = rest.slice(cut).trimStart();
+    const next = rest.slice(cut).trimStart();
+    if (next.length === 0) {
+      rest = "";
+      break;
+    }
+    rest = `${indent}${next}`;
   }
   if (rest.length > 0) parts.push(rest);
   return parts.join("\n");
@@ -234,28 +268,25 @@ export function renderInitHuman(input: { councils: HumanCouncil[] }): string {
   return wrapLines(lines.join("\n"));
 }
 
-/** Plain-language explanation for a council init did not write. */
+/** Plain-language explanation for a council init did not write. Lists every skipped seat. */
 export function formatPendingCouncil(pending: PendingCouncil): string {
-  const ready =
-    pending.readySeats.length === 0 ? "none ready" : `ready: ${pending.readySeats.join(", ")}`;
-  const lines = [
-    `${pending.name} was not created: it needs at least ${countable(pending.minimumSeats, "ready seat", "ready seats")} (${ready}).`,
-    "Missing:",
-  ];
-  if (pending.skippedSeats.length === 0) {
-    lines.push("  no default seats were available for this council");
+  const skipped = pending.skippedSeats.filter((seat) => seat.reason !== "no-model");
+  const reason = `${pending.name} was not created: needs at least ${countable(pending.minimumSeats, "ready seat", "ready seats")}`;
+  const tally = `${pending.readySeats.length} ready, ${skipped.length} skipped`;
+  // `error[2]: ` is prepended when this is printed. Break before the tally
+  // so that prefixed line still fits in 80 columns.
+  const lines =
+    `error[2]: ${reason}, ${tally}`.length <= LINE_WIDTH
+      ? [`${reason}, ${tally}`]
+      : [`${reason},`, `  ${tally}`];
+  if (skipped.length === 0) {
+    lines.push("  ✗ no default seats were available for this council");
   }
-  for (const seat of pending.skippedSeats) {
-    const why =
-      seat.reason === "logged-out"
-        ? "not logged in"
-        : seat.reason === "no-model"
-          ? "no model configured"
-          : "not installed";
-    lines.push(`  ${seat.seat}: ${seat.driver} ${why}`);
-    lines.push(`    ${humanCommand(seat.driver, seat.reason)}`);
+  for (const seat of skipped) {
+    const why = seat.reason === "logged-out" ? "not logged in" : "not installed";
+    lines.push(`  ✗ ${seat.seat}  skipped: ${seat.driver} ${why}`);
+    lines.push(`      ${humanCommand(seat.driver, seat.reason)}`);
   }
-  lines.push("Fix those, then run: councilkit init");
   return wrapLines(lines.join("\n"));
 }
 

@@ -394,6 +394,8 @@ export async function runReview(
   }
   let attemptAgents!: AgentRecord[];
   let aggregatorAgent!: AgentRecord;
+  /** Set when the configured reporter cannot run and another ready seat summarizes. */
+  let reporterFailover: { from: string; to: string } | undefined;
   let councilTopic: string | undefined;
   let councilBackground: string | undefined;
   let councilTargetOutput: string | undefined;
@@ -1181,10 +1183,32 @@ export async function runReview(
     (s) => probeByModel.get(probeKeysByAgent.get(s.agentId) ?? "")?.status === "success",
   );
 
+  // The configured reporter could not be probed. Another seat whose probe
+  // succeeded takes the summary instead of aborting the whole review. The
+  // original seat stays in the absent rows (its attempt is already a
+  // synthetic DRIVER_UNREACHABLE failure).
+  if (!controller.signal.aborted) {
+    const configuredProbe = probeByModel.get(probeKey(aggregatorAgent));
+    if (configuredProbe === undefined || configuredProbe.status !== "success") {
+      const replacement = attemptAgents.find((agent) => {
+        if (agent.id === aggregatorAgent.id) return false;
+        return probeByModel.get(probeKey(agent))?.status === "success";
+      });
+      if (replacement !== undefined) {
+        reporterFailover = { from: aggregatorAgent.name, to: replacement.name };
+        out.progress(
+          `  reporter ${aggregatorAgent.name} cannot run; ${replacement.name} will summarize`,
+        );
+        aggregatorAgent = replacement;
+      }
+    }
+  }
+
   let outcome: ReviewOutcome;
   try {
-    // Aggregator driver unreachable → the whole run aborts BEFORE any attempt
-    // spawn or workspace creation: exit 3, deterministic INCOMPLETE report.
+    // Aggregator driver unreachable and no other ready seat → the whole run
+    // aborts BEFORE any attempt spawn or workspace creation: exit 4,
+    // deterministic INCOMPLETE report.
     const aggProbe = probeByModel.get(probeKey(aggregatorAgent));
     if (controller.signal.aborted) {
       for (const spec of runnableSpecs) {
@@ -1483,6 +1507,7 @@ export async function runReview(
       startedAt,
       presolved,
       aggregatorAgent,
+      reporterFailover,
       aggregatorWorkspace,
       task,
       councilTopic,
@@ -1538,6 +1563,8 @@ interface ExecuteParams {
    * into declared attempt order by `mergeOrdered`. */
   presolved: AttemptResult[];
   aggregatorAgent: AgentRecord;
+  /** Present when a ready seat replaced a reporter that could not run. */
+  reporterFailover?: { from: string; to: string };
   aggregatorWorkspace: string;
   task: ReviewTask;
   councilTopic?: string;
@@ -1909,6 +1936,7 @@ async function finalize(
     incomplete: spec.incomplete,
     reason,
     failurePhase: spec.failure?.phase,
+    reporterFailover: p.reporterFailover,
   });
 
   // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then

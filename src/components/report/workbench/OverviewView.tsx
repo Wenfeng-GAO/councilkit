@@ -1,6 +1,10 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { FindingLedger } from "@/components/report/FindingLedger";
+import {
+  ReporterFailoverNote,
+  splitReporterFailover,
+} from "@/components/report/ReporterFailoverNote";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { reviewOverviewHeading } from "@/lib/cli-run-status";
 import {
@@ -85,6 +89,8 @@ export function OverviewView({
   const hasMarkdown = run.markdown.trim().length > 0;
   const StatusIcon = STATUS_ICONS[aggregator?.status ?? "pending"] ?? CircleHelpIcon;
   const overview = parsed?.sections.find((section) => section.title === "概览");
+  const conclusion = parsed?.sections.find((section) => section.title === "结论");
+  const reporterFailover = conclusion ? splitReporterFailover(conclusion.body).note : null;
   const disagreement = parsed?.sections.find((section) => section.title === "分歧");
   const overviewBody = [parsed?.preface, overview?.body]
     .filter((part): part is string => Boolean(part && part.trim().length > 0))
@@ -140,6 +146,11 @@ export function OverviewView({
           {parsed.verdict === "comment" ? (
             <p className="ck-finding-list-note">COMMENT 表示审查有意见，尚未给出通过建议。</p>
           ) : null}
+          {reporterFailover ? <ReporterFailoverNote text={reporterFailover} /> : null}
+        </section>
+      ) : reporterFailover ? (
+        <section className="ck-wb-review-decision" aria-label="审查结论">
+          <ReporterFailoverNote text={reporterFailover} />
         </section>
       ) : null}
       {partial ? (

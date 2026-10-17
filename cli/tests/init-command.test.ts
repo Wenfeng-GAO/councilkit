@@ -24,6 +24,7 @@ import { runIdeate } from "../src/commands/ideate";
 import { runInit } from "../src/commands/init";
 import { ReviewExit, runReview } from "../src/commands/review";
 import { DEFAULT_AGENT_NAMES } from "../src/init/defaults";
+import { formatPendingCouncil } from "../src/init/human-report";
 import { IDEATE_AGENT_NAMES } from "../src/init/ideate-defaults";
 import { renderErrorHuman } from "../src/output";
 import { resolvePaths } from "../src/store/paths";
@@ -169,13 +170,21 @@ exit 1
     expect(readMaybe(resolvePaths().agents)).toBeNull();
     const councils = JSON.parse(readMaybe(resolvePaths().councils) ?? "null") as {
       councils: unknown[];
-      pendingCouncils: Array<{ name: string }>;
+      pendingCouncils: Array<{
+        name: string;
+        status: string;
+        skippedSeats: Array<{ seat: string; reason: string }>;
+      }>;
     };
     expect(councils.councils).toEqual([]);
     expect(councils.pendingCouncils.map((row) => row.name).sort()).toEqual([
       "pr-jury",
       "product-jury",
     ]);
+    expect(councils.pendingCouncils.every((row) => row.status === "not created")).toBe(true);
+    expect(
+      councils.pendingCouncils.find((row) => row.name === "pr-jury")?.skippedSeats.length,
+    ).toBeGreaterThan(0);
   });
 
   it("names a next step for every missing driver and does not print a stack", async () => {
@@ -199,12 +208,17 @@ exit 1
     expect(message).toContain("cursor-agent login");
     expect(message).toContain("pr-jury ·");
     expect(message).toContain("✗ review-security  skipped: cld not installed");
-    expect(message).toContain("review-security");
     expect(message).toContain("put cld on PATH, then: cld login");
     expect(message).not.toContain("CLD_CFUSE_BIN");
     expect(message).not.toContain("backend");
+    expect(message).not.toContain("汇总席改由");
+    for (const line of message.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
     const skipped = (
-      error as { detail?: { skippedSeats?: Array<{ seat: string; reason: string }> } }
+      error as {
+        detail?: {
+          skippedSeats?: Array<{ seat: string; reason: string; next: string }>;
+        };
+      }
     ).detail?.skippedSeats;
     expect(
       skipped?.some((seat) => seat.seat === "review-security" && seat.reason === "missing"),
@@ -1008,6 +1022,8 @@ next:
   councilkit review --council pr-jury --pr <url>
   councilkit ideate "<idea>" --council product-jury
 open reports: http://127.0.0.1:43127/reports`);
+    expect(sink.human.split("\n").every((line) => line.length <= 80)).toBe(true);
+    expect(sink.human).not.toContain("汇总席改由");
     expect(sink.human).not.toContain("CLD_CFUSE_BIN");
     expect(sink.human).not.toContain(" · councilkit");
     expect(sink.human).not.toContain("config.toml");
@@ -1169,16 +1185,21 @@ open reports: http://127.0.0.1:43127/reports`);
       );
       const message = error?.message ?? "";
       expect(message).toContain("product-jury was not created");
-      expect(message).toContain("at least 2 ready seats");
+      expect(message).toContain("needs at least 2 ready seats");
       expect(message).toContain(needle);
       expect(message).not.toContain("councilkit init --json");
+      expect(message).not.toMatch(/^\s+at /m);
+      expect(message).not.toContain("汇总席改由");
       expect(message.split("\n").every((line) => line.length <= 80)).toBe(true);
     };
 
     stub(["grok"], LOGGED_IN);
     const grok = makeSink();
     await runInit([], grok);
-    expect(grok.human).toBe(`init: 1 council · 3 seats ready, 6 skipped
+    expect(grok.human.split("\n")[0]).toBe(
+      "init: 1 council · 2 seats ready, 4 skipped · product-jury not created",
+    );
+    expect(grok.human).toBe(`init: 1 council · 2 seats ready, 4 skipped · product-jury not created
 
 pr-jury (reporter review-adversarial) · 2 ready, 4 skipped
   ✓ review-correctness     grok 1.2.3     logged in
@@ -1201,10 +1222,35 @@ product-jury · not created (needs at least 2 ready seats), 1 ready, 2 skipped
 
 next:
   councilkit review --council pr-jury --pr <url>
+  to create product-jury, install kimi or codex (see above), then rerun:
+  councilkit init
 open reports: http://127.0.0.1:43127/reports`);
+    expect(grok.human).not.toContain("汇总席改由");
     expect(grok.human.split("\n").every((line) => line.length <= 80)).toBe(true);
     expect(new Store().listCouncils().map((council) => council.name)).toEqual(["pr-jury"]);
-    expect(new Store().getPendingCouncil("product-jury")?.readySeats).toEqual(["ideate-product"]);
+    expect(new Store().getPendingCouncil("product-jury")).toMatchObject({
+      status: "not created",
+      readySeats: ["ideate-product"],
+    });
+    const grokIdeate = await runIdeate(
+      ["ship a widget", "--council", "product-jury"],
+      makeSink(),
+    ).then(
+      () => "",
+      (caught: { message?: string }) => caught.message ?? "",
+    );
+    expect(grokIdeate).toBe(`product-jury was not created: needs at least 2 ready seats,
+  1 ready, 2 skipped
+  ✗ ideate-engineering  skipped: kimi not installed
+      install kimi so it's on PATH, then: kimi login
+  ✗ ideate-challenger  skipped: codex not installed
+      npm install -g @openai/codex, then: codex login`);
+    const grokIdeateHuman = renderErrorHuman({
+      name: "CliError",
+      exitCode: 2,
+      message: grokIdeate,
+    });
+    expect(grokIdeateHuman.split("\n").every((line) => line.length <= 80)).toBe(true);
     await expectExplained("ideate-engineering");
     await expect(
       runReview(
@@ -1326,10 +1372,33 @@ product-jury · not created (needs at least 2 ready seats), 0 ready, 3 skipped
 
 next:
   install a logged-in CLI, then run: councilkit init`);
+    expect(human).not.toContain("汇总席改由");
     expect(human).not.toContain("detail:");
     expect(human).not.toContain("{");
     for (const line of human.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
     expect(error?.detail?.skippedSeats).toEqual(expect.any(Array));
+  });
+
+  it("explains one skipped seat of an uncreated council without telling the user to rerun --json", () => {
+    expect(
+      formatPendingCouncil({
+        name: "product-jury",
+        status: "not created",
+        minimumSeats: 2,
+        readySeats: ["ideate-engineering"],
+        skippedSeats: [
+          {
+            seat: "ideate-product",
+            driver: "grok",
+            reason: "missing",
+            next: "install grok so it's on PATH, then: grok login",
+          },
+        ],
+      }),
+    ).toBe(`product-jury was not created: needs at least 2 ready seats,
+  1 ready, 1 skipped
+  ✗ ideate-product  skipped: grok not installed
+      install grok so it's on PATH, then: grok login`);
   });
 
   it("dispatch routes the init command", async () => {

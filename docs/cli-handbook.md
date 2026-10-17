@@ -50,7 +50,7 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——**大部分命令*
 
 人和 `--json` 都带 `drivers`：每个已知 driver 一行 `found`、`path`、`version`（`--version` 便宜就取）、`login`（`logged-in` / `logged-out` / `unknown`）。登录只在不会打开登录流程时检查（`codex login status`、`cursor-agent status` 或 `CURSOR_API_KEY`、凭据文件是否存在）。缺二进制或未登录时，`next` 是一句带确切命令的下一步。没有堆栈。
 
-driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out`；旧文件里还可能有 `no-model`）和 `next`。人读输出先写一行总览（`init: N councils · M seats ready, K skipped`；1 个时用单数 council / seat）。N 只数已经落盘的 Council；席位合计仍包含未落盘的分组。再按 Council 分组。已落盘的标题是 `name (reporter X) · R ready, S skipped`。人数不够、没有落盘的分组写成 `name · not created (needs at least …), R ready, S skipped`，并列出缺席席位和修复命令；`next:` 不打印指向它的命令。行首符号不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。同一 Council 里 driver 和原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时保持一行 `✗ <seat>  skipped: …` 加一行命令。版本列在知道版本时写出，`cursor-agent` 可以不写版本。`? cld` 这类全局说明放在两组之后。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。成功时 `next:` 后面仍有 `open reports:`。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）和 Codex 模型覆盖说明只出现在 `--json` 的 `next` 和 README。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
+driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out`；旧文件里还可能有 `no-model`）和 `next`。人读输出先写一行总览（`init: N councils · M seats ready, K skipped`；1 个时用单数 council / seat）。已经有 Council 落盘时，席位合计只数这些 Council，未落盘的名字接在后面（` · a, b not created`）。一个都没落盘时，席位合计仍包含各组，总览不追加 not created，人读输出以 `error[2]: no usable review CLI on PATH` 开头。再按 Council 分组。已落盘的标题是 `name (reporter X) · R ready, S skipped`。人数不够、没有落盘的分组写成 `name · not created (needs at least …), R ready, S skipped`。`next:` 在已有命令之后，为每个未落盘 Council 加一行 `to create <name>, install <cli> or <cli> (see above), then rerun: councilkit init`（名字来自该组缺席席位，按出现顺序去重，用 ` or ` 连接）。超过 80 列才折行，续行保留原缩进。未落盘的 Council 写在 `councils.json` 的 `pendingCouncils` 里，`status` 为 `not created`，并带上每个缺席席位和原因。之后对这个名字执行 `ideate` / `review` 会说明 `needs at least … ready seats`，并列出每个缺席席位和安装命令。行首符号不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。同一 Council 里 driver 和原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时保持一行 `✗ <seat>  skipped: …` 加一行命令。版本列在知道版本时写出，`cursor-agent` 可以不写版本。`? cld` 这类全局说明放在两组之后。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。成功时 `next:` 后面仍有 `open reports:`。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）和 Codex 模型覆盖说明只出现在 `--json` 的 `next` 和 README。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
 
 Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `model`，也会创建 `review-codex` 和 `ideate-challenger`，`modelId` 为 `default`。审查和 probe 都不传 `-m`，由 Codex CLI 使用自己的默认模型。顶层 `model = "..."` 存在时，两席都记下该 id 并传 `-m`。`models_cache.json` 不算用户配置。每个默认席位要么创建，要么写入 `skippedSeats`，不会悄悄消失。
 
@@ -228,6 +228,7 @@ CLI 直接按 PATH 解析 `cld`/`cfuse`/`kimi`/`codex`/`grok`/`cursor-agent` 并
 #### 失败容错
 
 - 单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常
+- 配置的汇总席在开跑前探针失败、但另有席位探针成功：改由该席位汇总，不中止。原席位仍记为缺席。报告「结论」写「汇总席改由 {席位}（原定 {席位} 没能运行）。」，报告页用灰色 info 图标显示（不是琥珀色）。没有其他可运行席位时仍按探针失败中止（exit 4）
 - **瞬态失败（<120s 内非零 EXIT）自动重试一次**（quota/auth/model、超时/无输出/探针失败不重试）
 - transcript 记录 `attemptNumber`/`retryOf`
 - 全失败 → 不聚合、确定性失败报告、exit 4

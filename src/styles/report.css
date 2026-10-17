@@ -1234,3 +1234,20 @@
     transform: translateY(0);
   }
 }
+
+.ck-reporter-failover {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--ck-secondary, #b2b7c2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ck-reporter-failover .ck-wb-icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  flex: none;
+  color: var(--ck-secondary, #b2b7c2);
+}

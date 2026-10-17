@@ -568,6 +568,21 @@
 .ck-wb-decision-conflict {
   color: var(--ck-accent);
 }
+.ck-reporter-failover {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--ck-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ck-reporter-failover .ck-wb-icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--ck-secondary);
+}
 .ck-wb-overview-brief {
   margin-top: 28px;
   min-width: 0;

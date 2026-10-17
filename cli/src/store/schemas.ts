@@ -92,6 +92,8 @@ export type SkippedSeat = z.infer<typeof skippedSeatSchema>;
 export const pendingCouncilSchema = z
   .object({
     name: z.string().min(1).max(128),
+    /** Written on every uncreated default council so the file states why it is absent. */
+    status: z.literal("not created").default("not created"),
     minimumSeats: z.number().int().min(1).max(8),
     readySeats: z.array(z.string().min(1).max(128)).max(16),
     skippedSeats: z.array(skippedSeatSchema).max(16),

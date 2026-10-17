@@ -255,6 +255,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   } else {
     store.savePendingCouncil({
       name: PRODUCT_JURY_COUNCIL_NAME,
+      status: "not created",
       minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
       readySeats: ideateRoster.map((agent) => agent.name),
       skippedSeats: ideateSkips,
@@ -393,7 +394,13 @@ function rememberUnsaved(
     store.deletePendingCouncil(name);
     return true;
   }
-  store.savePendingCouncil({ name, minimumSeats, readySeats, skippedSeats });
+  store.savePendingCouncil({
+    name,
+    status: "not created",
+    minimumSeats,
+    readySeats,
+    skippedSeats,
+  });
   return false;
 }
 
