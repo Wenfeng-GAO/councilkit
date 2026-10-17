@@ -32,7 +32,7 @@ pnpm exec councilkit ideate "一句话创意" --json            # 产品创意�
 ### `init` 默认配置
 
 - **默认 Agent**（按 PATH 上可发现的 CLI 创建）：
-  - `review-security`（需要 `cld`）
+  - `review-security`（需要 `cld`；没有 `cld` 时 PATH 上的独立 `cfuse` CLI 也会建成这一席）
   - `review-correctness`（需要 `grok`）
   - `review-maintainability`（需要 `kimi`）
   - `review-adversarial`（需要 `grok`）

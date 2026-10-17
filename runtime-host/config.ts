@@ -95,7 +95,7 @@ export interface NodeCheckResult {
 }
 
 /**
- * Node.js >= 22 is a hard requirement (#282): the same floor as
+ * Node.js >= 22.22.2 is a hard requirement (#282, #372): the same floor as
  * `engines` in package.json, so install and Host start agree. Newer majors
  * (24, 26) are exercised in CI.
  */

@@ -538,7 +538,13 @@ async function runOneSpawn(
   const extracted =
     out.error !== undefined
       ? null
-      : extractFinalOutput(spec.driverId, out.stdout, spec.lastMessageFile, out.finalEventLine);
+      : extractFinalOutput(
+          spec.driverId,
+          out.stdout,
+          spec.lastMessageFile,
+          out.finalEventLine,
+          spec.plainText === true,
+        );
 
   let failure: AttemptFailure | undefined;
   if (out.error !== undefined) {

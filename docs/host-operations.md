@@ -189,7 +189,7 @@ kill -9 <PID>
 **A**: 
 1. 检查日志：`~/Library/Logs/CouncilKit/host.err.log`
 2. 确认端口 43127 没有被其他进程占用
-3. 确认 Node.js 版本为 22（其他主版本会拒绝启动）
+3. 确认 Node.js 版本至少为 22.22.2（更低的版本会拒绝启动，并写出升级命令）
 4. 如果更换了 Node 版本或移动了仓库，重跑 `node scripts/install-service.mjs`
 
 ### Q: 更换 Node 版本后 Host 无法启动

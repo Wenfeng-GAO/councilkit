@@ -16,7 +16,7 @@
 
 ## 构建与安装
 
-CLI 是 `cli/` workspace 包，bin 是 `cli/bin/councilkit.mjs` thin launcher → 构建产物 `cli/dist/main.mjs`。`pnpm install` 后需构建一次：
+CLI 是 `cli/` workspace 包，bin 是 `cli/bin/councilkit.mjs` thin launcher → 构建产物 `cli/dist/main.mjs`。需要 Node.js 22.22.2 或更新，以及与根 `package.json` 的 `packageManager` 一致的 pnpm（`npm install -g pnpm@10.34.6`）。`pnpm install` 后需构建一次：
 
 ```bash
 pnpm install --frozen-lockfile
@@ -46,10 +46,14 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——**大部分命令*
 
 #### `councilkit init [--force] [--json]`
 
-发现本机 CLI（`cld`/`kimi`/`grok`/`cursor-agent`/`codex`），写入默认审查班子。
+发现本机 CLI（`cld` / 独立 `cfuse` / `kimi` / `grok` / `cursor-agent` / `codex`），写入默认审查班子。
+
+人和 `--json` 都带 `drivers`：每个已知 driver 一行 `found`、`path`、`version`（`--version` 便宜就取）、`login`（`logged-in` / `logged-out` / `unknown`）。登录只在不会打开登录流程时检查（`codex login status`、`cursor-agent status` 或 `CURSOR_API_KEY`、凭据文件是否存在）。缺二进制或未登录时，`next` 是一句带确切命令的下一步。没有堆栈。
+
+`review-security` 在 PATH 上有 `cld` 时走 `cld cfuse`（`cfuse-claude-code` 或 `cfuse-claude` 会写入 `CLD_CFUSE_BIN`）。没有 `cld` 但有独立 `cfuse` 时，同一席位改为运行 `cfuse -p … --output-format text --skip-update`。只有 `cfuse-claude` / `cfuse-claude-code`、没有 `cld` 也没有独立 `cfuse` 时，不建这一席，并说明需要 `cld`。
 
 - **默认 Agent**：
-  - `review-security`
+  - `review-security`（`cld`，或没有 `cld` 时的独立 `cfuse`）
   - `review-correctness`
   - `review-maintainability`
   - `review-adversarial`（PATH 上有 `grok` 时）
@@ -197,9 +201,9 @@ PR 审查需要本机已有该仓库：`--repo <path>`、`repos.json` 记忆，�
 
 #### 不经 Runtime Host
 
-CLI 直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK：
+CLI 直接按 PATH 解析 `cld`/`cfuse`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK：
 
-- **claude**：仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）
+- **claude**：审查只支持 `cfuse` 路由（其它 route 直接 usage 报错）。PATH 上有 `cld` 时走 `cld cfuse` 的 stream-json，并把 `cfuse-claude-code`（没有则用 `cfuse-claude`）写入 `CLD_CFUSE_BIN`。没有 `cld` 时，独立的 `cfuse` CLI 以 `cfuse -p … --output-format text --skip-update` 跑同一席位。Host 里的长会话仍然需要 `cld`。
 - **kimi**：用 `-p`（无 `--auto`，自主权限由 config 提供）
 - **codex**：用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
 - **grok**：直接 spawn

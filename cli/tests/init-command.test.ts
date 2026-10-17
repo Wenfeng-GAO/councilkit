@@ -18,9 +18,10 @@ interface FakeSink {
   json: boolean;
   lines: string[];
   finished: unknown;
+  human: string;
   progress(m: string): void;
   diag(m: string): void;
-  finish(d: unknown): Promise<void>;
+  finish(d: unknown, human?: (data: unknown) => string): Promise<void>;
 }
 
 function makeSink(): FakeSink {
@@ -28,10 +29,12 @@ function makeSink(): FakeSink {
     json: false,
     lines: [],
     finished: undefined,
+    human: "",
     progress: (m) => sink.lines.push(m),
     diag: () => {},
-    finish: (d) => {
+    finish: (d, human) => {
       sink.finished = d;
+      sink.human = human?.(d) ?? "";
       return Promise.resolve();
     },
   };
@@ -66,6 +69,8 @@ describe("councilkit init", () => {
   let oldPath: string | undefined;
   let oldCodex: string | undefined;
   let oldUserHome: string | undefined;
+  let oldCursorKey: string | undefined;
+  let oldGrokHome: string | undefined;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ck-init-home-"));
@@ -75,6 +80,8 @@ describe("councilkit init", () => {
     oldPath = process.env.PATH;
     oldCodex = process.env.CODEX_HOME;
     oldUserHome = process.env.HOME;
+    oldCursorKey = process.env.CURSOR_API_KEY;
+    oldGrokHome = process.env.GROK_HOME;
     process.env.COUNCILKIT_HOME = home;
     process.env.CODEX_HOME = codexHome;
     process.env.HOME = home;
@@ -89,26 +96,76 @@ describe("councilkit init", () => {
     else process.env.CODEX_HOME = oldCodex;
     if (oldUserHome === undefined) process.env.HOME = undefined;
     else process.env.HOME = oldUserHome;
+    if (oldCursorKey === undefined) delete process.env.CURSOR_API_KEY;
+    else process.env.CURSOR_API_KEY = oldCursorKey;
+    if (oldGrokHome === undefined) delete process.env.GROK_HOME;
+    else process.env.GROK_HOME = oldGrokHome;
     rmSync(home, { recursive: true, force: true });
     rmSync(bin, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
   });
 
-  function stub(names: string[]): void {
+  function stub(names: string[], script = "#!/bin/sh\nexit 0\n"): void {
     for (const name of names) {
       const p = join(bin, name);
-      writeFileSync(p, "#!/bin/sh\nexit 0\n");
+      writeFileSync(p, script);
       chmodSync(p, 0o755);
     }
     process.env.PATH = bin;
   }
 
+  const LOGGED_IN = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "1.2.3"; exit 0; fi
+if [ "$1" = "login" ] || [ "$1" = "status" ]; then echo "Logged in using ChatGPT"; exit 0; fi
+exit 0
+`;
+  const LOGGED_OUT = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "1.2.3"; exit 0; fi
+if [ "$1" = "login" ] || [ "$1" = "status" ]; then echo "Not logged in"; exit 1; fi
+exit 1
+`;
+
   it("fails with exit 2 and writes no store when no drivers are on PATH", async () => {
     process.env.PATH = bin;
+    delete process.env.CURSOR_API_KEY;
     const sink = makeSink();
     await expect(runInit([], sink)).rejects.toMatchObject({ exitCode: 2 });
     expect(readMaybe(resolvePaths().agents)).toBeNull();
     expect(readMaybe(resolvePaths().councils)).toBeNull();
+  });
+
+  it("names a next step for every missing driver and does not print a stack", async () => {
+    process.env.PATH = bin;
+    delete process.env.CURSOR_API_KEY;
+    const sink = makeSink();
+    const error = await runInit([], sink).then(
+      () => null,
+      (caught: {
+        message?: string;
+        detail?: { drivers?: Array<{ driver: string; next: string | null }> };
+      }) => caught,
+    );
+    expect(error).not.toBeNull();
+    const message = error?.message ?? "";
+    expect(message).not.toMatch(/^\s+at /m);
+    expect(message).toContain("cld login");
+    expect(message).toContain("npm install -g @openai/codex");
+    expect(message).toContain("kimi login");
+    expect(message).toContain("grok login");
+    expect(message).toContain("cursor-agent login");
+    const drivers = error?.detail?.drivers ?? [];
+    expect(drivers.map((row) => row.driver).sort()).toEqual([
+      "cfuse",
+      "cld",
+      "codex",
+      "cursor-agent",
+      "grok",
+      "kimi",
+    ]);
+    for (const row of drivers) {
+      expect(row.next, row.driver).toEqual(expect.any(String));
+      expect(row.next).not.toMatch(/^\s+at /m);
+    }
   });
 
   it("creates four default agents and pr-jury when cld, kimi and grok exist", async () => {
@@ -435,6 +492,133 @@ describe("councilkit init", () => {
     expect(reportPath.length).toBeGreaterThan(0);
     const report = readFileSync(reportPath, "utf8");
     expect(report).toContain("# Autonomous Review Report");
+  });
+
+  it("uses standalone cfuse as the review-security seat when cld is absent", async () => {
+    stub(["cfuse", "kimi"], LOGGED_IN);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdAgents: Array<{ name: string; driverId: string }>;
+      missingDrivers: string[];
+      drivers: Array<{
+        driver: string;
+        found: boolean;
+        path: string | null;
+        version: string | null;
+        login: string;
+        next: string | null;
+      }>;
+    };
+    expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
+    expect(out.createdAgents.find((agent) => agent.name === "review-security")?.driverId).toBe(
+      "claude-stream-json",
+    );
+    expect(out.missingDrivers).not.toContain("cld");
+    const cfuse = out.drivers.find((row) => row.driver === "cfuse");
+    const cld = out.drivers.find((row) => row.driver === "cld");
+    expect(cfuse).toMatchObject({ found: true, version: "1.2.3", login: "unknown", next: null });
+    expect(cfuse?.path).toBe(join(bin, "cfuse"));
+    expect(cld).toMatchObject({ found: false, path: null, login: "unknown" });
+    expect(cld?.next).toContain("review-security");
+    expect(cld?.next).toContain("cld login");
+    expect(sink.human).toContain("cfuse");
+    expect(sink.human).toContain("cld login");
+    expect(sink.human).not.toMatch(/^\s+at /m);
+    expect(new Store().getAgent("review-security").driverSelection).toEqual({
+      driverId: "claude-stream-json",
+      options: { route: "cfuse" },
+    });
+  });
+
+  it("does not treat cfuse-claude alone as a seat", async () => {
+    stub(["cfuse-claude", "kimi"], LOGGED_IN);
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdAgents: Array<{ name: string }>;
+      missingDrivers: string[];
+      drivers: Array<{
+        driver: string;
+        found: boolean;
+        next: string | null;
+        backendPath?: string | null;
+      }>;
+    };
+    expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-security");
+    expect(out.missingDrivers).toContain("cld");
+    const cld = out.drivers.find((row) => row.driver === "cld");
+    expect(cld?.found).toBe(false);
+    expect(cld?.backendPath).toBe(join(bin, "cfuse-claude"));
+    expect(cld?.next).toContain("cfuse-claude");
+    expect(cld?.next).toContain("cld is required");
+    expect(cld?.next).toContain("cld login");
+    expect(sink.human).toContain("cld is required");
+  });
+
+  it("reports each driver logged out when the binary is present but login is not", async () => {
+    stub(["cld", "kimi", "grok", "cursor-agent", "codex", "cfuse-claude-code"], LOGGED_OUT);
+    delete process.env.CURSOR_API_KEY;
+    delete process.env.GROK_HOME;
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      drivers: Array<{
+        driver: string;
+        found: boolean;
+        login: string;
+        next: string | null;
+        version: string | null;
+      }>;
+    };
+    for (const name of ["codex", "cursor-agent", "kimi", "grok"]) {
+      const row = out.drivers.find((item) => item.driver === name);
+      expect(row, name).toMatchObject({ found: true, login: "logged-out", version: "1.2.3" });
+      expect(row?.next).toContain(`${name} login`);
+    }
+    expect(sink.human).toContain("Run `codex login`.");
+    expect(sink.human).toContain("Run `kimi login`.");
+    expect(sink.human).not.toMatch(/^\s+at /m);
+  });
+
+  it("reports every discovered driver ready when login checks succeed", async () => {
+    stub(["cld", "cfuse", "kimi", "grok", "cursor-agent", "codex", "cfuse-claude-code"], LOGGED_IN);
+    delete process.env.CURSOR_API_KEY;
+    delete process.env.GROK_HOME;
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    writeFileSync(join(home, ".grok", "auth.json"), "{}\n");
+    mkdirSync(join(home, ".kimi-code", "credentials"), { recursive: true });
+    mkdirSync(join(home, ".config", "cld"), { recursive: true });
+    writeFileSync(join(home, ".config", "cld", "env"), "\n");
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdAgents: Array<{ name: string }>;
+      drivers: Array<{
+        driver: string;
+        found: boolean;
+        login: string;
+        next: string | null;
+        path: string | null;
+      }>;
+    };
+    expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
+    for (const name of ["cld", "kimi", "grok", "cursor-agent", "codex"]) {
+      const row = out.drivers.find((item) => item.driver === name);
+      expect(row, name).toMatchObject({
+        found: true,
+        login: "logged-in",
+        next: null,
+        path: join(bin, name),
+      });
+    }
+    expect(out.drivers.find((item) => item.driver === "cfuse")).toMatchObject({
+      found: true,
+      login: "unknown",
+      next: null,
+    });
+    expect(sink.human).toContain("login logged-in");
+    expect(sink.human).not.toMatch(/^\s+at /m);
   });
 
   it("dispatch routes the init command", async () => {

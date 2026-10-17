@@ -211,7 +211,8 @@ export function createInstallationRegistry(
     if (candidate.name === "cld") {
       // The `cld` wrapper drives two independent backends: `claude` (ant /
       // moonshot / deepseek routes, exec'd via CLD_CLAUDE_BIN) and
-      // `cfuse-claude-code` (the cfuse route, exec'd via CLD_CFUSE_BIN). Each
+      // `cfuse-claude-code`, or `cfuse-claude` when that name is the one on PATH
+      // (the cfuse route, exec'd via CLD_CFUSE_BIN). Each
       // backend is validated independently; a cld installation is trusted
       // when the wrapper plus AT LEAST ONE backend validates. A cfuse-only
       // environment must not be marked invalid for lacking `claude`.

@@ -5,7 +5,16 @@ import { defaultDriverWellKnownBinDirs } from "@shared/runtime/driver-bins";
 
 /**
  * PATH/well-known discovery of `cld`, `codex` and — for the `cld` composite
- * installation — the underlying `claude` executable.
+ * installation — the underlying `claude` executable and the cfuse backend.
+ *
+ * `cfuse` names are not interchangeable (#371):
+ * - `cld` is the wrapper. Routes `ant` / `moonshot` / `deepseek` / `cfuse` are
+ *   subcommands, not binaries.
+ * - `cfuse-claude-code` is the backend `cld cfuse` execs via `CLD_CFUSE_BIN`.
+ *   `cfuse-claude` is the same role when the documented name is absent.
+ * - `cfuse` is the standalone CodeFuse CLI. It is not a cld installation.
+ *   The CLI autonomous path can run it as the review-security seat; the Host
+ *   driver still speaks `cld`'s stream-json session.
  *
  * Discovery is metadata-only: candidates are located, never executed (no
  * `--version`, no handshake). First found wins; ordering is the scan order of
@@ -13,7 +22,12 @@ import { defaultDriverWellKnownBinDirs } from "@shared/runtime/driver-bins";
  */
 
 export type InstallationName = "cld" | "codex" | "kimi" | "grok" | "cursor-agent";
-export type BinaryName = InstallationName | "claude" | "cfuse-claude-code";
+export type BinaryName =
+  | InstallationName
+  | "claude"
+  | "cfuse-claude-code"
+  | "cfuse-claude"
+  | "cfuse";
 
 export interface DiscoveredCandidate {
   name: BinaryName;
@@ -30,13 +44,31 @@ export interface DiscoveredInstallation {
   wrapper: DiscoveredCandidate;
   /** `cld` composite only: the underlying Claude executable (null = absent). */
   claude: DiscoveredCandidate | null;
-  /** `cld` composite only: the `cfuse-claude-code` backend the `cfuse` route
-   * execs via `CLD_CFUSE_BIN` (null = absent; cfuse route then unavailable). */
+  /** `cld` composite only: the `cfuse-claude-code` (or `cfuse-claude`) backend
+   * the `cfuse` route execs via `CLD_CFUSE_BIN` (null = absent). */
   cfuse: DiscoveredCandidate | null;
+}
+
+/** How the cfuse-related binaries on disk relate to a review seat. */
+export interface CfuseLayout {
+  /** `cld` wrapper, when present. */
+  cld: DiscoveredCandidate | null;
+  /** Standalone CodeFuse CLI named `cfuse`. */
+  standalone: DiscoveredCandidate | null;
+  /** Backend for `CLD_CFUSE_BIN`: `cfuse-claude-code`, else `cfuse-claude`. */
+  backend: DiscoveredCandidate | null;
+  /**
+   * `cld` — wrapper seat (backend optional).
+   * `standalone` — `cfuse` CLI seat and no `cld`.
+   * `backend-only` — `cfuse-claude` or `cfuse-claude-code` without `cld` or standalone `cfuse`.
+   * `absent` — none of those binaries.
+   */
+  seat: "cld" | "standalone" | "backend-only" | "absent";
 }
 
 export interface DiscoveryOutcome {
   installations: DiscoveredInstallation[];
+  cfuse: CfuseLayout;
 }
 
 export interface DiscoveryOptions {
@@ -50,6 +82,8 @@ const BINARY_NAMES: readonly BinaryName[] = [
   "codex",
   "claude",
   "cfuse-claude-code",
+  "cfuse-claude",
+  "cfuse",
   "kimi",
   "grok",
   "cursor-agent",
@@ -101,6 +135,16 @@ function findCandidate(
   return null;
 }
 
+export function cfuseLayoutFromCandidates(
+  found: ReadonlyMap<BinaryName, DiscoveredCandidate>,
+): CfuseLayout {
+  const cld = found.get("cld") ?? null;
+  const standalone = found.get("cfuse") ?? null;
+  const backend = found.get("cfuse-claude-code") ?? found.get("cfuse-claude") ?? null;
+  const seat = cld ? "cld" : standalone ? "standalone" : backend ? "backend-only" : "absent";
+  return { cld, standalone, backend, seat };
+}
+
 export function discoverInstallations(options: DiscoveryOptions = {}): DiscoveryOutcome {
   const dirs = discoveryDirs(options);
   const found = new Map<BinaryName, DiscoveredCandidate>();
@@ -108,6 +152,7 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
     const candidate = findCandidate(dirs, name);
     if (candidate) found.set(name, candidate);
   }
+  const cfuse = cfuseLayoutFromCandidates(found);
   const installations: DiscoveredInstallation[] = [];
   const cld = found.get("cld");
   if (cld) {
@@ -116,7 +161,7 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
       driverId: DRIVER_BY_NAME.cld,
       wrapper: cld,
       claude: found.get("claude") ?? null,
-      cfuse: found.get("cfuse-claude-code") ?? null,
+      cfuse: cfuse.backend,
     });
   }
   const codex = found.get("codex");
@@ -159,5 +204,5 @@ export function discoverInstallations(options: DiscoveryOptions = {}): Discovery
       cfuse: null,
     });
   }
-  return { installations };
+  return { installations, cfuse };
 }

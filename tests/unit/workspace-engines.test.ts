@@ -2,11 +2,11 @@
  * #282 similar-bug sweep: every workspace package must declare the same
  * engines.node as the root. A narrower range in one package (cli had "^22")
  * makes `pnpm install` fail with ERR_PNPM_UNSUPPORTED_ENGINE on Node 24/26
- * under engine-strict, even though the root says ">=22".
+ * under engine-strict, even though the root says ">=22.22.2".
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SUPPORTED_NODE_MAJOR } from "@shared/runtime/contracts";
+import { SUPPORTED_NODE_RANGE } from "@shared/runtime/contracts";
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..", "..");
@@ -35,8 +35,8 @@ function workspacePackageDirs(): string[] {
 describe("#282 workspace engines agree with the root", () => {
   const root = enginesNode(ROOT);
 
-  it("the root declares Node >= the Host's minimum major", () => {
-    expect(root).toBe(`>=${SUPPORTED_NODE_MAJOR}`);
+  it("the root declares the same Node floor as the Host gate", () => {
+    expect(root).toBe(SUPPORTED_NODE_RANGE);
   });
 
   it("lists at least one workspace package (guards the parser)", () => {

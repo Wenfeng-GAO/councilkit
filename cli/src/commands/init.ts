@@ -16,6 +16,7 @@ import {
   PR_JURY_TARGET_OUTPUT,
   PR_JURY_TOPIC,
 } from "../init/defaults";
+import { type DriverStatus, collectDriverStatus, driverStatusByName } from "../init/driver-status";
 import {
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
@@ -39,6 +40,8 @@ export interface InitOutcome {
   createdCouncil: { id: string; name: string; reporter: string } | null;
   reusedCouncil: { id: string; name: string; reporter: string } | null;
   missingDrivers: string[];
+  /** One row per known driver: found, path, version, login, and a next step. */
+  drivers: DriverStatus[];
   next: string;
 }
 
@@ -50,11 +53,18 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const force = values.force === true;
   const store = new Store();
   const env = process.env;
+  const drivers = collectDriverStatus(env);
+  const cldFound = driverStatusByName(drivers, "cld").found;
+  const cfuseFound = driverStatusByName(drivers, "cfuse").found;
 
   const available: DefaultAgentSpec[] = [];
   const missingDrivers: string[] = [];
   for (const spec of DEFAULT_AGENT_SPECS) {
-    if (findExecutable(spec.executable, env) !== null) available.push(spec);
+    const present =
+      spec.name === "review-security"
+        ? cldFound || cfuseFound
+        : findExecutable(spec.executable, env) !== null;
+    if (present) available.push(spec);
     else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   const ideateAvailable: IdeateAgentSpec[] = [];
@@ -63,9 +73,13 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   if (available.length === 0) {
+    const steps = drivers.map((row) => row.next).filter((line): line is string => line !== null);
     throw errors.usage(
-      "no review drivers found on PATH (need at least one of: cld, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
-      { missingDrivers },
+      [
+        "no review drivers found on PATH (need at least one of: cld, cfuse, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
+        ...steps,
+      ].join("\n"),
+      { missingDrivers, drivers },
     );
   }
 
@@ -181,6 +195,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     createdCouncil: createdCouncil === null ? null : briefCouncil(createdCouncil, store),
     reusedCouncil: reusedCouncil === null ? null : briefCouncil(reusedCouncil, store),
     missingDrivers,
+    drivers,
     next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
   };
   await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
@@ -274,8 +289,16 @@ function renderHuman(outcome: InitOutcome): string {
     const mark = outcome.createdAgents.some((a) => a.id === agent.id) ? "new" : "kept";
     lines.push(`  ${agent.name}  ${agent.driverId}/${agent.modelId}  [${mark}]`);
   }
-  if (outcome.missingDrivers.length > 0) {
-    lines.push(`missing on PATH: ${outcome.missingDrivers.join(", ")}`);
+  lines.push("drivers:");
+  for (const row of outcome.drivers) {
+    if (!row.found) {
+      lines.push(`  ${row.driver}  missing`);
+    } else {
+      const version = row.version === null ? "version unknown" : row.version;
+      const backend = row.backendPath ? `  backend ${row.backendPath}` : "";
+      lines.push(`  ${row.driver}  ${row.path}  ${version}  login ${row.login}${backend}`);
+    }
+    if (row.next !== null) lines.push(`    ${row.next}`);
   }
   lines.push(`next: ${outcome.next}`);
   lines.push("open reports: http://127.0.0.1:43127/reports");
