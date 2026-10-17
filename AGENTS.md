@@ -43,7 +43,7 @@ pnpm exec councilkit ideate "一句话创意" --json            # 产品创意�
 
 - **默认 Council**：
   - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 和 `review-codex` 不是 preferred reporter）
-  - `product-jury`（Reporter 优先 Codex，其次 product，再 engineering；已配置 Reporter 不静默换人）
+  - `product-jury`（Reporter 优先 Codex，其次 product，再 engineering；已配置 Reporter 不静默换人；就绪席位不足 2 不落盘，记在 `pendingCouncils`，`ideate` 说明缺席而不是只提示再跑 init）
 
 - **行为**：已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）
 - `--force` 先删 `pr-jury` 与 `product-jury` 再重建

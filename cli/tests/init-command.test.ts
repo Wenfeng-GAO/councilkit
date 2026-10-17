@@ -3,6 +3,7 @@
  * Expected names/colors/models are the product literals, not derived from
  * the implementation under test beyond importing the command.
  */
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -14,14 +15,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { dispatch } from "../src/cli";
+import { runIdeate } from "../src/commands/ideate";
 import { runInit } from "../src/commands/init";
 import { ReviewExit, runReview } from "../src/commands/review";
 import { DEFAULT_AGENT_NAMES } from "../src/init/defaults";
 import { IDEATE_AGENT_NAMES } from "../src/init/ideate-defaults";
+import { renderErrorHuman } from "../src/output";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -157,13 +161,21 @@ if [ "$1" = "login" ] || [ "$1" = "status" ]; then echo "Not logged in"; exit 1;
 exit 1
 `;
 
-  it("fails with exit 2 and writes no store when no drivers are on PATH", async () => {
+  it("fails with exit 2 and writes no agents when no drivers are on PATH", async () => {
     process.env.PATH = bin;
     delete process.env.CURSOR_API_KEY;
     const sink = makeSink();
     await expect(runInit([], sink)).rejects.toMatchObject({ exitCode: 2 });
     expect(readMaybe(resolvePaths().agents)).toBeNull();
-    expect(readMaybe(resolvePaths().councils)).toBeNull();
+    const councils = JSON.parse(readMaybe(resolvePaths().councils) ?? "null") as {
+      councils: unknown[];
+      pendingCouncils: Array<{ name: string }>;
+    };
+    expect(councils.councils).toEqual([]);
+    expect(councils.pendingCouncils.map((row) => row.name).sort()).toEqual([
+      "pr-jury",
+      "product-jury",
+    ]);
   });
 
   it("names a next step for every missing driver and does not print a stack", async () => {
@@ -1048,6 +1060,276 @@ open reports: http://127.0.0.1:43127/reports`);
     }
     const finished = sink.finished as { reportPath?: string };
     expect(finished.reportPath ?? "").not.toHaveLength(0);
+  });
+
+  it("reviews with the printed pr-jury command when the reporter is standalone cfuse", async () => {
+    stub(["cfuse", "kimi", "cursor-agent", "codex"], LOGGED_IN);
+    process.env.PATH = `${bin}${delimiter}${oldPath ?? ""}`;
+    const sink = makeSink();
+    await runInit([], sink);
+    const reviewLine = sink.human
+      .split("\n")
+      .find((line) => line.includes("councilkit review --council pr-jury"));
+    expect(reviewLine?.trim()).toBe("councilkit review --council pr-jury --pr <url>");
+    const pr = "https://github.com/acme/widget/pull/7";
+    const tokens = (reviewLine ?? "").trim().split(/\s+/);
+    expect(tokens.slice(0, 2)).toEqual(["councilkit", "review"]);
+    const args = tokens.slice(2).map((token) => (token === "<url>" ? pr : token));
+    args.push("--no-require-spec");
+
+    const repo = join(home, "src-repo");
+    mkdirSync(repo, { recursive: true });
+    execFileSync("git", ["init"], { cwd: repo });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: repo });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: repo });
+    execFileSync("git", ["commit", "--allow-empty", "-m", "head"], { cwd: repo });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/widget.git"], {
+      cwd: repo,
+    });
+
+    const calls: SpawnInput[] = [];
+    const spawn: SpawnImpl = async (input) => {
+      calls.push(input);
+      const text =
+        input.prompt === DRIVER_PROBE_PROMPT
+          ? "ok"
+          : input.prompt.includes("对比汇总") || input.prompt.includes("Aggregator")
+            ? "## 概览\nok\n## 共识发现\n- x\n## 独有发现\n- y\n## 分歧\nnone\n## 结论\napprove"
+            : "## 发现\n- [nit] a.ts:1 — n\n## 验证\n未验证\n## 结论\ncomment";
+      if (input.driverId === "claude-stream-json") {
+        return { stdout: `${text}\n`, exitCode: 0, timedOut: false, aborted: false };
+      }
+      if (input.driverId === "kimi-stream-json") {
+        return {
+          stdout: `${JSON.stringify({ role: "assistant", content: text })}\n`,
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+        };
+      }
+      if (input.driverId === "codex-app-server") {
+        return {
+          stdout: `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } })}\n`,
+          exitCode: 0,
+          timedOut: false,
+          aborted: false,
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: text,
+        }),
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+
+    const cwd = process.cwd();
+    const reviewSink = makeSink();
+    let exitCode = -1;
+    try {
+      process.chdir(repo);
+      await runReview(args, reviewSink, { spawnImpl: spawn, worktreeRef: "HEAD" });
+    } catch (error) {
+      if (!(error instanceof ReviewExit)) throw error;
+      exitCode = error.exitCode;
+    } finally {
+      process.chdir(cwd);
+    }
+    expect(exitCode).toBe(0);
+    const finished = reviewSink.finished as { reportPath?: string; status?: string };
+    expect(finished.status).toBe("completed");
+    expect((finished.reportPath ?? "").length).toBeGreaterThan(0);
+    expect(readFileSync(finished.reportPath ?? "", "utf8").length).toBeGreaterThan(0);
+    const claudeCalls = calls.filter((call) => call.driverId === "claude-stream-json");
+    expect(claudeCalls.length).toBeGreaterThan(0);
+    for (const call of claudeCalls) {
+      expect(basename(call.executable)).toBe("cfuse");
+      expect(call.argv).toContain("-p");
+      expect(call.argv).toContain("--output-format");
+      expect(call.argv).toContain("text");
+      expect(call.argv).toContain("--skip-update");
+    }
+    expect(calls.every((call) => basename(call.executable) !== "cld")).toBe(true);
+  });
+
+  it("does not advertise product-jury when fewer than two seats are ready", async () => {
+    const expectExplained = async (needle: string): Promise<void> => {
+      const error = await runIdeate(
+        ["ship a widget", "--council", "product-jury"],
+        makeSink(),
+      ).then(
+        () => null,
+        (caught: { message?: string }) => caught,
+      );
+      const message = error?.message ?? "";
+      expect(message).toContain("product-jury was not created");
+      expect(message).toContain("at least 2 ready seats");
+      expect(message).toContain(needle);
+      expect(message).not.toContain("councilkit init --json");
+      expect(message.split("\n").every((line) => line.length <= 80)).toBe(true);
+    };
+
+    stub(["grok"], LOGGED_IN);
+    const grok = makeSink();
+    await runInit([], grok);
+    expect(grok.human).toBe(`init: 1 council · 3 seats ready, 6 skipped
+
+pr-jury (reporter review-adversarial) · 2 ready, 4 skipped
+  ✓ review-correctness     grok 1.2.3     logged in
+  ✓ review-adversarial     grok 1.2.3     logged in
+  ✗ review-security  skipped: cld not installed
+      put cld on PATH, then: cld login
+  ✗ review-maintainability  skipped: kimi not installed
+      install kimi so it's on PATH, then: kimi login
+  ✗ review-cursor  skipped: cursor-agent not installed
+      curl https://cursor.com/install -fsS | bash, then: cursor-agent login
+  ✗ review-codex  skipped: codex not installed
+      npm install -g @openai/codex, then: codex login
+
+product-jury · not created (needs at least 2 ready seats), 1 ready, 2 skipped
+  ✓ ideate-product         grok 1.2.3     logged in
+  ✗ ideate-engineering  skipped: kimi not installed
+      install kimi so it's on PATH, then: kimi login
+  ✗ ideate-challenger  skipped: codex not installed
+      npm install -g @openai/codex, then: codex login
+
+next:
+  councilkit review --council pr-jury --pr <url>
+open reports: http://127.0.0.1:43127/reports`);
+    expect(grok.human.split("\n").every((line) => line.length <= 80)).toBe(true);
+    expect(new Store().listCouncils().map((council) => council.name)).toEqual(["pr-jury"]);
+    expect(new Store().getPendingCouncil("product-jury")?.readySeats).toEqual(["ideate-product"]);
+    await expectExplained("ideate-engineering");
+    await expect(
+      runReview(
+        ["--council", "product-jury", "--task", "fixture", "--no-require-spec"],
+        makeSink(),
+      ),
+    ).rejects.toThrow(/product-jury was not created/);
+
+    stub(["grok", "kimi"], LOGGED_IN);
+    await runInit([], makeSink());
+    expect(new Store().getCouncil("product-jury").name).toBe("product-jury");
+    expect(new Store().getPendingCouncil("product-jury")).toBeNull();
+
+    const wipe = (): void => {
+      rmSync(home, { recursive: true, force: true });
+      mkdirSync(home, { recursive: true });
+      rmSync(bin, { recursive: true, force: true });
+      mkdirSync(bin, { recursive: true });
+      rmSync(codexHome, { recursive: true, force: true });
+      mkdirSync(codexHome, { recursive: true });
+      process.env.COUNCILKIT_HOME = home;
+      process.env.HOME = home;
+      process.env.CODEX_HOME = codexHome;
+      process.env.PATH = bin;
+      delete process.env.CURSOR_API_KEY;
+      delete process.env.GROK_HOME;
+    };
+
+    wipe();
+    const loginFailed = `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "0.161.0"; exit 0; fi
+if [ "$1" = "login" ]; then echo "login failed"; exit 1; fi
+exit 1
+`;
+    stub(["codex"], loginFailed);
+    await expect(runInit([], makeSink())).rejects.toMatchObject({ exitCode: 2 });
+    expect(new Store().listCouncils()).toEqual([]);
+    const codexPending = new Store().getPendingCouncil("product-jury");
+    expect(codexPending?.skippedSeats).toContainEqual(
+      expect.objectContaining({ seat: "ideate-challenger", driver: "codex", reason: "logged-out" }),
+    );
+    await expectExplained("codex login");
+
+    wipe();
+    writeFileSync(join(bin, "grok"), LOGGED_IN);
+    chmodSync(join(bin, "grok"), 0o755);
+    process.env.PATH = bin;
+    await expect(runInit([], makeSink())).rejects.toMatchObject({ exitCode: 2 });
+    expect(new Store().getPendingCouncil("product-jury")?.skippedSeats).toContainEqual(
+      expect.objectContaining({ seat: "ideate-product", driver: "grok", reason: "logged-out" }),
+    );
+    await expectExplained("grok login");
+
+    wipe();
+    stub(["cfuse"], LOGGED_IN);
+    const cfuse = makeSink();
+    await runInit([], cfuse);
+    expect(cfuse.human.startsWith("init: 1 council ·")).toBe(true);
+    expect(cfuse.human).toContain("product-jury · not created");
+    expect(cfuse.human).not.toContain('councilkit ideate "<idea>"');
+    expect(new Store().getCouncil("pr-jury").name).toBe("pr-jury");
+    expect(() => new Store().getCouncil("product-jury")).toThrow(/no council/);
+    await expectExplained("install grok");
+
+    wipe();
+    stub(["cfuse-claude"], LOGGED_IN);
+    const wrapped = makeSink();
+    const wrappedError = await runInit([], wrapped).then(
+      () => null,
+      (caught: { message?: string }) => caught,
+    );
+    expect(wrappedError?.message ?? "").toContain("init: 0 councils");
+    expect(wrappedError?.message ?? "").toContain("review-security");
+    expect(wrappedError?.message ?? "").not.toContain("CLD_CFUSE_BIN");
+    expect(new Store().listCouncils()).toEqual([]);
+    expect(
+      new Store().getPendingCouncil("product-jury")?.skippedSeats.map((seat) => seat.seat),
+    ).toEqual(["ideate-product", "ideate-engineering", "ideate-challenger"]);
+    await expectExplained("ideate-product");
+  });
+
+  it("prints an overview and plain reasons when no CLI is usable", async () => {
+    process.env.PATH = bin;
+    delete process.env.CURSOR_API_KEY;
+    const error = await runInit([], makeSink()).then(
+      () => null,
+      (caught: { message: string; exitCode: number; detail?: Record<string, unknown> }) => caught,
+    );
+    expect(error).not.toBeNull();
+    const human = renderErrorHuman({
+      name: "CliError",
+      exitCode: error?.exitCode,
+      message: error?.message ?? "",
+      detail: error?.detail,
+    });
+    expect(human).toBe(`error[2]: no usable review CLI on PATH
+init: 0 councils · 0 seats ready, 9 skipped
+
+pr-jury · not created (needs at least 1 ready seat), 0 ready, 6 skipped
+  ✗ review-security  skipped: cld not installed
+      put cld on PATH, then: cld login
+  ✗ 2 seats skipped: grok not installed
+      review-correctness, review-adversarial
+      install grok so it's on PATH, then: grok login
+  ✗ review-maintainability  skipped: kimi not installed
+      install kimi so it's on PATH, then: kimi login
+  ✗ review-cursor  skipped: cursor-agent not installed
+      curl https://cursor.com/install -fsS | bash, then: cursor-agent login
+  ✗ review-codex  skipped: codex not installed
+      npm install -g @openai/codex, then: codex login
+
+product-jury · not created (needs at least 2 ready seats), 0 ready, 3 skipped
+  ✗ ideate-product  skipped: grok not installed
+      install grok so it's on PATH, then: grok login
+  ✗ ideate-engineering  skipped: kimi not installed
+      install kimi so it's on PATH, then: kimi login
+  ✗ ideate-challenger  skipped: codex not installed
+      npm install -g @openai/codex, then: codex login
+
+next:
+  install a logged-in CLI, then run: councilkit init`);
+    expect(human).not.toContain("detail:");
+    expect(human).not.toContain("{");
+    for (const line of human.split("\n")) expect(line.length).toBeLessThanOrEqual(80);
+    expect(error?.detail?.skippedSeats).toEqual(expect.any(Array));
   });
 
   it("dispatch routes the init command", async () => {

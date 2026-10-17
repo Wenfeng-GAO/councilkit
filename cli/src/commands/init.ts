@@ -11,6 +11,7 @@ import {
   NEXT_REVIEW_HINT,
   PR_JURY_BACKGROUND,
   PR_JURY_COUNCIL_NAME,
+  PR_JURY_MINIMUM_SEATS,
   PR_JURY_ROUNDS,
   PR_JURY_TARGET_OUTPUT,
   PR_JURY_TOPIC,
@@ -25,6 +26,7 @@ import {
   NEXT_IDEATE_HINT,
   PRODUCT_JURY_BACKGROUND,
   PRODUCT_JURY_COUNCIL_NAME,
+  PRODUCT_JURY_MINIMUM_SEATS,
   PRODUCT_JURY_ROUNDS,
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
@@ -92,32 +94,47 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
 
   if (available.length === 0) {
     const skippedSeats = [...reviewSkips, ...ideateSkips];
+    const prCreated = rememberUnsaved(
+      store,
+      PR_JURY_COUNCIL_NAME,
+      PR_JURY_MINIMUM_SEATS,
+      [],
+      reviewSkips,
+    );
+    const productCreated = rememberUnsaved(
+      store,
+      PRODUCT_JURY_COUNCIL_NAME,
+      PRODUCT_JURY_MINIMUM_SEATS,
+      [],
+      ideateSkips,
+    );
     const lines = renderInitHuman({
-      failure: true,
       councils: [
         {
           name: PR_JURY_COUNCIL_NAME,
-          reporter: null,
+          reporter: prCreated ? reporterName(store, PR_JURY_COUNCIL_NAME) : null,
           ready: [],
           skipped: reviewSkips,
+          created: prCreated,
+          minimumSeats: PR_JURY_MINIMUM_SEATS,
           cldSubstitute: false,
         },
         {
           name: PRODUCT_JURY_COUNCIL_NAME,
-          reporter: null,
+          reporter: productCreated ? reporterName(store, PRODUCT_JURY_COUNCIL_NAME) : null,
           ready: [],
           skipped: ideateSkips,
+          created: productCreated,
+          minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
           cldSubstitute: false,
         },
       ],
     });
-    throw errors.usage(
-      [
-        "no review drivers found on PATH (need at least one of: cld, cfuse, kimi, grok, cursor-agent, codex). Install and login to a local CLI, then retry.",
-        lines,
-      ].join("\n"),
-      { missingDrivers, drivers, skippedSeats },
-    );
+    throw errors.usage(`no usable review CLI on PATH\n${lines}`, {
+      missingDrivers,
+      drivers,
+      skippedSeats,
+    });
   }
 
   if (force) recreateDefaults(store);
@@ -177,6 +194,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       skippedSeats: reviewSkips,
     });
   }
+  store.deletePendingCouncil(PR_JURY_COUNCIL_NAME);
 
   const ideateRoster: AgentRecord[] = [];
   for (const spec of ideateAvailable) {
@@ -209,8 +227,9 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     ideateRoster.push(created);
   }
   let productReporterName: string | null = null;
-  if (ideateRoster.length >= 2) {
-    const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+  let productCreated = false;
+  const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+  if (ideateRoster.length >= PRODUCT_JURY_MINIMUM_SEATS) {
     const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
     productReporterName = productReporter.name;
     if (existingProduct !== null) {
@@ -227,6 +246,19 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
         skippedSeats: ideateSkips,
       });
     }
+    store.deletePendingCouncil(PRODUCT_JURY_COUNCIL_NAME);
+    productCreated = true;
+  } else if (existingProduct !== null) {
+    productReporterName = reporterName(store, PRODUCT_JURY_COUNCIL_NAME);
+    store.deletePendingCouncil(PRODUCT_JURY_COUNCIL_NAME);
+    productCreated = true;
+  } else {
+    store.savePendingCouncil({
+      name: PRODUCT_JURY_COUNCIL_NAME,
+      minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
+      readySeats: ideateRoster.map((agent) => agent.name),
+      skippedSeats: ideateSkips,
+    });
   }
 
   const outcome: InitOutcome = {
@@ -243,6 +275,8 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
         reporter: reporter.name,
         ready: seatsInOrder(reviewRoster, DEFAULT_AGENT_NAMES),
         skippedSeats: reviewSkips,
+        created: true,
+        minimumSeats: PR_JURY_MINIMUM_SEATS,
       },
       ...(ideateRoster.length === 0 && ideateSkips.length === 0
         ? []
@@ -252,10 +286,12 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
               reporter: productReporterName,
               ready: seatsInOrder(ideateRoster, IDEATE_AGENT_NAMES),
               skippedSeats: ideateSkips,
+              created: productCreated,
+              minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
             },
           ]),
     ],
-    next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
+    next: productCreated ? `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}` : NEXT_REVIEW_HINT,
   };
   await out.finish(outcome, (d) => initHumanFromOutcome(d as InitOutcome));
 }
@@ -264,6 +300,7 @@ function recreateDefaults(store: Store): void {
   for (const name of [PR_JURY_COUNCIL_NAME, PRODUCT_JURY_COUNCIL_NAME]) {
     const council = findCouncilByName(store, name);
     if (council !== null) store.deleteCouncil(council.id);
+    store.deletePendingCouncil(name);
   }
   for (const spec of [...DEFAULT_AGENT_SPECS, ...IDEATE_AGENT_SPECS]) {
     const agent = findByName(store, spec.name);
@@ -342,6 +379,32 @@ function findByName(store: Store, name: string): AgentRecord | null {
 
 function findCouncilByName(store: Store, name: string): CouncilRecord | null {
   return store.listCouncils().find((c) => c.name === name) ?? null;
+}
+
+/** Keep a real council if one is already on disk. Otherwise record why it was not written. */
+function rememberUnsaved(
+  store: Store,
+  name: string,
+  minimumSeats: number,
+  readySeats: string[],
+  skippedSeats: SkippedSeat[],
+): boolean {
+  if (findCouncilByName(store, name) !== null) {
+    store.deletePendingCouncil(name);
+    return true;
+  }
+  store.savePendingCouncil({ name, minimumSeats, readySeats, skippedSeats });
+  return false;
+}
+
+function reporterName(store: Store, councilName: string): string | null {
+  const council = findCouncilByName(store, councilName);
+  if (council === null) return null;
+  try {
+    return store.getAgent(council.reporterAgentId).name;
+  } catch {
+    return null;
+  }
 }
 
 function briefAgent(agent: AgentRecord): InitOutcome["createdAgents"][number] {

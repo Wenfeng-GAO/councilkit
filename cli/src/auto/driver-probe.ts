@@ -28,6 +28,7 @@ import {
   executableForDriver,
   findExecutable,
   probeTimeoutMs,
+  resolveClaudeCfuse,
 } from "./driver-commands";
 import type { AttemptResult, SpawnImpl } from "./runner";
 import { spawnOnce } from "./runner";
@@ -176,6 +177,28 @@ export function lightweightConnectivityCheck(
 ): LightweightResult {
   const started = (deps.now ?? Date.now)();
   const driverId = agent.driverSelection.driverId;
+  // Review / apply / fix share this check, including the aggregator's probe.
+  // A standalone `cfuse` seat must count as present here, same as
+  // `resolveClaudeCfuse` in the spawn spec (`cfuse -p …`). Looking up only
+  // `cld` aborts the run before that invocation. Ideate stays on `cld`.
+  if (driverId === "claude-stream-json") {
+    try {
+      const resolved = resolveClaudeCfuse(env);
+      return {
+        ok: true,
+        suspicious: false,
+        reason: resolved.mode === "standalone" ? "standalone cfuse present" : "cli present",
+        durationMs: Math.max(0, (deps.now ?? Date.now)() - started),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        suspicious: false,
+        reason: error instanceof Error ? error.message : "claude cli not found",
+        durationMs: Math.max(0, (deps.now ?? Date.now)() - started),
+      };
+    }
+  }
   const exeName = executableForDriver(driverId);
   if (exeName === undefined) {
     return {

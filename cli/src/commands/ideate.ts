@@ -51,6 +51,7 @@ import {
   writeIdeateTranscript,
 } from "../auto/transcript";
 import { EXIT, errors } from "../errors";
+import { formatPendingCouncil } from "../init/human-report";
 import { PRODUCT_JURY_COUNCIL_NAME } from "../init/ideate-defaults";
 import type { OutputSink } from "../output";
 import { atomicWriteFile } from "../store/atomic-write";
@@ -166,6 +167,8 @@ export async function runIdeate(
     try {
       council = store.getCouncil(councilRef);
     } catch {
+      const pending = store.getPendingCouncil(councilRef);
+      if (pending !== null) throw errors.usage(formatPendingCouncil(pending));
       throw errors.usage(
         `no council "${councilRef}". Run: councilkit init --json  (creates product-jury)`,
       );
@@ -317,6 +320,8 @@ export async function runIdeate(
       if (shouldStop(controller, now, deadline)) break;
       const key = modelConfigKey(agent);
       if (probeByKey.has(key)) continue;
+      // Ideate's Claude invocation is `cld cfuse …`, not standalone `cfuse -p`.
+      // Review/apply/fix probes go through resolveClaudeCfuse instead.
       const exeName = executableForDriver(agent.driverSelection.driverId);
       const exe = exeName === undefined ? null : findExecutable(exeName);
       if (exe === null) {

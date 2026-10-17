@@ -353,6 +353,32 @@ describe("driver-probe cache + lightweight", () => {
     expect(llmCalls).toBe(0);
   });
 
+  it("treats standalone cfuse as a present claude cli when cld is absent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-cfuse-only-"));
+    try {
+      writeFileSync(join(dir, "cfuse"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(dir, "cfuse"), 0o755);
+      const check = lightweightConnectivityCheck(agent(CLAUDE), { PATH: dir, HOME: dir });
+      expect(check.ok).toBe(true);
+      expect(check.suspicious).toBe(false);
+      expect(check.reason).toBe("standalone cfuse present");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report only a missing cld when neither cld nor cfuse exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ck-no-claude-"));
+    try {
+      const check = lightweightConnectivityCheck(agent(CLAUDE), { PATH: dir, HOME: dir });
+      expect(check.ok).toBe(false);
+      expect(check.reason).not.toBe('executable "cld" not found');
+      expect(check.reason).toContain("cfuse");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("kimi lightweight never requires a proxy and stays unproxied in spawn env", () => {
     const check = lightweightConnectivityCheck(
       agent(KIMI),

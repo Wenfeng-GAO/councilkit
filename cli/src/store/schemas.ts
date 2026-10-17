@@ -84,6 +84,21 @@ export const skippedSeatSchema = z
   .strict();
 export type SkippedSeat = z.infer<typeof skippedSeatSchema>;
 
+/**
+ * A default council `init` considered but did not write because it had too
+ * few ready seats. Kept beside `councils` so a later `ideate` / `review` can
+ * name the missing seats. Absent on files written before this field.
+ */
+export const pendingCouncilSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    minimumSeats: z.number().int().min(1).max(8),
+    readySeats: z.array(z.string().min(1).max(128)).max(16),
+    skippedSeats: z.array(skippedSeatSchema).max(16),
+  })
+  .strict();
+export type PendingCouncil = z.infer<typeof pendingCouncilSchema>;
+
 export const councilRecordSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -114,6 +129,7 @@ export const councilsFileSchema = z
     format: z.literal(COUNCILS_FORMAT),
     version: z.literal(COUNCILS_VERSION),
     councils: z.array(councilRecordSchema),
+    pendingCouncils: z.array(pendingCouncilSchema).max(8).optional(),
   })
   .strict();
 export type CouncilsFile = z.infer<typeof councilsFileSchema>;

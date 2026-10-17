@@ -1,12 +1,14 @@
 /**
  * Human layout for `councilkit init`. Symbols carry status (not colour).
- * A summary line counts every council, then each council is its own group.
- * Skips that share a driver and reason merge only inside that group; a single
- * skip stays one line. Global notes (standalone cfuse filling cld) come after
- * both groups. Long driver notes stay in `--json` `next` and the README.
+ * The summary counts councils that were actually written. Each council is its
+ * own group. A council that was not written says so and lists the missing
+ * seats; its next command is omitted. Skips that share a driver and reason
+ * merge only inside that group; a single skip stays one line. Global notes
+ * (standalone cfuse filling cld) come after both groups. Long driver notes
+ * stay in `--json` `next` and the README. Every line stays within 80 columns.
  */
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
-import type { SkippedSeat } from "../store/schemas";
+import type { PendingCouncil, SkippedSeat } from "../store/schemas";
 import { NEXT_REVIEW_HINT } from "./defaults";
 import type { DriverStatus, LoginState } from "./driver-status";
 import { driverStatusByName } from "./driver-status";
@@ -14,6 +16,7 @@ import { NEXT_IDEATE_HINT } from "./ideate-defaults";
 
 const SEAT_WIDTH = 22;
 const TOOL_WIDTH = 15;
+const LINE_WIDTH = 80;
 const VERSION_TOKEN = /\d+\.\d+\.\d+/;
 
 export function loginWords(login: LoginState): "logged in" | "not logged in" | "login not checked" {
@@ -53,7 +56,8 @@ function executableForSeat(name: string): string {
   return name;
 }
 
-function humanCommand(driver: string, reason: "missing" | "logged-out"): string {
+function humanCommand(driver: string, reason: "missing" | "logged-out" | "no-model"): string {
+  if (reason === "no-model") return `set a ${driver} model, then run: councilkit init`;
   if (reason === "logged-out") return `${driver} login`;
   switch (driver) {
     case "cld":
@@ -138,6 +142,10 @@ export interface HumanCouncil {
     defaultModel: boolean;
   }>;
   skipped: SkippedSeat[];
+  /** False when init did not write this council. */
+  created: boolean;
+  /** Ready seats required before init writes the council. */
+  minimumSeats: number;
   /** Standalone cfuse is filling review-security because cld is absent. */
   cldSubstitute: boolean;
 }
@@ -148,8 +156,10 @@ function countable(count: number, singular: string, plural: string): string {
 
 function councilSection(council: HumanCouncil): string {
   const skipped = council.skipped.filter((seat) => seat.reason !== "no-model");
-  const reporter = council.reporter === null ? "" : ` (reporter ${council.reporter})`;
-  const header = `${council.name}${reporter} · ${council.ready.length} ready, ${skipped.length} skipped`;
+  const counts = `${council.ready.length} ready, ${skipped.length} skipped`;
+  const header = council.created
+    ? `${council.name}${council.reporter === null ? "" : ` (reporter ${council.reporter})`} · ${counts}`
+    : `${council.name} · not created (needs at least ${countable(council.minimumSeats, "ready seat", "ready seats")}), ${counts}`;
   return [
     header,
     ...council.ready.map((seat) =>
@@ -166,7 +176,43 @@ function summaryLine(councils: readonly HumanCouncil[]): string {
     ready += council.ready.length;
     skipped += council.skipped.filter((seat) => seat.reason !== "no-model").length;
   }
-  return `init: ${countable(councils.length, "council", "councils")} · ${countable(ready, "seat", "seats")} ready, ${skipped} skipped`;
+  const created = councils.filter((council) => council.created).length;
+  return `init: ${countable(created, "council", "councils")} · ${countable(ready, "seat", "seats")} ready, ${skipped} skipped`;
+}
+
+function nextLines(councils: readonly HumanCouncil[]): string[] {
+  const lines = ["next:"];
+  if (councils.some((council) => council.name === "pr-jury" && council.created)) {
+    lines.push(`  ${NEXT_REVIEW_HINT}`);
+  }
+  if (councils.some((council) => council.name === "product-jury" && council.created)) {
+    lines.push(`  ${NEXT_IDEATE_HINT}`);
+  }
+  if (lines.length === 1) {
+    lines.push("  install a logged-in CLI, then run: councilkit init");
+  }
+  return lines;
+}
+
+function wrapLine(line: string): string {
+  if (line.length <= LINE_WIDTH) return line;
+  const parts: string[] = [];
+  let rest = line;
+  while (rest.length > LINE_WIDTH) {
+    let cut = rest.lastIndexOf(" ", LINE_WIDTH);
+    if (cut <= 0) cut = LINE_WIDTH;
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest.length > 0) parts.push(rest);
+  return parts.join("\n");
+}
+
+function wrapLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => wrapLine(line))
+    .join("\n");
 }
 
 function globalNotes(councils: readonly HumanCouncil[]): string[] {
@@ -177,21 +223,40 @@ function globalNotes(councils: readonly HumanCouncil[]): string[] {
   ];
 }
 
-export function renderInitHuman(input: { councils: HumanCouncil[]; failure?: boolean }): string {
+export function renderInitHuman(input: { councils: HumanCouncil[] }): string {
   const sections = input.councils.map((council) => councilSection(council)).join("\n\n");
   const notes = globalNotes(input.councils);
   const body = notes.length === 0 ? sections : `${sections}\n\n${notes.join("\n")}`;
-  if (input.failure) return body;
-  return [
-    summaryLine(input.councils),
-    "",
-    body,
-    "",
-    "next:",
-    `  ${NEXT_REVIEW_HINT}`,
-    `  ${NEXT_IDEATE_HINT}`,
-    "open reports: http://127.0.0.1:43127/reports",
-  ].join("\n");
+  const lines = [summaryLine(input.councils), "", body, "", ...nextLines(input.councils)];
+  if (input.councils.some((council) => council.created)) {
+    lines.push("open reports: http://127.0.0.1:43127/reports");
+  }
+  return wrapLines(lines.join("\n"));
+}
+
+/** Plain-language explanation for a council init did not write. */
+export function formatPendingCouncil(pending: PendingCouncil): string {
+  const ready =
+    pending.readySeats.length === 0 ? "none ready" : `ready: ${pending.readySeats.join(", ")}`;
+  const lines = [
+    `${pending.name} was not created: it needs at least ${countable(pending.minimumSeats, "ready seat", "ready seats")} (${ready}).`,
+    "Missing:",
+  ];
+  if (pending.skippedSeats.length === 0) {
+    lines.push("  no default seats were available for this council");
+  }
+  for (const seat of pending.skippedSeats) {
+    const why =
+      seat.reason === "logged-out"
+        ? "not logged in"
+        : seat.reason === "no-model"
+          ? "no model configured"
+          : "not installed";
+    lines.push(`  ${seat.seat}: ${seat.driver} ${why}`);
+    lines.push(`    ${humanCommand(seat.driver, seat.reason)}`);
+  }
+  lines.push("Fix those, then run: councilkit init");
+  return wrapLines(lines.join("\n"));
 }
 
 export interface InitCouncilBrief {
@@ -199,6 +264,8 @@ export interface InitCouncilBrief {
   reporter: string | null;
   ready: Array<{ name: string; modelId: string }>;
   skippedSeats: SkippedSeat[];
+  created: boolean;
+  minimumSeats: number;
 }
 
 function usesCodexDefault(name: string, modelId: string): boolean {
@@ -223,6 +290,8 @@ export function initHumanFromOutcome(input: {
           ...displayTool(seat.name, input.drivers),
         })),
         skipped: council.skippedSeats,
+        created: council.created,
+        minimumSeats: council.minimumSeats,
         cldSubstitute:
           council.name === "pr-jury" &&
           readyNames.has("review-security") &&

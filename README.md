@@ -21,7 +21,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
   ```bash
   npm install -g pnpm@10.34.6
   ```
-- **至少一个已登录的本机 CLI**。`councilkit init` 的人读输出先给一行总览，再按 Council 分组，行首符号：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。登录只写 `logged in`、`not logged in` 或 `login not checked`。同一个 Council 里原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时席位名和原因在同一行。`--json` 仍给出每个 driver 的路径、版本和完整 `next`。缺席席位记在 Council 的 `skippedSeats` 里。
+- **至少一个已登录的本机 CLI**。`councilkit init` 的人读输出先给一行总览，再按 Council 分组，行首符号：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。登录只写 `logged in`、`not logged in` 或 `login not checked`。同一个 Council 里原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时席位名和原因在同一行。`--json` 仍给出每个 driver 的路径、版本和完整 `next`。缺席席位记在 Council 的 `skippedSeats` 里。总览里的 Council 个数只算已经落盘的。`product-jury` 就绪席位不足 2 时不落盘，人读输出说明原因和缺席席位，`next` 不给出 `ideate` 命令；同一份缺席写在 `councils.json` 的 `pendingCouncils`，`ideate --council product-jury` 会按它说明该装什么、该登录什么。没有任何可用 CLI 时，人读输出仍有总览和明文原因，不打印原始 JSON。
   - `cld`：Claude 包装器。route 是 `ant`、`moonshot`、`deepseek`、`cfuse`。`cfuse` 是 `cld` 的一条 route，不是 `cld` 本身；这条 route 通过环境变量 `CLD_CFUSE_BIN` 执行 `cfuse-claude-code`。PATH 上如果只有 `cfuse-claude`，也会把它当作这个后端。把名为 `cld` 的可执行文件放到 PATH 上，然后运行 `cld login`。CouncilKit 不附带 `cld`。
   - 独立的 `cfuse` CLI（`cfuse -p "…" --output-format text --skip-update`）在没有 `cld` 时，会被 `init` 收成 `review-security` 席位。Host 里的长会话仍然需要 `cld`。
   - Codex CLI：`npm install -g @openai/codex`，然后 `codex login`。已登录但没有配置模型时，`review-codex` 和 `ideate-challenger` 都会建成，使用 Codex CLI 自己的默认模型，审查时不传 `-m`。要指定模型，编辑 `~/.codex/config.toml`（或 `$CODEX_HOME/config.toml`）里第一个表之前的顶层字段，例如 `model = "gpt-5-codex"`；也可以用 Codex 的官方参数 `codex exec -m <model-id>`。改完后重新运行 `councilkit init`。覆盖说明只出现在 `--json` 的 `next` 和这里，不出现在人读输出里。每个默认席位要么创建，要么出现在 `skippedSeats` 里。

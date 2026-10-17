@@ -11,6 +11,8 @@ export const PR_JURY_BACKGROUND =
 export const PR_JURY_TARGET_OUTPUT =
   "五章节聚合报告：概览 / 共识发现 / 独有发现 / 分歧 / 结论，外加各审查者附录。";
 export const PR_JURY_ROUNDS = 1;
+/** One ready review seat is enough to write pr-jury. */
+export const PR_JURY_MINIMUM_SEATS = 1;
 
 export const DEFAULT_AGENT_NAMES = [
   "review-security",

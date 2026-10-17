@@ -30,11 +30,14 @@ import {
   COUNCILS_FORMAT,
   COUNCILS_VERSION,
   type CouncilRecord,
+  type CouncilsFile,
+  type PendingCouncil,
   type SkippedSeat,
   agentRecordSchema,
   agentsFileSchema,
   councilRecordSchema,
   councilsFileSchema,
+  pendingCouncilSchema,
 } from "./schemas";
 
 export interface StoreEnv {
@@ -319,6 +322,36 @@ export class Store {
     return next;
   }
 
+  listPendingCouncils(): PendingCouncil[] {
+    return this.readCouncils().pendingCouncils ?? [];
+  }
+
+  getPendingCouncil(name: string): PendingCouncil | null {
+    return this.listPendingCouncils().find((row) => row.name === name) ?? null;
+  }
+
+  /** Replace any pending row with this name. Does not create a real council. */
+  savePendingCouncil(input: PendingCouncil): PendingCouncil {
+    const parsed = pendingCouncilSchema.safeParse(input);
+    if (!parsed.success) {
+      throw errors.usage(zodFailureMessage(parsed.error.issues, "invalid pending council"));
+    }
+    const file = this.readCouncils();
+    const next = (file.pendingCouncils ?? []).filter((row) => row.name !== parsed.data.name);
+    next.push(parsed.data);
+    file.pendingCouncils = next;
+    this.writeCouncils(file);
+    return parsed.data;
+  }
+
+  deletePendingCouncil(name: string): void {
+    const file = this.readCouncils();
+    const pending = file.pendingCouncils ?? [];
+    if (!pending.some((row) => row.name === name)) return;
+    file.pendingCouncils = pending.filter((row) => row.name !== name);
+    this.writeCouncils(file);
+  }
+
   deleteCouncil(ref: string): { deletedId: string; freed: true } {
     const council = this.getCouncil(ref);
     const file = this.readCouncils();
@@ -369,11 +402,7 @@ export class Store {
     }
   }
 
-  private readCouncils(): {
-    format: "councilkit-councils";
-    version: 1;
-    councils: CouncilRecord[];
-  } {
+  private readCouncils(): CouncilsFile {
     ensureHome(this.env);
     const text = readFileText(this.paths.councils);
     if (text === null) {
@@ -395,13 +424,16 @@ export class Store {
     return validated.data;
   }
 
-  private writeCouncils(file: {
-    format: "councilkit-councils";
-    version: 1;
-    councils: CouncilRecord[];
-  }): void {
+  private writeCouncils(file: CouncilsFile): void {
+    const pending = file.pendingCouncils ?? [];
+    const payload: CouncilsFile = {
+      format: file.format,
+      version: file.version,
+      councils: file.councils,
+      ...(pending.length > 0 ? { pendingCouncils: pending } : {}),
+    };
     try {
-      atomicWriteJson(this.paths.councils, redact(file));
+      atomicWriteJson(this.paths.councils, redact(payload));
     } catch (cause) {
       throw errors.io(`failed to write councils.json: ${ioName(cause)}`, {
         cause: ioName(cause),

@@ -14,6 +14,8 @@ export const PRODUCT_JURY_BACKGROUND =
 export const PRODUCT_JURY_TARGET_OUTPUT =
   "十章节决策报告：背景与问题 / 目标用户与场景 / 方案对比 / 辩论要点与分歧 / 决策与范围 / 产品形态与关键流程 / 技术方案与约束 / 里程碑 / 验证计划 / 风险与未决问题。";
 export const PRODUCT_JURY_ROUNDS = 1;
+/** product-jury is a discussion; fewer than two ready seats is not a council. */
+export const PRODUCT_JURY_MINIMUM_SEATS = 2;
 
 export const IDEATE_AGENT_NAMES = [
   "ideate-product",

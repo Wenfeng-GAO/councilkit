@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import { errors } from "../errors";
+import { formatPendingCouncil } from "../init/human-report";
 import { formatSkippedSeatLine } from "../init/skipped-seats";
 import type { OutputSink } from "../output";
 import type { CouncilRecord } from "../store/schemas";
@@ -103,7 +104,13 @@ function showCouncil(argv: string[], out: OutputSink): Promise<void> {
   const ref = positionals[0];
   if (!ref) throw errors.usage("councilkit council show requires a council name or id");
   const store = new Store();
-  return finishCouncil(out, store.getCouncil(ref));
+  try {
+    return finishCouncil(out, store.getCouncil(ref));
+  } catch (error) {
+    const pending = store.getPendingCouncil(ref);
+    if (pending !== null) throw errors.usage(formatPendingCouncil(pending));
+    throw error;
+  }
 }
 
 function deleteCouncil(argv: string[], out: OutputSink): Promise<void> {

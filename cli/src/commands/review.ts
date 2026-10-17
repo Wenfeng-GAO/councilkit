@@ -163,6 +163,7 @@ import {
   revalidateTrustedRoot,
 } from "../fs-safe";
 import { PR_JURY_COUNCIL_NAME } from "../init/defaults";
+import { formatPendingCouncil } from "../init/human-report";
 import type { OutputSink } from "../output";
 import { atomicWriteFile } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
@@ -446,6 +447,8 @@ export async function runReview(
     try {
       council = store.getCouncil(councilRef);
     } catch (error) {
+      const pending = store.getPendingCouncil(councilRef);
+      if (pending !== null) throw errors.usage(formatPendingCouncil(pending));
       if (defaultedCouncil) {
         throw errors.usage(
           "no --council/--agents given and default pr-jury is missing; run `councilkit init` or pass --council/--agents",

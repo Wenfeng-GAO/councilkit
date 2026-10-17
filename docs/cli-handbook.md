@@ -50,11 +50,11 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——**大部分命令*
 
 人和 `--json` 都带 `drivers`：每个已知 driver 一行 `found`、`path`、`version`（`--version` 便宜就取）、`login`（`logged-in` / `logged-out` / `unknown`）。登录只在不会打开登录流程时检查（`codex login status`、`cursor-agent status` 或 `CURSOR_API_KEY`、凭据文件是否存在）。缺二进制或未登录时，`next` 是一句带确切命令的下一步。没有堆栈。
 
-driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out`；旧文件里还可能有 `no-model`）和 `next`。人读输出先写一行总览（`init: N councils · M seats ready, K skipped`；1 个时用单数 council / seat），再按 Council 分组。每组标题是 `name · R ready, S skipped`；Council 已落盘且有 reporter 时写成 `name (reporter X) · R ready, S skipped`。行首符号不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。同一 Council 里 driver 和原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时保持一行 `✗ <seat>  skipped: …` 加一行命令。版本列在知道版本时写出，`cursor-agent` 可以不写版本。`? cld` 这类全局说明放在两组之后。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。成功时 `next:` 后面仍有 `open reports:`。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）和 Codex 模型覆盖说明只出现在 `--json` 的 `next` 和 README。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
+driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out`；旧文件里还可能有 `no-model`）和 `next`。人读输出先写一行总览（`init: N councils · M seats ready, K skipped`；1 个时用单数 council / seat）。N 只数已经落盘的 Council；席位合计仍包含未落盘的分组。再按 Council 分组。已落盘的标题是 `name (reporter X) · R ready, S skipped`。人数不够、没有落盘的分组写成 `name · not created (needs at least …), R ready, S skipped`，并列出缺席席位和修复命令；`next:` 不打印指向它的命令。行首符号不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。同一 Council 里 driver 和原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时保持一行 `✗ <seat>  skipped: …` 加一行命令。版本列在知道版本时写出，`cursor-agent` 可以不写版本。`? cld` 这类全局说明放在两组之后。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。成功时 `next:` 后面仍有 `open reports:`。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）和 Codex 模型覆盖说明只出现在 `--json` 的 `next` 和 README。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
 
 Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `model`，也会创建 `review-codex` 和 `ideate-challenger`，`modelId` 为 `default`。审查和 probe 都不传 `-m`，由 Codex CLI 使用自己的默认模型。顶层 `model = "..."` 存在时，两席都记下该 id 并传 `-m`。`models_cache.json` 不算用户配置。每个默认席位要么创建，要么写入 `skippedSeats`，不会悄悄消失。
 
-`review-security` 在 PATH 上有 `cld` 时走 `cld cfuse`（`cfuse-claude-code` 或 `cfuse-claude` 会写入 `CLD_CFUSE_BIN`）。没有 `cld` 但有独立 `cfuse` 时，同一席位改为运行 `cfuse -p … --output-format text --skip-update`。只有 `cfuse-claude` / `cfuse-claude-code`、没有 `cld` 也没有独立 `cfuse` 时，不建这一席，并说明需要 `cld`。
+`review-security` 在 PATH 上有 `cld` 时走 `cld cfuse`（`cfuse-claude-code` 或 `cfuse-claude` 会写入 `CLD_CFUSE_BIN`）。没有 `cld` 但有独立 `cfuse` 时，同一席位改为运行 `cfuse -p … --output-format text --skip-update`。审查、apply、fix 的健康检查（含 Aggregator）使用同一次解析：独立 `cfuse` 在场就算驱动可达，不会在调用 `cfuse` 之前因为找不到 `cld` 中止。只有 `cfuse-claude` / `cfuse-claude-code`、没有 `cld` 也没有独立 `cfuse` 时，不建这一席，并说明需要 `cld`。`ideate` 的 Claude 席仍只使用 `cld`。
 
 - **默认 Agent**：
   - `review-security`（`cld`，或没有 `cld` 时的独立 `cfuse`）
@@ -66,7 +66,7 @@ Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `
 
 - **默认 Council**：
   - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 和 `review-codex` 不是 preferred reporter）
-  - `product-jury`（PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 在 PATH 有 `codex` 且不是明确未登录时创建，没有顶层 `model` 时 model = `default`、不传 `-m`；人数不足 2 不落盘，人读标题也不写 reporter；Reporter 优先 Codex）
+  - `product-jury`（PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 在 PATH 有 `codex` 且不是明确未登录时创建，没有顶层 `model` 时 model = `default`、不传 `-m`；就绪席位不足 2 时不写入 `councils`，而记在 `pendingCouncils`（缺席席位和修复命令）。之后 `ideate --council product-jury` 说明缺什么，而不是只让用户再跑 init。Reporter 优先 Codex）
 
 - **行为**：
   - 已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）
