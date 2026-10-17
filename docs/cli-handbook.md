@@ -50,7 +50,7 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——**大部分命令*
 
 人和 `--json` 都带 `drivers`：每个已知 driver 一行 `found`、`path`、`version`（`--version` 便宜就取）、`login`（`logged-in` / `logged-out` / `unknown`）。登录只在不会打开登录流程时检查（`codex login status`、`cursor-agent status` 或 `CURSOR_API_KEY`、凭据文件是否存在）。缺二进制或未登录时，`next` 是一句带确切命令的下一步。没有堆栈。
 
-driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out` / `no-model`）和 `next`。人读一行形如 `未创建席位 review-security：未找到 cld（安装后重新运行 init）`。同一列表写入该 Council 的 `skippedSeats`。登录状态未知时仍创建席位。
+driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out` / `no-model`）和 `next`。人读输出用行首符号，不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）只出现在 `--json` 的 `next` 和 README；人读是一行现状加一行命令。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
 
 `review-security` 在 PATH 上有 `cld` 时走 `cld cfuse`（`cfuse-claude-code` 或 `cfuse-claude` 会写入 `CLD_CFUSE_BIN`）。没有 `cld` 但有独立 `cfuse` 时，同一席位改为运行 `cfuse -p … --output-format text --skip-update`。只有 `cfuse-claude` / `cfuse-claude-code`、没有 `cld` 也没有独立 `cfuse` 时，不建这一席，并说明需要 `cld`。
 

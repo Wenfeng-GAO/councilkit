@@ -174,7 +174,10 @@ exit 1
     expect(message).toContain("kimi login");
     expect(message).toContain("grok login");
     expect(message).toContain("cursor-agent login");
-    expect(message).toContain("未创建席位 review-security：未找到 cld（安装后重新运行 init）");
+    expect(message).toContain("✗ review-security  skipped: cld not installed");
+    expect(message).toContain("put cld on PATH, then: cld login");
+    expect(message).not.toContain("CLD_CFUSE_BIN");
+    expect(message).not.toContain("backend");
     const skipped = (
       error as { detail?: { skippedSeats?: Array<{ seat: string; reason: string }> } }
     ).detail?.skippedSeats;
@@ -551,8 +554,16 @@ exit 1
     expect(cld).toMatchObject({ found: false, path: null, login: "unknown" });
     expect(cld?.next).toContain("review-security");
     expect(cld?.next).toContain("cld login");
-    expect(sink.human).toContain("cfuse");
-    expect(sink.human).toContain("cld login");
+    expect(sink.human).toContain("✓ review-security");
+    expect(sink.human).toContain("cfuse 1.2.3");
+    expect(sink.human).toContain("login not checked");
+    expect(sink.human).toContain(
+      "? cld  not installed (review-security is using standalone cfuse instead)",
+    );
+    expect(sink.human).toContain("for full features, put cld on PATH, then: cld login");
+    expect(sink.human).not.toContain("CLD_CFUSE_BIN");
+    expect(sink.human).not.toContain("backend");
+    expect(sink.human).not.toMatch(/\broute\b/);
     expect(sink.human).not.toMatch(/^\s+at /m);
     expect(new Store().getAgent("review-security").driverSelection).toEqual({
       driverId: "claude-stream-json",
@@ -582,8 +593,11 @@ exit 1
     expect(cld?.next).toContain("cfuse-claude");
     expect(cld?.next).toContain("cld is required");
     expect(cld?.next).toContain("cld login");
-    expect(sink.human).toContain("cld is required");
-    expect(sink.human).toContain("未创建席位 review-security：未找到 cld（安装后重新运行 init）");
+    expect(sink.human).toContain("✗ review-security  skipped: cld not installed");
+    expect(sink.human).toContain("put cld on PATH, then: cld login");
+    expect(sink.human).not.toContain("cld is required");
+    expect(sink.human).not.toContain("CLD_CFUSE_BIN");
+    expect(sink.human).not.toContain("backend");
     const skipped = (
       out as {
         skippedSeats?: Array<{ seat: string; driver: string; reason: string; next: string }>;
@@ -626,8 +640,10 @@ exit 1
       expect(row, name).toMatchObject({ found: true, login: "logged-out", version: "1.2.3" });
       expect(row?.next).toContain(`${name} login`);
     }
-    expect(sink.human).toContain("Run `codex login`.");
-    expect(sink.human).toContain("Run `kimi login`.");
+    expect(sink.human).toContain("✗ review-maintainability  skipped: kimi not logged in");
+    expect(sink.human).toContain("\n      kimi login\n");
+    expect(sink.human).toContain("\n      codex login\n");
+    expect(sink.human).toContain("not logged in");
     expect(sink.human).not.toMatch(/^\s+at /m);
   });
 
@@ -667,7 +683,10 @@ exit 1
       login: "unknown",
       next: null,
     });
-    expect(sink.human).toContain("login logged-in");
+    expect(sink.human).toContain("logged in");
+    expect(sink.human).toContain("? codex  logged in, no model configured — seat not created");
+    expect(sink.human).not.toContain("login logged-in");
+    expect(sink.human).not.toContain(" · councilkit");
     expect(sink.human).not.toMatch(/^\s+at /m);
     const skipped = out.skippedSeats;
     expect(skipped.filter((seat) => seat.seat.startsWith("review-"))).toEqual([]);
@@ -686,8 +705,8 @@ exit 1
     stub(["kimi"]);
     const sink = makeSink();
     await runInit([], sink);
-    const line = "未创建席位 review-security：未找到 cld（安装后重新运行 init）";
-    expect(sink.human).toContain(line);
+    expect(sink.human).toContain("✗ review-security  skipped: cld not installed");
+    expect(sink.human).toContain("put cld on PATH, then: cld login");
     const out = sink.finished as {
       skippedSeats: Array<{ seat: string; driver: string; reason: string; next: string }>;
     };
@@ -723,8 +742,8 @@ exit 1
     expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-correctness");
     expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-adversarial");
     expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
-    const line = "未创建席位 review-correctness：grok 未登录（运行 `grok login` 后重新运行 init）";
-    expect(sink.human).toContain(line);
+    expect(sink.human).toContain("✗ review-correctness  skipped: grok not logged in");
+    expect(sink.human).toContain("\n      grok login\n");
     expect(out.skippedSeats).toContainEqual(
       expect.objectContaining({
         seat: "review-correctness",
@@ -783,6 +802,53 @@ exit 1
     const loaded = new Store().getCouncil("pr-jury");
     expect(loaded.name).toBe("pr-jury");
     expect(loaded.skippedSeats).toBeUndefined();
+  });
+
+  it("prints the symbol layout for a mixed PATH", async () => {
+    const script = (version: string) => `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "${version}"; exit 0; fi
+if [ "$1" = "login" ] || [ "$1" = "status" ]; then echo "Logged in using ChatGPT"; exit 0; fi
+exit 0
+`;
+    for (const [name, version] of [
+      ["cfuse", "2.6.43"],
+      ["kimi", "2.1.1"],
+      ["cursor-agent", "2026.10.16"],
+      ["codex", "codex-cli 0.161.0"],
+    ] as const) {
+      const path = join(bin, name);
+      writeFileSync(path, script(version));
+      chmodSync(path, 0o755);
+    }
+    mkdirSync(join(home, ".kimi-code"), { recursive: true });
+    writeFileSync(join(home, ".kimi-code", "credentials"), "{}\n");
+    process.env.PATH = bin;
+    const sink = makeSink();
+    await runInit([], sink);
+    expect(
+      sink.human,
+    ).toBe(`init: 4 seats ready, 3 skipped · council pr-jury (reporter review-security)
+  ✓ review-security        cfuse 2.6.43             login not checked
+  ✓ review-maintainability kimi 2.1.1               logged in
+  ✓ review-cursor          cursor-agent 2026.10.16  logged in
+  ✓ ideate-engineering     kimi 2.1.1               logged in
+  ✗ review-correctness  skipped: grok not installed
+      install grok so it's on PATH, then: grok login
+  ✗ review-adversarial  skipped: grok not installed
+      install grok so it's on PATH, then: grok login
+  ✗ ideate-product  skipped: grok not installed
+      install grok so it's on PATH, then: grok login
+  ? codex  logged in, no model configured — seat not created
+      set a model: printf 'model = "<model-id>"\\n' >> "\${CODEX_HOME:-$HOME/.codex}/config.toml"
+  ? cld  not installed (review-security is using standalone cfuse instead)
+      for full features, put cld on PATH, then: cld login
+
+next:
+  councilkit review --council pr-jury --pr <url>
+  councilkit ideate "<idea>" --council product-jury
+open reports: http://127.0.0.1:43127/reports`);
+    expect(sink.human).not.toContain("CLD_CFUSE_BIN");
+    expect(sink.human).not.toContain(" · councilkit");
   });
 
   it("dispatch routes the init command", async () => {

@@ -16,6 +16,7 @@ import {
   PR_JURY_TOPIC,
 } from "../init/defaults";
 import { type DriverStatus, collectDriverStatus } from "../init/driver-status";
+import { initHumanFromOutcome, renderInitHuman } from "../init/human-report";
 import {
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
@@ -27,12 +28,7 @@ import {
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
 } from "../init/ideate-defaults";
-import {
-  codexModelSkip,
-  formatSkippedSeatLine,
-  ideateDriverSkip,
-  reviewSkip,
-} from "../init/skipped-seats";
+import { codexModelSkip, ideateDriverSkip, reviewSkip } from "../init/skipped-seats";
 import type { OutputSink } from "../output";
 import type { AgentRecord, CouncilRecord, SkippedSeat } from "../store/schemas";
 import { Store } from "../store/store";
@@ -98,12 +94,18 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       skippedSeats.push(codexModelSkip());
       if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
     }
-    const steps = drivers.map((row) => row.next).filter((line): line is string => line !== null);
+    const lines = renderInitHuman({
+      ready: [],
+      skipped: skippedSeats,
+      codexModel: skippedSeats.some((seat) => seat.reason === "no-model"),
+      cldUsesCfuse: false,
+      council: null,
+      failure: true,
+    });
     throw errors.usage(
       [
         "no review drivers found on PATH (need at least one of: cld, cfuse, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
-        ...skippedSeats.map(formatSkippedSeatLine),
-        ...steps,
+        lines,
       ].join("\n"),
       { missingDrivers, drivers, skippedSeats },
     );
@@ -233,7 +235,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     skippedSeats: [...reviewSkips, ...ideateSkips],
     next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
   };
-  await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
+  await out.finish(outcome, (d) => initHumanFromOutcome(d as InitOutcome));
 }
 
 function recreateDefaults(store: Store): void {
@@ -307,36 +309,4 @@ function briefCouncil(
     // keep id if the agent was deleted out of band
   }
   return { id: council.id, name: council.name, reporter };
-}
-
-function renderHuman(outcome: InitOutcome): string {
-  const lines: string[] = [];
-  const created = outcome.createdAgents.length;
-  const reused = outcome.reusedAgents.length;
-  const councilBit =
-    outcome.createdCouncil !== null
-      ? `created council ${outcome.createdCouncil.name} (reporter ${outcome.createdCouncil.reporter})`
-      : outcome.reusedCouncil !== null
-        ? `reused council ${outcome.reusedCouncil.name} (reporter ${outcome.reusedCouncil.reporter})`
-        : "no council";
-  lines.push(`init: created ${created} agent(s), reused ${reused}; ${councilBit}`);
-  for (const agent of [...outcome.createdAgents, ...outcome.reusedAgents]) {
-    const mark = outcome.createdAgents.some((a) => a.id === agent.id) ? "new" : "kept";
-    lines.push(`  ${agent.name}  ${agent.driverId}/${agent.modelId}  [${mark}]`);
-  }
-  for (const seat of outcome.skippedSeats) lines.push(formatSkippedSeatLine(seat));
-  lines.push("drivers:");
-  for (const row of outcome.drivers) {
-    if (!row.found) {
-      lines.push(`  ${row.driver}  missing`);
-    } else {
-      const version = row.version === null ? "version unknown" : row.version;
-      const backend = row.backendPath ? `  backend ${row.backendPath}` : "";
-      lines.push(`  ${row.driver}  ${row.path}  ${version}  login ${row.login}${backend}`);
-    }
-    if (row.next !== null) lines.push(`    ${row.next}`);
-  }
-  lines.push(`next: ${outcome.next}`);
-  lines.push("open reports: http://127.0.0.1:43127/reports");
-  return lines.join("\n");
 }

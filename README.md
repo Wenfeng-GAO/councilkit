@@ -21,7 +21,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
   ```bash
   npm install -g pnpm@10.34.6
   ```
-- **至少一个已登录的本机 CLI**。`councilkit init` 会为每个已知 driver 打印是否找到、路径、版本，以及能不发起登录就检查到的登录状态；缺的或未登录的各给一句下一步。没建成的默认席位会写明，例如 `未创建席位 review-security：未找到 cld（安装后重新运行 init）`，并记在 Council 的 `skippedSeats` 里。
+- **至少一个已登录的本机 CLI**。`councilkit init` 的人读输出用行首符号：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。登录只写 `logged in`、`not logged in` 或 `login not checked`。没建成的席位和未检查的 driver 各占一行，下一步命令单独一行。`--json` 仍给出每个 driver 的路径、版本和完整 `next`。缺席席位记在 Council 的 `skippedSeats` 里。
   - `cld`：Claude 包装器。route 是 `ant`、`moonshot`、`deepseek`、`cfuse`。`cfuse` 是 `cld` 的一条 route，不是 `cld` 本身；这条 route 通过环境变量 `CLD_CFUSE_BIN` 执行 `cfuse-claude-code`。PATH 上如果只有 `cfuse-claude`，也会把它当作这个后端。把名为 `cld` 的可执行文件放到 PATH 上，然后运行 `cld login`。CouncilKit 不附带 `cld`。
   - 独立的 `cfuse` CLI（`cfuse -p "…" --output-format text --skip-update`）在没有 `cld` 时，会被 `init` 收成 `review-security` 席位。Host 里的长会话仍然需要 `cld`。
   - Codex CLI：`npm install -g @openai/codex`，然后 `codex login`。

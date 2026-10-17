@@ -15,8 +15,11 @@ import {
 } from "./driver-status";
 import type { IdeateAgentSpec } from "./ideate-defaults";
 
-export const CODEX_MODEL_NEXT =
-  "Configure a Codex model in CODEX_HOME or ~/.codex, then run `councilkit init`.";
+/** Writes the top-level `model = "..."` that `init` reads from Codex config. */
+export const CODEX_MODEL_COMMAND =
+  'printf \'model = "<model-id>"\\n\' >> "${CODEX_HOME:-$HOME/.codex}/config.toml"';
+
+export const CODEX_MODEL_NEXT = `${CODEX_MODEL_COMMAND} && councilkit init`;
 
 export function formatSkippedSeatLine(seat: SkippedSeat): string {
   const reason =
