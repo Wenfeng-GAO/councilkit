@@ -186,7 +186,11 @@ describe("#295 designer: blocking rule folded in the sample report", () => {
       }),
     );
     expect(html).not.toContain("阻塞是怎么判的");
-    expect(html).toContain("阻塞依据：这条问题违反了规格里写明的验收");
+    expect(html).toContain(
+      "阻塞依据：未绑定规格；多数席位各自指出同一高严重度缺陷即阻塞，单席问题进「待确认」。",
+    );
+    expect(html).not.toContain("严重度是重大或致命");
+    expect(html).not.toContain("不会自动改这项门禁");
     expect(html).not.toContain("规格合同减法");
   });
 });

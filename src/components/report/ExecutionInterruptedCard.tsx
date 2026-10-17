@@ -1,5 +1,6 @@
 import { InterruptionMark } from "@/components/report/interruption-mark";
 import { Button } from "@/components/ui/Button";
+import { renderInlineCode } from "@/lib/inline-code";
 import {
   EXECUTION_SERVICE_INTERRUPTION,
   RE_REVIEW_STARTING_LABEL,
@@ -40,7 +41,7 @@ export function ExecutionInterruptedCard({
           {error ? (
             <p className="ck-action-error" role="alert">
               <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
-              {error}
+              {renderInlineCode(error)}
             </p>
           ) : null}
           {errorDetail ? (

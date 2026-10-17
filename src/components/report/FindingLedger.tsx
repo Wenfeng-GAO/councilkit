@@ -32,14 +32,36 @@ import {
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useMemo, useState } from "react";
 
-const SPEC_BLOCKING_RULE =
-  "阻塞依据：这条问题违反了规格里写明的验收，严重度是重大或致命，并且还没有验证解决或接受不修。建议修订规格的项和 nit 不阻塞。报告里写“本轮不阻塞”不会自动改这项门禁。";
-
 export const NO_SPEC_BLOCKING_RULE =
   "阻塞依据：未绑定规格；多数席位各自指出同一高严重度缺陷即阻塞，单席问题进「待确认」。";
 
-export function blockingRuleForReport(markdown: string): string {
-  return markdown.includes("无规格依据") ? NO_SPEC_BLOCKING_RULE : SPEC_BLOCKING_RULE;
+/** 「阻塞依据：违反了规格里的AC-3：{验收原文}。」 */
+export function specBlockingBasisLine(id: string, acceptance: string): string {
+  const text = acceptance.trim().replace(/[。．.]\s*$/, "");
+  return `阻塞依据：违反了规格里的${id}：${text}。`;
+}
+
+/**
+ * One plain line per blocking fact. A spec violation names that AC and its
+ * verbatim text. Anything else is the no-spec one-liner. The old rule
+ * paragraph is not a line we render.
+ */
+export function blockingBasisLines(markdown: string): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const specBasis = /违反了规格里的\s*([A-Za-z][A-Za-z0-9_-]*)\s*[：:]\s*([^\n]+)/g;
+  for (const match of markdown.matchAll(specBasis)) {
+    const id = match[1];
+    const acceptance = match[2];
+    if (!id || !acceptance?.trim()) continue;
+    const line = specBlockingBasisLine(id, acceptance);
+    if (seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+  }
+  if (lines.length > 0) return lines;
+  if (/违反了规格里的|违反规格/.test(markdown)) return [];
+  return [NO_SPEC_BLOCKING_RULE];
 }
 
 export function FindingLedger({
@@ -112,7 +134,7 @@ export function FindingLedger({
   const summary = pendingOnly
     ? { primary: formatAttentionLabel(attention), secondary: pendingOnlyLedgerCopy(pendingCount) }
     : formatProblemSummary(projection, nextCluster?.id ?? null, attention);
-  const blockingRule = blockingRuleForReport(run.markdown);
+  const blockingLines = blockingBasisLines(run.markdown);
   const againstId = run.reviewEvidence?.againstRunId ?? null;
   const prUrl = run.reviewEvidence?.prUrl ?? null;
 
@@ -123,16 +145,22 @@ export function FindingLedger({
         <p className="ck-finding-list-summary-primary">{summary.primary}</p>
         <p className="ck-finding-list-summary-secondary">{summary.secondary}</p>
       </div>
-      {projection.blockingCount > 0 ? (
+      {projection.blockingCount > 0 && blockingLines.length > 0 ? (
         run.demo === true ? (
-          // Designer (#295): in the sample report this rule text is noise for a
-          // first-time reader; fold it to one line, expandable on demand.
+          // Designer (#295): in the sample report this line is noise for a
+          // first-time reader; fold it, expandable on demand.
           <details className="ck-finding-list-note ck-blocking-rule">
             <summary>阻塞是怎么判的 ▸</summary>
-            <p>{blockingRule}</p>
+            {blockingLines.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
           </details>
         ) : (
-          <p className="ck-finding-list-note">{blockingRule}</p>
+          blockingLines.map((line) => (
+            <p key={line} className="ck-finding-list-note">
+              {line}
+            </p>
+          ))
         )
       ) : null}
       {countNote ? <p className="ck-finding-list-note">{countNote}</p> : null}

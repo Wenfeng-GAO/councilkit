@@ -83,11 +83,16 @@ describe("ExecutionInterruptedCard", () => {
     ).exec(html);
     const rest = html.slice((button?.index ?? 0) + (button?.[0].length ?? 0)).trimStart();
     expect(rest.startsWith('<p class="ck-action-error" role="alert">')).toBe(true);
-    expect(rest.indexOf(failure)).toBeLessThan(rest.indexOf("<details"));
+    expect(rest.indexOf(`<code class="ck-inline-code">${stored}</code>`)).toBeLessThan(
+      rest.indexOf("<details"),
+    );
+    expect(rest).not.toContain("`");
     expect(rest.indexOf("<summary>详情</summary>")).toBeLessThan(
       rest.indexOf(EXECUTION_SERVICE_INTERRUPTION.secondaryAction),
     );
-    expect(html).toContain(failure);
+    expect(html).toContain(`<code class="ck-inline-code">${stored}</code>`);
+    expect(html).toContain("复审没有启动：找不到原来的规格文件 ");
+    expect(html.slice(html.indexOf('role="alert"'), html.indexOf("<details"))).not.toContain("`");
     expect(html).not.toContain("可以再试一次");
     expect(html.slice(html.indexOf('role="alert"'), html.indexOf("<details"))).not.toContain(
       "DRIVER_SPAWN_FAILED",

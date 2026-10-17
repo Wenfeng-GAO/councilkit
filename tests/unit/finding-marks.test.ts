@@ -62,7 +62,9 @@ describe("report label shapes", () => {
     expect(html).toContain("违反规格 · AC-3");
     expect(html).toContain("违反了规格里的 AC-3：空串输入必须问候");
     expect(html).toContain("ck-verdict-changes");
-    expect(html).toContain("阻塞依据：这条问题违反了规格里写明的验收");
+    expect(html).toContain("阻塞依据：违反了规格里的AC-3：空串输入必须问候。");
+    expect(html).not.toContain("严重度是重大或致命");
+    expect(html).not.toContain("不会自动改这项门禁");
     expect(html).not.toContain("规格合同减法");
     expect(html).not.toContain("合同内 Act On");
     expect(html).not.toContain("不变量 ID");
@@ -137,6 +139,20 @@ describe("report label shapes", () => {
     expect(decision).not.toContain("review-security");
     expect(decision).not.toContain("cld");
     expect(decision).toContain("账本无阻塞");
+  });
+
+  it("renders councilkit init as inline code and keeps the absence note secondary", () => {
+    const html = page(
+      `${header}## 结论\n\ncomment\n\n缺席：review-correctness（grok）：原因未记录，重新运行 \`councilkit init\` 可以看到原因。\n这份报告只汇总了其余 4 席的结果，缺席的这几席负责查的问题可能没被发现。\n\n阻塞 0。\n`,
+      [],
+    );
+    const decision = html.slice(html.indexOf("审查结论"), html.indexOf("原始汇总报告"));
+    expect(decision).toContain('<code class="ck-inline-code">councilkit init</code>');
+    expect(decision).not.toContain("`");
+    expect(decision).toContain('class="ck-wb-absence-note"');
+    expect(decision).toContain(
+      "这份报告只汇总了其余 4 席的结果，缺席的这几席负责查的问题可能没被发现。",
+    );
   });
 });
 

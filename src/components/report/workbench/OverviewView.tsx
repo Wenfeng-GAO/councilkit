@@ -10,6 +10,7 @@ import {
   projectFindingList,
 } from "@/lib/finding-list";
 import { findingDisplayMark, findingMarkdown, textWithoutBasis } from "@/lib/finding-marks";
+import { renderInlineCode } from "@/lib/inline-code";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
@@ -185,7 +186,7 @@ export function OverviewView({
           {absences.map((line) => (
             <p key={line} className="ck-wb-absence" data-absence-icon="circle-alert">
               <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
-              <span>{line}</span>
+              <span>{renderInlineCode(line)}</span>
             </p>
           ))}
           {absenceNote ? <p className="ck-wb-absence-note">{absenceNote}</p> : null}
