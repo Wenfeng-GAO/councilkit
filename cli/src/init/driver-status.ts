@@ -47,7 +47,7 @@ export const CURSOR_INSTALL_NEXT =
 export const CFUSE_INSTALL_NEXT =
   'Install the standalone cfuse CLI so `cfuse` is on PATH. `councilkit init` uses it as the review-security seat (`cfuse -p "…" --output-format text --skip-update`) when `cld` is absent.';
 
-const LOGIN_NEXT: Record<string, string> = {
+export const LOGIN_NEXT: Record<string, string> = {
   cld: "Run `cld login`.",
   codex: "Run `codex login`.",
   kimi: "Run `kimi login`.",

@@ -85,6 +85,8 @@ describe("councilkit init", () => {
     process.env.COUNCILKIT_HOME = home;
     process.env.CODEX_HOME = codexHome;
     process.env.HOME = home;
+    delete process.env.GROK_HOME;
+    delete process.env.CURSOR_API_KEY;
   });
 
   afterEach(() => {
@@ -110,6 +112,18 @@ describe("councilkit init", () => {
       const p = join(bin, name);
       writeFileSync(p, script);
       chmodSync(p, 0o755);
+    }
+    // File probes treat a missing credential as logged-out. A stubbed binary
+    // is a present driver; only the explicit logged-out script stays signed out.
+    if (script !== LOGGED_OUT) {
+      if (names.includes("kimi")) {
+        mkdirSync(join(home, ".kimi-code"), { recursive: true });
+        writeFileSync(join(home, ".kimi-code", "credentials"), "{}\n");
+      }
+      if (names.includes("grok")) {
+        mkdirSync(join(home, ".grok"), { recursive: true });
+        writeFileSync(join(home, ".grok", "auth.json"), "{}\n");
+      }
     }
     process.env.PATH = bin;
   }
@@ -153,6 +167,13 @@ exit 1
     expect(message).toContain("kimi login");
     expect(message).toContain("grok login");
     expect(message).toContain("cursor-agent login");
+    expect(message).toContain("未创建席位 review-security：未找到 cld（安装后重新运行 init）");
+    const skipped = (
+      error as { detail?: { skippedSeats?: Array<{ seat: string; reason: string }> } }
+    ).detail?.skippedSeats;
+    expect(
+      skipped?.some((seat) => seat.seat === "review-security" && seat.reason === "missing"),
+    ).toBe(true);
     const drivers = error?.detail?.drivers ?? [];
     expect(drivers.map((row) => row.driver).sort()).toEqual([
       "cfuse",
@@ -334,6 +355,7 @@ exit 1
     const kimi = join(vendor, "kimi");
     writeFileSync(kimi, "#!/bin/sh\nexit 0\n");
     chmodSync(kimi, 0o755);
+    writeFileSync(join(home, ".kimi-code", "credentials"), "{}\n");
     const sink = makeSink();
     await runInit([], sink);
     const out = sink.finished as {
@@ -554,6 +576,27 @@ exit 1
     expect(cld?.next).toContain("cld is required");
     expect(cld?.next).toContain("cld login");
     expect(sink.human).toContain("cld is required");
+    expect(sink.human).toContain("未创建席位 review-security：未找到 cld（安装后重新运行 init）");
+    const skipped = (
+      out as {
+        skippedSeats?: Array<{ seat: string; driver: string; reason: string; next: string }>;
+      }
+    ).skippedSeats;
+    expect(skipped).toContainEqual(
+      expect.objectContaining({
+        seat: "review-security",
+        driver: "cld",
+        reason: "missing",
+      }),
+    );
+    expect(skipped?.find((seat) => seat.seat === "review-security")?.next).toContain(
+      "cld is required",
+    );
+    expect(new Store().getCouncil("pr-jury").skippedSeats).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ seat: "review-security", reason: "missing" }),
+      ]),
+    );
   });
 
   it("reports each driver logged out when the binary is present but login is not", async () => {
@@ -587,7 +630,6 @@ exit 1
     delete process.env.GROK_HOME;
     mkdirSync(join(home, ".grok"), { recursive: true });
     writeFileSync(join(home, ".grok", "auth.json"), "{}\n");
-    mkdirSync(join(home, ".kimi-code", "credentials"), { recursive: true });
     mkdirSync(join(home, ".config", "cld"), { recursive: true });
     writeFileSync(join(home, ".config", "cld", "env"), "\n");
     const sink = makeSink();
@@ -601,6 +643,7 @@ exit 1
         next: string | null;
         path: string | null;
       }>;
+      skippedSeats: Array<{ seat: string; driver: string; reason: string }>;
     };
     expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
     for (const name of ["cld", "kimi", "grok", "cursor-agent", "codex"]) {
@@ -619,6 +662,120 @@ exit 1
     });
     expect(sink.human).toContain("login logged-in");
     expect(sink.human).not.toMatch(/^\s+at /m);
+    const skipped = out.skippedSeats;
+    expect(skipped.filter((seat) => seat.seat.startsWith("review-"))).toEqual([]);
+    expect(skipped).toContainEqual(
+      expect.objectContaining({ seat: "ideate-challenger", driver: "codex", reason: "no-model" }),
+    );
+    expect(new Store().getCouncil("pr-jury").skippedSeats).toEqual([]);
+    expect(new Store().getCouncil("product-jury").skippedSeats).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ seat: "ideate-challenger", reason: "no-model" }),
+      ]),
+    );
+  });
+
+  it("records a missing default seat on the council and in both outputs", async () => {
+    stub(["kimi"]);
+    const sink = makeSink();
+    await runInit([], sink);
+    const line = "未创建席位 review-security：未找到 cld（安装后重新运行 init）";
+    expect(sink.human).toContain(line);
+    const out = sink.finished as {
+      skippedSeats: Array<{ seat: string; driver: string; reason: string; next: string }>;
+    };
+    const security = out.skippedSeats.find((seat) => seat.seat === "review-security");
+    expect(security).toMatchObject({ driver: "cld", reason: "missing" });
+    expect(security?.next).toContain("cld login");
+    expect(out.skippedSeats.map((seat) => seat.seat)).toEqual([
+      "review-security",
+      "review-correctness",
+      "review-adversarial",
+      "review-cursor",
+      "ideate-product",
+      "ideate-challenger",
+    ]);
+    expect(new Store().getCouncil("pr-jury").skippedSeats?.map((seat) => seat.seat)).toEqual([
+      "review-security",
+      "review-correctness",
+      "review-adversarial",
+      "review-cursor",
+    ]);
+    expect(new Store().listAgents().map((agent) => agent.name)).not.toContain("review-security");
+  });
+
+  it("skips a default seat when its driver is logged out", async () => {
+    stub(["cld", "kimi", "grok"]);
+    rmSync(join(home, ".grok", "auth.json"));
+    const sink = makeSink();
+    await runInit([], sink);
+    const out = sink.finished as {
+      createdAgents: Array<{ name: string }>;
+      skippedSeats: Array<{ seat: string; driver: string; reason: string; next: string }>;
+    };
+    expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-correctness");
+    expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-adversarial");
+    expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
+    const line = "未创建席位 review-correctness：grok 未登录（运行 `grok login` 后重新运行 init）";
+    expect(sink.human).toContain(line);
+    expect(out.skippedSeats).toContainEqual(
+      expect.objectContaining({
+        seat: "review-correctness",
+        driver: "grok",
+        reason: "logged-out",
+        next: "Run `grok login`.",
+      }),
+    );
+    expect(out.skippedSeats).toContainEqual(
+      expect.objectContaining({ seat: "review-adversarial", driver: "grok", reason: "logged-out" }),
+    );
+    expect(out.skippedSeats).toContainEqual(
+      expect.objectContaining({ seat: "ideate-product", driver: "grok", reason: "logged-out" }),
+    );
+    const stored = new Store().getCouncil("pr-jury").skippedSeats ?? [];
+    expect(stored.map((seat) => seat.seat).sort()).toEqual(
+      ["review-adversarial", "review-correctness", "review-cursor"].sort(),
+    );
+  });
+
+  it("does not list review-security as skipped when standalone cfuse fills it", async () => {
+    stub(["cfuse", "kimi"], LOGGED_IN);
+    const sink = makeSink();
+    await runInit([], sink);
+    const skipped = (sink.finished as { skippedSeats: Array<{ seat: string }> }).skippedSeats.map(
+      (seat) => seat.seat,
+    );
+    expect(skipped).not.toContain("review-security");
+    expect(new Store().getCouncil("pr-jury").skippedSeats?.map((seat) => seat.seat)).not.toContain(
+      "review-security",
+    );
+  });
+
+  it("clears a skipped seat after the driver is installed and init runs again", async () => {
+    stub(["kimi"]);
+    await runInit([], makeSink());
+    expect(new Store().getCouncil("pr-jury").skippedSeats?.map((seat) => seat.seat)).toContain(
+      "review-security",
+    );
+    stub(["kimi", "cld"]);
+    await runInit([], makeSink());
+    const skips = new Store().getCouncil("pr-jury").skippedSeats ?? [];
+    expect(skips.map((seat) => seat.seat)).not.toContain("review-security");
+    expect(new Store().listAgents().map((agent) => agent.name)).toContain("review-security");
+  });
+
+  it("still loads a council written before skippedSeats existed", async () => {
+    stub(["kimi"]);
+    await runInit([], makeSink());
+    const path = resolvePaths().councils;
+    const file = JSON.parse(readFileSync(path, "utf8")) as {
+      councils: Array<Record<string, unknown>>;
+    };
+    for (const council of file.councils) delete council.skippedSeats;
+    writeFileSync(path, JSON.stringify(file));
+    const loaded = new Store().getCouncil("pr-jury");
+    expect(loaded.name).toBe("pr-jury");
+    expect(loaded.skippedSeats).toBeUndefined();
   });
 
   it("dispatch routes the init command", async () => {

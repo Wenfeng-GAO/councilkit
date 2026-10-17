@@ -30,6 +30,7 @@ import {
   COUNCILS_FORMAT,
   COUNCILS_VERSION,
   type CouncilRecord,
+  type SkippedSeat,
   agentRecordSchema,
   agentsFileSchema,
   councilRecordSchema,
@@ -178,6 +179,7 @@ export class Store {
     agentIds: string[];
     rounds: number;
     reporterAgentId: string;
+    skippedSeats?: SkippedSeat[];
   }): CouncilRecord {
     const parsed = councilRecordSchema.safeParse({
       id: randomUUID(),
@@ -188,6 +190,7 @@ export class Store {
       agentIds: input.agentIds,
       rounds: input.rounds,
       reporterAgentId: input.reporterAgentId,
+      ...(input.skippedSeats === undefined ? {} : { skippedSeats: input.skippedSeats }),
     });
     if (!parsed.success) {
       throw errors.usage(zodFailureMessage(parsed.error.issues, "invalid council"));
@@ -232,8 +235,14 @@ export class Store {
   }
 
   /** Add missing roster agents and set the reporter. Used by `init` to keep
-   * pr-jury aligned with discovered drivers without `--force`. */
-  syncCouncilRoster(councilRef: string, roster: AgentRecord[], reporterId: string): CouncilRecord {
+   * pr-jury aligned with discovered drivers without `--force`. Pass
+   * `skippedSeats` to record default seats this init left off the council. */
+  syncCouncilRoster(
+    councilRef: string,
+    roster: AgentRecord[],
+    reporterId: string,
+    skippedSeats?: SkippedSeat[],
+  ): CouncilRecord {
     const council = this.getCouncil(councilRef);
     const ids = [...council.agentIds];
     for (const agent of roster) {
@@ -242,17 +251,26 @@ export class Store {
     if (!ids.includes(reporterId)) {
       throw errors.usage("reporter must be among council agents");
     }
+    const skipsUnchanged =
+      skippedSeats === undefined ||
+      JSON.stringify(council.skippedSeats ?? []) === JSON.stringify(skippedSeats);
     if (
       ids.length === council.agentIds.length &&
       ids.every((id, i) => id === council.agentIds[i]) &&
-      council.reporterAgentId === reporterId
+      council.reporterAgentId === reporterId &&
+      skipsUnchanged
     ) {
       return council;
     }
     const file = this.readCouncils();
     const idx = file.councils.findIndex((c) => c.id === council.id);
     if (idx < 0) throw errors.usage(`no council matches ref "${redactName(councilRef)}"`);
-    const next: CouncilRecord = { ...council, agentIds: ids, reporterAgentId: reporterId };
+    const next: CouncilRecord = {
+      ...council,
+      agentIds: ids,
+      reporterAgentId: reporterId,
+      ...(skippedSeats === undefined ? {} : { skippedSeats }),
+    };
     const validated = councilRecordSchema.safeParse(next);
     if (!validated.success) {
       throw errors.usage(zodFailureMessage(validated.error.issues, "invalid council"));

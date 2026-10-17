@@ -4,7 +4,6 @@
  * roster into the CLI store. Does not talk to the Runtime Host.
  */
 import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
-import { findExecutable } from "../auto/driver-commands";
 import { errors } from "../errors";
 import {
   DEFAULT_AGENT_SPECS,
@@ -16,7 +15,7 @@ import {
   PR_JURY_TARGET_OUTPUT,
   PR_JURY_TOPIC,
 } from "../init/defaults";
-import { type DriverStatus, collectDriverStatus, driverStatusByName } from "../init/driver-status";
+import { type DriverStatus, collectDriverStatus } from "../init/driver-status";
 import {
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
@@ -28,8 +27,14 @@ import {
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
 } from "../init/ideate-defaults";
+import {
+  codexModelSkip,
+  formatSkippedSeatLine,
+  ideateDriverSkip,
+  reviewSkip,
+} from "../init/skipped-seats";
 import type { OutputSink } from "../output";
-import type { AgentRecord, CouncilRecord } from "../store/schemas";
+import type { AgentRecord, CouncilRecord, SkippedSeat } from "../store/schemas";
 import { Store } from "../store/store";
 import { discoverCodexModel } from "./jury";
 import { parseFlags } from "./parse";
@@ -42,6 +47,8 @@ export interface InitOutcome {
   missingDrivers: string[];
   /** One row per known driver: found, path, version, login, and a next step. */
   drivers: DriverStatus[];
+  /** Default seats this init did not create, also stored on the council. */
+  skippedSeats: SkippedSeat[];
   next: string;
 }
 
@@ -54,32 +61,51 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const store = new Store();
   const env = process.env;
   const drivers = collectDriverStatus(env);
-  const cldFound = driverStatusByName(drivers, "cld").found;
-  const cfuseFound = driverStatusByName(drivers, "cfuse").found;
 
   const available: DefaultAgentSpec[] = [];
+  const reviewSkips: SkippedSeat[] = [];
   const missingDrivers: string[] = [];
   for (const spec of DEFAULT_AGENT_SPECS) {
-    const present =
-      spec.name === "review-security"
-        ? cldFound || cfuseFound
-        : findExecutable(spec.executable, env) !== null;
-    if (present) available.push(spec);
-    else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
+    const skip = reviewSkip(spec, drivers);
+    if (skip !== null) {
+      reviewSkips.push(skip);
+      if (skip.reason === "missing" && !missingDrivers.includes(spec.executable)) {
+        missingDrivers.push(spec.executable);
+      }
+    } else {
+      available.push(spec);
+    }
   }
   const ideateAvailable: IdeateAgentSpec[] = [];
+  const ideateSkips: SkippedSeat[] = [];
   for (const spec of IDEATE_AGENT_SPECS) {
-    if (findExecutable(spec.executable, env) !== null) ideateAvailable.push(spec);
-    else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
+    const skip = ideateDriverSkip(spec, drivers);
+    if (skip !== null) {
+      ideateSkips.push(skip);
+      if (skip.reason === "missing" && !missingDrivers.includes(spec.executable)) {
+        missingDrivers.push(spec.executable);
+      }
+    } else {
+      ideateAvailable.push(spec);
+    }
   }
   if (available.length === 0) {
+    const skippedSeats = [...reviewSkips, ...ideateSkips];
+    if (
+      ideateAvailable.some((spec) => spec.name === "ideate-challenger") &&
+      discoverCodexModel(env) === null
+    ) {
+      skippedSeats.push(codexModelSkip());
+      if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
+    }
     const steps = drivers.map((row) => row.next).filter((line): line is string => line !== null);
     throw errors.usage(
       [
         "no review drivers found on PATH (need at least one of: cld, cfuse, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
+        ...skippedSeats.map(formatSkippedSeatLine),
         ...steps,
       ].join("\n"),
-      { missingDrivers, drivers },
+      { missingDrivers, drivers, skippedSeats },
     );
   }
 
@@ -121,7 +147,12 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   let reusedCouncil: CouncilRecord | null = null;
   const existingCouncil = findCouncilByName(store, PR_JURY_COUNCIL_NAME);
   if (existingCouncil !== null) {
-    reusedCouncil = store.syncCouncilRoster(existingCouncil.id, reviewRoster, reporter.id);
+    reusedCouncil = store.syncCouncilRoster(
+      existingCouncil.id,
+      reviewRoster,
+      reporter.id,
+      reviewSkips,
+    );
   } else {
     createdCouncil = store.createCouncil({
       name: PR_JURY_COUNCIL_NAME,
@@ -131,6 +162,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       agentIds: reviewRoster.map((a) => a.id),
       rounds: PR_JURY_ROUNDS,
       reporterAgentId: reporter.id,
+      skippedSeats: reviewSkips,
     });
   }
 
@@ -159,6 +191,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     }
     if (discovered === null) {
       if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
+      if (existing === null) ideateSkips.push(codexModelSkip());
       continue;
     }
     const created = store.createAgent({
@@ -175,7 +208,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
     const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
     if (existingProduct !== null) {
-      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id);
+      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id, ideateSkips);
     } else {
       store.createCouncil({
         name: PRODUCT_JURY_COUNCIL_NAME,
@@ -185,6 +218,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
         agentIds: ideateRoster.map((a) => a.id),
         rounds: PRODUCT_JURY_ROUNDS,
         reporterAgentId: productReporter.id,
+        skippedSeats: ideateSkips,
       });
     }
   }
@@ -196,6 +230,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     reusedCouncil: reusedCouncil === null ? null : briefCouncil(reusedCouncil, store),
     missingDrivers,
     drivers,
+    skippedSeats: [...reviewSkips, ...ideateSkips],
     next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
   };
   await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
@@ -289,6 +324,7 @@ function renderHuman(outcome: InitOutcome): string {
     const mark = outcome.createdAgents.some((a) => a.id === agent.id) ? "new" : "kept";
     lines.push(`  ${agent.name}  ${agent.driverId}/${agent.modelId}  [${mark}]`);
   }
+  for (const seat of outcome.skippedSeats) lines.push(formatSkippedSeatLine(seat));
   lines.push("drivers:");
   for (const row of outcome.drivers) {
     if (!row.found) {

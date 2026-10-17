@@ -6,6 +6,7 @@
  */
 import { z } from "zod";
 import { errors } from "../errors";
+import { formatSkippedSeatLine } from "../init/skipped-seats";
 import type { OutputSink } from "../output";
 import type { CouncilRecord } from "../store/schemas";
 import { Store } from "../store/store";
@@ -128,6 +129,7 @@ function councilView(c: CouncilRecord) {
     agentIds: c.agentIds,
     rounds: c.rounds,
     reporterAgentId: c.reporterAgentId,
+    ...(c.skippedSeats === undefined ? {} : { skippedSeats: c.skippedSeats }),
   };
 }
 
@@ -141,6 +143,7 @@ function finishCouncil(out: OutputSink, council: CouncilRecord): Promise<void> {
       `rounds: ${c.rounds}`,
       `reporter: ${c.reporterAgentId}`,
       `agents: ${c.agentIds.join(", ")}`,
+      ...(c.skippedSeats ?? []).map((seat) => formatSkippedSeatLine(seat)),
     ].join("\n");
   });
 }

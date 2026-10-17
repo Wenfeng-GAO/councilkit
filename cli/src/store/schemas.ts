@@ -66,6 +66,24 @@ export type AgentsFile = z.infer<typeof agentsFileSchema>;
 export const COUNCILS_FORMAT = "councilkit-councils" as const;
 export const COUNCILS_VERSION = 1 as const;
 
+/** Why `init` left a default seat off the council. */
+export const SKIPPED_SEAT_REASONS = ["missing", "logged-out", "no-model"] as const;
+
+/**
+ * A default seat `init` did not create. Optional on the council so files
+ * written before this field still load. The review report reads it from
+ * the council config.
+ */
+export const skippedSeatSchema = z
+  .object({
+    seat: z.string().min(1).max(128),
+    driver: z.string().min(1).max(64),
+    reason: z.enum(SKIPPED_SEAT_REASONS),
+    next: z.string().min(1).max(4000),
+  })
+  .strict();
+export type SkippedSeat = z.infer<typeof skippedSeatSchema>;
+
 export const councilRecordSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -86,6 +104,7 @@ export const councilRecordSchema = z
     rounds: z.number().int().positive().max(16),
     reporterAgentId: z.string().min(1).max(128),
     agentOverrides: z.record(z.string(), reviewModelSchema).optional(),
+    skippedSeats: z.array(skippedSeatSchema).max(16).optional(),
   })
   .strict();
 export type CouncilRecord = z.infer<typeof councilRecordSchema>;
