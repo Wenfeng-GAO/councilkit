@@ -48,9 +48,41 @@ export const SPEC_CONTRACT_BASENAMES = new Set([
 const PATH_REF_RE =
   /(?:^|[\s`"'([{])((?:docs\/(?:plans|design|vibespec|verification)\/[\w./@+-]+\.(?:md|mjs|json|txt))|(?:[\w./@+-]*(?:acceptance|contract|VERIFY|PRD|DESIGN|TECH)[\w./@+-]*\.md))(?=$|[\s`"' )\],.:;])/gim;
 
-/** Named acceptance / agentverify IDs inside a bound contract body. */
-const ACCEPTANCE_ID_RE =
+/**
+ * Named acceptance / agentverify IDs inside a bound contract body.
+ *
+ * Two layers:
+ * 1. Historical forms: `agentverify:…`, `AC-` / `INV-` / `AV-` (or underscore),
+ *    bare `A1` / `A01`, `VT3`.
+ * 2. Generic requirement ids: one leading letter, up to 7 more uppercase
+ *    letters or digits, a single hyphen, then digits and an optional single
+ *    trailing lowercase letter (`IN-12`, `SE-12`, `E2E-3`, `IN-12a`).
+ *
+ * The generic shape is intentionally narrow so it does not swallow tokens that
+ * only look similar:
+ * - Dates (`2026-10-16`) start with a digit, so the leading-letter rule misses them.
+ * - A SHA-256 digest is hex without this prefix. The *name* `SHA-256` (and
+ *   SHA-1/224/384/512) collides, so those names are denylisted. Same for
+ *   encoding names `UTF-8` / `UTF-16` / `UTF-32`.
+ * - ISO standard numbers (`ISO-8601`, `ISO-3166`) are denylisted by `ISO-` + digits.
+ *   Country or language codes without a hyphen and a number never match.
+ * - A dotted version (`GO-1.21`) is not an id: the match must not continue into `.\d`.
+ *   `IN-12.` at the end of a sentence still matches, because the dot is not `.\d`.
+ * - A longer token (`CVE-2026-12345`, `FOO-12-34`) is not an id either. The match
+ *   must not continue into another `-<letter or digit>` segment, so a prefix
+ *   such as `CVE-2026` or `FOO-12` is not accepted on its own.
+ * - `RFC-2119` matches. It has the same shape as a requirement id; it is not a
+ *   hash name, an encoding, or an ISO number, so it stays accepted.
+ */
+const NAMED_ACCEPTANCE_ID_RE =
   /\b(?:agentverify:[A-Za-z0-9][\w.:-]{0,80}|(?:AC|INV|AV)[-_][A-Za-z0-9][\w.-]{0,80}|A\d+|VT\d+)\b/g;
+
+const GENERIC_ACCEPTANCE_ID_RE = /\b[A-Z][A-Z0-9]{0,7}-\d+[a-z]?(?!\.\d)(?!-[A-Za-z0-9])\b/g;
+
+/** Any prefix-hyphen-number token, including ones the generic rule rejects. */
+const LOOSE_ID_RE = /\b[A-Za-z][A-Za-z0-9]{0,7}-\d+[A-Za-z]?(?!\.\d)(?!-[A-Za-z0-9])\b/g;
+
+const REJECTED_GENERIC_ID = /^(?:SHA-(?:1|2|3|224|256|384|512)|UTF-(?:8|16|32)|ISO-\d+)$/;
 
 export interface DetectedSpec {
   /** Path or label used as `task.specSource`. */
@@ -89,8 +121,20 @@ export const SPEC_REFUSAL_MESSAGE = [
 export const SPEC_VERIFY_UNBOUND_MESSAGE = [
   "review refused: a spec was bound, but verify cannot be scheduled —",
   "the contract has no named acceptance points / agentverify scenarios.",
-  "Add IDs such as AC-12, A1, A01, INV-1, VT3, or agentverify:<scenario>",
-  "in the bound document (or under an ## 验收 / ## Acceptance section).",
+].join("\n");
+
+const SPEC_VERIFY_FORMAT_HINT = [
+  "Add one of these to the bound spec:",
+  "  - an acceptance id, for example IN-12, SE-12, E2E-3, AC-12, A01, VT3, or agentverify:cancel-path",
+  "  - a markdown checkbox under a heading that contains 验收 or Acceptance:",
+  "      ## 验收",
+  "      - [ ] IN-12 空串仍返回问候",
+  "  - a markdown table under that heading, or a table whose header cell is 编号 / 验收 / ID / Acceptance:",
+  "      | 编号 | 标准 |",
+  "      | --- | --- |",
+  "      | IN-12 | 空串仍返回问候 |",
+  "Generic ids match /\\b[A-Z][A-Z0-9]{0,7}-\\d+[a-z]?\\b/ (one optional trailing lowercase letter).",
+  "Not acceptance ids: dates (YYYY-MM-DD), hash names (SHA-256), encodings (UTF-8), ISO standard numbers (ISO-8601).",
 ].join("\n");
 
 /**
@@ -240,14 +284,104 @@ export function bindVerifyFromSpec(input: {
   return { acceptanceIds: ids, scheduleNote };
 }
 
+export function isRejectedAcceptanceToken(id: string): boolean {
+  return REJECTED_GENERIC_ID.test(id);
+}
+
+/** True when `id` is a schedulable acceptance point (not a denylisted lookalike). */
+export function isAcceptanceId(id: string): boolean {
+  if (isRejectedAcceptanceToken(id)) return false;
+  return (
+    new RegExp(NAMED_ACCEPTANCE_ID_RE.source).test(id) ||
+    new RegExp(GENERIC_ACCEPTANCE_ID_RE.source).test(id)
+  );
+}
+
+export interface SpecAcceptanceInspection {
+  acceptanceIds: string[];
+  /** ATX headings in document order. */
+  headings: string[];
+  /**
+   * Prefix-hyphen-number tokens that were seen but not accepted
+   * (lowercase `in-12`, `SHA-256`, `UTF-8`, `ISO-8601`, …).
+   */
+  candidateIds: string[];
+}
+
+export function inspectSpecAcceptance(specText: string): SpecAcceptanceInspection {
+  const acceptanceIds = extractAcceptanceIds(specText);
+  const accepted = new Set(acceptanceIds);
+  const headings: string[] = [];
+  for (const line of specText.split(/\r?\n/)) {
+    const heading = /^#{1,6}\s+(.+?)\s*$/.exec(line.trim());
+    if (heading?.[1]) headings.push(heading[1].trim());
+  }
+  const candidateIds: string[] = [];
+  const seen = new Set<string>();
+  for (const match of specText.matchAll(LOOSE_ID_RE)) {
+    const id = match[0];
+    if (!id || accepted.has(id) || seen.has(id) || isAcceptanceId(id)) continue;
+    seen.add(id);
+    candidateIds.push(id);
+  }
+  candidateIds.sort((a, b) => a.localeCompare(b));
+  return { acceptanceIds, headings, candidateIds };
+}
+
+/** A `--spec` value that names a file, as opposed to a bare label. */
+export function looksLikeSpecPath(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return true;
+  return /\.(?:md|txt|json|mjs)$/i.test(trimmed);
+}
+
+/** Headline when `--spec` names a file that cannot be read. */
+export function formatMissingSpecFile(path: string): string {
+  return `找不到规格文件 \`${path.trim()}\`。请检查路径后重新运行。`;
+}
+
+/** SPEC_VERIFY_UNBOUND text that belongs inside a collapsed 详情 block. */
+export function formatMissingSpecDetail(input: {
+  specSource?: string | null;
+  specText?: string | null;
+}): string {
+  return ["SPEC_VERIFY_UNBOUND", formatSpecVerifyUnbound(input)].join("\n");
+}
+
+export function formatSpecVerifyUnbound(input: {
+  specSource?: string | null;
+  specText?: string | null;
+}): string {
+  const inspected = inspectSpecAcceptance(input.specText ?? "");
+  const headings = inspected.headings.length > 0 ? inspected.headings.join(" | ") : "(none)";
+  const candidates =
+    inspected.candidateIds.length > 0 ? inspected.candidateIds.join(", ") : "(none)";
+  const source = input.specSource?.trim();
+  return [
+    SPEC_VERIFY_UNBOUND_MESSAGE,
+    source ? `Bound spec: ${source}` : "",
+    `Headings seen: ${headings}`,
+    `Candidate IDs seen: ${candidates}`,
+    "",
+    SPEC_VERIFY_FORMAT_HINT,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
 export function extractAcceptanceIds(specText: string): string[] {
   const ids = new Set<string>();
-  for (const match of specText.matchAll(ACCEPTANCE_ID_RE)) {
+  for (const match of specText.matchAll(NAMED_ACCEPTANCE_ID_RE)) {
     const id = match[0]?.trim();
-    if (id) ids.add(id);
+    if (id && !isRejectedAcceptanceToken(id)) ids.add(id);
   }
-  // Checklist items under an acceptance-ish heading become synthetic IDs when
-  // the document has no AC/INV tokens (common in narrative plans).
+  for (const match of specText.matchAll(GENERIC_ACCEPTANCE_ID_RE)) {
+    const id = match[0]?.trim();
+    if (id && !isRejectedAcceptanceToken(id)) ids.add(id);
+  }
+  // Checklist items and table rows under an acceptance section become synthetic
+  // IDs when the document has no schedulable tokens (narrative plans).
   if (ids.size === 0) {
     for (const synthetic of extractAcceptanceChecklistIds(specText)) {
       ids.add(synthetic);
@@ -256,30 +390,77 @@ export function extractAcceptanceIds(specText: string): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b));
 }
 
+const ACCEPTANCE_HEADING_RE = /^#{1,3}\s+.*(验收|acceptance|verify|合同|contract)/i;
+const ACCEPTANCE_HEADER_CELL_RE = /^(?:编号|id|验收|acceptance|用例|场景)$/i;
+
+function slugAcceptanceText(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[`*_]/g, "")
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function splitTableCells(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function isTableSeparator(line: string): boolean {
+  const cells = splitTableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.includes("|");
+}
+
+function pushSynthetic(items: string[], raw: string): void {
+  const slug = slugAcceptanceText(raw);
+  if (!slug) return;
+  const id = `accept:${slug}`;
+  if (!items.includes(id)) items.push(id);
+}
+
 function extractAcceptanceChecklistIds(specText: string): string[] {
   const lines = specText.split(/\r?\n/);
   let inAcceptance = false;
   const items: string[] = [];
-  for (const line of lines) {
-    if (/^#{1,3}\s+.*(验收|acceptance|verify|合同|contract)/i.test(line)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (ACCEPTANCE_HEADING_RE.test(line)) {
       inAcceptance = true;
       continue;
     }
     if (inAcceptance && /^#{1,3}\s+/.test(line)) {
       inAcceptance = false;
     }
-    if (!inAcceptance) continue;
     const check = /^\s*[-*]\s+\[[ xX]\]\s+(.+)$/.exec(line);
-    if (!check?.[1]) continue;
-    const slug = check[1]
-      .trim()
-      .toLowerCase()
-      .replace(/[`*_]/g, "")
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/gi, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 48);
-    if (slug) items.push(`accept:${slug}`);
-    if (items.length >= 32) break;
+    if (inAcceptance && check?.[1]) {
+      pushSynthetic(items, check[1]);
+      if (items.length >= 32) break;
+      continue;
+    }
+    if (!isTableRow(line) || isTableSeparator(line)) continue;
+    const header = splitTableCells(line);
+    const headerIsAcceptance =
+      inAcceptance || header.some((cell) => ACCEPTANCE_HEADER_CELL_RE.test(cell));
+    if (!headerIsAcceptance) continue;
+    // Consume this table. The current line is the header.
+    i += 1;
+    if (isTableSeparator(lines[i] ?? "")) i += 1;
+    for (; i < lines.length; i++) {
+      const row = lines[i] ?? "";
+      if (!isTableRow(row) || isTableSeparator(row)) break;
+      const cells = splitTableCells(row).filter((cell) => cell.length > 0 && !/^[-:]+$/.test(cell));
+      if (cells.length === 0) continue;
+      pushSynthetic(items, cells.join(" "));
+      if (items.length >= 32) return items;
+    }
+    i -= 1;
   }
   return items;
 }

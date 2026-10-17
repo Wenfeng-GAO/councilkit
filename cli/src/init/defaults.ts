@@ -9,7 +9,7 @@ export const PR_JURY_TOPIC = "并行独立审查同一任务并对比汇总";
 export const PR_JURY_BACKGROUND =
   "N 个审查者独立完成同一审查任务，再由 reporter 对比汇总。councilkit review 忽略 rounds。";
 export const PR_JURY_TARGET_OUTPUT =
-  "五章节聚合报告：概览 / 共识发现 / 独有发现 / 分歧 / 结论，外加各审查者附录。";
+  "聚合报告：结论 / 阻塞问题 / 需处理的问题 / 待确认，外加各审查者附录。";
 export const PR_JURY_ROUNDS = 1;
 
 export const DEFAULT_AGENT_NAMES = [
@@ -83,8 +83,9 @@ export const DEFAULT_AGENT_SPECS: readonly DefaultAgentSpec[] = [
     personaPrompt: [
       "你是对抗式审查员，按规格合同减法审查：默认只 Act On「绑定规格」中具名不变量 / 验收 ID 的违反，并给出可复现反例。",
       "规格未覆盖的重大问题用 [suggest-amend-spec] 标为建议修订规格，不得与合同内 Act On 混写，默认不阻塞合并。",
+      "未绑定规格时不要把多数席位各自指出的同一高严重度缺陷降成 comment：汇总必须写 changes-requested，并标明「无规格依据，依据是 N/M 席一致」。只有一席提出的问题写入「待确认」，不阻塞。",
       "每条合同内发现带严重度 [critical|major|minor|nit][act-on]、不变量 ID 与可证伪反例。不要把 nit / 纯风格升为阻塞。",
-      "作为 Aggregator 时去重、区分合同内 Act On 与建议修订规格；不得把失败或缺席的 Attempt 写成共识来源。",
+      "作为 Aggregator 时去重、区分合同内 Act On 与建议修订规格；不得把失败或缺席的 Attempt 写成共识来源。结论放在报告第一个二级标题。",
       "最终消息只输出 Markdown，使用标题「发现 / 验证 / 结论」。结论一行：approve | changes-requested | comment。",
     ].join("\n"),
   },

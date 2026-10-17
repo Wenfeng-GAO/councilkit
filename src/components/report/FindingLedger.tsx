@@ -11,11 +11,14 @@ import {
   filterFindingProblems,
   formatFindingCountNote,
   formatLedgerComparison,
+  pendingOnlyLedgerCopy,
   projectFindingList,
   reviewCoverageLabel,
   reviewRelationLabel,
   severityLabel,
 } from "@/lib/finding-list";
+import { findingDisplayMark, findingMarkdown, textWithoutBasis } from "@/lib/finding-marks";
+import { countActionablePendingFindings } from "@/lib/review-report";
 import {
   type RunAttentionCounts,
   computeRunAttention,
@@ -29,8 +32,37 @@ import {
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useMemo, useState } from "react";
 
-const BLOCKING_RULE =
-  "阻塞依据（规格合同减法）：合同内 Act On——重大/致命且引用具名不变量 ID + 可复现反例，尚未验证解决或接受不修。标为规格外 / 建议修订规格的项默认不阻塞；nit 不阻塞。报告中的“本轮不阻塞”不会自动改变这项门禁。";
+export const NO_SPEC_BLOCKING_RULE =
+  "阻塞依据：未绑定规格；多数席位各自指出同一高严重度缺陷即阻塞，单席问题进「待确认」。";
+
+/** 「阻塞依据：违反了规格里的AC-3：{验收原文}。」 */
+export function specBlockingBasisLine(id: string, acceptance: string): string {
+  const text = acceptance.trim().replace(/[。．.]\s*$/, "");
+  return `阻塞依据：违反了规格里的${id}：${text}。`;
+}
+
+/**
+ * One plain line per blocking fact. A spec violation names that AC and its
+ * verbatim text. Anything else is the no-spec one-liner. The old rule
+ * paragraph is not a line we render.
+ */
+export function blockingBasisLines(markdown: string): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const specBasis = /违反了规格里的\s*([A-Za-z][A-Za-z0-9_-]*)\s*[：:]\s*([^\n]+)/g;
+  for (const match of markdown.matchAll(specBasis)) {
+    const id = match[1];
+    const acceptance = match[2];
+    if (!id || !acceptance?.trim()) continue;
+    const line = specBlockingBasisLine(id, acceptance);
+    if (seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+  }
+  if (lines.length > 0) return lines;
+  if (/违反了规格里的|违反规格/.test(markdown)) return [];
+  return [NO_SPEC_BLOCKING_RULE];
+}
 
 export function FindingLedger({
   run,
@@ -96,7 +128,13 @@ export function FindingLedger({
       sha: candidateSha,
       groups: run.findingGroups,
     });
-  const summary = formatProblemSummary(projection, nextCluster?.id ?? null, attention);
+  const pendingCount = useMemo(() => countActionablePendingFindings(run.markdown), [run.markdown]);
+  const pendingOnly =
+    attention.needsAttention === 0 && pendingCount >= 1 && projection.displayCount === 0;
+  const summary = pendingOnly
+    ? { primary: formatAttentionLabel(attention), secondary: pendingOnlyLedgerCopy(pendingCount) }
+    : formatProblemSummary(projection, nextCluster?.id ?? null, attention);
+  const blockingLines = blockingBasisLines(run.markdown);
   const againstId = run.reviewEvidence?.againstRunId ?? null;
   const prUrl = run.reviewEvidence?.prUrl ?? null;
 
@@ -107,16 +145,22 @@ export function FindingLedger({
         <p className="ck-finding-list-summary-primary">{summary.primary}</p>
         <p className="ck-finding-list-summary-secondary">{summary.secondary}</p>
       </div>
-      {projection.blockingCount > 0 ? (
+      {projection.blockingCount > 0 && blockingLines.length > 0 ? (
         run.demo === true ? (
-          // Designer (#295): in the sample report this rule text is noise for a
-          // first-time reader; fold it to one line, expandable on demand.
+          // Designer (#295): in the sample report this line is noise for a
+          // first-time reader; fold it, expandable on demand.
           <details className="ck-finding-list-note ck-blocking-rule">
             <summary>阻塞是怎么判的 ▸</summary>
-            <p>{BLOCKING_RULE}</p>
+            {blockingLines.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
           </details>
         ) : (
-          <p className="ck-finding-list-note">{BLOCKING_RULE}</p>
+          blockingLines.map((line) => (
+            <p key={line} className="ck-finding-list-note">
+              {line}
+            </p>
+          ))
         )
       ) : null}
       {countNote ? <p className="ck-finding-list-note">{countNote}</p> : null}
@@ -173,7 +217,7 @@ export function FindingLedger({
             <p className="ck-finding-empty">{emptyFindingListCopy(effectiveFilter)}</p>
           )}
         </>
-      ) : (
+      ) : pendingOnly ? null : (
         <p className="ck-finding-empty">{emptyFindingListCopy("all")}</p>
       )}
       {run.landings.length > 0 ? (
@@ -239,6 +283,7 @@ function ProblemRow({
               <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
                 {problem.statusLabel}
               </span>
+              <LedgerMark problem={problem} />
             </span>
             {(problem.blocking || problem.sourceTags.length > 0 || problem.members.length > 1) && (
               <span className="ck-finding-tags-row">
@@ -263,6 +308,24 @@ function ProblemRow({
         </div>
       </details>
     </li>
+  );
+}
+
+function LedgerMark({ problem }: { problem: FindingListProblem }) {
+  const member = problem.members[0];
+  if (!member) return null;
+  const mark = findingDisplayMark({
+    text: `${member.title}\n${member.text}`,
+    invariantId: member.invariantId,
+    contractClass: member.contractClass ?? null,
+    sectionTitle: member.text.includes("待确认 ·") ? "待确认" : null,
+  });
+  if (!mark) return null;
+  return (
+    <>
+      <span className={`ck-tag ck-tag-${mark.kind}`}>{mark.label}</span>
+      {mark.basis ? <span className="ck-tag-basis">{mark.basis}</span> : null}
+    </>
   );
 }
 
@@ -299,7 +362,20 @@ function MemberEvidence({
           ))}
         </p>
       ) : null}
-      <SafeMarkdown className="text-sm" variant="document" content={member.text} />
+      <SafeMarkdown
+        className="text-sm"
+        variant="document"
+        content={findingMarkdown(
+          textWithoutBasis(
+            member.text,
+            findingDisplayMark({
+              text: member.text,
+              invariantId: member.invariantId,
+              contractClass: member.contractClass ?? null,
+            })?.basis ?? null,
+          ),
+        )}
+      />
       {member.acceptedReason ? (
         <p className="ck-finding-member-meta">接受不修：{member.acceptedReason}</p>
       ) : null}

@@ -16,6 +16,10 @@ const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Screenshots for the locked labels boot their own host (see
+  // playwright.consensus-tags.config.ts). This suite's fixture counts
+  // assume those three runs are absent.
+  testIgnore: /consensus-tags\.spec\.ts/,
   timeout: 60000,
   retries: 0,
   workers: 1,

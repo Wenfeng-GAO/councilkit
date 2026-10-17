@@ -151,6 +151,7 @@ export function parseFindingContractFields(input: {
   const actOnTagged = /^(?:act-on|合同内)$/i.test(qualifier) || /\bact-on\b/i.test(qualifier);
   const invariantId = firstField(text, [
     /(?:^|\n)\s*(?:不变量|不变式|invariant|acceptance(?:\s*id)?|验收)\s*[:：]\s*`?([^`\n]+?)`?\s*(?:\n|$)/i,
+    /违反了规格里的\s*`?([A-Za-z][A-Za-z0-9_-]{0,80})`?\s*[：:]/,
     /\b((?:AC|INV|AV)[-_][A-Za-z0-9][\w.-]{0,80})\b/,
   ]);
   const counterexample = firstField(text, [

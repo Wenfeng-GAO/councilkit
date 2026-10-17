@@ -405,7 +405,7 @@ describe("cli review command — argument matrix", () => {
     );
   });
 
-  it("CK-3 BUG-03 missing driver: exit 2 and no new run dir", async () => {
+  it("CK-3 missing driver is absent and the report is still written", async () => {
     const store = new Store();
     const ds = { driverId: "kimi-stream-json" as const, options: {} };
     store.createAgent({
@@ -426,8 +426,7 @@ describe("cli review command — argument matrix", () => {
     const oldUserHome = process.env.HOME;
     process.env.PATH = bin;
     process.env.HOME = home;
-    const runsRoot = join(home, "runs");
-    const before = existsSync(runsRoot) ? readdirSync(runsRoot).sort() : [];
+    const sink = makeSink();
     try {
       await runReview(
         [
@@ -440,21 +439,59 @@ describe("cli review command — argument matrix", () => {
           "--json",
           "--no-require-spec",
         ],
+        sink,
+      );
+      throw new Error("expected review exit");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ReviewExit);
+      expect((error as ReviewExit).exitCode).toBe(4);
+    } finally {
+      if (oldUserHome === undefined) process.env.HOME = undefined;
+      else process.env.HOME = oldUserHome;
+      rmSync(bin, { recursive: true, force: true });
+    }
+    const outcome = sink.finished as { reportPath: string };
+    const report = readFileSync(outcome.reportPath, "utf8");
+    expect(report).toContain("缺席：A（kimi）：没有找到 kimi。");
+    expect(report).toContain("缺席：B（kimi）：没有找到 kimi。");
+    expect(report).toContain("本次指定 2 席：A、B");
+    expect(report).not.toContain("缺席：review-security");
+    expect(report).not.toContain("无缺席");
+  });
+
+  it("a missing --spec file is a path error, with SPEC_VERIFY_UNBOUND only in 详情", async () => {
+    const store = new Store();
+    store.createAgent({
+      name: "A",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#112233",
+      driverSelection: { driverId: "claude-stream-json", options: { route: "cfuse" } },
+    });
+    const missing = join(home, "docs", "vibespec", "NOPE.md");
+    try {
+      await runReview(
+        ["--agents", '["A"]', "--aggregator", "A", "--task", "x", "--spec", missing],
         makeSink(),
+        { spawnImpl: fakeSpawn() },
       );
       throw new Error("expected usage");
     } catch (error) {
       expect(error).toBeInstanceOf(CliError);
       const err = error as CliError;
       expect(err.exitCode).toBe(2);
-      expect(err.message).toContain("kimi");
-    } finally {
-      if (oldUserHome === undefined) process.env.HOME = undefined;
-      else process.env.HOME = oldUserHome;
-      rmSync(bin, { recursive: true, force: true });
+      expect(err.message).toBe(`找不到规格文件 \`${missing}\`。请检查路径后重新运行。`);
+      expect(err.message).not.toContain("SPEC_VERIFY_UNBOUND");
+      const detail = err.detail?.detailBody;
+      expect(typeof detail).toBe("string");
+      expect(detail).toContain("SPEC_VERIFY_UNBOUND");
+      const { renderErrorHuman } = await import("../src/output");
+      const human = renderErrorHuman(err);
+      const detailsAt = human.indexOf("<summary>详情</summary>");
+      expect(detailsAt).toBeGreaterThan(0);
+      expect(human.indexOf("SPEC_VERIFY_UNBOUND")).toBeGreaterThan(detailsAt);
+      expect(human.slice(0, detailsAt)).not.toContain("SPEC_VERIFY_UNBOUND");
     }
-    const after = existsSync(runsRoot) ? readdirSync(runsRoot).sort() : [];
-    expect(after).toEqual(before);
   });
 });
 
@@ -489,6 +526,145 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     } catch {
       // ignore
     }
+  });
+
+  it("a missing --agents driver is absent and the other seat still runs", async () => {
+    const store = new Store();
+    const cfuse = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    store.createAgent({
+      name: "review-cursor",
+      personaPrompt: "你是 review-cursor，一位独立代码审查者。",
+      modelId: "auto",
+      color: "#112233",
+      driverSelection: { driverId: "cursor-stream-json", options: {} },
+    });
+    store.createAgent({
+      name: "review-maintainability",
+      personaPrompt: "你是 review-maintainability，一位独立代码审查者。",
+      modelId: "m",
+      color: "#445566",
+      driverSelection: cfuse,
+    });
+    const sink = makeSink();
+    try {
+      await runReview(
+        [
+          "--task",
+          "x",
+          "--agents",
+          '["review-cursor","review-maintainability"]',
+          "--aggregator",
+          "review-maintainability",
+          "--no-require-spec",
+        ],
+        sink,
+        { spawnImpl: fakeSpawn() },
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    const report = readFileSync((sink.finished as { reportPath: string }).reportPath, "utf8");
+    expect(report).toContain("缺席：review-cursor（cursor-agent）：没有找到 cursor-agent。");
+    expect(report).toContain("本次指定 2 席：review-cursor、review-maintainability");
+    expect(report).not.toContain("缺席：review-security");
+    expect(report).not.toContain("缺席：review-correctness");
+    expect(report).not.toContain("无缺席");
+    expect(report).toContain("review-maintainability");
+  });
+
+  it("legacy pr-jury without skippedSeats names the template seat that was removed", async () => {
+    const store = new Store();
+    const cfuse = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const ids: string[] = [];
+    for (const name of [
+      "review-security",
+      "review-maintainability",
+      "review-adversarial",
+      "review-cursor",
+    ]) {
+      ids.push(
+        store.createAgent({
+          name,
+          personaPrompt: `你是 ${name}，一位独立代码审查者。`,
+          modelId: "m",
+          color: "#112233",
+          driverSelection: cfuse,
+        }).id,
+      );
+    }
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "审查",
+      agentIds: ids,
+      rounds: 1,
+      reporterAgentId: ids[0] as string,
+    });
+    const sink = makeSink();
+    try {
+      await runReview(["--council", "pr-jury", "--task", "x", "--no-require-spec"], sink, {
+        spawnImpl: fakeSpawn(),
+      });
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    const report = readFileSync((sink.finished as { reportPath: string }).reportPath, "utf8");
+    expect(report).toContain(
+      "缺席：review-correctness（grok）：原因未记录，重新运行 `councilkit init` 可以看到原因。",
+    );
+    expect(report).not.toContain("缺席：review-security");
+    expect(report).not.toContain("本次指定");
+    expect(report).not.toContain("无缺席");
+  });
+
+  it("new pr-jury with empty skippedSeats does not mention a seat the user deleted", async () => {
+    const store = new Store();
+    const cfuse = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const ids: string[] = [];
+    for (const name of [
+      "review-security",
+      "review-maintainability",
+      "review-adversarial",
+      "review-cursor",
+    ]) {
+      ids.push(
+        store.createAgent({
+          name,
+          personaPrompt: `你是 ${name}，一位独立代码审查者。`,
+          modelId: "m",
+          color: "#112233",
+          driverSelection: cfuse,
+        }).id,
+      );
+    }
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "审查",
+      agentIds: ids,
+      rounds: 1,
+      reporterAgentId: ids[0] as string,
+    });
+    const councilsPath = resolvePaths().councils;
+    const file = JSON.parse(readFileSync(councilsPath, "utf8")) as {
+      councils: Array<{ skippedSeats?: unknown }>;
+    };
+    expect(file.councils[0]?.skippedSeats).toBeUndefined();
+    file.councils[0]!.skippedSeats = [];
+    writeFileSync(councilsPath, JSON.stringify(file));
+    expect(new Store().getCouncil("pr-jury").skippedSeats).toEqual([]);
+    const sink = makeSink();
+    try {
+      await runReview(["--council", "pr-jury", "--task", "x", "--no-require-spec"], sink, {
+        spawnImpl: fakeSpawn(),
+      });
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    const report = readFileSync((sink.finished as { reportPath: string }).reportPath, "utf8");
+    expect(report).not.toContain("review-correctness");
+    expect(report).not.toContain("原因未记录");
+    expect(report).not.toContain("缺席：");
+    expect(report).not.toContain("无缺席");
+    expect(report).toContain("review-security");
   });
 
   it("custom models reach Codex argv, probe separately and persist without changing the store", async () => {

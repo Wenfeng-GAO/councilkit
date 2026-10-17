@@ -1,4 +1,5 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
+import { findingDisplayMark, findingMarkdown, textWithoutBasis } from "@/lib/finding-marks";
 import {
   FINDING_SEVERITY_LABEL,
   type ParsedReviewReport,
@@ -221,9 +222,13 @@ function SectionBlock({
       ) : section.title === "分歧" ? (
         <DisagreementBody body={section.body} />
       ) : section.groups?.some((group) => group.title.length > 0) ? (
-        <GroupedFindings groups={section.groups ?? []} />
+        <GroupedFindings groups={section.groups ?? []} sectionTitle={section.title} />
       ) : section.findings?.some((finding) => finding.severity) ? (
-        <FindingList findings={section.findings} sectionId={section.id} />
+        <FindingList
+          findings={section.findings}
+          sectionId={section.id}
+          sectionTitle={section.title}
+        />
       ) : section.title === "结论" ? (
         <SafeMarkdown
           className="text-sm"
@@ -393,9 +398,11 @@ function AppendixBody({ body }: { body: string }) {
 function FindingList({
   findings,
   sectionId,
+  sectionTitle,
 }: {
   findings: ReviewFinding[];
   sectionId: string;
+  sectionTitle: string;
 }) {
   const ordered = sortReviewFindings(findings);
   return (
@@ -404,6 +411,7 @@ function FindingList({
         <FindingCard
           key={`${sectionId}-${finding.severity}-${finding.text.slice(0, 64)}`}
           finding={finding}
+          sectionTitle={sectionTitle}
         />
       ))}
     </ul>
@@ -412,8 +420,10 @@ function FindingList({
 
 function GroupedFindings({
   groups,
+  sectionTitle,
 }: {
   groups: NonNullable<ReviewSection["groups"]>;
+  sectionTitle: string;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -431,7 +441,11 @@ function GroupedFindings({
                 ) : null}
               </div>
             ) : null}
-            <FindingList findings={group.findings} sectionId={group.title || "group"} />
+            <FindingList
+              findings={group.findings}
+              sectionId={group.title || "group"}
+              sectionTitle={group.title || sectionTitle}
+            />
           </div>
         );
       })}
@@ -492,8 +506,20 @@ function asDisagreement(item: string): { title: string; body: string } {
   return { title: match[1].trim(), body: match[2].trim() };
 }
 
-function FindingCard({ finding }: { finding: ReviewFinding }) {
+function FindingCard({
+  finding,
+  sectionTitle,
+}: {
+  finding: ReviewFinding;
+  sectionTitle: string;
+}) {
   const tone = finding.severity ?? "nit";
+  const mark = findingDisplayMark({
+    qualifier: finding.qualifier,
+    text: finding.text,
+    sectionTitle,
+  });
+  const text = textWithoutBasis(finding.text, mark?.basis ?? null);
   return (
     <li className={`ck-finding ck-finding-${tone}`}>
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -503,9 +529,13 @@ function FindingCard({ finding }: { finding: ReviewFinding }) {
             <span className="ck-sev-en">{finding.severity}</span>
           </span>
         ) : null}
-        {finding.qualifier ? <span className="ck-sev-note">{finding.qualifier}</span> : null}
+        {mark ? <span className={`ck-tag ck-tag-${mark.kind}`}>{mark.label}</span> : null}
+        {finding.qualifier && !mark ? (
+          <span className="ck-sev-note">{finding.qualifier}</span>
+        ) : null}
       </div>
-      <SafeMarkdown className="text-sm" variant="document" content={finding.text} />
+      {mark?.basis ? <p className="ck-tag-basis">{mark.basis}</p> : null}
+      <SafeMarkdown className="text-sm" variant="document" content={findingMarkdown(text)} />
     </li>
   );
 }

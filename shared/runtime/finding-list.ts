@@ -324,6 +324,11 @@ export function emptyFindingListCopy(filter: FindingListFilter): string {
   return "这份审查还没有问题记录。";
 }
 
+/** Ledger is empty of need-action items, but the report still has single-seat notes. */
+export function pendingOnlyLedgerCopy(count: number): string {
+  return `没有需要处理的问题，另有 ${count} 条待确认（只有一席提出）。`;
+}
+
 function toProblem(
   members: readonly LedgerFinding[],
   sha: string | null,

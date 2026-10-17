@@ -44,7 +44,7 @@ import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
 import { mkdirPrivate } from "@shared/runtime/durable-write";
 import { jsonParse, jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { firstNonBlank, nonBlank } from "@shared/runtime/non-blank";
-import { errors } from "../errors";
+import { CliError, EXIT, errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 import {
   IDEATE_GROK_CONFIG,
@@ -62,6 +62,7 @@ import {
   prepareIdeateAuthHome,
   prepareIdeateWorkspace,
 } from "./ideate-policy";
+import { stripProcessNarration } from "./process-narration";
 
 export { IDEATE_FORBIDDEN_FLAGS } from "./ideate-policy";
 
@@ -631,6 +632,30 @@ export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.en
   return null;
 }
 
+/**
+ * A per-seat pre-spawn failure that must not abort the rest of the review.
+ * Missing executables become 「没有找到 {工具}」. Returns null for usage errors
+ * that are not about this one seat.
+ */
+export function describePreSpawnFailure(
+  error: unknown,
+  tool: string,
+): { code: string; message: string } | null {
+  if (!(error instanceof CliError) || error.exitCode !== EXIT.usage) return null;
+  const message = error.message;
+  if (
+    message.includes("not found on PATH") ||
+    message.includes("not found or not executable") ||
+    message.includes("missing executable")
+  ) {
+    return { code: "NOT_FOUND", message: `没有找到 ${tool}` };
+  }
+  if (message.includes("unsupported driver") || message.includes("only supports the cfuse route")) {
+    return { code: "SPAWN_ERROR", message: "未能启动" };
+  }
+  return null;
+}
+
 /** Resolve a bare executable name against PATH (X_OK regular file), or verify an
  * absolute/relative path directly. Throws a usage error (exit 2) when not found
  * so the command fails fast before spawning anything. Never shells out. */
@@ -1107,6 +1132,19 @@ export const FINAL_EVENT_LINE_CAP = 16 * 1024 * 1024;
  * boundary (reviewer finding: head+tail split made both halves invalid JSON →
  * spurious NO_OUTPUT). */
 export function extractFinalOutput(
+  driverId: string,
+  stdout: string,
+  lastMessageFile?: string,
+  capturedFinalLine?: string | null,
+): string | null {
+  const raw = extractFinalOutputRaw(driverId, stdout, lastMessageFile, capturedFinalLine);
+  if (raw === null) return null;
+  const stripped = stripProcessNarration(raw);
+  const text = stripped.trim();
+  return text.length > 0 ? stripped : raw;
+}
+
+function extractFinalOutputRaw(
   driverId: string,
   stdout: string,
   lastMessageFile?: string,

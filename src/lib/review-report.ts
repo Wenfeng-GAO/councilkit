@@ -91,6 +91,12 @@ export interface ParsedReviewReport {
   verdict: "approve" | "changes-requested" | "comment" | null;
 }
 
+/** Severity-tagged items under 「待确认」. Untagged notes do not count. */
+export function countActionablePendingFindings(markdown: string): number {
+  const section = splitH2Sections(markdown).sections.find((item) => item.title === "待确认");
+  return section?.findings?.filter((finding) => finding.severity).length ?? 0;
+}
+
 export function parseReviewReport(markdown: string): ParsedReviewReport | null {
   const text = markdown.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   if (!/^# Autonomous Review Report\s*$/m.test(text)) return null;

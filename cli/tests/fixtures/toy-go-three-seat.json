@@ -1,0 +1,17 @@
+{
+  "badAggregate": "## 概览\n\n未绑定规格，两条实质发现标为建议修订规格，默认不阻塞合并。\n\n## 共识发现\n\n无\n\n## 建议修订规格\n\n- [major][suggest-amend-spec] Add 把加法改成减法\n- [major][suggest-amend-spec] Greet 删除空串分支\n\n## 结论\n\ncomment\n",
+  "seats": [
+    {
+      "name": "kimi",
+      "output": "## 发现\n- [major][suggest-amend-spec] Add 把 a + b 改成 a - b\n  位置：`toy.go`\n  触发与后果：Add 返回减法而不是加法。\n- [major][suggest-amend-spec] Greet 删除空串分支\n  位置：`toy.go`\n  触发与后果：空串不再走原来的问候分支。\n\n## 结论\nchanges-requested\n"
+    },
+    {
+      "name": "cursor",
+      "output": "## 发现\n- [critical] Add 从 a + b 改为 a - b\n  位置：`toy.go`\n  触发与后果：加法被换成减法。\n- [major] Greet 空串分支被删除\n  位置：`toy.go`\n  触发与后果：空串分支没有了。\n\n## 结论\nchanges-requested\n"
+    },
+    {
+      "name": "codex",
+      "output": "## 发现\n- [major] 函数 Add 的加法被改成减法 a - b\n  位置：`toy.go`\n  触发与后果：Add 现在做减法。\n- [minor] 注释过期无人维护\n  位置：`toy.go`\n\n## 结论\nchanges-requested\n"
+    }
+  ]
+}

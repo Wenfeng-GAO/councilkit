@@ -1,5 +1,6 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { Button } from "@/components/ui/Button";
+import { renderInlineCode } from "@/lib/inline-code";
 import { RuntimeClientError } from "@/runtime/client";
 import { isDemoRun } from "@shared/runtime/demo-report";
 import {
@@ -113,7 +114,7 @@ export function FixPipeline({
                 : "text-info"
           }`}
         >
-          {liveHint.text}
+          {renderInlineCode(liveHint.text)}
         </p>
       ) : null}
       {pipeline?.planVerdict === "changes-requested" && pipeline.phase === "done" ? (

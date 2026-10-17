@@ -32,15 +32,20 @@ export function summarizeSeatOutput(output: string | null | undefined): CliRunAt
   const blockingCount = matches.filter((row, index) => {
     const severity = row[1]?.toLowerCase();
     if (severity !== "critical" && severity !== "major") return false;
-    // Scope out-of-spec markers to this finding only (stop at the next severity tag).
+    // Scope out-of-spec markers to this finding only. A later heading such as
+    // ## 待确认 must not un-block an earlier consensus major.
     const start = row.index ?? 0;
-    const end = matches[index + 1]?.index ?? visible.length;
+    const nextSeverity = matches[index + 1]?.index ?? visible.length;
+    const headingAt = visible.indexOf("\n## ", start);
+    const end = Math.min(nextSeverity, headingAt === -1 ? visible.length : headingAt);
     const around = visible.slice(start, end).toLowerCase();
     // Out-of-spec / suggest-amend-spec majors are non-blocking by default.
     if (
       around.includes("suggest-amend-spec") ||
       around.includes("out-of-spec") ||
-      around.includes("规格外")
+      around.includes("规格外") ||
+      // No-spec single-seat items live under 待确认 and must not block.
+      around.includes("待确认")
     ) {
       return false;
     }

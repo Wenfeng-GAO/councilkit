@@ -154,12 +154,11 @@ code_trace 的 evidence 写调用链及原反例已被消除的具体证据。�
 [{"findingId":"<原ID>","candidateSha":"<git rev-parse HEAD>","outcome":"not_evaluated","method":"not_evaluated","reason":"本席未检查这个反例","evidence":"无验证证据"}]
 \`\`\``;
 
-const AGGREGATE_STRUCTURE = `## 概览
-## 共识发现
-## 建议修订规格
-## 独有发现
-## 分歧
-## 结论`;
+const AGGREGATE_STRUCTURE = `## 结论
+## 阻塞问题
+## 需处理的问题
+## 待确认
+## 分歧`;
 
 /** 代理规则原文（P1-2）:内部工具只在命令级清代理;模型 API 调用绝不动代理。 */
 const PROXY_RULE =
@@ -383,6 +382,7 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
         ].join("\n")
       : "";
 
+  const specBound = Boolean(input.task.specSource?.trim());
   const requirementBlock = [
     "",
     "## 聚合要求",
@@ -391,14 +391,22 @@ export function buildAggregatePrompt(input: AggregatePromptInput): string {
     "reviewer 可能使用 Findings/Verification/Verdict 等英文标题，请按语义理解，不要当作格式错误。",
     "去重：同一不变量 ID + 同一根因只保留一条最强证据；不要把 nit / 风格 / 仅注释行号意见升为阻塞。",
     "必须保留有具体证据的严重独有发现；少数意见不能因无人重复而删除。逐项验证 JSON 来自独立 Attempt，你不能补造关闭证据。",
-    "把发现分成两类，不得混写：",
-    "- 「共识发现」/「独有发现」：仅合同内 Act On（标签 [act-on]，且含不变量 ID + 可复现反例）。",
-    "- 「建议修订规格」：规格外重大问题（标签 [suggest-amend-spec]），默认不阻塞合并。",
+    specBound
+      ? "把发现分成两类，不得混写："
+      : "未绑定规格。不要把多数席位各自指出的同一代码缺陷降成 comment，也不要标成 [suggest-amend-spec]。",
+    specBound
+      ? "- 「阻塞问题」：仅合同内 Act On（标签 [act-on]，且含不变量 ID + 可复现反例）。"
+      : "- 「阻塞问题」：超过半数已完成席位（至少 2 席）各自指出的同一缺陷，且为 critical/major。标签写成 [多席一致 N/M]，并另起一行「无规格依据，依据是 N/M 席一致：席位名」。非高严重度的多数一致写入「需处理的问题」，不阻塞。",
+    specBound
+      ? "- 「需处理的问题」：规格外重大问题（标签 [suggest-amend-spec]），默认不阻塞合并。"
+      : "- 「待确认」：只有一席提出的问题。标签写成 [待确认 · 席位名]，不阻塞合并。",
     "每条发现遵守以下标题与正文格式：",
     FINDING_FORMAT,
     "不要包含任何 workspace 路径。失败缺席或因预算省略的审查者不得被引用为共识来源。",
-    "结论章节给出单行英文 verdict token：approve | changes-requested | comment。",
-    "仅当仍存在合同内 Act On（critical/major + 不变量 + 反例）时用 changes-requested；只有 nit / 规格外建议时用 comment，不得因规格外或 nit 阻塞合并。",
+    "章节顺序固定：结论、阻塞问题、需处理的问题、待确认，然后才是分歧。结论是全文第一个二级标题。先写单行英文 verdict token：approve | changes-requested | comment，再写原因。不要编造缺席行；汇总程序会按席位配置和运行结果写入「缺席：席位（工具）：原因。」再写阻塞数。",
+    specBound
+      ? "仅当仍存在合同内 Act On（critical/major + 不变量 + 反例）时用 changes-requested；只有 nit / 规格外建议时用 comment，不得因规格外或 nit 阻塞合并。"
+      : "未绑定规格时：多数席位（已完成席位的过半，且至少 2 席）各自指出同一缺陷，并且至少一席把它标为 critical 或 major，汇总结论必须是 changes-requested，不能降成 comment。只有一席提出的问题不阻塞。",
     input.task.against
       ? "若有 Finding 账本：在「共识发现」里用原 id 标注仍成立或回归的项；新洞另起条目。历史 closed 无验证不等于解决；未报告/未覆盖不等于关闭。已验证关闭另述证据，不混入仍成立的发现列表。"
       : "",
@@ -475,8 +483,9 @@ function renderSpecBinding(task: ReviewTask): string {
   } else {
     lines.push(
       "未绑定规格合同（`--no-require-spec` / 取消「强制按 spec review」）。",
-      "本审查以**非合同 / 遗留加法**模式运行：可做一般代码审查，但不得假装已有合同减法；",
-      "重大发现仍建议标注 [suggest-amend-spec] 若明显超出任何隐含需求；blocking 回退为严重度门禁（无 contractClass 时）。",
+      "本审查以**非合同**模式运行：按代码缺陷本身给出严重度，不要把明显的逻辑错误标成 [suggest-amend-spec]。",
+      "汇总时，超过半数已完成席位（至少两席）各自指出的同一高严重度缺陷必须判为 changes-requested，",
+      "并写明「无规格依据，依据是 N/M 席一致」；只有一席提出的问题不阻塞。",
       "PR 描述本身仍不是合同。",
       "",
       "规格来源：（未绑定 — 非强制模式）",

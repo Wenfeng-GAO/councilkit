@@ -402,6 +402,28 @@
   font-weight: 600;
   margin: 0 0 12px;
 }
+.ck-wb-absence {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--ck-interrupt);
+}
+.ck-wb-absence .ck-wb-icon {
+  flex: none;
+  margin-top: 2px;
+}
+.ck-wb .ck-inline-code {
+  font-family: var(--ck-mono-font);
+  font-size: 0.92em;
+}
+.ck-wb-document .ck-wb-review-decision p.ck-wb-absence-note {
+  margin: 6px 0 0;
+  color: var(--ck-secondary, #b2b7c2);
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 400;
+}
 .ck-interrupt p {
   margin: 0;
   color: var(--ck-secondary);

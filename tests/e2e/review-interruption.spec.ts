@@ -574,7 +574,9 @@ test("旧 run 找不到原来的规格时，复审不启动并保持中断", asy
       }
 
       const alert = button.locator("xpath=following-sibling::*[1]");
-      await expect(alert).toHaveText(sentence);
+      await expect(alert).toHaveText(sentence.replaceAll("`", ""));
+      await expect(alert.locator("code.ck-inline-code")).toHaveText(specSource);
+      await expect(alert).not.toContainText("`");
       await expect(alert).not.toContainText("可以再试一次");
       await expect(alert).not.toContainText("DRIVER_SPAWN_FAILED");
       await expect(alert).not.toContainText("SPEC_VERIFY_UNBOUND");
@@ -610,7 +612,8 @@ test("旧 run 找不到原来的规格时，复审不启动并保持中断", asy
           main.appendChild(seats);
         }
       });
-      await expect(alert).toHaveText(sentence);
+      await expect(alert).toHaveText(sentence.replaceAll("`", ""));
+      await expect(alert.locator("code.ck-inline-code")).toHaveText(specSource);
       await expect(raw).toContainText("SPEC_ORIGINAL_UNPROVEN");
       await expect(summary).toContainText("中断");
       await expectAmberInterrupt(page.locator(".ck-wb-run-status .ck-interrupt-mark"));
