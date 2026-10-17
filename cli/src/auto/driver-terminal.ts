@@ -12,6 +12,8 @@ export type DriverTerminal = {
   errorClass: DriverErrorClass;
   retryable: boolean;
   message: string;
+  /** `structured` is a protocol error event. `stderr` is an explicit phrase. */
+  source: "structured" | "stderr";
 };
 
 const QUOTA = /usage[_\s-]?limit|quota[_\s-]?exceeded|insufficient[_\s-]?quota/i;
@@ -22,29 +24,10 @@ const RATE_PHRASE = /rate[_ ]limit|too many requests/i;
 const TRANSPORT_PHRASE =
   /econnreset|etimedout|socket hang up|network error|bad gateway|service unavailable/i;
 
-const STATUS_LABEL = /\b(?:status(?:[_\s-]?code)?|error)["']?\s*[:=]\s*["']?\s*$/i;
-const GLUED_NUMBER = /[A-Za-z0-9.:]$/;
-const ATTACHED_PAREN = /[A-Za-z0-9./\\_]\($/;
-const SPACED_PATH_PAREN = /[./\\][A-Za-z0-9_]*\s*\(\s*$/;
-const COLUMN_AFTER = /^\s*,\s*\d+/;
-const LOCATION_WORD = /(?:^|[^A-Za-z])(?:lines?|ports?|versions?)\b[\s"'=:]*$/i;
+/** Diff hunks and name-status lines are tool output, not a provider error. */
+const TOOL_OUTPUT = /^(?:diff --git |[MADRC]\t)|@@ -\d+/m;
 
-function mentionsStatusCode(text: string, code: "401" | "429" | "502" | "503"): boolean {
-  const re = new RegExp(String.raw`(?<![A-Za-z0-9])${code}(?![A-Za-z0-9])`, "g");
-  for (const match of text.matchAll(re)) {
-    const index = match.index ?? 0;
-    if (numberIsHttpStatus(text.slice(0, index), text.slice(index + code.length))) return true;
-  }
-  return false;
-}
-
-function numberIsHttpStatus(before: string, after: string): boolean {
-  if (STATUS_LABEL.test(before)) return true;
-  if (SPACED_PATH_PAREN.test(before) && COLUMN_AFTER.test(after)) return false;
-  if (GLUED_NUMBER.test(before) || ATTACHED_PAREN.test(before)) return false;
-  if (LOCATION_WORD.test(before)) return false;
-  return true;
-}
+const STATUS_FIELDS = ["status", "statusCode", "status_code", "httpStatus", "http_status"] as const;
 
 /** Redact provider diagnostics before any failure/transcript/report persistence. */
 export function redactDriverDiagnostic(text: string): string {
@@ -57,16 +40,84 @@ export function redactDriverDiagnostic(text: string): string {
 
 function pickClass(text: string): DriverErrorClass | null {
   if (QUOTA.test(text)) return "quota";
-  if (AUTH_PHRASE.test(text) || mentionsStatusCode(text, "401")) return "auth";
+  if (AUTH_PHRASE.test(text)) return "auth";
   if (MODEL.test(text)) return "model";
-  if (RATE_PHRASE.test(text) || mentionsStatusCode(text, "429")) return "rate";
-  if (
-    TRANSPORT_PHRASE.test(text) ||
-    mentionsStatusCode(text, "502") ||
-    mentionsStatusCode(text, "503")
-  ) {
-    return "transport";
+  if (RATE_PHRASE.test(text)) return "rate";
+  if (TRANSPORT_PHRASE.test(text)) return "transport";
+  return null;
+}
+
+function phraseFor(text: string, errorClass: DriverErrorClass): string | null {
+  const pattern =
+    errorClass === "quota"
+      ? QUOTA
+      : errorClass === "auth"
+        ? AUTH_PHRASE
+        : errorClass === "model"
+          ? MODEL
+          : errorClass === "rate"
+            ? RATE_PHRASE
+            : errorClass === "transport"
+              ? TRANSPORT_PHRASE
+              : null;
+  return pattern?.exec(text)?.[0] ?? null;
+}
+
+function fallbackSentence(errorClass: DriverErrorClass): string {
+  switch (errorClass) {
+    case "auth":
+      return "authentication failed";
+    case "quota":
+      return "quota exceeded";
+    case "rate":
+      return "rate limit";
+    case "transport":
+      return "transport error";
+    case "model":
+      return "model unavailable";
+    default:
+      return "driver failed";
   }
+}
+
+/** Provider phrase or a fixed sentence. Never a slice of tool output. */
+function failureMessage(text: string, errorClass: DriverErrorClass, structured: boolean): string {
+  const phrase = phraseFor(text, errorClass);
+  if (!structured || TOOL_OUTPUT.test(text)) {
+    return redactDriverDiagnostic(phrase ?? fallbackSentence(errorClass));
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return fallbackSentence(errorClass);
+  return redactDriverDiagnostic(trimmed);
+}
+
+function numericStatus(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^(?:401|403|429|502|503)$/.test(value)) return Number(value);
+  return null;
+}
+
+function rowStatusCode(row: Record<string, unknown>): number | null {
+  const nests = [row];
+  const error = row.error;
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    nests.push(error as Record<string, unknown>);
+  }
+  for (const obj of nests) {
+    for (const key of STATUS_FIELDS) {
+      const code = numericStatus(obj[key]);
+      if (code !== null) return code;
+    }
+    const code = numericStatus(obj.code);
+    if (code !== null) return code;
+  }
+  return null;
+}
+
+function classForStatus(code: number): DriverErrorClass | null {
+  if (code === 401 || code === 403) return "auth";
+  if (code === 429) return "rate";
+  if (code === 502 || code === 503) return "transport";
   return null;
 }
 
@@ -130,20 +181,56 @@ function structuredLabel(row: Record<string, unknown>): string {
   return `${label}${message ? `: ${message}` : ""}`;
 }
 
-function parseStructuredTerminal(text: string): { errors: string[]; success: boolean } {
-  const errors: string[] = [];
+type StructuredHit = { label: string; row: Record<string, unknown> };
+
+/** A JSON object that is only an HTTP status, not a tool or assistant event. */
+function isBareStatusPayload(row: Record<string, unknown>): boolean {
+  if (
+    row.role !== undefined ||
+    row.item !== undefined ||
+    row.content !== undefined ||
+    row.tool_calls !== undefined
+  ) {
+    return false;
+  }
+  const type = typeof row.type === "string" ? row.type : "";
+  if (
+    type === "result" ||
+    type === "assistant" ||
+    type === "item.completed" ||
+    type === "turn.completed" ||
+    type === "tool_call" ||
+    type === "stream_event" ||
+    type === "system"
+  ) {
+    return false;
+  }
+  return classForStatus(rowStatusCode(row) ?? Number.NaN) !== null;
+}
+
+function classifyStructured(hit: StructuredHit): DriverErrorClass {
+  const fromStatus = classForStatus(rowStatusCode(hit.row) ?? Number.NaN);
+  const fromPhrase = pickClass(hit.label);
+  if (fromPhrase === "quota" || fromPhrase === "auth") return fromPhrase;
+  return fromStatus ?? fromPhrase ?? "unknown";
+}
+
+function parseStructuredTerminal(text: string): { errors: StructuredHit[]; success: boolean } {
+  const errors: StructuredHit[] = [];
   let success = false;
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith("{")) continue;
     try {
       const row = JSON.parse(trimmed) as Record<string, unknown>;
-      if (isStructuredErrorRow(row)) {
-        const label = structuredLabel(row);
-        if (!isCodexReconnectDiagnostic(label)) errors.push(label);
+      if (isStructuredSuccessRow(row)) {
+        success = true;
         continue;
       }
-      if (isStructuredSuccessRow(row)) success = true;
+      if (isStructuredErrorRow(row) || isBareStatusPayload(row)) {
+        const label = structuredLabel(row);
+        if (!isCodexReconnectDiagnostic(label)) errors.push({ label, row });
+      }
     } catch {
       /* ignore non-json */
     }
@@ -161,12 +248,14 @@ export function classifyDriverTerminal(input: {
   // Structured terminal (success or error) beats unrelated stderr warnings.
   const structured = parseStructuredTerminal(`${stdout}\n${stderr}`);
   if (structured.errors.length > 0) {
-    const blob = structured.errors.join("\n");
-    const errorClass = pickClass(blob) ?? "unknown";
+    const hit = structured.errors[0];
+    if (hit === undefined) return null;
+    const errorClass = classifyStructured(hit);
     return {
       errorClass,
       retryable: isRetryableClass(errorClass),
-      message: redactDriverDiagnostic(structured.errors[0] || blob),
+      message: failureMessage(hit.label, errorClass, true),
+      source: "structured",
     };
   }
   if (structured.success) return null;
@@ -176,7 +265,8 @@ export function classifyDriverTerminal(input: {
   return {
     errorClass: fromStderr,
     retryable: isRetryableClass(fromStderr),
-    message: redactDriverDiagnostic(stderr),
+    message: failureMessage(stderr, fromStderr, false),
+    source: "stderr",
   };
 }
 

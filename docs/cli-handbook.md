@@ -229,6 +229,8 @@ CLI 直接按 PATH 解析 `cld`/`cfuse`/`kimi`/`codex`/`grok`/`cursor-agent` 并
 - transcript 记录 `attemptNumber`/`retryOf`
 - 全失败 → 不聚合、确定性失败报告、exit 4
 - 聚合失败 → INCOMPLETE 报告 + exit 4
+- 进程 exit 0 且已取出终态结果的席位记成功。鉴权失败只来自结构化错误事件，或没有终态结果时 stderr 上的明确鉴权文案（`not logged in`、`AUTH_REQUIRED` 等）；正文或工具输出里的 401/403 不算。失败文案用该文案本身，不截取工具输出
+- 部分席位失败但仍汇总：`status=completed`、`incomplete=true`、退出码 0（与退出码表一致）
 - SIGINT → 尽力落盘、exit 130
 
 #### 恢复失败席位

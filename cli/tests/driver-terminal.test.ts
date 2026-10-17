@@ -67,15 +67,9 @@ describe("classifyDriverTerminal", () => {
     expect(quiet("listening on 127.0.0.1:429")).toBeNull();
     expect(quiet("go1.401")).toBeNull();
     expect(quiet("1401")).toBeNull();
-    expect(
-      classifyDriverTerminal({ stdout: "", stderr: "error: 401", exitCode: 1 })?.errorClass,
-    ).toBe("auth");
-    expect(
-      classifyDriverTerminal({ stdout: "", stderr: "status:429", exitCode: 1 })?.errorClass,
-    ).toBe("rate");
-    expect(
-      classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 401", exitCode: 1 })?.errorClass,
-    ).toBe("auth");
+    expect(classifyDriverTerminal({ stdout: "", stderr: "error: 401", exitCode: 1 })).toBeNull();
+    expect(classifyDriverTerminal({ stdout: "", stderr: "status:429", exitCode: 1 })).toBeNull();
+    expect(classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 401", exitCode: 1 })).toBeNull();
     expect(
       classifyDriverTerminal({ stdout: "", stderr: "AUTH_REQUIRED", exitCode: 1 })?.errorClass,
     ).toBe("auth");
@@ -99,44 +93,26 @@ describe("classifyDriverTerminal", () => {
       classifyDriverTerminal({ stdout: "", stderr: '{"status":401}', exitCode: 1 })?.errorClass,
     ).toBe("auth");
     expect(
+      classifyDriverTerminal({ stdout: "", stderr: '{"status":403}', exitCode: 1 })?.errorClass,
+    ).toBe("auth");
+    expect(
       classifyDriverTerminal({ stdout: "", stderr: '{"status":429}', exitCode: 1 })?.errorClass,
     ).toBe("rate");
     expect(
-      classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 502", exitCode: 1 })?.errorClass,
+      classifyDriverTerminal({ stdout: "", stderr: '{"status":502}', exitCode: 1 })?.errorClass,
     ).toBe("transport");
-    expect(
-      classifyDriverTerminal({ stdout: "", stderr: "status: 503", exitCode: 1 })?.errorClass,
-    ).toBe("transport");
+    expect(classifyDriverTerminal({ stdout: "", stderr: "HTTP/1.1 502", exitCode: 1 })).toBeNull();
+    expect(classifyDriverTerminal({ stdout: "", stderr: "status: 503", exitCode: 1 })).toBeNull();
   });
 
-  it("classifies a free-standing parenthesized status and ignores a source location", () => {
+  it("ignores a free-standing or parenthesized 401 in tool output", () => {
     const classified = (stderr: string) =>
       classifyDriverTerminal({ stdout: "", stderr, exitCode: 1 });
-    expect(classified("HTTP status (401)")).toEqual({
-      errorClass: "auth",
-      retryable: false,
-      message: "HTTP status (401)",
-    });
-    expect(classified("request failed (401)")).toEqual({
-      errorClass: "auth",
-      retryable: false,
-      message: "request failed (401)",
-    });
-    expect(classified("HTTP status (429)")).toEqual({
-      errorClass: "rate",
-      retryable: true,
-      message: "HTTP status (429)",
-    });
-    expect(classified("HTTP status (502)")).toEqual({
-      errorClass: "transport",
-      retryable: true,
-      message: "HTTP status (502)",
-    });
-    expect(classified("HTTP status (503)")).toEqual({
-      errorClass: "transport",
-      retryable: true,
-      message: "HTTP status (503)",
-    });
+    expect(classified("HTTP status (401)")).toBeNull();
+    expect(classified("request failed (401)")).toBeNull();
+    expect(classified("HTTP status (429)")).toBeNull();
+    expect(classified("HTTP status (502)")).toBeNull();
+    expect(classified("HTTP status (503)")).toBeNull();
     expect(classified("src/foo.ts(401,12): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (401,12): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (401, 12): error TS2345")).toBeNull();
@@ -144,15 +120,49 @@ describe("classifyDriverTerminal", () => {
     expect(classified("src/foo.ts (429,8): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (502,3): error TS2345")).toBeNull();
     expect(classified("src/foo.ts (503,1): error TS2345")).toBeNull();
-    expect(classified("src/foo.ts (401)")).toEqual({
-      errorClass: "auth",
-      retryable: false,
-      message: "src/foo.ts (401)",
-    });
+    expect(classified("src/foo.ts (401)")).toBeNull();
     expect(classified('File "app.py", line 401, in main')).toBeNull();
     expect(classified("src/foo.ts(429,8): error TS2345")).toBeNull();
     expect(classified("src/foo.ts(502,3): error TS2345")).toBeNull();
     expect(classified("src/foo.ts(503,1): error TS2345")).toBeNull();
+    expect(classified("M\tsrc/auth.ts\n@@ -401,7 +401,7 @@\n context")).toBeNull();
+  });
+
+  it("uses the auth phrase itself when tool output precedes it", () => {
+    const stderr = `${"M\tsrc/auth.ts\n".repeat(40)}@@ -401,7 +401,7 @@\nError: not logged in`;
+    const terminal = classifyDriverTerminal({ stdout: "", stderr, exitCode: 1 });
+    expect(terminal).toMatchObject({
+      errorClass: "auth",
+      retryable: false,
+      source: "stderr",
+      message: "not logged in",
+    });
+    expect(terminal?.message).not.toContain("src/auth.ts");
+    expect(terminal?.message).not.toContain("@@");
+  });
+
+  it("classifies a structured 401 or 403 without echoing a diff stuffed into the event", () => {
+    const diff = "M\tsrc/auth.ts\n@@ -401,7 +401,7 @@\n";
+    const terminal = classifyDriverTerminal({
+      stdout: JSON.stringify({
+        type: "error",
+        status: 401,
+        message: `${diff}authentication failed`,
+      }),
+      stderr: "",
+      exitCode: 1,
+    });
+    expect(terminal?.errorClass).toBe("auth");
+    expect(terminal?.source).toBe("structured");
+    expect(terminal?.message).toBe("authentication failed");
+    expect(terminal?.message).not.toContain("src/auth.ts");
+    expect(
+      classifyDriverTerminal({
+        stdout: JSON.stringify({ type: "error", status: 403 }),
+        stderr: "",
+        exitCode: 1,
+      })?.errorClass,
+    ).toBe("auth");
   });
 
   it("still flags a later turn.failed network error", () => {
