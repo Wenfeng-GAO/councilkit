@@ -39,7 +39,7 @@ pnpm exec councilkit ideate "一句话创意" --json            # 产品创意�
   - `review-cursor`（需要 `cursor-agent`，model = `auto`）
   - `review-codex`（需要 `codex` 且不是明确未登录；没有顶层 `config.toml` `model` 时 model = `default`，审查不传 `-m`）
   - `ideate-product` / `ideate-engineering`（需要 grok/kimi）
-  - `ideate-challenger`（需要 `codex` 且不是明确未登录；模型规则与 `review-codex` 相同）
+  - `ideate-challenger`（需要 `codex`、不是明确未登录、且顶层 `config.toml` 有 `model`）
 
 - **默认 Council**：
   - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 和 `review-codex` 不是 preferred reporter）

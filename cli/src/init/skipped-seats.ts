@@ -3,7 +3,8 @@
  *
  * A seat is skipped when its driver binary is missing or the login probe
  * says logged-out. Login `unknown` still creates the seat. A logged-in Codex
- * with no top-level `model` still becomes a seat (`modelId` `default`).
+ * with no top-level `model` still becomes review-codex (`modelId` `default`).
+ * ideate-challenger is created only when that top-level key is set.
  */
 import type { SkippedSeat } from "../store/schemas";
 import type { DefaultAgentSpec } from "./defaults";

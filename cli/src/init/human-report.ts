@@ -1,7 +1,9 @@
 /**
  * Human layout for `councilkit init`. Symbols carry status (not colour).
- * Seats are grouped by council. Skips that share a driver and reason merge
- * into one entry. Long driver notes stay in `--json` `next` and the README.
+ * A summary line counts every council, then each council is its own group.
+ * Skips that share a driver and reason merge only inside that group; a single
+ * skip stays one line. Global notes (standalone cfuse filling cld) come after
+ * both groups. Long driver notes stay in `--json` `next` and the README.
  */
 import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import type { SkippedSeat } from "../store/schemas";
@@ -11,7 +13,8 @@ import { driverStatusByName } from "./driver-status";
 import { NEXT_IDEATE_HINT } from "./ideate-defaults";
 
 const SEAT_WIDTH = 22;
-const TOOL_WIDTH = 24;
+const TOOL_WIDTH = 15;
+const VERSION_TOKEN = /\d+\.\d+\.\d+/;
 
 export function loginWords(login: LoginState): "logged in" | "not logged in" | "login not checked" {
   if (login === "logged-in") return "logged in";
@@ -70,6 +73,12 @@ function humanCommand(driver: string, reason: "missing" | "logged-out"): string 
   }
 }
 
+/** cursor-agent builds often print a date, which the column may leave off. */
+function shownVersion(tool: string, version: string | null): string | null {
+  if (tool === "cursor-agent" || version === null) return null;
+  return version.match(VERSION_TOKEN)?.[0] ?? version;
+}
+
 function readyLine(
   name: string,
   tool: string,
@@ -77,9 +86,11 @@ function readyLine(
   login: LoginState,
   defaultModel: boolean,
 ): string {
-  const versionText = version ?? "version unknown";
+  const versionText = shownVersion(tool, version);
+  const toolText = versionText === null ? tool : `${tool} ${versionText}`;
   const status = defaultModel ? `${loginWords(login)} · default model` : loginWords(login);
-  return `  ✓ ${name.padEnd(SEAT_WIDTH)} ${`${tool} ${versionText}`.padEnd(TOOL_WIDTH)} ${status}`;
+  const column = toolText.length >= TOOL_WIDTH ? `${toolText} ` : toolText.padEnd(TOOL_WIDTH);
+  return `  ✓ ${name.padEnd(SEAT_WIDTH)} ${column}${status}`;
 }
 
 function mergedSkipLines(seats: readonly SkippedSeat[]): string[] {
@@ -104,12 +115,14 @@ function mergedSkipLines(seats: readonly SkippedSeat[]): string[] {
     const group = groups.get(key);
     if (group === undefined) return [];
     const why = group.reason === "missing" ? "not installed" : "not logged in";
-    const count =
-      group.names.length === 1 ? "1 seat skipped" : `${group.names.length} seats skipped`;
+    const command = `      ${humanCommand(group.driver, group.reason)}`;
+    if (group.names.length === 1) {
+      return [`  ✗ ${group.names[0]}  skipped: ${group.driver} ${why}`, command];
+    }
     return [
-      `  ✗ ${count}: ${group.driver} ${why}`,
+      `  ✗ ${group.names.length} seats skipped: ${group.driver} ${why}`,
       `      ${group.names.join(", ")}`,
-      `      ${humanCommand(group.driver, group.reason)}`,
+      command,
     ];
   });
 }
@@ -129,30 +142,49 @@ export interface HumanCouncil {
   cldSubstitute: boolean;
 }
 
+function countable(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function councilSection(council: HumanCouncil): string {
   const skipped = council.skipped.filter((seat) => seat.reason !== "no-model");
-  const header =
-    council.reporter === null
-      ? `${council.name}: ${council.ready.length} ready, ${skipped.length} skipped`
-      : `${council.name}: ${council.ready.length} ready, ${skipped.length} skipped (reporter ${council.reporter})`;
-  const lines = [
+  const reporter = council.reporter === null ? "" : ` (reporter ${council.reporter})`;
+  const header = `${council.name}${reporter} · ${council.ready.length} ready, ${skipped.length} skipped`;
+  return [
     header,
     ...council.ready.map((seat) =>
       readyLine(seat.name, seat.tool, seat.version, seat.login, seat.defaultModel),
     ),
     ...mergedSkipLines(skipped),
-  ];
-  if (council.cldSubstitute) {
-    lines.push("  ? cld  not installed (review-security is using standalone cfuse instead)");
-    lines.push("      for full features, put cld on PATH, then: cld login");
+  ].join("\n");
+}
+
+function summaryLine(councils: readonly HumanCouncil[]): string {
+  let ready = 0;
+  let skipped = 0;
+  for (const council of councils) {
+    ready += council.ready.length;
+    skipped += council.skipped.filter((seat) => seat.reason !== "no-model").length;
   }
-  return lines.join("\n");
+  return `init: ${countable(councils.length, "council", "councils")} · ${countable(ready, "seat", "seats")} ready, ${skipped} skipped`;
+}
+
+function globalNotes(councils: readonly HumanCouncil[]): string[] {
+  if (!councils.some((council) => council.cldSubstitute)) return [];
+  return [
+    "  ? cld  not installed (review-security is using standalone cfuse instead)",
+    "      for full features, put cld on PATH, then: cld login",
+  ];
 }
 
 export function renderInitHuman(input: { councils: HumanCouncil[]; failure?: boolean }): string {
-  const body = input.councils.map((council) => councilSection(council)).join("\n\n");
+  const sections = input.councils.map((council) => councilSection(council)).join("\n\n");
+  const notes = globalNotes(input.councils);
+  const body = notes.length === 0 ? sections : `${sections}\n\n${notes.join("\n")}`;
   if (input.failure) return body;
   return [
+    summaryLine(input.councils),
+    "",
     body,
     "",
     "next:",
