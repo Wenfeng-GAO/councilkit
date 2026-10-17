@@ -174,7 +174,9 @@ exit 1
     expect(message).toContain("kimi login");
     expect(message).toContain("grok login");
     expect(message).toContain("cursor-agent login");
-    expect(message).toContain("✗ review-security  skipped: cld not installed");
+    expect(message).toContain("pr-jury:");
+    expect(message).toContain("✗ 1 seat skipped: cld not installed");
+    expect(message).toContain("review-security");
     expect(message).toContain("put cld on PATH, then: cld login");
     expect(message).not.toContain("CLD_CFUSE_BIN");
     expect(message).not.toContain("backend");
@@ -258,15 +260,35 @@ exit 1
       store.getAgent("ideate-challenger").id,
     );
     expect(store.getAgent("ideate-challenger").modelId).toBe("gpt-6-astra");
+    expect(store.getAgent("review-codex").modelId).toBe("gpt-6-astra");
+    expect(store.getCouncil("pr-jury").agentIds).toContain(store.getAgent("review-codex").id);
   });
 
-  it("does not invent a Codex model when none is configured", async () => {
-    stub(["cld", "kimi", "grok", "codex"]);
+  it("creates codex seats on the CLI default model when none is configured", async () => {
+    stub(["cld", "kimi", "grok", "codex"], LOGGED_IN);
     const sink = makeSink();
     await runInit([], sink);
-    const out = sink.finished as { missingDrivers: string[] };
-    expect(out.missingDrivers).toContain("codex-model");
-    expect(new Store().listAgents().map((agent) => agent.name)).not.toContain("ideate-challenger");
+    const out = sink.finished as {
+      missingDrivers: string[];
+      drivers: Array<{ driver: string; next: string | null }>;
+    };
+    const store = new Store();
+    expect(out.missingDrivers).not.toContain("codex-model");
+    expect(store.getAgent("review-codex").modelId).toBe("default");
+    expect(store.getAgent("ideate-challenger").modelId).toBe("default");
+    expect(store.getCouncil("pr-jury").agentIds).toContain(store.getAgent("review-codex").id);
+    expect(store.getCouncil("product-jury").agentIds).toContain(
+      store.getAgent("ideate-challenger").id,
+    );
+    const codex = out.drivers.find((row) => row.driver === "codex");
+    expect(codex?.next).toContain('model = "<model-id>"');
+    expect(codex?.next).toContain("-m");
+    expect(codex?.next).not.toContain(">>");
+    expect(sink.human).toContain("✓ review-codex");
+    expect(sink.human).toContain("logged in · default model");
+    expect(sink.human).not.toContain("config.toml");
+    expect(sink.human).not.toContain(">>");
+    expect(sink.human).not.toContain("seat not created");
   });
 
   it("does not silently replace a configured product-jury reporter", async () => {
@@ -275,8 +297,7 @@ exit 1
     expect(new Store().getCouncil("product-jury").reporterAgentId).toBe(
       new Store().getAgent("ideate-product").id,
     );
-    // PATH-only `codex` is not enough under the current contract: challenger
-    // is created only when a Codex model is discoverable.
+    // A later init may add Codex seats. An already chosen reporter stays.
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-6-astra"\n');
     stub(["cld", "kimi", "grok", "codex"]);
     await runInit([], makeSink());
@@ -593,7 +614,8 @@ exit 1
     expect(cld?.next).toContain("cfuse-claude");
     expect(cld?.next).toContain("cld is required");
     expect(cld?.next).toContain("cld login");
-    expect(sink.human).toContain("✗ review-security  skipped: cld not installed");
+    expect(sink.human).toContain("✗ 1 seat skipped: cld not installed");
+    expect(sink.human).toContain("review-security");
     expect(sink.human).toContain("put cld on PATH, then: cld login");
     expect(sink.human).not.toContain("cld is required");
     expect(sink.human).not.toContain("CLD_CFUSE_BIN");
@@ -640,7 +662,8 @@ exit 1
       expect(row, name).toMatchObject({ found: true, login: "logged-out", version: "1.2.3" });
       expect(row?.next).toContain(`${name} login`);
     }
-    expect(sink.human).toContain("✗ review-maintainability  skipped: kimi not logged in");
+    expect(sink.human).toContain("✗ 1 seat skipped: kimi not logged in");
+    expect(sink.human).toContain("review-maintainability");
     expect(sink.human).toContain("\n      kimi login\n");
     expect(sink.human).toContain("\n      codex login\n");
     expect(sink.human).toContain("not logged in");
@@ -669,7 +692,7 @@ exit 1
       skippedSeats: Array<{ seat: string; driver: string; reason: string }>;
     };
     expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
-    for (const name of ["cld", "kimi", "grok", "cursor-agent", "codex"]) {
+    for (const name of ["cld", "kimi", "grok", "cursor-agent"]) {
       const row = out.drivers.find((item) => item.driver === name);
       expect(row, name).toMatchObject({
         found: true,
@@ -678,34 +701,40 @@ exit 1
         path: join(bin, name),
       });
     }
+    const codex = out.drivers.find((item) => item.driver === "codex");
+    expect(codex).toMatchObject({ found: true, login: "logged-in", path: join(bin, "codex") });
+    expect(codex?.next).toContain("-m");
+    expect(codex?.next).not.toContain(">>");
     expect(out.drivers.find((item) => item.driver === "cfuse")).toMatchObject({
       found: true,
       login: "unknown",
       next: null,
     });
-    expect(sink.human).toContain("logged in");
-    expect(sink.human).toContain("? codex  logged in, no model configured — seat not created");
+    expect(sink.human).toContain("logged in · default model");
+    expect(sink.human).toContain("pr-jury:");
+    expect(sink.human).toContain("product-jury:");
     expect(sink.human).not.toContain("login logged-in");
     expect(sink.human).not.toContain(" · councilkit");
+    expect(sink.human).not.toContain("config.toml");
+    expect(sink.human).not.toContain(">>");
     expect(sink.human).not.toMatch(/^\s+at /m);
     const skipped = out.skippedSeats;
     expect(skipped.filter((seat) => seat.seat.startsWith("review-"))).toEqual([]);
-    expect(skipped).toContainEqual(
-      expect.objectContaining({ seat: "ideate-challenger", driver: "codex", reason: "no-model" }),
+    expect(skipped.map((seat) => seat.seat)).not.toContain("ideate-challenger");
+    expect(new Store().getCouncil("pr-jury").agentIds).toContain(
+      new Store().getAgent("review-codex").id,
     );
+    expect(new Store().getAgent("review-codex").modelId).toBe("default");
     expect(new Store().getCouncil("pr-jury").skippedSeats).toEqual([]);
-    expect(new Store().getCouncil("product-jury").skippedSeats).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ seat: "ideate-challenger", reason: "no-model" }),
-      ]),
-    );
+    expect(new Store().getCouncil("product-jury").skippedSeats).toEqual([]);
   });
 
   it("records a missing default seat on the council and in both outputs", async () => {
     stub(["kimi"]);
     const sink = makeSink();
     await runInit([], sink);
-    expect(sink.human).toContain("✗ review-security  skipped: cld not installed");
+    expect(sink.human).toContain("✗ 1 seat skipped: cld not installed");
+    expect(sink.human).toContain("review-security");
     expect(sink.human).toContain("put cld on PATH, then: cld login");
     const out = sink.finished as {
       skippedSeats: Array<{ seat: string; driver: string; reason: string; next: string }>;
@@ -718,6 +747,7 @@ exit 1
       "review-correctness",
       "review-adversarial",
       "review-cursor",
+      "review-codex",
       "ideate-product",
       "ideate-challenger",
     ]);
@@ -726,6 +756,7 @@ exit 1
       "review-correctness",
       "review-adversarial",
       "review-cursor",
+      "review-codex",
     ]);
     expect(new Store().listAgents().map((agent) => agent.name)).not.toContain("review-security");
   });
@@ -742,7 +773,8 @@ exit 1
     expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-correctness");
     expect(out.createdAgents.map((agent) => agent.name)).not.toContain("review-adversarial");
     expect(out.createdAgents.map((agent) => agent.name)).toContain("review-security");
-    expect(sink.human).toContain("✗ review-correctness  skipped: grok not logged in");
+    expect(sink.human).toContain("✗ 2 seats skipped: grok not logged in");
+    expect(sink.human).toContain("review-correctness, review-adversarial");
     expect(sink.human).toContain("\n      grok login\n");
     expect(out.skippedSeats).toContainEqual(
       expect.objectContaining({
@@ -760,7 +792,7 @@ exit 1
     );
     const stored = new Store().getCouncil("pr-jury").skippedSeats ?? [];
     expect(stored.map((seat) => seat.seat).sort()).toEqual(
-      ["review-adversarial", "review-correctness", "review-cursor"].sort(),
+      ["review-adversarial", "review-codex", "review-correctness", "review-cursor"].sort(),
     );
   });
 
@@ -825,23 +857,23 @@ exit 0
     process.env.PATH = bin;
     const sink = makeSink();
     await runInit([], sink);
-    expect(
-      sink.human,
-    ).toBe(`init: 4 seats ready, 3 skipped · council pr-jury (reporter review-security)
+    expect(sink.human).toBe(`pr-jury: 4 ready, 2 skipped (reporter review-security)
   ✓ review-security        cfuse 2.6.43             login not checked
   ✓ review-maintainability kimi 2.1.1               logged in
   ✓ review-cursor          cursor-agent 2026.10.16  logged in
-  ✓ ideate-engineering     kimi 2.1.1               logged in
-  ✗ review-correctness  skipped: grok not installed
+  ✓ review-codex           codex codex-cli 0.161.0  logged in · default model
+  ✗ 2 seats skipped: grok not installed
+      review-correctness, review-adversarial
       install grok so it's on PATH, then: grok login
-  ✗ review-adversarial  skipped: grok not installed
-      install grok so it's on PATH, then: grok login
-  ✗ ideate-product  skipped: grok not installed
-      install grok so it's on PATH, then: grok login
-  ? codex  logged in, no model configured — seat not created
-      set a model: printf 'model = "<model-id>"\\n' >> "\${CODEX_HOME:-$HOME/.codex}/config.toml"
   ? cld  not installed (review-security is using standalone cfuse instead)
       for full features, put cld on PATH, then: cld login
+
+product-jury: 2 ready, 1 skipped (reporter ideate-challenger)
+  ✓ ideate-engineering     kimi 2.1.1               logged in
+  ✓ ideate-challenger      codex codex-cli 0.161.0  logged in · default model
+  ✗ 1 seat skipped: grok not installed
+      ideate-product
+      install grok so it's on PATH, then: grok login
 
 next:
   councilkit review --council pr-jury --pr <url>
@@ -849,6 +881,56 @@ next:
 open reports: http://127.0.0.1:43127/reports`);
     expect(sink.human).not.toContain("CLD_CFUSE_BIN");
     expect(sink.human).not.toContain(" · councilkit");
+    expect(sink.human).not.toContain("config.toml");
+    expect(sink.human).not.toContain(">>");
+    const out = sink.finished as { drivers: Array<{ driver: string; next: string | null }> };
+    const codex = out.drivers.find((row) => row.driver === "codex");
+    expect(codex?.next).toContain('model = "<model-id>"');
+    expect(codex?.next).toContain("-m <model-id>");
+    expect(codex?.next).not.toContain(">>");
+  });
+
+  it("runs a toy review on review-codex without passing a model flag", async () => {
+    stub(["codex"], LOGGED_IN);
+    await runInit([], makeSink());
+    const store = new Store();
+    expect(store.getAgent("review-codex").modelId).toBe("default");
+    expect(store.getCouncil("pr-jury").reporterAgentId).toBe(store.getAgent("review-codex").id);
+    const calls: string[][] = [];
+    const spawn: SpawnImpl = async (input: SpawnInput) => {
+      calls.push(input.argv);
+      const text =
+        input.prompt.includes("对比汇总") || input.prompt.includes("Aggregator")
+          ? "## 概览\nok\n## 共识发现\n- x\n## 独有发现\n- y\n## 分歧\nnone\n## 结论\napprove"
+          : "## 发现\n- [nit] a.ts:1 — n\n## 验证\n未验证\n## 结论\ncomment";
+      return {
+        stdout: JSON.stringify({
+          type: "item.completed",
+          item: { type: "agent_message", text },
+        }),
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+      };
+    };
+    const sink = makeSink();
+    try {
+      await runReview(
+        ["--council", "pr-jury", "--task", "fixture review", "--no-require-spec"],
+        sink,
+        { spawnImpl: spawn },
+      );
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    expect(calls.length).toBeGreaterThan(0);
+    for (const argv of calls) {
+      expect(argv).not.toContain("-m");
+      expect(argv).not.toContain("--model");
+      expect(argv).not.toContain("default");
+    }
+    const finished = sink.finished as { reportPath?: string };
+    expect(finished.reportPath ?? "").not.toHaveLength(0);
   });
 
   it("dispatch routes the init command", async () => {

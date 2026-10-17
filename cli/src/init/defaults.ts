@@ -18,6 +18,7 @@ export const DEFAULT_AGENT_NAMES = [
   "review-maintainability",
   "review-adversarial",
   "review-cursor",
+  "review-codex",
 ] as const;
 
 export type DefaultAgentName = (typeof DEFAULT_AGENT_NAMES)[number];
@@ -97,6 +98,19 @@ export const DEFAULT_AGENT_SPECS: readonly DefaultAgentSpec[] = [
     preferredReporter: false,
     personaPrompt: [
       "你是 Cursor 默认模型审查员。用当前账户的 Cursor Auto 模型独立审查同一任务。",
+      "每条发现带严重度 [critical|major|minor|nit]、位置和可验证的依据。不要报纯风格。",
+      "最终消息只输出 Markdown，使用标题「发现 / 验证 / 结论」。结论一行：approve | changes-requested | comment。",
+    ].join("\n"),
+  },
+  {
+    name: "review-codex",
+    executable: "codex",
+    driverSelection: { driverId: "codex-app-server", options: {} },
+    modelId: "default",
+    color: "#22d3ee",
+    preferredReporter: false,
+    personaPrompt: [
+      "你是 Codex 审查员。用本机 Codex CLI 的模型独立审查同一任务。",
       "每条发现带严重度 [critical|major|minor|nit]、位置和可验证的依据。不要报纯风格。",
       "最终消息只输出 Markdown，使用标题「发现 / 验证 / 结论」。结论一行：approve | changes-requested | comment。",
     ].join("\n"),

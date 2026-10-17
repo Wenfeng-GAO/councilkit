@@ -17,7 +17,8 @@
  *    `{"role":"assistant"}.content`, skipping `role:"meta"` resume lines.
  *  - codex: `codex exec -s read-only --skip-git-repo-check -m <modelId>
  *    -o <workspace>/.last-message.md -` (write access: `-s workspace-write
- *    --dangerously-bypass-approvals-and-sandbox`).
+ *    --dangerously-bypass-approvals-and-sandbox`). `auto` / `default` /
+ *    `configured` omit `-m` so the Codex CLI uses its own default model.
  *  - Seat access (#273): every seat is read-only by default; see `SeatAccess`.
  *    prompt → stdin; read the last-message file, fall back to stdout.
  */
@@ -120,6 +121,11 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
 
 export function executableForDriver(driverId: string): string | undefined {
   return EXECUTABLE_BY_DRIVER[driverId];
+}
+
+/** `auto` / `default` / `configured` leave the model flag off. */
+function codexModelArgv(modelId: string): string[] {
+  return isDefaultModelAlias(modelId) ? [] : ["-m", modelId];
 }
 
 function codexEffortArgv(agent: AgentRecord): string[] {
@@ -836,8 +842,7 @@ function buildInvocation(
           argv: [
             "exec",
             "--skip-git-repo-check",
-            "-m",
-            agent.modelId,
+            ...codexModelArgv(agent.modelId),
             ...codexEffortArgv(agent),
             "--json",
             "-",
@@ -856,8 +861,7 @@ function buildInvocation(
             : ["read-only"]),
           "--skip-git-repo-check",
           "--json",
-          "-m",
-          agent.modelId,
+          ...codexModelArgv(agent.modelId),
           ...codexEffortArgv(agent),
           "-o",
           lastMessageFile,

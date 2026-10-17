@@ -1,13 +1,14 @@
 /**
  * Human layout for `councilkit init`. Symbols carry status (not colour).
- * Long driver notes stay in `--json` `next` and the README.
+ * Seats are grouped by council. Skips that share a driver and reason merge
+ * into one entry. Long driver notes stay in `--json` `next` and the README.
  */
+import { isDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import type { SkippedSeat } from "../store/schemas";
 import { NEXT_REVIEW_HINT } from "./defaults";
 import type { DriverStatus, LoginState } from "./driver-status";
 import { driverStatusByName } from "./driver-status";
 import { NEXT_IDEATE_HINT } from "./ideate-defaults";
-import { CODEX_MODEL_COMMAND } from "./skipped-seats";
 
 const SEAT_WIDTH = 22;
 const TOOL_WIDTH = 24;
@@ -45,7 +46,7 @@ function executableForSeat(name: string): string {
     return "grok";
   }
   if (name === "review-cursor") return "cursor-agent";
-  if (name === "ideate-challenger") return "codex";
+  if (name === "review-codex" || name === "ideate-challenger") return "codex";
   return name;
 }
 
@@ -69,63 +70,90 @@ function humanCommand(driver: string, reason: "missing" | "logged-out"): string 
   }
 }
 
-function readyLine(name: string, tool: string, version: string | null, login: LoginState): string {
+function readyLine(
+  name: string,
+  tool: string,
+  version: string | null,
+  login: LoginState,
+  defaultModel: boolean,
+): string {
   const versionText = version ?? "version unknown";
-  return `  ✓ ${name.padEnd(SEAT_WIDTH)} ${`${tool} ${versionText}`.padEnd(TOOL_WIDTH)} ${loginWords(login)}`;
+  const status = defaultModel ? `${loginWords(login)} · default model` : loginWords(login);
+  return `  ✓ ${name.padEnd(SEAT_WIDTH)} ${`${tool} ${versionText}`.padEnd(TOOL_WIDTH)} ${status}`;
 }
 
-function skippedLines(seat: SkippedSeat): string[] {
-  const reason = seat.reason === "logged-out" ? "logged-out" : "missing";
-  const why = reason === "missing" ? "not installed" : "not logged in";
-  return [
-    `  ✗ ${seat.seat}  skipped: ${seat.driver} ${why}`,
-    `      ${humanCommand(seat.driver, reason)}`,
-  ];
-}
-
-function partialLines(input: {
-  codexModel: boolean;
-  cldUsesCfuse: boolean;
-}): string[] {
-  const lines: string[] = [];
-  if (input.codexModel) {
-    lines.push("  ? codex  logged in, no model configured — seat not created");
-    lines.push(`      set a model: ${CODEX_MODEL_COMMAND}`);
+function mergedSkipLines(seats: readonly SkippedSeat[]): string[] {
+  const order: string[] = [];
+  const groups = new Map<
+    string,
+    { driver: string; reason: "missing" | "logged-out"; names: string[] }
+  >();
+  for (const seat of seats) {
+    if (seat.reason === "no-model") continue;
+    const reason = seat.reason === "logged-out" ? "logged-out" : "missing";
+    const key = `${reason}\0${seat.driver}`;
+    const existing = groups.get(key);
+    if (existing !== undefined) {
+      existing.names.push(seat.seat);
+      continue;
+    }
+    order.push(key);
+    groups.set(key, { driver: seat.driver, reason, names: [seat.seat] });
   }
-  if (input.cldUsesCfuse) {
+  return order.flatMap((key) => {
+    const group = groups.get(key);
+    if (group === undefined) return [];
+    const why = group.reason === "missing" ? "not installed" : "not logged in";
+    const count =
+      group.names.length === 1 ? "1 seat skipped" : `${group.names.length} seats skipped`;
+    return [
+      `  ✗ ${count}: ${group.driver} ${why}`,
+      `      ${group.names.join(", ")}`,
+      `      ${humanCommand(group.driver, group.reason)}`,
+    ];
+  });
+}
+
+export interface HumanCouncil {
+  name: string;
+  reporter: string | null;
+  ready: Array<{
+    name: string;
+    tool: string;
+    version: string | null;
+    login: LoginState;
+    defaultModel: boolean;
+  }>;
+  skipped: SkippedSeat[];
+  /** Standalone cfuse is filling review-security because cld is absent. */
+  cldSubstitute: boolean;
+}
+
+function councilSection(council: HumanCouncil): string {
+  const skipped = council.skipped.filter((seat) => seat.reason !== "no-model");
+  const header =
+    council.reporter === null
+      ? `${council.name}: ${council.ready.length} ready, ${skipped.length} skipped`
+      : `${council.name}: ${council.ready.length} ready, ${skipped.length} skipped (reporter ${council.reporter})`;
+  const lines = [
+    header,
+    ...council.ready.map((seat) =>
+      readyLine(seat.name, seat.tool, seat.version, seat.login, seat.defaultModel),
+    ),
+    ...mergedSkipLines(skipped),
+  ];
+  if (council.cldSubstitute) {
     lines.push("  ? cld  not installed (review-security is using standalone cfuse instead)");
     lines.push("      for full features, put cld on PATH, then: cld login");
   }
-  return lines;
+  return lines.join("\n");
 }
 
-export interface HumanInitInput {
-  ready: Array<{ name: string; tool: string; version: string | null; login: LoginState }>;
-  skipped: SkippedSeat[];
-  codexModel: boolean;
-  cldUsesCfuse: boolean;
-  council: { name: string; reporter: string } | null;
-  /** Failure text lists seats only. Success adds the header, next commands, and reports URL. */
-  failure?: boolean;
-}
-
-export function renderInitHuman(input: HumanInitInput): string {
-  const skipped = input.skipped.filter((seat) => seat.reason !== "no-model");
-  const body = [
-    ...input.ready.map((seat) => readyLine(seat.name, seat.tool, seat.version, seat.login)),
-    ...skipped.flatMap((seat) => skippedLines(seat)),
-    ...partialLines({ codexModel: input.codexModel, cldUsesCfuse: input.cldUsesCfuse }),
-  ];
-  if (input.failure) return body.join("\n");
-  const readyLabel =
-    input.ready.length === 1 ? "1 seat ready" : `${input.ready.length} seats ready`;
-  const council =
-    input.council === null
-      ? "no council"
-      : `council ${input.council.name} (reporter ${input.council.reporter})`;
+export function renderInitHuman(input: { councils: HumanCouncil[]; failure?: boolean }): string {
+  const body = input.councils.map((council) => councilSection(council)).join("\n\n");
+  if (input.failure) return body;
   return [
-    `init: ${readyLabel}, ${skipped.length} skipped · ${council}`,
-    ...body,
+    body,
     "",
     "next:",
     `  ${NEXT_REVIEW_HINT}`,
@@ -134,27 +162,41 @@ export function renderInitHuman(input: HumanInitInput): string {
   ].join("\n");
 }
 
-export function initHumanFromOutcome(input: {
-  createdAgents: Array<{ name: string }>;
-  reusedAgents: Array<{ name: string }>;
-  drivers: readonly DriverStatus[];
+export interface InitCouncilBrief {
+  name: string;
+  reporter: string | null;
+  ready: Array<{ name: string; modelId: string }>;
   skippedSeats: SkippedSeat[];
-  createdCouncil: { name: string; reporter: string } | null;
-  reusedCouncil: { name: string; reporter: string } | null;
+}
+
+function usesCodexDefault(name: string, modelId: string): boolean {
+  return (name === "review-codex" || name === "ideate-challenger") && isDefaultModelAlias(modelId);
+}
+
+export function initHumanFromOutcome(input: {
+  drivers: readonly DriverStatus[];
+  councils: readonly InitCouncilBrief[];
 }): string {
-  const seen = new Set<string>();
-  const ready = [...input.createdAgents, ...input.reusedAgents].flatMap((agent) => {
-    if (seen.has(agent.name)) return [];
-    seen.add(agent.name);
-    return [{ name: agent.name, ...displayTool(agent.name, input.drivers) }];
-  });
   const cld = driverStatusByName(input.drivers, "cld");
   const cfuse = driverStatusByName(input.drivers, "cfuse");
   return renderInitHuman({
-    ready,
-    skipped: input.skippedSeats,
-    codexModel: input.skippedSeats.some((seat) => seat.reason === "no-model"),
-    cldUsesCfuse: seen.has("review-security") && !cld.found && cfuse.found,
-    council: input.createdCouncil ?? input.reusedCouncil,
+    councils: input.councils.map((council) => {
+      const readyNames = new Set(council.ready.map((seat) => seat.name));
+      return {
+        name: council.name,
+        reporter: council.reporter,
+        ready: council.ready.map((seat) => ({
+          name: seat.name,
+          defaultModel: usesCodexDefault(seat.name, seat.modelId),
+          ...displayTool(seat.name, input.drivers),
+        })),
+        skipped: council.skippedSeats,
+        cldSubstitute:
+          council.name === "pr-jury" &&
+          readyNames.has("review-security") &&
+          !cld.found &&
+          cfuse.found,
+      };
+    }),
   });
 }

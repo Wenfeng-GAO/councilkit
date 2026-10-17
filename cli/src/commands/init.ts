@@ -6,6 +6,7 @@
 import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
 import { errors } from "../errors";
 import {
+  DEFAULT_AGENT_NAMES,
   DEFAULT_AGENT_SPECS,
   type DefaultAgentSpec,
   NEXT_REVIEW_HINT,
@@ -16,8 +17,9 @@ import {
   PR_JURY_TOPIC,
 } from "../init/defaults";
 import { type DriverStatus, collectDriverStatus } from "../init/driver-status";
-import { initHumanFromOutcome, renderInitHuman } from "../init/human-report";
+import { type InitCouncilBrief, initHumanFromOutcome, renderInitHuman } from "../init/human-report";
 import {
+  IDEATE_AGENT_NAMES,
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
   type IdeateAgentSpec,
@@ -28,11 +30,11 @@ import {
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
 } from "../init/ideate-defaults";
-import { codexModelSkip, ideateDriverSkip, reviewSkip } from "../init/skipped-seats";
+import { CODEX_MODEL_OVERRIDE_NEXT, ideateDriverSkip, reviewSkip } from "../init/skipped-seats";
 import type { OutputSink } from "../output";
 import type { AgentRecord, CouncilRecord, SkippedSeat } from "../store/schemas";
 import { Store } from "../store/store";
-import { discoverCodexModel } from "./jury";
+import { configuredCodexModel } from "./jury";
 import { parseFlags } from "./parse";
 
 export interface InitOutcome {
@@ -45,6 +47,8 @@ export interface InitOutcome {
   drivers: DriverStatus[];
   /** Default seats this init did not create, also stored on the council. */
   skippedSeats: SkippedSeat[];
+  /** Per-council roster used by the human report. Ideate seats stay out of pr-jury. */
+  councils: InitCouncilBrief[];
   next: string;
 }
 
@@ -85,26 +89,32 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       ideateAvailable.push(spec);
     }
   }
+  noteCodexDefaultModel(drivers, env);
+
   if (available.length === 0) {
     const skippedSeats = [...reviewSkips, ...ideateSkips];
-    if (
-      ideateAvailable.some((spec) => spec.name === "ideate-challenger") &&
-      discoverCodexModel(env) === null
-    ) {
-      skippedSeats.push(codexModelSkip());
-      if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
-    }
     const lines = renderInitHuman({
-      ready: [],
-      skipped: skippedSeats,
-      codexModel: skippedSeats.some((seat) => seat.reason === "no-model"),
-      cldUsesCfuse: false,
-      council: null,
       failure: true,
+      councils: [
+        {
+          name: PR_JURY_COUNCIL_NAME,
+          reporter: null,
+          ready: [],
+          skipped: reviewSkips,
+          cldSubstitute: false,
+        },
+        {
+          name: PRODUCT_JURY_COUNCIL_NAME,
+          reporter: null,
+          ready: [],
+          skipped: ideateSkips,
+          cldSubstitute: false,
+        },
+      ],
     });
     throw errors.usage(
       [
-        "no review drivers found on PATH (need at least one of: cld, cfuse, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
+        "no review drivers found on PATH (need at least one of: cld, cfuse, kimi, grok, cursor-agent, codex). Install and login to a local CLI, then retry.",
         lines,
       ].join("\n"),
       { missingDrivers, drivers, skippedSeats },
@@ -116,14 +126,15 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const createdAgents: AgentRecord[] = [];
   const reusedAgents: AgentRecord[] = [];
   for (const spec of available) {
+    const modelId = reviewModelId(spec, env);
     const existing = findByName(store, spec.name);
     if (existing !== null) {
       const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
-      const sameModel = existing.modelId === spec.modelId;
+      const sameModel = existing.modelId === modelId;
       if (!sameDriver || !sameModel) {
         reusedAgents.push(
           store.updateAgent(existing.id, {
-            modelId: spec.modelId,
+            modelId,
             driverSelection: spec.driverSelection,
           }),
         );
@@ -136,7 +147,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       store.createAgent({
         name: spec.name,
         personaPrompt: spec.personaPrompt,
-        modelId: spec.modelId,
+        modelId,
         color: spec.color,
         driverSelection: spec.driverSelection,
       }),
@@ -170,12 +181,9 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
 
   const ideateRoster: AgentRecord[] = [];
   for (const spec of ideateAvailable) {
-    const discovered = spec.modelId ?? discoverCodexModel(env);
     const existing = findByName(store, spec.name);
+    const modelId = ideateModelId(spec, existing, env);
     if (existing !== null) {
-      const modelId =
-        spec.modelId ??
-        (isExactDefaultModelAlias(existing.modelId) && discovered ? discovered : existing.modelId);
       const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
       const sameModel = existing.modelId === modelId;
       if (!sameDriver || !sameModel) {
@@ -191,37 +199,36 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       }
       continue;
     }
-    if (discovered === null) {
-      if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
-      if (existing === null) ideateSkips.push(codexModelSkip());
-      continue;
-    }
     const created = store.createAgent({
       name: spec.name,
       personaPrompt: spec.personaPrompt,
-      modelId: discovered,
+      modelId,
       color: spec.color,
       driverSelection: spec.driverSelection,
     });
     createdAgents.push(created);
     ideateRoster.push(created);
   }
-  if (ideateRoster.length >= 2) {
+  let productReporterName: string | null = null;
+  if (ideateRoster.length > 0) {
     const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
     const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
-    if (existingProduct !== null) {
-      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id, ideateSkips);
-    } else {
-      store.createCouncil({
-        name: PRODUCT_JURY_COUNCIL_NAME,
-        topic: PRODUCT_JURY_TOPIC,
-        background: PRODUCT_JURY_BACKGROUND,
-        targetOutput: PRODUCT_JURY_TARGET_OUTPUT,
-        agentIds: ideateRoster.map((a) => a.id),
-        rounds: PRODUCT_JURY_ROUNDS,
-        reporterAgentId: productReporter.id,
-        skippedSeats: ideateSkips,
-      });
+    productReporterName = productReporter.name;
+    if (ideateRoster.length >= 2) {
+      if (existingProduct !== null) {
+        store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id, ideateSkips);
+      } else {
+        store.createCouncil({
+          name: PRODUCT_JURY_COUNCIL_NAME,
+          topic: PRODUCT_JURY_TOPIC,
+          background: PRODUCT_JURY_BACKGROUND,
+          targetOutput: PRODUCT_JURY_TARGET_OUTPUT,
+          agentIds: ideateRoster.map((a) => a.id),
+          rounds: PRODUCT_JURY_ROUNDS,
+          reporterAgentId: productReporter.id,
+          skippedSeats: ideateSkips,
+        });
+      }
     }
   }
 
@@ -233,6 +240,24 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     missingDrivers,
     drivers,
     skippedSeats: [...reviewSkips, ...ideateSkips],
+    councils: [
+      {
+        name: PR_JURY_COUNCIL_NAME,
+        reporter: reporter.name,
+        ready: seatsInOrder(reviewRoster, DEFAULT_AGENT_NAMES),
+        skippedSeats: reviewSkips,
+      },
+      ...(ideateRoster.length === 0 && ideateSkips.length === 0
+        ? []
+        : [
+            {
+              name: PRODUCT_JURY_COUNCIL_NAME,
+              reporter: productReporterName,
+              ready: seatsInOrder(ideateRoster, IDEATE_AGENT_NAMES),
+              skippedSeats: ideateSkips,
+            },
+          ]),
+    ],
     next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
   };
   await out.finish(outcome, (d) => initHumanFromOutcome(d as InitOutcome));
@@ -250,6 +275,39 @@ function recreateDefaults(store: Store): void {
     if (stillUsed) continue;
     store.deleteAgent(agent.id);
   }
+}
+
+function seatsInOrder(
+  agents: readonly AgentRecord[],
+  names: readonly string[],
+): Array<{ name: string; modelId: string }> {
+  const byName = new Map(agents.map((agent) => [agent.name, agent]));
+  return names.flatMap((name) => {
+    const agent = byName.get(name);
+    return agent === undefined ? [] : [{ name: agent.name, modelId: agent.modelId }];
+  });
+}
+
+function reviewModelId(spec: DefaultAgentSpec, env: NodeJS.ProcessEnv): string {
+  if (spec.name !== "review-codex") return spec.modelId;
+  return configuredCodexModel(env) ?? spec.modelId;
+}
+
+function ideateModelId(
+  spec: IdeateAgentSpec,
+  existing: AgentRecord | null,
+  env: NodeJS.ProcessEnv,
+): string {
+  if (spec.modelId !== null) return spec.modelId;
+  if (existing !== null && !isExactDefaultModelAlias(existing.modelId)) return existing.modelId;
+  return configuredCodexModel(env) ?? "default";
+}
+
+function noteCodexDefaultModel(drivers: DriverStatus[], env: NodeJS.ProcessEnv): void {
+  if (configuredCodexModel(env) !== null) return;
+  const row = drivers.find((item) => item.driver === "codex");
+  if (row === undefined || !row.found || row.login === "logged-out" || row.next !== null) return;
+  row.next = CODEX_MODEL_OVERRIDE_NEXT;
 }
 
 const REPORTER_FALLBACK = ["review-adversarial", "review-correctness"] as const;

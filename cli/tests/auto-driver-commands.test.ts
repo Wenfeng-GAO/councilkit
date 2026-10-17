@@ -364,6 +364,20 @@ describe("cli auto driver-commands", () => {
       expect(spec.argv).toContain("composer-2.5");
     });
 
+    it("codex: default model alias omits -m so the CLI uses its own model", () => {
+      for (const modelId of ["default", "auto", "configured"]) {
+        const spec = buildSpawnSpec(agent(CODEX, modelId), {
+          attemptId: "attempt-0",
+          workspace: "/ws",
+          prompt: "review",
+          env: env(tmp),
+        });
+        expect(spec.argv, modelId).not.toContain("-m");
+        expect(spec.argv, modelId).not.toContain("--model");
+        expect(spec.argv, modelId).not.toContain(modelId);
+      }
+    });
+
     it("codex: stdin prompt, last-message file under workspace, skip-git-repo-check, --json", () => {
       const spec = buildSpawnSpec(agent(CODEX, "gpt-5"), {
         attemptId: "attempt-0",
@@ -486,6 +500,12 @@ describe("cli auto driver-commands", () => {
         "stream-json",
       ]);
       expect(spec.promptStdin).toBe(false);
+    });
+
+    it("codex: default model alias omits -m on the probe", () => {
+      const spec = buildProbeSpec(agent(CODEX, "default"), probeOpts());
+      expect(spec.argv).toEqual(["exec", "--skip-git-repo-check", "--json", "-"]);
+      expect(spec.argv).not.toContain("default");
     });
 
     it("codex: minimal exec argv — no sandbox-write, no bypass, no -o", () => {

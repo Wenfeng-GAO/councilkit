@@ -2,8 +2,8 @@
  * Default seats `init` does not create (#380 onboarding standard 3).
  *
  * A seat is skipped when its driver binary is missing or the login probe
- * says logged-out. Login `unknown` still creates the seat. `ideate-challenger`
- * is also skipped when Codex is usable but no model is configured.
+ * says logged-out. Login `unknown` still creates the seat. A logged-in Codex
+ * with no top-level `model` still becomes a seat (`modelId` `default`).
  */
 import type { SkippedSeat } from "../store/schemas";
 import type { DefaultAgentSpec } from "./defaults";
@@ -15,11 +15,12 @@ import {
 } from "./driver-status";
 import type { IdeateAgentSpec } from "./ideate-defaults";
 
-/** Writes the top-level `model = "..."` that `init` reads from Codex config. */
-export const CODEX_MODEL_COMMAND =
-  'printf \'model = "<model-id>"\\n\' >> "${CODEX_HOME:-$HOME/.codex}/config.toml"';
-
-export const CODEX_MODEL_NEXT = `${CODEX_MODEL_COMMAND} && councilkit init`;
+/**
+ * `--json` only. Human init output does not print this. Editing the file
+ * means replacing the top-level key, not appending with `>>`.
+ */
+export const CODEX_MODEL_OVERRIDE_NEXT =
+  'Codex has no top-level `model` in ${CODEX_HOME:-$HOME/.codex}/config.toml, so the seat uses the Codex CLI default and councilkit does not pass -m. To override, edit that top-level key (for example `model = "<model-id>"`) or pass Codex\'s `-m <model-id>`, then rerun `councilkit init`.';
 
 export function formatSkippedSeatLine(seat: SkippedSeat): string {
   const reason =
@@ -79,7 +80,7 @@ export function reviewSkip(
   return makeSkip(spec.name, spec.executable, block, rows);
 }
 
-/** Driver-level skip. Model discovery is a separate `no-model` skip. */
+/** Driver-level skip. A missing Codex model is not a skip. */
 export function ideateDriverSkip(
   spec: IdeateAgentSpec,
   rows: readonly DriverStatus[],
@@ -87,13 +88,4 @@ export function ideateDriverSkip(
   const block = blockFor(spec.executable, rows);
   if (block === null) return null;
   return makeSkip(spec.name, spec.executable, block, rows);
-}
-
-export function codexModelSkip(): SkippedSeat {
-  return {
-    seat: "ideate-challenger",
-    driver: "codex",
-    reason: "no-model",
-    next: CODEX_MODEL_NEXT,
-  };
 }
