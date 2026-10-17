@@ -9,7 +9,7 @@ import {
   defaultFindingListFilter,
   projectFindingList,
 } from "@/lib/finding-list";
-import { findingDisplayMark, textWithoutBasis } from "@/lib/finding-marks";
+import { findingDisplayMark, findingMarkdown, textWithoutBasis } from "@/lib/finding-marks";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
@@ -24,6 +24,33 @@ const VERDICT_LABEL: Record<NonNullable<ParsedReviewReport["verdict"]>, string> 
   "changes-requested": "要求修改（CHANGES REQUESTED）",
   comment: "有意见（COMMENT）",
 };
+
+/** A finished shaped report that already counted zero blocks is not "ledger missing". */
+export function ledgerGateCopy(input: {
+  hasLedger: boolean;
+  blockingCount: number;
+  ledgerComplete: boolean;
+  reportSaysClear: boolean;
+}): string {
+  if (input.blockingCount > 0) return `${input.blockingCount} 个阻塞问题，待处理`;
+  if (input.reportSaysClear || (input.hasLedger && input.ledgerComplete)) return "账本无阻塞";
+  if (input.hasLedger) return "账本证据不完整，尚无法判断阻塞";
+  return "账本未生成，尚无法判断阻塞";
+}
+
+function reportSaysClear(parsed: ParsedReviewReport | null, status: string): boolean {
+  if (status !== "completed" || !parsed) return false;
+  const body = parsed.sections.find((section) => section.title === "结论")?.body ?? "";
+  return /阻塞\s*0/.test(body);
+}
+
+export function conclusionAbsences(parsed: ParsedReviewReport | null): string[] {
+  const body = parsed?.sections.find((section) => section.title === "结论")?.body ?? "";
+  return body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("缺席："));
+}
 
 /**
  * 本轮总览主内容：审查结论与简短概览 → 统一问题清单 → 可展开原始汇总报告。
@@ -85,6 +112,13 @@ export function OverviewView({
     aggregator !== null && !ATTEMPT_TERMINAL.has(aggregator.status) && run.status === "running";
   const hasMarkdown = run.markdown.trim().length > 0;
   const StatusIcon = STATUS_ICONS[aggregator?.status ?? "pending"] ?? CircleHelpIcon;
+  const gate = ledgerGateCopy({
+    hasLedger,
+    blockingCount,
+    ledgerComplete,
+    reportSaysClear: reportSaysClear(parsed, run.status),
+  });
+  const absences = conclusionAbsences(parsed);
   const overview = parsed?.sections.find((section) => section.title === "概览");
   const disagreement = parsed?.sections.find((section) => section.title === "分歧");
   const overviewBody = [parsed?.preface, overview?.body]
@@ -124,18 +158,19 @@ export function OverviewView({
           </p>
           <p>
             账本门禁：
-            {hasLedger ? (
+            {hasLedger || gate === "账本无阻塞" ? (
               <a className="ck-finding-list-link" href="#ck-ledger">
-                {blockingCount > 0
-                  ? `${blockingCount} 个阻塞问题，待处理`
-                  : ledgerComplete
-                    ? "账本无阻塞"
-                    : "账本证据不完整，尚无法判断阻塞"}
+                {gate}
               </a>
             ) : (
-              "账本未生成，尚无法判断阻塞"
+              gate
             )}
           </p>
+          {absences.map((line) => (
+            <p key={line} className="ck-wb-absence">
+              {line}
+            </p>
+          ))}
           {decisionConflict ? (
             <p className="ck-wb-decision-conflict">
               报告意见与账本门禁尚未对齐。请核对问题的适用范围和处置依据，再判断是否可以通过。
@@ -233,7 +268,7 @@ function PendingFindings({ parsed }: { parsed: ParsedReviewReport | null }) {
               <SafeMarkdown
                 className="text-sm"
                 variant="document"
-                content={textWithoutBasis(finding.text, mark?.basis ?? null)}
+                content={findingMarkdown(textWithoutBasis(finding.text, mark?.basis ?? null))}
               />
             </li>
           );

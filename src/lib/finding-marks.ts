@@ -63,3 +63,13 @@ export function textWithoutBasis(text: string, basis: string | null): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+/** Keep a location line from collapsing into the title. Markdown treats a
+ * single newline as a space. */
+export function findingMarkdown(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join("\n\n");
+}

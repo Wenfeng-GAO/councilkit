@@ -8,10 +8,12 @@ import { join } from "node:path";
 export const SPEC_TAG_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000377";
 export const CONSENSUS_TAG_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000378";
 export const PENDING_TAG_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000379";
+export const ABSENT_TAG_RUN_ID = "ck-review-00000000-0000-4000-8000-000000000380";
 
 export const SPEC_TAG_TITLE = "规格违反 AC-3";
 export const CONSENSUS_TAG_TITLE = "多席一致加法";
 export const PENDING_TAG_TITLE = "待确认单席";
+export const ABSENT_TAG_TITLE = "缺席席位";
 
 const BASIS = "无规格依据，依据是 2/3 席一致：kimi、cursor";
 
@@ -157,6 +159,25 @@ export function seedConsensusTagFixtures(home: string): void {
         "",
         "- [major][待确认 · kimi] Add 把加法改成减法",
         "  位置：`toy.go`",
+        "",
+      ].join("\n"),
+    ),
+    null,
+  );
+  writeRun(
+    home,
+    ABSENT_TAG_RUN_ID,
+    ABSENT_TAG_TITLE,
+    report(
+      [
+        "## 结论",
+        "",
+        "comment",
+        "",
+        "缺席：review-security（未找到 cld）",
+        "缺席：cursor（non-zero exit 1）",
+        "",
+        "阻塞 0。",
         "",
       ].join("\n"),
     ),

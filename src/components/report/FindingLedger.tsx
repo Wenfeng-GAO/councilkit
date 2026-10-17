@@ -30,8 +30,15 @@ import {
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useMemo, useState } from "react";
 
-const BLOCKING_RULE =
+const SPEC_BLOCKING_RULE =
   "阻塞依据（规格合同减法）：合同内 Act On——重大/致命且引用具名不变量 ID + 可复现反例，尚未验证解决或接受不修。标为规格外 / 建议修订规格的项默认不阻塞；nit 不阻塞。报告中的“本轮不阻塞”不会自动改变这项门禁。";
+
+export const NO_SPEC_BLOCKING_RULE =
+  "阻塞依据：未绑定规格；多数席位各自指出同一高严重度缺陷即阻塞，单席问题进「待确认」。";
+
+export function blockingRuleForReport(markdown: string): string {
+  return markdown.includes("无规格依据") ? NO_SPEC_BLOCKING_RULE : SPEC_BLOCKING_RULE;
+}
 
 export function FindingLedger({
   run,
@@ -98,6 +105,7 @@ export function FindingLedger({
       groups: run.findingGroups,
     });
   const summary = formatProblemSummary(projection, nextCluster?.id ?? null, attention);
+  const blockingRule = blockingRuleForReport(run.markdown);
   const againstId = run.reviewEvidence?.againstRunId ?? null;
   const prUrl = run.reviewEvidence?.prUrl ?? null;
 
@@ -114,10 +122,10 @@ export function FindingLedger({
           // first-time reader; fold it to one line, expandable on demand.
           <details className="ck-finding-list-note ck-blocking-rule">
             <summary>阻塞是怎么判的 ▸</summary>
-            <p>{BLOCKING_RULE}</p>
+            <p>{blockingRule}</p>
           </details>
         ) : (
-          <p className="ck-finding-list-note">{BLOCKING_RULE}</p>
+          <p className="ck-finding-list-note">{blockingRule}</p>
         )
       ) : null}
       {countNote ? <p className="ck-finding-list-note">{countNote}</p> : null}

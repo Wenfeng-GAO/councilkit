@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Isolated host for the three locked-label screenshots.
+ * Isolated host for the locked-label screenshots.
  * The default `pnpm test:e2e` server does not seed these runs, so the
  * reports-list counts in report-case-filters stay stable.
  */

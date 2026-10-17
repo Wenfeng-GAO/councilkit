@@ -1,5 +1,5 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
-import { findingDisplayMark, textWithoutBasis } from "@/lib/finding-marks";
+import { findingDisplayMark, findingMarkdown, textWithoutBasis } from "@/lib/finding-marks";
 import {
   FINDING_SEVERITY_LABEL,
   type ParsedReviewReport,
@@ -535,7 +535,7 @@ function FindingCard({
         ) : null}
       </div>
       {mark?.basis ? <p className="ck-tag-basis">{mark.basis}</p> : null}
-      <SafeMarkdown className="text-sm" variant="document" content={text} />
+      <SafeMarkdown className="text-sm" variant="document" content={findingMarkdown(text)} />
     </li>
   );
 }

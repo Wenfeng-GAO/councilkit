@@ -4,7 +4,12 @@
  */
 import { mkdirSync } from "node:fs";
 import { type Page, expect, test } from "@playwright/test";
-import { CONSENSUS_TAG_TITLE, PENDING_TAG_TITLE, SPEC_TAG_TITLE } from "./consensus-tag-fixtures";
+import {
+  ABSENT_TAG_TITLE,
+  CONSENSUS_TAG_TITLE,
+  PENDING_TAG_TITLE,
+  SPEC_TAG_TITLE,
+} from "./consensus-tag-fixtures";
 
 const OUT = "/opt/cursor/artifacts/screenshots";
 
@@ -29,6 +34,13 @@ const CASES = [
     tag: ".ck-tag-pending",
     text: "待确认 · kimi",
     file: "pending-single-seat",
+    verdict: null,
+  },
+  {
+    title: ABSENT_TAG_TITLE,
+    tag: ".ck-wb-absence",
+    text: "缺席：review-security（未找到 cld）",
+    file: "absent-seat",
     verdict: null,
   },
 ] as const;
@@ -58,6 +70,12 @@ test.describe("locked report labels", () => {
         }
         if (item.file === "consensus-majority") {
           await expect(page.getByText("Add 把加法改成减法").first()).toBeVisible();
+          await expect(page.getByText(/阻塞依据：未绑定规格/)).toBeVisible();
+          await expect(page.getByText("规格合同减法")).toHaveCount(0);
+        }
+        if (item.file === "spec-violation") {
+          await expect(page.getByText(/阻塞依据（规格合同减法）/)).toBeVisible();
+          await expect(page.getByText("未绑定规格")).toHaveCount(0);
         }
         if ("basis" in item && item.basis) {
           await expect(
@@ -70,6 +88,20 @@ test.describe("locked report labels", () => {
         if (item.file === "pending-single-seat") {
           await expect(page.locator(".ck-tag-spec")).toHaveCount(0);
           await expect(page.locator(".ck-tag-consensus")).toHaveCount(0);
+          await expect(page.getByText("账本无阻塞")).toBeVisible();
+          await expect(page.getByText("账本未生成")).toHaveCount(0);
+          const card = page.getByRole("region", { name: "待确认" });
+          await expect(card.getByText("待确认 · kimi")).toBeVisible();
+          await expect(card.getByText("位置：")).toBeVisible();
+          const cardText = await card.innerText();
+          expect(cardText.split("\n").some((line) => /减法/.test(line) && /位置/.test(line))).toBe(
+            false,
+          );
+        }
+        if (item.file === "absent-seat") {
+          const decision = page.getByRole("region", { name: "审查结论" });
+          await expect(decision.getByText("缺席：review-security（未找到 cld）")).toBeVisible();
+          await expect(decision.getByText("缺席：cursor（non-zero exit 1）")).toBeVisible();
         }
         await tag.scrollIntoViewIfNeeded();
         await page.screenshot({
