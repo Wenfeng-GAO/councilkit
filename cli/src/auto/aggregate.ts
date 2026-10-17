@@ -11,7 +11,7 @@ import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from ".
  * write + `--out` copy, so durability semantics match the `run` command.
  */
 import { collectReportAbsences } from "./absences";
-import { shapeAggregateDeliverable } from "./consensus";
+import { shapeAggregateDeliverable, stripUnboundSpecTags } from "./consensus";
 import { stripProxyPrefix } from "./driver-commands";
 import { formatDurationMs } from "./duration";
 import type { AttemptResult } from "./runner";
@@ -91,6 +91,8 @@ export interface ReviewReportInput {
   failurePhase?: string;
   /** Seats that did not take part. Computed from the attempts when omitted. */
   absences?: ReturnType<typeof collectReportAbsences>;
+  /** 「本次指定 N 席：…」 when the review used `--agents`. */
+  scopeNote?: string;
 }
 
 /** Render the full Markdown report. */
@@ -101,22 +103,34 @@ export function renderReviewReport(input: ReviewReportInput): string {
       ? input.aggregation.output.trim()
       : "";
   const absences = input.absences ?? collectReportAbsences(input.attempts);
-  const body = raw
+  const specBound = Boolean(input.task.specSource?.trim());
+  const shaped = raw
     ? shapeAggregateDeliverable({
         markdown: raw,
         task: input.task,
         attempts: input.attempts,
         absences,
+        scopeNote: input.scopeNote,
       }).trim()
     : "";
+  const fallback =
+    shaped.length === 0 && (absences.length > 0 || input.scopeNote)
+      ? shapeAggregateDeliverable({
+          markdown: "## 结论\n\n未能汇总。",
+          task: input.task,
+          attempts: input.attempts,
+          absences,
+          scopeNote: input.scopeNote,
+        }).trim()
+      : "";
+  const body = shaped || fallback;
   const sections: string[] = [head];
+  if (raw.length === 0) sections.push(incompleteBanner(input), "");
   if (body.length > 0) {
     sections.push("---", "", body, "");
-  } else {
-    sections.push(incompleteBanner(input), "");
   }
   sections.push(renderProcessComparison(input.attempts));
-  sections.push(renderAppendix(input.attempts));
+  sections.push(renderAppendix(input.attempts, specBound));
   return sections.join("\n");
 }
 
@@ -268,7 +282,7 @@ function dedupCommands(commands: ReadonlyArray<string>): RenderedCommand[] {
  * deliverable's ATX headings demoted two levels OUTSIDE code fences, so no H1/H2
  * from a deliverable can pollute the report outline. A retried Attempt is marked
  * 「第 1 次尝试（失败，已重试）」 from the retry chain carried on the result. */
-function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
+function renderAppendix(attempts: ReadonlyArray<AttemptResult>, specBound: boolean): string {
   const lines: string[] = ["## 附录:各审查者交付物", ""];
   if (attempts.length === 0) {
     lines.push("_(no attempts ran.)_", "");
@@ -294,15 +308,17 @@ function renderAppendix(attempts: ReadonlyArray<AttemptResult>): string {
       // trimEnd only: a leading trim() would delete the first line's indent and
       // turn legitimately indented code (≥4 spaces = NOT a fence) into a fake
       // top-level fence opener (reviewer finding).
-      lines.push(downgradeHeadingsOutsideFences(a.output.trimEnd()), "");
+      const delivered = downgradeHeadingsOutsideFences(a.output.trimEnd());
+      lines.push(specBound ? delivered : stripUnboundSpecTags(delivered), "");
     } else {
       // failure.message can carry child stderr — demote its headings too, or a
       // failed deliverable could still inject an H1/H2 into the outline
       // (reviewer finding).
-      const detail = downgradeHeadingsOutsideFences(a.failure?.message ?? "no output").replace(
+      const rawDetail = downgradeHeadingsOutsideFences(a.failure?.message ?? "no output").replace(
         /\n/g,
         " ",
       );
+      const detail = specBound ? rawDetail : stripUnboundSpecTags(rawDetail);
       lines.push(`failed: ${a.failure?.code ?? "unknown"} — ${detail}`, "");
     }
   }

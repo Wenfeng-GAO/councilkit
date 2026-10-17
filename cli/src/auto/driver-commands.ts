@@ -44,7 +44,7 @@ import { vendorDriverBinDirs, vendorHome } from "@shared/runtime/driver-bins";
 import { mkdirPrivate } from "@shared/runtime/durable-write";
 import { jsonParse, jsonParseEmbedded } from "@shared/runtime/json-parse";
 import { firstNonBlank, nonBlank } from "@shared/runtime/non-blank";
-import { errors } from "../errors";
+import { CliError, EXIT, errors } from "../errors";
 import type { AgentRecord } from "../store/schemas";
 import {
   IDEATE_GROK_CONFIG,
@@ -628,6 +628,30 @@ export function findExecutable(name: string, env: NodeJS.ProcessEnv = process.en
     if (seen.has(resolvedDir)) continue;
     const candidate = join(resolvedDir, name);
     if (isExecutableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * A per-seat pre-spawn failure that must not abort the rest of the review.
+ * Missing executables become 「没有找到 {工具}」. Returns null for usage errors
+ * that are not about this one seat.
+ */
+export function describePreSpawnFailure(
+  error: unknown,
+  tool: string,
+): { code: string; message: string } | null {
+  if (!(error instanceof CliError) || error.exitCode !== EXIT.usage) return null;
+  const message = error.message;
+  if (
+    message.includes("not found on PATH") ||
+    message.includes("not found or not executable") ||
+    message.includes("missing executable")
+  ) {
+    return { code: "NOT_FOUND", message: `没有找到 ${tool}` };
+  }
+  if (message.includes("unsupported driver") || message.includes("only supports the cfuse route")) {
+    return { code: "SPAWN_ERROR", message: "未能启动" };
   }
   return null;
 }

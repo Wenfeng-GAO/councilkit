@@ -1,15 +1,21 @@
 /**
  * Seats that did not take part.
  *
- * Source of truth is the council record's `skippedSeats` (written by
- * `councilkit init`, #380) plus seats that failed while running. There is
- * no report-time PATH probe: a seat that ran, including review-security on
- * standalone cfuse, is not absent.
+ * With `skippedSeats` on the council record (written by `councilkit init`,
+ * #380): those rows, plus runtime failures among seats that were supposed to
+ * run. Do not invent template seats init did not record.
  *
- * A council saved before `skippedSeats` existed has no field. Each defined
- * seat that never produced an attempt is still listed, with an unrecorded
- * reason, so a seat is never dropped silently.
+ * Without that field, a built-in template name (`pr-jury`, `product-jury`)
+ * uses the template roster — old init deleted missing-driver seats from the
+ * config, so the config cannot reveal them. Any other council uses the seats
+ * saved in the config. `--agents` never consults a template: only the named
+ * seats can be absent.
+ *
+ * There is no report-time PATH probe. A seat that ran, including
+ * review-security on standalone cfuse, is not absent.
  */
+import { DEFAULT_AGENT_SPECS, PR_JURY_COUNCIL_NAME } from "../init/defaults";
+import { IDEATE_AGENT_SPECS, PRODUCT_JURY_COUNCIL_NAME } from "../init/ideate-defaults";
 import type { SkippedSeat } from "../store/schemas";
 import { executableForDriver } from "./driver-commands";
 import type { AttemptResult } from "./runner";
@@ -33,6 +39,10 @@ export interface AbsenceRoster {
    */
   skippedSeats?: readonly SkippedSeat[];
   definedSeats?: readonly DefinedSeat[];
+  /** Saved council name. Template baseline applies only when `skippedSeats` is absent. */
+  councilName?: string;
+  /** `--agents` subset. Unspecified default seats are not absent. */
+  explicitAgents?: boolean;
 }
 
 type AbsenceAttempt = Pick<AttemptResult, "agentName" | "status" | "failure" | "driverId">;
@@ -58,6 +68,11 @@ export function toolNameForSelection(selection: {
   return executableForDriver(selection.driverId) ?? selection.driverId;
 }
 
+/** 「本次指定 N 席：{席位名、…}」 for an explicit `--agents` subset. */
+export function formatRequestedSeats(names: readonly string[]): string {
+  return `本次指定 ${names.length} 席：${names.join("、")}`;
+}
+
 const NOT_LOGGED_IN =
   /未登录|not logged in|please (?:run )?\S* ?login|AUTH_REQUIRED|auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key/i;
 
@@ -67,6 +82,13 @@ export function failureAbsenceReason(
 ): string {
   const message = failure?.message?.replace(/\s+/g, " ").trim() ?? "";
   const code = failure?.code?.trim() ?? "";
+  if (code === "NOT_FOUND" || /没有找到/.test(message)) {
+    const named = /没有找到\s*(\S+)/.exec(message);
+    const tool = named?.[1]?.replace(/。$/, "");
+    return tool ? `没有找到 ${tool}` : "没有找到工具";
+  }
+  const pathMiss = /executable "([^"]+)" not found/i.exec(message);
+  if (pathMiss?.[1]) return `没有找到 ${pathMiss[1]}`;
   if (
     failure?.errorClass === "auth" ||
     code === "AUTH_REQUIRED" ||
@@ -91,15 +113,45 @@ export function skippedSeatReason(seat: Pick<SkippedSeat, "driver" | "reason">):
   return `没有配置 ${seat.driver} 模型`;
 }
 
+function templateBaseline(councilName: string | undefined): DefinedSeat[] | null {
+  if (councilName === PR_JURY_COUNCIL_NAME) {
+    return DEFAULT_AGENT_SPECS.map((spec) => ({
+      name: spec.name,
+      tool: toolNameForSelection(spec.driverSelection),
+    }));
+  }
+  if (councilName === PRODUCT_JURY_COUNCIL_NAME) {
+    return IDEATE_AGENT_SPECS.map((spec) => ({
+      name: spec.name,
+      tool: toolNameForSelection(spec.driverSelection),
+    }));
+  }
+  return null;
+}
+
 function toolForAttempt(attempt: AbsenceAttempt, roster: AbsenceRoster): string {
   const defined = roster.definedSeats?.find((seat) => seat.name === attempt.agentName);
   if (defined?.tool) return defined.tool;
+  const template = templateBaseline(roster.councilName)?.find(
+    (seat) => seat.name === attempt.agentName,
+  );
+  if (template?.tool) return template.tool;
   return executableForDriver(attempt.driverId) ?? attempt.driverId;
 }
 
+function inRequestedSet(name: string, roster: AbsenceRoster): boolean {
+  if (!roster.explicitAgents || !roster.definedSeats) return true;
+  return roster.definedSeats.some((seat) => seat.name === name);
+}
+
 /**
- * `skippedSeats` plus runtime failures. When the field is missing, defined
- * seats with no attempt are listed too. A successful attempt is never absent.
+ * Absences for one report.
+ *
+ * `skippedSeats` present: those rows plus runtime failures. No template fill-in.
+ * Field absent and the council is a built-in template: template seats that
+ * never ran, with an unrecorded reason. Field absent otherwise: config seats
+ * that never ran. `--agents` uses only the seats that were named.
+ * A successful attempt is never absent.
  */
 export function collectReportAbsences(
   attempts: readonly AbsenceAttempt[],
@@ -110,17 +162,22 @@ export function collectReportAbsences(
 
   const absences: ReportAbsence[] = [];
   const named = new Set<string>();
+  const fieldPresent = roster.skippedSeats !== undefined;
 
-  for (const seat of roster.skippedSeats ?? []) {
-    const ran = byName.get(seat.seat);
-    if (ran?.status === "success" || ran?.status === "failure") continue;
-    if (named.has(seat.seat)) continue;
-    absences.push({ name: seat.seat, tool: seat.driver, reason: skippedSeatReason(seat) });
-    named.add(seat.seat);
+  if (fieldPresent) {
+    for (const seat of roster.skippedSeats ?? []) {
+      if (!inRequestedSet(seat.seat, roster)) continue;
+      const ran = byName.get(seat.seat);
+      if (ran?.status === "success" || ran?.status === "failure") continue;
+      if (named.has(seat.seat)) continue;
+      absences.push({ name: seat.seat, tool: seat.driver, reason: skippedSeatReason(seat) });
+      named.add(seat.seat);
+    }
   }
 
   for (const attempt of attempts) {
     if (attempt.status !== "failure" || named.has(attempt.agentName)) continue;
+    if (!inRequestedSet(attempt.agentName, roster)) continue;
     absences.push({
       name: attempt.agentName,
       tool: toolForAttempt(attempt, roster),
@@ -129,10 +186,15 @@ export function collectReportAbsences(
     named.add(attempt.agentName);
   }
 
-  for (const seat of roster.definedSeats ?? []) {
-    if (named.has(seat.name) || byName.has(seat.name)) continue;
-    absences.push({ name: seat.name, tool: seat.tool, reason: UNRECORDED_REASON });
-    named.add(seat.name);
+  if (!fieldPresent) {
+    const baseline = roster.explicitAgents
+      ? (roster.definedSeats ?? [])
+      : (templateBaseline(roster.councilName) ?? roster.definedSeats ?? []);
+    for (const seat of baseline) {
+      if (named.has(seat.name) || byName.has(seat.name)) continue;
+      absences.push({ name: seat.name, tool: seat.tool, reason: UNRECORDED_REASON });
+      named.add(seat.name);
+    }
   }
 
   return absences;

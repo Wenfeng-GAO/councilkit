@@ -9,7 +9,12 @@ import { join } from "node:path";
 import { isFindingBlocking } from "@shared/runtime/cli-ledger";
 import { summarizeSeatOutput } from "@shared/runtime/seat-result";
 import { describe, expect, it } from "vitest";
-import { collectReportAbsences, failureAbsenceReason, formatAbsence } from "../src/auto/absences";
+import {
+  collectReportAbsences,
+  failureAbsenceReason,
+  formatAbsence,
+  formatRequestedSeats,
+} from "../src/auto/absences";
 import { type ReviewReportInput, renderReviewReport } from "../src/auto/aggregate";
 import { shapeAggregateDeliverable } from "../src/auto/consensus";
 import { persistFindingsFromReport } from "../src/auto/ledger";
@@ -79,7 +84,7 @@ describe("no-spec majority aggregation", () => {
     expect(body).toMatch(/## 结论\n+changes-requested/);
     expect(body).toContain("无规格依据，依据是 3/3 席一致：kimi、cursor、codex");
     expect(body).toContain("[多席一致 3/3]");
-    expect(body).toContain("阻塞 1。");
+    expect(body).toContain("阻塞 1 个问题");
     expect(summarizeSeatOutput(body).blockingCount).toBe(1);
     expect(body).not.toMatch(/## 结论\n+comment/);
   });
@@ -95,7 +100,7 @@ describe("no-spec majority aggregation", () => {
     expect(body).toContain("无规格依据，依据是 2/3 席一致：kimi、cursor");
     expect(body).toContain("[多席一致 2/3]");
     expect(body).toContain("[待确认 · codex]");
-    expect(body).toContain("阻塞 1。");
+    expect(body).toContain("阻塞 1 个问题");
     expect(summarizeSeatOutput(body).blockingCount).toBe(1);
   });
 
@@ -109,7 +114,8 @@ describe("no-spec majority aggregation", () => {
     expect(firstH2(body)).toBe("## 结论");
     expect(body).toMatch(/## 结论\n+comment/);
     expect(body).toContain("[待确认 · kimi]");
-    expect(body).toContain("阻塞 0。");
+    expect(body).toContain("阻塞 0 个问题");
+    expect(body).toContain("单席意见见「待确认」。");
     expect(body).not.toContain("多席一致");
     expect(summarizeSeatOutput(body).blockingCount).toBe(0);
   });
@@ -173,6 +179,27 @@ describe("no-spec majority aggregation", () => {
     expect(comment).not.toContain("无规格依据，依据是");
     expect(firstH2(comment)).toBe("## 结论");
   });
+
+  it("drops the 待确认 sentence when that section is empty and states the scope once", () => {
+    const attempts = [
+      seat("kimi", finding("注释过期无人维护", "minor")),
+      seat("cursor", finding("注释过期无人维护", "minor")),
+      seat("codex", finding("注释过期无人维护", "minor")),
+    ];
+    const body = shapeAggregateDeliverable({
+      markdown: BAD_COMMENT,
+      task: {},
+      attempts,
+      scopeNote: "本次指定 3 席：kimi、cursor、codex",
+    });
+    expect(body).toContain("阻塞 0 个问题");
+    expect(body).not.toContain("单席意见见");
+    expect(body).not.toContain("无缺席");
+    expect(body).not.toContain("缺席：");
+    expect(body.split("本次指定").length - 1).toBe(1);
+    expect(body).not.toContain("[suggest-amend-spec]");
+    expect(body).not.toContain("[act-on]");
+  });
 });
 
 describe("report structure", () => {
@@ -203,6 +230,37 @@ describe("report structure", () => {
     const titles = [...md.matchAll(/^## .+$/gm)].map((match) => match[0]);
     expect(titles.slice(0, 4)).toEqual(["## 结论", "## 阻塞问题", "## 需处理的问题", "## 待确认"]);
     expect(titles.at(-1)).toBe("## 附录:各审查者交付物");
+  });
+
+  it("strips spec-contract tags from a no-spec appendix and keeps them when a spec is bound", () => {
+    const attempts = [
+      seat("kimi", "## 发现\n- [major][act-on] 空串\n  [suggest-amend-spec]\n\n## 结论\ncomment\n"),
+    ];
+    const base = {
+      runId: "ck-review-tags",
+      startedAt: "2026-10-17T00:00:00.000Z",
+      endedAt: "2026-10-17T00:01:00.000Z",
+      attempts,
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: "agg",
+        agentName: "Agg",
+        driverId: "kimi-stream-json",
+        modelId: "m",
+      },
+      aggregation: seat("Agg", "## 结论\ncomment\n"),
+      status: "completed" as const,
+      incomplete: false,
+    };
+    const unbound = renderReviewReport({ ...base, task: { task: "toy", requireSpec: false } });
+    const appendix = unbound.slice(unbound.indexOf("## 附录"));
+    expect(appendix).not.toContain("[act-on]");
+    expect(appendix).not.toContain("[suggest-amend-spec]");
+    const bound = renderReviewReport({
+      ...base,
+      task: { task: "toy", specSource: "docs/design/toy.md", specText: "AC-3 问候" },
+    });
+    expect(bound.slice(bound.indexOf("## 附录"))).toContain("[act-on]");
   });
 });
 
@@ -258,6 +316,15 @@ describe("missing seats", () => {
         message: "non-zero exit 1\nerror: Cannot combine --prompt with --plan.",
       }),
     ).toBe("运行失败，退出码 1");
+    expect(failureAbsenceReason({ code: "NOT_FOUND", message: "没有找到 cursor-agent" })).toBe(
+      "没有找到 cursor-agent",
+    );
+    expect(
+      failureAbsenceReason({
+        code: "EXIT",
+        message: 'executable "kimi" not found on PATH (review needs it installed)',
+      }),
+    ).toBe("没有找到 kimi");
 
     const md = renderReviewReport({
       runId: "ck-review-absent",
@@ -318,6 +385,73 @@ describe("missing seats", () => {
       "缺席：review-maintainability（kimi）：原因未记录，重新运行 `councilkit init` 可以看到原因。",
     );
     expect(absences.some((row) => row.name === "review-security")).toBe(false);
+  });
+
+  it("uses the pr-jury template when an old config dropped a seat and has no skippedSeats", () => {
+    const attempts = [
+      "review-security",
+      "review-maintainability",
+      "review-adversarial",
+      "review-cursor",
+    ].map((name) => seat(name, "## 发现\n无\n\n## 结论\napprove\n"));
+    const absences = collectReportAbsences(attempts, {
+      councilName: "pr-jury",
+      definedSeats: [
+        { name: "review-security", tool: "cfuse" },
+        { name: "review-maintainability", tool: "kimi" },
+        { name: "review-adversarial", tool: "grok" },
+        { name: "review-cursor", tool: "cursor-agent" },
+      ],
+    });
+    expect(absences).toEqual([
+      {
+        name: "review-correctness",
+        tool: "grok",
+        reason: "原因未记录，重新运行 `councilkit init` 可以看到原因",
+      },
+    ]);
+    expect(formatAbsence(absences[0]!)).toBe(
+      "缺席：review-correctness（grok）：原因未记录，重新运行 `councilkit init` 可以看到原因。",
+    );
+  });
+
+  it("does not invent template seats when skippedSeats is present", () => {
+    const attempts = [seat("review-security", "## 发现\n无\n\n## 结论\napprove\n")];
+    const absences = collectReportAbsences(attempts, {
+      councilName: "pr-jury",
+      skippedSeats: [],
+      definedSeats: [{ name: "review-security", tool: "cfuse" }],
+    });
+    expect(absences).toEqual([]);
+  });
+
+  it("counts absences only among --agents seats", () => {
+    const attempts = [
+      seat("review-correctness", "## 发现\n无\n\n## 结论\napprove\n"),
+      {
+        ...seat("review-cursor", "", "failure"),
+        driverId: "cursor-stream-json",
+        failure: { code: "NOT_FOUND", message: "没有找到 cursor-agent" },
+      },
+    ];
+    const absences = collectReportAbsences(attempts, {
+      councilName: "pr-jury",
+      explicitAgents: true,
+      definedSeats: [
+        { name: "review-correctness", tool: "grok" },
+        { name: "review-cursor", tool: "cursor-agent" },
+      ],
+    });
+    expect(absences).toEqual([
+      {
+        name: "review-cursor",
+        tool: "cursor-agent",
+        reason: "没有找到 cursor-agent",
+      },
+    ]);
+    expect(formatRequestedSeats(["review-correctness", "review-cursor"])).toBe(
+      "本次指定 2 席：review-correctness、review-cursor",
+    );
   });
 });
 

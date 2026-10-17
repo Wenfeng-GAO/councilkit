@@ -50,7 +50,12 @@ import { shellSingleQuote } from "@shared/runtime/shell-quote";
  * Exit codes follow the existing table (0/2/4/5/130).
  */
 import { z } from "zod";
-import { type AbsenceRoster, collectReportAbsences, toolNameForSelection } from "../auto/absences";
+import {
+  type AbsenceRoster,
+  collectReportAbsences,
+  formatRequestedSeats,
+  toolNameForSelection,
+} from "../auto/absences";
 import {
   renderReviewReport,
   writeCanonicalReviewReport,
@@ -79,6 +84,7 @@ import {
   DRIVER_PROBE_PROMPT,
   buildProbeSpec,
   buildSpawnSpec,
+  describePreSpawnFailure,
   probeTimeoutMs,
 } from "../auto/driver-commands";
 import { runDriverProbe } from "../auto/driver-probe";
@@ -134,8 +140,11 @@ import {
   applySpecToTask,
   bindVerifyFromSpec,
   fetchPrSpecSearchText,
+  formatMissingSpecDetail,
+  formatMissingSpecFile,
   formatSpecRefusal,
   formatSpecVerifyUnbound,
+  looksLikeSpecPath,
   resolveSpecContract,
 } from "../auto/spec-detect";
 import {
@@ -396,6 +405,8 @@ export async function runReview(
   let attemptAgents!: AgentRecord[];
   let aggregatorAgent!: AgentRecord;
   let skippedSeats: AbsenceRoster["skippedSeats"];
+  let councilName: string | undefined;
+  let explicitAgents = false;
   let councilTopic: string | undefined;
   let councilBackground: string | undefined;
   let councilTargetOutput: string | undefined;
@@ -461,6 +472,7 @@ export async function runReview(
     councilBackground = council.background.trim().length > 0 ? council.background : undefined;
     councilTargetOutput = council.targetOutput.trim().length > 0 ? council.targetOutput : undefined;
     skippedSeats = council.skippedSeats;
+    councilName = council.name;
     attemptAgents = store.councilAgents(council);
     aggregatorAgent = attemptAgents.find(
       (agent) => agent.id === council.reporterAgentId,
@@ -472,6 +484,7 @@ export async function runReview(
     if (values.aggregator === undefined) {
       throw errors.usage("--aggregator is required (or use --council)");
     }
+    explicitAgents = true;
     const refs = parseJsonFlag(values.agents as string | undefined, agentRefsSchema, "agents");
     attemptAgents = refs.map((ref) => store.getAgent(ref));
     aggregatorAgent = store.getAgent(values.aggregator as string);
@@ -827,11 +840,12 @@ export async function runReview(
     );
   }
 
-  // Build spawn specs BEFORE creating the run dir so a missing executable
-  // (exit 2) cannot leave an empty ghost under runs/.
+  // One seat whose executable is missing is recorded absent and the rest still
+  // run. The run dir is created so that absence is written into the report.
   const attemptMetas: AttemptMeta[] = [];
   const rerunSpecs: AttemptSpec[] = [];
   const rerunAgents: AgentRecord[] = [];
+  const prespawnFailures: AttemptResult[] = [];
   let index = 0;
   for (const a of attemptAgents) {
     const attemptId = `attempt-${index}`;
@@ -850,10 +864,28 @@ export async function runReview(
         task,
         workspaceMode: localRepo !== null ? "worktree" : "empty",
       });
-      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt, access: task.seatAccess });
-      spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
-      rerunSpecs.push(spec);
-      rerunAgents.push(a);
+      try {
+        const spec = buildSpawnSpec(a, { attemptId, workspace, prompt, access: task.seatAccess });
+        spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
+        rerunSpecs.push(spec);
+        rerunAgents.push(a);
+      } catch (error) {
+        const mapped = describePreSpawnFailure(error, toolNameForSelection(a.driverSelection));
+        if (!mapped) throw error;
+        prespawnFailures.push({
+          attemptId,
+          agentId: a.id,
+          agentName: a.name,
+          driverId: a.driverSelection.driverId,
+          modelId: a.modelId,
+          status: "failure",
+          output: "",
+          exitCode: null,
+          durationMs: 0,
+          workspace,
+          failure: mapped,
+        });
+      }
     }
     index++;
   }
@@ -898,22 +930,49 @@ export async function runReview(
   }
   probeAgents.set(probeKey(aggregatorAgent), aggregatorAgent);
 
-  const probeJobs = [...probeAgents.entries()].map(([key, probeAgent], index) => {
+  const probeJobs: Array<{
+    key: string;
+    probeAgent: AgentRecord;
+    probeId: string;
+    spec: AttemptSpec;
+  }> = [];
+  const extraProbeFailures: DriverProbeRecord[] = [];
+  const prespawnProbeFailures: Array<{ key: string; record: DriverProbeRecord }> = [];
+  let probeIndex = 0;
+  for (const [key, probeAgent] of probeAgents) {
     const driverId = probeAgent.driverSelection.driverId;
-    const probeId = `probe-${index}-${driverId}`;
+    const probeId = `probe-${probeIndex}-${driverId}`;
+    probeIndex += 1;
     const probeCwd = join(runDir, "probe", probeId);
     mkdirSync(probeCwd, { recursive: true, mode: 0o700 });
-    return {
-      key,
-      probeAgent,
-      probeId,
-      spec: buildProbeSpec(probeAgent, {
+    try {
+      probeJobs.push({
+        key,
+        probeAgent,
         probeId,
-        cwd: probeCwd,
-        prompt: DRIVER_PROBE_PROMPT,
-      }),
-    };
-  });
+        spec: buildProbeSpec(probeAgent, {
+          probeId,
+          cwd: probeCwd,
+          prompt: DRIVER_PROBE_PROMPT,
+        }),
+      });
+    } catch (error) {
+      const mapped = describePreSpawnFailure(
+        error,
+        toolNameForSelection(probeAgent.driverSelection),
+      );
+      if (!mapped) throw error;
+      const record: DriverProbeRecord = {
+        driverId,
+        modelId: probeAgent.modelId,
+        status: "failure",
+        durationMs: 0,
+        failure: mapped,
+      };
+      extraProbeFailures.push(record);
+      prespawnProbeFailures.push({ key, record });
+    }
+  }
   const executionRevision = matchExecutionRevision(readExecutionRevision(runDir), runId);
   const frozenTools: ToolFingerprint[] =
     resumeRaw !== undefined
@@ -950,6 +1009,7 @@ export async function runReview(
 
   const probeSlots: Array<DriverProbeRecord | undefined> = new Array(probeJobs.length);
   const probeByModel = new Map<string, DriverProbeRecord>();
+  for (const row of prespawnProbeFailures) probeByModel.set(row.key, row.record);
   const runningProbe = new Set<number>();
   const preflightWriter = createPreflightWriter(runDir, resumeRoot);
   const probeSeats = (): Array<{
@@ -1056,9 +1116,10 @@ export async function runReview(
       probeWorker(),
     ),
   );
-  const probeResults: DriverProbeRecord[] = probeSlots.filter(
-    (row): row is DriverProbeRecord => row !== undefined,
-  );
+  const probeResults: DriverProbeRecord[] = [
+    ...probeSlots.filter((row): row is DriverProbeRecord => row !== undefined),
+    ...extraProbeFailures,
+  ];
   try {
     rmSync(join(runDir, "probe"), { recursive: true, force: true });
   } catch {
@@ -1155,7 +1216,8 @@ export async function runReview(
   // failures: recorded, never spawned, no workspace. Reused results are
   // carried over silently (no new attempt.finished — the history already
   // has one).
-  const presolved: AttemptResult[] = [...reusedByAttemptId.values()];
+  const presolved: AttemptResult[] = [...reusedByAttemptId.values(), ...prespawnFailures];
+  for (const failure of prespawnFailures) recordAttemptFinished(failure);
   for (const spec of rerunSpecs) {
     const probe = probeByModel.get(probeKeysByAgent.get(spec.agentId) ?? "");
     if (probe === undefined || probe.status === "success") continue;
@@ -1508,7 +1570,12 @@ export async function runReview(
           name: agent.name,
           tool: toolNameForSelection(agent.driverSelection),
         })),
+        councilName,
+        explicitAgents,
       },
+      scopeNote: explicitAgents
+        ? formatRequestedSeats(attemptAgents.map((agent) => agent.name))
+        : undefined,
       frozenTools,
       executionRevision,
       extraAssessments: replayAcceptedCorrections({
@@ -1579,6 +1646,7 @@ interface ExecuteParams {
   reviewedSha: string | null;
   attemptAgents: AgentRecord[];
   absenceRoster: AbsenceRoster;
+  scopeNote?: string;
   frozenTools: readonly ToolFingerprint[];
   executionRevision: ExecutionRevision | null;
   extraAssessments: DiagnosedAssessment[];
@@ -1763,12 +1831,27 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       output: r.output,
     })),
   });
-  const aggregatorSpec = buildSpawnSpec(p.aggregatorAgent, {
-    attemptId: "aggregator",
-    workspace: p.aggregatorWorkspace,
-    prompt: aggregatePrompt,
-    access: p.task.seatAccess,
-  });
+  let aggregatorSpec: AttemptSpec;
+  try {
+    aggregatorSpec = buildSpawnSpec(p.aggregatorAgent, {
+      attemptId: "aggregator",
+      workspace: p.aggregatorWorkspace,
+      prompt: aggregatePrompt,
+      access: p.task.seatAccess,
+    });
+  } catch (error) {
+    const mapped = describePreSpawnFailure(
+      error,
+      toolNameForSelection(p.aggregatorAgent.driverSelection),
+    );
+    if (!mapped) throw error;
+    return finalize(p, new Date().toISOString(), results, null, {
+      status: "failed",
+      exitCode: EXIT.runFailed,
+      incomplete: true,
+      failure: { phase: "aggregation", code: mapped.code, message: mapped.message },
+    });
+  }
 
   p.out.progress(`  aggregator ${p.aggregatorAgent.name} synthesizing`);
   noteLiveBeat(p, "aggregator", 0, null, true);
@@ -1807,6 +1890,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       task: p.task,
       attempts: results,
       absences: collectReportAbsences(results, p.absenceRoster),
+      scopeNote: p.scopeNote,
     });
   }
 
@@ -1927,6 +2011,7 @@ async function finalize(
     reason,
     failurePhase: spec.failure?.phase,
     absences: collectReportAbsences(results, p.absenceRoster),
+    scopeNote: p.scopeNote,
   });
 
   // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then
@@ -2669,6 +2754,20 @@ async function ensureSpecContractBound(input: {
     }
     throw errors.usage(formatSpecRefusal({ searched: searchText, repoRoot }), {
       code: "SPEC_REQUIRED",
+    });
+  }
+
+  // A path-like `--spec` that cannot be read is a missing file, not an unbound
+  // contract. The headline is the Chinese sentence; SPEC_VERIFY_UNBOUND stays
+  // in a collapsed 详情 block.
+  if (input.explicitSpec && looksLikeSpecPath(input.explicitSpec) && detected.text === undefined) {
+    throw errors.usage(formatMissingSpecFile(input.explicitSpec), {
+      specSource: input.explicitSpec.trim(),
+      code: "SPEC_VERIFY_UNBOUND",
+      detailBody: formatMissingSpecDetail({
+        specSource: detected.source,
+        specText: detected.text,
+      }),
     });
   }
 

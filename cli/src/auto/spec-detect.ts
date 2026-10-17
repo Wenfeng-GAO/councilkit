@@ -325,6 +325,27 @@ export function inspectSpecAcceptance(specText: string): SpecAcceptanceInspectio
   return { acceptanceIds, headings, candidateIds };
 }
 
+/** A `--spec` value that names a file, as opposed to a bare label. */
+export function looksLikeSpecPath(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.includes("/") || trimmed.includes("\\")) return true;
+  return /\.(?:md|txt|json|mjs)$/i.test(trimmed);
+}
+
+/** Headline when `--spec` names a file that cannot be read. */
+export function formatMissingSpecFile(path: string): string {
+  return `找不到规格文件 \`${path.trim()}\`。请检查路径后重新运行。`;
+}
+
+/** SPEC_VERIFY_UNBOUND text that belongs inside a collapsed 详情 block. */
+export function formatMissingSpecDetail(input: {
+  specSource?: string | null;
+  specText?: string | null;
+}): string {
+  return ["SPEC_VERIFY_UNBOUND", formatSpecVerifyUnbound(input)].join("\n");
+}
+
 export function formatSpecVerifyUnbound(input: {
   specSource?: string | null;
   specText?: string | null;

@@ -7,6 +7,7 @@ import { type Page, expect, test } from "@playwright/test";
 import {
   ABSENT_TAG_TITLE,
   CONSENSUS_TAG_TITLE,
+  LEGACY_TAG_TITLE,
   PENDING_TAG_TITLE,
   SKIPPED_TAG_TITLE,
   SPEC_TAG_TITLE,
@@ -63,6 +64,14 @@ const CASES = [
     file: "old-config-unrecorded",
     verdict: null,
   },
+  {
+    title: LEGACY_TAG_TITLE,
+    tag: ".ck-wb-absence",
+    text: "缺席：review-correctness（grok）：原因未记录，重新运行 `councilkit init` 可以看到原因。",
+    note: "这份报告只汇总了其余 4 席的结果，缺席的这几席负责查的问题可能没被发现。",
+    file: "legacy-config",
+    verdict: null,
+  },
 ] as const;
 
 async function openFromLibrary(page: Page, title: string): Promise<void> {
@@ -114,7 +123,7 @@ test.describe("locked report labels", () => {
           await expect(
             page.getByText("没有需要处理的问题，另有 1 条待确认（只有一席提出）。"),
           ).toBeVisible();
-          await expect(page.getByText("0 个问题")).toHaveCount(0);
+          await expect(page.getByText("0 个问题", { exact: true })).toHaveCount(0);
           await expect(page.getByText("这份审查还没有问题记录。")).toHaveCount(0);
           await expect(page.getByText("账本无阻塞")).toBeVisible();
           await expect(page.getByText("账本未生成")).toHaveCount(0);

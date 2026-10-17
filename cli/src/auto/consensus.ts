@@ -118,6 +118,8 @@ export function shapeAggregateDeliverable(input: {
   task: Pick<ReviewTask, "specSource" | "specText">;
   attempts: readonly ConsensusSeat[];
   absences?: readonly ReportAbsence[];
+  /** 「本次指定 N 席：…」 when the caller passed `--agents`. */
+  scopeNote?: string;
 }): string {
   const specBound = Boolean(input.task.specSource?.trim());
   const drafted = !specBound
@@ -125,7 +127,14 @@ export function shapeAggregateDeliverable(input: {
       promoteConclusion(input.markdown))
     : annotateSpecViolations(promoteConclusion(input.markdown), input.task.specText);
   const presentCount = input.attempts.filter((seat) => seat.status === "success").length;
-  return applyDesignerOrder(drafted, specBound, input.absences ?? [], presentCount);
+  const shaped = applyDesignerOrder(
+    drafted,
+    specBound,
+    input.absences ?? [],
+    presentCount,
+    input.scopeNote,
+  );
+  return specBound ? shaped : stripUnboundSpecTags(shaped);
 }
 
 /** More than half of the completed seats, and at least two. */
@@ -152,14 +161,19 @@ function synthesizeNoSpecAggregate(
   const verdict = blocking.length > 0 ? "changes-requested" : "comment";
   const lines: string[] = ["## 结论", "", verdict, ""];
   if (blocking.length === 0) {
-    lines.push("无规格依据。没有多数席位一致的高严重度缺陷。单席意见见「待确认」。", "");
+    const pendingNote = pending.length > 0 ? "单席意见见「待确认」。" : "";
+    lines.push(`无规格依据。没有多数席位一致的高严重度缺陷。${pendingNote}`.trim(), "");
   } else {
+    const seen = new Set<string>();
     for (const cluster of sortClusters(blocking)) {
-      lines.push(basisLine(cluster.seats.length, completed.length, cluster.seats));
+      const line = basisLine(cluster.seats.length, completed.length, cluster.seats);
+      if (seen.has(line)) continue;
+      seen.add(line);
+      lines.push(line);
     }
     lines.push("");
   }
-  lines.push(`阻塞 ${blocking.length}。`, "");
+  lines.push(`阻塞 ${blocking.length} 个问题`, "");
   const actionable = consensus.filter((cluster) => !HIGH_SEVERITY.has(cluster.severity));
   lines.push("## 阻塞问题", "");
   if (blocking.length === 0) {
@@ -440,6 +454,7 @@ export function applyDesignerOrder(
   specBound: boolean,
   absences: readonly ReportAbsence[],
   presentCount = 0,
+  scopeNote?: string,
 ): string {
   const split = splitH2(markdown);
   const buckets: Record<"blocking" | "actionable" | "pending", string[]> = {
@@ -458,20 +473,20 @@ export function applyDesignerOrder(
       rest.push(section);
       continue;
     }
-    const items = splitTopLevelItems(section.body).filter((item) => item.trim().length > 0);
-    const tagged = items.filter((item) => /\[[^\]]+\]/.test(item.split("\n")[0] ?? ""));
-    const plain = items.filter((item) => !tagged.includes(item));
-    for (const item of tagged) {
-      buckets[classifyDesignerItem(item, section.title, specBound)].push(item.trim());
+    // Designer titles are emitted once below. A second copy ("无" / "无。…")
+    // must not be appended under the same heading.
+    if (isVacantDesignerBody(section.body)) continue;
+    const items = splitTopLevelItems(section.body).filter(
+      (item) => item.trim().length > 0 && !isVacantDesignerBody(item),
+    );
+    if (items.length === 0) {
+      buckets[classifyDesignerItem(section.body, section.title, specBound)].push(
+        section.body.trim(),
+      );
+      continue;
     }
-    if (plain.length > 0) {
-      rest.push({ title: section.title, body: plain.join("\n") });
-    } else if (
-      tagged.length === 0 &&
-      section.body.trim().length > 0 &&
-      section.body.trim() !== "无"
-    ) {
-      rest.push(section);
+    for (const item of items) {
+      buckets[classifyDesignerItem(item, section.title, specBound)].push(item.trim());
     }
   }
   const withAbsences = injectAbsences(conclusion?.body ?? "", absences, presentCount);
@@ -490,7 +505,15 @@ export function applyDesignerOrder(
     .filter((part) => part.length > 0)
     .join("\n\n")
     .trim();
-  return refreshBlockingCount(draft);
+  return finalizeConclusion(draft, scopeNote);
+}
+
+/** "无" / "无。" and the aggregator's empty-section explanation. */
+function isVacantDesignerBody(body: string): boolean {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return true;
+  if (/^\s*[-*]\s+/.test(trimmed) || /\[[^\]]+\]/.test(trimmed)) return false;
+  return /^无(?:[。．.])?/.test(trimmed);
 }
 
 function classifyDesignerItem(
@@ -527,21 +550,20 @@ function injectAbsences(
     .trim();
   if (absences.length === 0) return cleaned;
   const block = [...absences.map(formatAbsence), formatAbsenceNote(presentCount)].join("\n");
-  if (/阻塞\s*\d+/.test(cleaned)) {
-    return cleaned.replace(/阻塞\s*\d+。?/, `${block}\n\n$&`).trim();
-  }
   return `${cleaned}\n\n${block}`.trim();
 }
 
-function refreshBlockingCount(markdown: string): string {
+const BASIS_LINE = /^(?:无规格依据，依据是|违反了规格里的)/;
+
+/** One blocking line, no 「无缺席」, each basis fact once, scope note once. */
+function finalizeConclusion(markdown: string, scopeNote?: string): string {
   const split = splitH2(markdown);
   const conclusion = split.sections.find((section) => section.title === "结论");
   if (!conclusion) return markdown;
-  if (!conclusion.body.trim()) return markdown;
+  const pending = split.sections.find((section) => section.title === "待确认");
+  const pendingEmpty = !pending || isVacantDesignerBody(pending.body);
   const count = summarizeSeatOutput(markdown).blockingCount ?? 0;
-  const next = /阻塞\s*\d+/.test(conclusion.body)
-    ? conclusion.body.replace(/阻塞\s*\d+。?/, `阻塞 ${count}。`)
-    : `${conclusion.body.trim()}\n\n阻塞 ${count}。`;
+  const next = normalizeConclusion(conclusion.body, count, pendingEmpty, scopeNote);
   if (next === conclusion.body) return markdown;
   const sections = split.sections.map((section) =>
     section.title === "结论" && section === conclusion
@@ -556,6 +578,59 @@ function refreshBlockingCount(markdown: string): string {
     .filter((part) => part.length > 0)
     .join("\n\n")
     .trim();
+}
+
+function normalizeConclusion(
+  body: string,
+  count: number,
+  pendingEmpty: boolean,
+  scopeNote?: string,
+): string {
+  let text = body.replace(/无缺席席位。?/g, "");
+  if (pendingEmpty) text = text.replace(/单席意见见[「"']?待确认[」"']?。?/g, "");
+  text = text
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (/^阻塞数\s*[:：]\s*\d+/.test(trimmed)) return "";
+      if (/^阻塞\s*\d+/.test(trimmed)) return "";
+      return line
+        .replace(/阻塞数\s*[:：]\s*\d+\s*。?/g, "")
+        .replace(/阻塞\s*\d+\s*个问题。?/g, "")
+        .replace(/阻塞\s*\d+\s*。/g, "");
+    })
+    .join("\n");
+  const seenBasis = new Set<string>();
+  let scopePlaced = false;
+  const kept: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (BASIS_LINE.test(trimmed)) {
+      if (seenBasis.has(trimmed)) continue;
+      seenBasis.add(trimmed);
+    }
+    if (scopeNote && trimmed === scopeNote) scopePlaced = true;
+    kept.push(line);
+  }
+  text = kept
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  if (scopeNote && !scopePlaced) {
+    const lines = text.length > 0 ? text.split("\n") : [];
+    const verdictAt = lines.findIndex((line) =>
+      /^(approve|changes-requested|comment)$/i.test(line.trim()),
+    );
+    if (verdictAt >= 0) lines.splice(verdictAt + 1, 0, "", scopeNote);
+    else lines.unshift(scopeNote);
+    text = lines
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  return `${text}\n\n阻塞 ${count} 个问题`.trim();
 }
 
 export function promoteConclusion(markdown: string): string {
@@ -584,7 +659,7 @@ function ensureBlockingCount(conclusion: H2Section, rest: readonly H2Section[]):
     ...rest.map((section) => `## ${section.title}\n${section.body}`),
   ].join("\n");
   const count = summarizeSeatOutput(probe).blockingCount ?? 0;
-  const body = `${conclusion.body.trim()}\n\n阻塞 ${count}。`.trim();
+  const body = `${conclusion.body.trim()}\n\n阻塞 ${count} 个问题`.trim();
   return { title: conclusion.title, body };
 }
 
@@ -708,6 +783,28 @@ function stripReportJargon(text: string): string {
     .replace(/规格合同减法/g, "对照规格")
     .replace(/合同内\s*Act On/gi, "违反规格")
     .replace(/不变量\s*ID/g, "验收编号");
+}
+
+/** Drop spec-contract tags from a report that has no bound spec. */
+export function stripUnboundSpecTags(markdown: string): string {
+  const out: string[] = [];
+  for (const { line, fenced } of markdownLines(markdown)) {
+    if (fenced) {
+      out.push(line);
+      continue;
+    }
+    out.push(
+      line
+        .replace(/\[act-on\]/gi, "")
+        .replace(/\[suggest-amend-spec\]/gi, "")
+        .replace(/合同内\s*Act On/gi, "")
+        .replace(/规格合同减法/g, "")
+        .replace(/不变量\s*ID/g, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/[ \t]+([，。])/g, "$1"),
+    );
+  }
+  return out.join("\n");
 }
 
 function splitH2(markdown: string): { lead: string; sections: H2Section[] } {
