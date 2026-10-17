@@ -1,5 +1,9 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import {
+  ReporterFailoverNote,
+  splitReporterFailover,
+} from "@/components/report/ReporterFailoverNote";
+import {
   FINDING_SEVERITY_LABEL,
   type ParsedReviewReport,
   type ReviewAttemptRow,
@@ -204,6 +208,8 @@ function SectionBlock({
 }) {
   const appendix = section.id.startsWith("附录") || section.title.startsWith("附录");
   const stats = sectionFindingStats(section);
+  const failover = section.title === "结论" ? splitReporterFailover(section.body) : null;
+  const body = failover?.rest ?? section.body;
   return (
     <section id={section.id} className="scroll-mt-6">
       <div className="mb-3 flex items-center gap-3">
@@ -213,7 +219,8 @@ function SectionBlock({
         ) : null}
         <div className="h-px flex-1 bg-gradient-to-r from-[var(--color-brass-dim)] to-transparent" />
       </div>
-      {section.title === "结论" ? <VerdictBody body={section.body} /> : null}
+      {section.title === "结论" ? <VerdictBody body={body} /> : null}
+      {failover?.note ? <ReporterFailoverNote text={failover.note} /> : null}
       {section.title === "过程对比" ? (
         <ProcessBody body={section.body} liveAttempts={liveAttempts} onInspect={onInspect} />
       ) : appendix ? (
@@ -225,11 +232,7 @@ function SectionBlock({
       ) : section.findings?.some((finding) => finding.severity) ? (
         <FindingList findings={section.findings} sectionId={section.id} />
       ) : section.title === "结论" ? (
-        <SafeMarkdown
-          className="text-sm"
-          variant="document"
-          content={stripVerdictLine(section.body)}
-        />
+        <SafeMarkdown className="text-sm" variant="document" content={stripVerdictLine(body)} />
       ) : (
         <SafeMarkdown className="text-sm" variant="document" content={section.body} />
       )}

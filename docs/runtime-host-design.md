@@ -28,7 +28,7 @@ V1 非目标：
 ## 产品形态与职责边界
 
 - V1 正式支持 macOS。
-- 用户主动启动一个前台 Node.js 22 + TypeScript Runtime Host。
+- 用户主动启动一个前台 Node.js 22.22.2（或更新）+ TypeScript Runtime Host。
 - Host 同时提供构建后的 React UI 与同源 Runtime API。
 - 浏览器中的 Discussion Orchestrator 负责 Room、Round、Participant 顺序、Context Snapshot、Summary 和业务持久化。
 - Runtime Host 负责 Runtime Installation 信任、Driver、进程、Session、Scope、取消和标准化事件；它不理解或调度 Room、Round 和 Summary。

@@ -322,7 +322,7 @@ function CaseCard({
       ) : null}
       <div className="ck-case-meta">
         <span>
-          {progress ? `${progress} 席` : `${runs.length} 份记录`}
+          {progress ?? `${runs.length} 份记录`}
           {latest.startedAt ? (
             <>
               {" · "}
@@ -368,7 +368,7 @@ function HistoryRow({ run, groupKey }: { run: CliRunSummaryDto; groupKey: string
         <StatusPill tone={pill.tone} text={pill.text} />
       </div>
       <div className="ck-run-meta">
-        <span>{progress ? `${progress} 席` : "\u00a0"}</span>
+        <span>{progress ?? "\u00a0"}</span>
         {run.startedAt ? (
           <time dateTime={run.startedAt}>{formatRunTime(run.startedAt)}</time>
         ) : null}

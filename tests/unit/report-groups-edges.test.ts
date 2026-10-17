@@ -109,7 +109,7 @@ describe("report group edges", () => {
           progress: { phase: "attempts", updatedAt: null, attempts: attempts as never },
         }),
       ),
-    ).toBe("3/4");
+    ).toBe("1/4 席位成功 · 1 路失败 · 1 路中断");
     expect(
       seatProgress(
         run({
@@ -124,7 +124,7 @@ describe("report group edges", () => {
           },
         }),
       ),
-    ).toBe("0/1");
+    ).toBe("0/1 席位成功");
   });
 
   it("flags a quiet completed review when the ledger still blocks", () => {

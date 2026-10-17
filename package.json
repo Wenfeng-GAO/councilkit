@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Local-first rooms for multi-agent decisions.",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.22.2"
   },
   "packageManager": "pnpm@10.34.6",
   "scripts": {

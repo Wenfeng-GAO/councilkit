@@ -3,34 +3,39 @@
  * homes `~/.kimi-code/bin` / `~/.grok/bin`) and write the default PR-jury
  * roster into the CLI store. Does not talk to the Runtime Host.
  */
-import { isExactDefaultModelAlias } from "@shared/runtime/default-model-alias";
-import { findExecutable } from "../auto/driver-commands";
 import { errors } from "../errors";
 import {
+  DEFAULT_AGENT_NAMES,
   DEFAULT_AGENT_SPECS,
   type DefaultAgentSpec,
   NEXT_REVIEW_HINT,
   PR_JURY_BACKGROUND,
   PR_JURY_COUNCIL_NAME,
+  PR_JURY_MINIMUM_SEATS,
   PR_JURY_ROUNDS,
   PR_JURY_TARGET_OUTPUT,
   PR_JURY_TOPIC,
 } from "../init/defaults";
+import { type DriverStatus, collectDriverStatus } from "../init/driver-status";
+import { type InitCouncilBrief, initHumanFromOutcome, renderInitHuman } from "../init/human-report";
 import {
+  IDEATE_AGENT_NAMES,
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
   type IdeateAgentSpec,
   NEXT_IDEATE_HINT,
   PRODUCT_JURY_BACKGROUND,
   PRODUCT_JURY_COUNCIL_NAME,
+  PRODUCT_JURY_MINIMUM_SEATS,
   PRODUCT_JURY_ROUNDS,
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
 } from "../init/ideate-defaults";
+import { CODEX_MODEL_OVERRIDE_NEXT, ideateDriverSkip, reviewSkip } from "../init/skipped-seats";
 import type { OutputSink } from "../output";
-import type { AgentRecord, CouncilRecord } from "../store/schemas";
+import type { AgentRecord, CouncilRecord, SkippedSeat } from "../store/schemas";
 import { Store } from "../store/store";
-import { discoverCodexModel } from "./jury";
+import { configuredCodexModel } from "./jury";
 import { parseFlags } from "./parse";
 
 export interface InitOutcome {
@@ -39,6 +44,12 @@ export interface InitOutcome {
   createdCouncil: { id: string; name: string; reporter: string } | null;
   reusedCouncil: { id: string; name: string; reporter: string } | null;
   missingDrivers: string[];
+  /** One row per known driver: found, path, version, login, and a next step. */
+  drivers: DriverStatus[];
+  /** Default seats this init did not create, also stored on the council. */
+  skippedSeats: SkippedSeat[];
+  /** Per-council roster used by the human report. Ideate seats stay out of pr-jury. */
+  councils: InitCouncilBrief[];
   next: string;
 }
 
@@ -50,23 +61,80 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const force = values.force === true;
   const store = new Store();
   const env = process.env;
+  const drivers = collectDriverStatus(env);
 
   const available: DefaultAgentSpec[] = [];
+  const reviewSkips: SkippedSeat[] = [];
   const missingDrivers: string[] = [];
   for (const spec of DEFAULT_AGENT_SPECS) {
-    if (findExecutable(spec.executable, env) !== null) available.push(spec);
-    else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
+    const skip = reviewSkip(spec, drivers);
+    if (skip !== null) {
+      reviewSkips.push(skip);
+      if (skip.reason === "missing" && !missingDrivers.includes(spec.executable)) {
+        missingDrivers.push(spec.executable);
+      }
+    } else {
+      available.push(spec);
+    }
   }
   const ideateAvailable: IdeateAgentSpec[] = [];
+  const ideateSkips: SkippedSeat[] = [];
   for (const spec of IDEATE_AGENT_SPECS) {
-    if (findExecutable(spec.executable, env) !== null) ideateAvailable.push(spec);
-    else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
+    const skip = ideateDriverSkip(spec, drivers);
+    if (skip !== null) {
+      ideateSkips.push(skip);
+      if (skip.reason === "missing" && !missingDrivers.includes(spec.executable)) {
+        missingDrivers.push(spec.executable);
+      }
+    } else {
+      ideateAvailable.push(spec);
+    }
   }
+  noteCodexDefaultModel(drivers, env);
+
   if (available.length === 0) {
-    throw errors.usage(
-      "no review drivers found on PATH (need at least one of: cld, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
-      { missingDrivers },
+    const skippedSeats = [...reviewSkips, ...ideateSkips];
+    const prCreated = rememberUnsaved(
+      store,
+      PR_JURY_COUNCIL_NAME,
+      PR_JURY_MINIMUM_SEATS,
+      [],
+      reviewSkips,
     );
+    const productCreated = rememberUnsaved(
+      store,
+      PRODUCT_JURY_COUNCIL_NAME,
+      PRODUCT_JURY_MINIMUM_SEATS,
+      [],
+      ideateSkips,
+    );
+    const lines = renderInitHuman({
+      councils: [
+        {
+          name: PR_JURY_COUNCIL_NAME,
+          reporter: prCreated ? reporterName(store, PR_JURY_COUNCIL_NAME) : null,
+          ready: [],
+          skipped: reviewSkips,
+          created: prCreated,
+          minimumSeats: PR_JURY_MINIMUM_SEATS,
+          cldSubstitute: false,
+        },
+        {
+          name: PRODUCT_JURY_COUNCIL_NAME,
+          reporter: productCreated ? reporterName(store, PRODUCT_JURY_COUNCIL_NAME) : null,
+          ready: [],
+          skipped: ideateSkips,
+          created: productCreated,
+          minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
+          cldSubstitute: false,
+        },
+      ],
+    });
+    throw errors.usage(`no usable review CLI on PATH\n${lines}`, {
+      missingDrivers,
+      drivers,
+      skippedSeats,
+    });
   }
 
   if (force) recreateDefaults(store);
@@ -74,14 +142,15 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const createdAgents: AgentRecord[] = [];
   const reusedAgents: AgentRecord[] = [];
   for (const spec of available) {
+    const modelId = reviewModelId(spec, env);
     const existing = findByName(store, spec.name);
     if (existing !== null) {
       const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
-      const sameModel = existing.modelId === spec.modelId;
+      const sameModel = existing.modelId === modelId;
       if (!sameDriver || !sameModel) {
         reusedAgents.push(
           store.updateAgent(existing.id, {
-            modelId: spec.modelId,
+            modelId,
             driverSelection: spec.driverSelection,
           }),
         );
@@ -94,7 +163,7 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       store.createAgent({
         name: spec.name,
         personaPrompt: spec.personaPrompt,
-        modelId: spec.modelId,
+        modelId,
         color: spec.color,
         driverSelection: spec.driverSelection,
       }),
@@ -107,7 +176,12 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   let reusedCouncil: CouncilRecord | null = null;
   const existingCouncil = findCouncilByName(store, PR_JURY_COUNCIL_NAME);
   if (existingCouncil !== null) {
-    reusedCouncil = store.syncCouncilRoster(existingCouncil.id, reviewRoster, reporter.id);
+    reusedCouncil = store.syncCouncilRoster(
+      existingCouncil.id,
+      reviewRoster,
+      reporter.id,
+      reviewSkips,
+    );
   } else {
     createdCouncil = store.createCouncil({
       name: PR_JURY_COUNCIL_NAME,
@@ -117,17 +191,16 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       agentIds: reviewRoster.map((a) => a.id),
       rounds: PR_JURY_ROUNDS,
       reporterAgentId: reporter.id,
+      skippedSeats: reviewSkips,
     });
   }
+  store.deletePendingCouncil(PR_JURY_COUNCIL_NAME);
 
   const ideateRoster: AgentRecord[] = [];
   for (const spec of ideateAvailable) {
-    const discovered = spec.modelId ?? discoverCodexModel(env);
     const existing = findByName(store, spec.name);
+    const modelId = ideateModelId(spec, env);
     if (existing !== null) {
-      const modelId =
-        spec.modelId ??
-        (isExactDefaultModelAlias(existing.modelId) && discovered ? discovered : existing.modelId);
       const sameDriver = existing.driverSelection.driverId === spec.driverSelection.driverId;
       const sameModel = existing.modelId === modelId;
       if (!sameDriver || !sameModel) {
@@ -143,25 +216,24 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
       }
       continue;
     }
-    if (discovered === null) {
-      if (!missingDrivers.includes("codex-model")) missingDrivers.push("codex-model");
-      continue;
-    }
     const created = store.createAgent({
       name: spec.name,
       personaPrompt: spec.personaPrompt,
-      modelId: discovered,
+      modelId,
       color: spec.color,
       driverSelection: spec.driverSelection,
     });
     createdAgents.push(created);
     ideateRoster.push(created);
   }
-  if (ideateRoster.length >= 2) {
-    const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+  let productReporterName: string | null = null;
+  let productCreated = false;
+  const existingProduct = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+  if (ideateRoster.length >= PRODUCT_JURY_MINIMUM_SEATS) {
     const productReporter = pickIdeateReporter(ideateRoster, existingProduct);
+    productReporterName = productReporter.name;
     if (existingProduct !== null) {
-      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id);
+      store.syncCouncilRoster(existingProduct.id, ideateRoster, productReporter.id, ideateSkips);
     } else {
       store.createCouncil({
         name: PRODUCT_JURY_COUNCIL_NAME,
@@ -171,8 +243,23 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
         agentIds: ideateRoster.map((a) => a.id),
         rounds: PRODUCT_JURY_ROUNDS,
         reporterAgentId: productReporter.id,
+        skippedSeats: ideateSkips,
       });
     }
+    store.deletePendingCouncil(PRODUCT_JURY_COUNCIL_NAME);
+    productCreated = true;
+  } else if (existingProduct !== null) {
+    productReporterName = reporterName(store, PRODUCT_JURY_COUNCIL_NAME);
+    store.deletePendingCouncil(PRODUCT_JURY_COUNCIL_NAME);
+    productCreated = true;
+  } else {
+    store.savePendingCouncil({
+      name: PRODUCT_JURY_COUNCIL_NAME,
+      status: "not created",
+      minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
+      readySeats: ideateRoster.map((agent) => agent.name),
+      skippedSeats: ideateSkips,
+    });
   }
 
   const outcome: InitOutcome = {
@@ -181,15 +268,40 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     createdCouncil: createdCouncil === null ? null : briefCouncil(createdCouncil, store),
     reusedCouncil: reusedCouncil === null ? null : briefCouncil(reusedCouncil, store),
     missingDrivers,
-    next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
+    drivers,
+    skippedSeats: [...reviewSkips, ...ideateSkips],
+    councils: [
+      {
+        name: PR_JURY_COUNCIL_NAME,
+        reporter: reporter.name,
+        ready: seatsInOrder(reviewRoster, DEFAULT_AGENT_NAMES),
+        skippedSeats: reviewSkips,
+        created: true,
+        minimumSeats: PR_JURY_MINIMUM_SEATS,
+      },
+      ...(ideateRoster.length === 0 && ideateSkips.length === 0
+        ? []
+        : [
+            {
+              name: PRODUCT_JURY_COUNCIL_NAME,
+              reporter: productReporterName,
+              ready: seatsInOrder(ideateRoster, IDEATE_AGENT_NAMES),
+              skippedSeats: ideateSkips,
+              created: productCreated,
+              minimumSeats: PRODUCT_JURY_MINIMUM_SEATS,
+            },
+          ]),
+    ],
+    next: productCreated ? `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}` : NEXT_REVIEW_HINT,
   };
-  await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
+  await out.finish(outcome, (d) => initHumanFromOutcome(d as InitOutcome));
 }
 
 function recreateDefaults(store: Store): void {
   for (const name of [PR_JURY_COUNCIL_NAME, PRODUCT_JURY_COUNCIL_NAME]) {
     const council = findCouncilByName(store, name);
     if (council !== null) store.deleteCouncil(council.id);
+    store.deletePendingCouncil(name);
   }
   for (const spec of [...DEFAULT_AGENT_SPECS, ...IDEATE_AGENT_SPECS]) {
     const agent = findByName(store, spec.name);
@@ -198,6 +310,36 @@ function recreateDefaults(store: Store): void {
     if (stillUsed) continue;
     store.deleteAgent(agent.id);
   }
+}
+
+function seatsInOrder(
+  agents: readonly AgentRecord[],
+  names: readonly string[],
+): Array<{ name: string; modelId: string }> {
+  const byName = new Map(agents.map((agent) => [agent.name, agent]));
+  return names.flatMap((name) => {
+    const agent = byName.get(name);
+    return agent === undefined ? [] : [{ name: agent.name, modelId: agent.modelId }];
+  });
+}
+
+function reviewModelId(spec: DefaultAgentSpec, env: NodeJS.ProcessEnv): string {
+  if (spec.name !== "review-codex") return spec.modelId;
+  return configuredCodexModel(env) ?? spec.modelId;
+}
+
+function ideateModelId(spec: IdeateAgentSpec, env: NodeJS.ProcessEnv): string {
+  if (spec.modelId !== null) return spec.modelId;
+  // Same rule as review-codex: a logged-in Codex with no top-level model still
+  // becomes a seat. Spawn omits `-m` when the id is the default alias.
+  return configuredCodexModel(env) ?? "default";
+}
+
+function noteCodexDefaultModel(drivers: DriverStatus[], env: NodeJS.ProcessEnv): void {
+  if (configuredCodexModel(env) !== null) return;
+  const row = drivers.find((item) => item.driver === "codex");
+  if (row === undefined || !row.found || row.login === "logged-out" || row.next !== null) return;
+  row.next = CODEX_MODEL_OVERRIDE_NEXT;
 }
 
 const REPORTER_FALLBACK = ["review-adversarial", "review-correctness"] as const;
@@ -217,7 +359,10 @@ function pickReporter(roster: AgentRecord[], available: DefaultAgentSpec[]): Age
   return roster[0];
 }
 
-function pickIdeateReporter(roster: AgentRecord[], existing: CouncilRecord | null): AgentRecord {
+function pickIdeateReporter(
+  roster: readonly AgentRecord[],
+  existing: CouncilRecord | null,
+): AgentRecord {
   if (existing !== null) {
     const current = roster.find((agent) => agent.id === existing.reporterAgentId);
     if (current !== undefined) return current;
@@ -235,6 +380,38 @@ function findByName(store: Store, name: string): AgentRecord | null {
 
 function findCouncilByName(store: Store, name: string): CouncilRecord | null {
   return store.listCouncils().find((c) => c.name === name) ?? null;
+}
+
+/** Keep a real council if one is already on disk. Otherwise record why it was not written. */
+function rememberUnsaved(
+  store: Store,
+  name: string,
+  minimumSeats: number,
+  readySeats: string[],
+  skippedSeats: SkippedSeat[],
+): boolean {
+  if (findCouncilByName(store, name) !== null) {
+    store.deletePendingCouncil(name);
+    return true;
+  }
+  store.savePendingCouncil({
+    name,
+    status: "not created",
+    minimumSeats,
+    readySeats,
+    skippedSeats,
+  });
+  return false;
+}
+
+function reporterName(store: Store, councilName: string): string | null {
+  const council = findCouncilByName(store, councilName);
+  if (council === null) return null;
+  try {
+    return store.getAgent(council.reporterAgentId).name;
+  } catch {
+    return null;
+  }
 }
 
 function briefAgent(agent: AgentRecord): InitOutcome["createdAgents"][number] {
@@ -257,27 +434,4 @@ function briefCouncil(
     // keep id if the agent was deleted out of band
   }
   return { id: council.id, name: council.name, reporter };
-}
-
-function renderHuman(outcome: InitOutcome): string {
-  const lines: string[] = [];
-  const created = outcome.createdAgents.length;
-  const reused = outcome.reusedAgents.length;
-  const councilBit =
-    outcome.createdCouncil !== null
-      ? `created council ${outcome.createdCouncil.name} (reporter ${outcome.createdCouncil.reporter})`
-      : outcome.reusedCouncil !== null
-        ? `reused council ${outcome.reusedCouncil.name} (reporter ${outcome.reusedCouncil.reporter})`
-        : "no council";
-  lines.push(`init: created ${created} agent(s), reused ${reused}; ${councilBit}`);
-  for (const agent of [...outcome.createdAgents, ...outcome.reusedAgents]) {
-    const mark = outcome.createdAgents.some((a) => a.id === agent.id) ? "new" : "kept";
-    lines.push(`  ${agent.name}  ${agent.driverId}/${agent.modelId}  [${mark}]`);
-  }
-  if (outcome.missingDrivers.length > 0) {
-    lines.push(`missing on PATH: ${outcome.missingDrivers.join(", ")}`);
-  }
-  lines.push(`next: ${outcome.next}`);
-  lines.push("open reports: http://127.0.0.1:43127/reports");
-  return lines.join("\n");
 }

@@ -16,7 +16,7 @@
 
 ## 构建与安装
 
-CLI 是 `cli/` workspace 包，bin 是 `cli/bin/councilkit.mjs` thin launcher → 构建产物 `cli/dist/main.mjs`。`pnpm install` 后需构建一次：
+CLI 是 `cli/` workspace 包，bin 是 `cli/bin/councilkit.mjs` thin launcher → 构建产物 `cli/dist/main.mjs`。需要 Node.js 22.22.2 或更新，以及与根 `package.json` 的 `packageManager` 一致的 pnpm（`npm install -g pnpm@10.34.6`）。`pnpm install` 后需构建一次：
 
 ```bash
 pnpm install --frozen-lockfile
@@ -46,18 +46,27 @@ CLI 不 spawn Runtime Host，也不直连模型供应商——**大部分命令*
 
 #### `councilkit init [--force] [--json]`
 
-发现本机 CLI（`cld`/`kimi`/`grok`/`cursor-agent`/`codex`），写入默认审查班子。
+发现本机 CLI（`cld` / 独立 `cfuse` / `kimi` / `grok` / `cursor-agent` / `codex`），写入默认审查班子。
+
+人和 `--json` 都带 `drivers`：每个已知 driver 一行 `found`、`path`、`version`（`--version` 便宜就取）、`login`（`logged-in` / `logged-out` / `unknown`）。登录只在不会打开登录流程时检查（`codex login status`、`cursor-agent status` 或 `CURSOR_API_KEY`、凭据文件是否存在）。缺二进制或未登录时，`next` 是一句带确切命令的下一步。没有堆栈。
+
+driver 缺失或明确未登录时，对应默认席位不创建。`--json` 的 `skippedSeats` 含席位名、`driver`、`reason`（`missing` / `logged-out`；旧文件里还可能有 `no-model`）和 `next`。人读输出先写一行总览（`init: N councils · M seats ready, K skipped`；1 个时用单数 council / seat）。已经有 Council 落盘时，席位合计只数这些 Council，未落盘的名字接在后面（` · a, b not created`）。一个都没落盘时，席位合计仍包含各组，总览不追加 not created，人读输出以 `error[2]: no usable review CLI on PATH` 开头。再按 Council 分组。已落盘的标题是 `name (reporter X) · R ready, S skipped`。人数不够、没有落盘的分组写成 `name · not created (needs at least …), R ready, S skipped`。`next:` 在已有命令之后，为每个未落盘 Council 加一行 `to create <name>: install <cli> or <cli>, then rerun councilkit init`（名字来自该组缺席席位，按出现顺序去重，用 ` or ` 连接）。超过 80 列才折行，续行保留原缩进。未落盘的 Council 写在 `councils.json` 的 `pendingCouncils` 里，`status` 为 `not created`，并带上每个缺席席位和原因。之后对这个名字执行 `ideate` / `review`，人读第一行是 `<name> not created (needs at least … ready seats), R ready, S skipped`，不加 `error[n]:` 前缀，下面仍列出每个缺席席位和安装命令。行首符号不靠颜色：`✓` 已就绪，`✗` 缺席，`?` 部分就绪或未检查。同一 Council 里 driver 和原因相同的多条缺席合并成一条（席位名一行，命令一行）；只缺一席时保持一行 `✗ <seat>  skipped: …` 加一行命令。版本列在知道版本时写出，`cursor-agent` 可以不写版本。`? cld` 这类全局说明放在两组之后。登录文案只有 `logged in`、`not logged in`、`login not checked`。每条下一步命令单独一行。成功时 `next:` 后面仍有 `open reports:`。`cld` 的长说明（`CLD_CFUSE_BIN`、route、backend）和 Codex 模型覆盖说明只出现在 `--json` 的 `next` 和 README。同一 `skippedSeats` 列表写入该 Council。登录状态未知时仍创建席位。
+
+Codex 已安装且不是明确未登录时，即使 `config.toml` 没有顶层 `model`，也会创建 `review-codex` 和 `ideate-challenger`，`modelId` 为 `default`。审查和 probe 都不传 `-m`，由 Codex CLI 使用自己的默认模型。顶层 `model = "..."` 存在时，两席都记下该 id 并传 `-m`。`models_cache.json` 不算用户配置。每个默认席位要么创建，要么写入 `skippedSeats`，不会悄悄消失。
+
+`review-security` 在 PATH 上有 `cld` 时走 `cld cfuse`（`cfuse-claude-code` 或 `cfuse-claude` 会写入 `CLD_CFUSE_BIN`）。没有 `cld` 但有独立 `cfuse` 时，同一席位改为运行 `cfuse -p … --output-format text --skip-update`。审查、apply、fix 的健康检查（含 Aggregator）使用同一次解析：独立 `cfuse` 在场就算驱动可达，不会在调用 `cfuse` 之前因为找不到 `cld` 中止。只有 `cfuse-claude` / `cfuse-claude-code`、没有 `cld` 也没有独立 `cfuse` 时，不建这一席，并说明需要 `cld`。`ideate` 的 Claude 席仍只使用 `cld`。
 
 - **默认 Agent**：
-  - `review-security`
+  - `review-security`（`cld`，或没有 `cld` 时的独立 `cfuse`）
   - `review-correctness`
   - `review-maintainability`
   - `review-adversarial`（PATH 上有 `grok` 时）
   - `review-cursor`（PATH 上有 `cursor-agent` 时，model = `auto`）
+  - `review-codex`（PATH 上有 `codex` 且不是明确未登录时；没有顶层 `model` 时 model = `default`，不传 `-m`）
 
 - **默认 Council**：
-  - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）
-  - `product-jury`（PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 还要 PATH 有 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型；Reporter 优先 Codex）
+  - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 和 `review-codex` 不是 preferred reporter）
+  - `product-jury`（PATH 上有 grok/kimi 时另写 `ideate-product` / `ideate-engineering`；`ideate-challenger` 在 PATH 有 `codex` 且不是明确未登录时创建，没有顶层 `model` 时 model = `default`、不传 `-m`；就绪席位不足 2 时不写入 `councils`，而记在 `pendingCouncils`（缺席席位和修复命令）。之后 `ideate --council product-jury` 说明缺什么，而不是只让用户再跑 init。Reporter 优先 Codex）
 
 - **行为**：
   - 已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）
@@ -197,9 +206,9 @@ PR 审查需要本机已有该仓库：`--repo <path>`、`repos.json` 记忆，�
 
 #### 不经 Runtime Host
 
-CLI 直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK：
+CLI 直接按 PATH 解析 `cld`/`cfuse`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK：
 
-- **claude**：仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）
+- **claude**：审查只支持 `cfuse` 路由（其它 route 直接 usage 报错）。PATH 上有 `cld` 时走 `cld cfuse` 的 stream-json，并把 `cfuse-claude-code`（没有则用 `cfuse-claude`）写入 `CLD_CFUSE_BIN`。没有 `cld` 时，独立的 `cfuse` CLI 以 `cfuse -p … --output-format text --skip-update` 跑同一席位。Host 里的长会话仍然需要 `cld`。
 - **kimi**：用 `-p`（无 `--auto`，自主权限由 config 提供）
 - **codex**：用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
 - **grok**：直接 spawn
@@ -219,10 +228,13 @@ CLI 直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn�
 #### 失败容错
 
 - 单 Attempt 失败进入 `attemptFailures`，其余继续、聚合照常
+- 配置的汇总席在开跑前探针失败、但另有席位探针成功：改由该席位汇总，不中止。原席位仍记为缺席。报告「结论」写「汇总席改由 {席位}（原定 {席位} 没能运行）。」，报告页用灰色 info 图标显示（不是琥珀色）。没有其他可运行席位时仍按探针失败中止（exit 4）
 - **瞬态失败（<120s 内非零 EXIT）自动重试一次**（quota/auth/model、超时/无输出/探针失败不重试）
 - transcript 记录 `attemptNumber`/`retryOf`
 - 全失败 → 不聚合、确定性失败报告、exit 4
 - 聚合失败 → INCOMPLETE 报告 + exit 4
+- 进程 exit 0 且已取出终态结果的席位记成功。鉴权失败只来自结构化错误事件，或没有终态结果时 stderr 上的明确鉴权文案（`not logged in`、`AUTH_REQUIRED` 等）；正文或工具输出里的 401/403 不算。失败文案用该文案本身，不截取工具输出
+- 部分席位失败但仍汇总：`status=completed`、`incomplete=true`、退出码 0（与退出码表一致）
 - SIGINT → 尽力落盘、exit 130
 
 #### 恢复失败席位

@@ -28,24 +28,37 @@ export interface CliErrorOptions {
   /** Structured machine-readable detail for `--json` consumers (already redacted). */
   detail?: Record<string, unknown>;
   cause?: unknown;
+  /** Human mode prints `message` as-is, without the `error[code]:` prefix. */
+  verbatim?: boolean;
 }
 
 export class CliError extends Error {
   readonly exitCode: ExitCode;
   readonly detail: Record<string, unknown> | undefined;
+  readonly verbatim: boolean;
 
   constructor(options: CliErrorOptions) {
     super(options.message, { cause: options.cause });
     this.name = "CliError";
     this.exitCode = options.code;
     this.detail = options.detail;
+    this.verbatim = options.verbatim === true;
   }
 }
 
 /** Convenience constructors. */
 export const errors = {
-  usage: (message: string, detail?: Record<string, unknown>): CliError =>
-    new CliError({ code: EXIT.usage, message, detail }),
+  usage: (
+    message: string,
+    detail?: Record<string, unknown>,
+    options?: { verbatim?: boolean },
+  ): CliError =>
+    new CliError({
+      code: EXIT.usage,
+      message,
+      detail,
+      verbatim: options?.verbatim === true,
+    }),
   hostUnavailable: (message: string, detail?: Record<string, unknown>): CliError =>
     new CliError({ code: EXIT.hostUnavailable, message, detail }),
   runFailed: (message: string, detail?: Record<string, unknown>): CliError =>

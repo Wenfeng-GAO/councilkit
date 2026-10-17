@@ -1,6 +1,10 @@
 import { SafeMarkdown } from "@/components/markdown/SafeMarkdown";
 import { ExecutionInterruptedCard } from "@/components/report/ExecutionInterruptedCard";
 import { FindingLedger } from "@/components/report/FindingLedger";
+import {
+  ReporterFailoverNote,
+  splitReporterFailover,
+} from "@/components/report/ReporterFailoverNote";
 import { ReviewReportView } from "@/components/report/ReviewReportView";
 import { reviewOverviewHeading } from "@/lib/cli-run-status";
 import {
@@ -14,6 +18,7 @@ import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useState } from "react";
+import { SeatCount } from "./SeatCount";
 import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
@@ -77,14 +82,16 @@ export function OverviewView({
   const lost = isLostExecutionReview(run);
   const heading = decisionConflict ? "审查结论待核对" : reviewOverviewHeading(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
-  const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
-  const partial = seats.length > 0 && doneSeats < seats.length;
+  const finishedSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
+  const partial = seats.length > 0 && finishedSeats < seats.length;
   const aggregator = run.progress?.attempts.find((row) => row.role === "aggregator") ?? null;
   const aggregatorLive =
     aggregator !== null && !ATTEMPT_TERMINAL.has(aggregator.status) && run.status === "running";
   const hasMarkdown = run.markdown.trim().length > 0;
   const StatusIcon = STATUS_ICONS[aggregator?.status ?? "pending"] ?? CircleHelpIcon;
   const overview = parsed?.sections.find((section) => section.title === "概览");
+  const conclusion = parsed?.sections.find((section) => section.title === "结论");
+  const reporterFailover = conclusion ? splitReporterFailover(conclusion.body).note : null;
   const disagreement = parsed?.sections.find((section) => section.title === "分歧");
   const overviewBody = [parsed?.preface, overview?.body]
     .filter((part): part is string => Boolean(part && part.trim().length > 0))
@@ -105,11 +112,7 @@ export function OverviewView({
       )}
       <p className="ck-wb-report-meta">
         {run.status === "completed" ? <span>审查执行已完成</span> : null}
-        {seats.length > 0 && !lost ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
-        ) : null}
+        {seats.length > 0 && !lost ? <SeatCount attempts={seats} /> : null}
         {run.truncated ? <span>报告超过 2MB，已截断显示</span> : null}
       </p>
       {parsed?.verdict ? (
@@ -140,6 +143,11 @@ export function OverviewView({
           {parsed.verdict === "comment" ? (
             <p className="ck-finding-list-note">COMMENT 表示审查有意见，尚未给出通过建议。</p>
           ) : null}
+          {reporterFailover ? <ReporterFailoverNote text={reporterFailover} /> : null}
+        </section>
+      ) : reporterFailover ? (
+        <section className="ck-wb-review-decision" aria-label="审查结论">
+          <ReporterFailoverNote text={reporterFailover} />
         </section>
       ) : null}
       {partial ? (

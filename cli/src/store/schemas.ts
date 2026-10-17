@@ -66,6 +66,41 @@ export type AgentsFile = z.infer<typeof agentsFileSchema>;
 export const COUNCILS_FORMAT = "councilkit-councils" as const;
 export const COUNCILS_VERSION = 1 as const;
 
+/** Why `init` left a default seat off the council. */
+export const SKIPPED_SEAT_REASONS = ["missing", "logged-out", "no-model"] as const;
+
+/**
+ * A default seat `init` did not create. Optional on the council so files
+ * written before this field still load. The review report reads it from
+ * the council config.
+ */
+export const skippedSeatSchema = z
+  .object({
+    seat: z.string().min(1).max(128),
+    driver: z.string().min(1).max(64),
+    reason: z.enum(SKIPPED_SEAT_REASONS),
+    next: z.string().min(1).max(4000),
+  })
+  .strict();
+export type SkippedSeat = z.infer<typeof skippedSeatSchema>;
+
+/**
+ * A default council `init` considered but did not write because it had too
+ * few ready seats. Kept beside `councils` so a later `ideate` / `review` can
+ * name the missing seats. Absent on files written before this field.
+ */
+export const pendingCouncilSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    /** Written on every uncreated default council so the file states why it is absent. */
+    status: z.literal("not created").default("not created"),
+    minimumSeats: z.number().int().min(1).max(8),
+    readySeats: z.array(z.string().min(1).max(128)).max(16),
+    skippedSeats: z.array(skippedSeatSchema).max(16),
+  })
+  .strict();
+export type PendingCouncil = z.infer<typeof pendingCouncilSchema>;
+
 export const councilRecordSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -86,6 +121,7 @@ export const councilRecordSchema = z
     rounds: z.number().int().positive().max(16),
     reporterAgentId: z.string().min(1).max(128),
     agentOverrides: z.record(z.string(), reviewModelSchema).optional(),
+    skippedSeats: z.array(skippedSeatSchema).max(16).optional(),
   })
   .strict();
 export type CouncilRecord = z.infer<typeof councilRecordSchema>;
@@ -95,6 +131,7 @@ export const councilsFileSchema = z
     format: z.literal(COUNCILS_FORMAT),
     version: z.literal(COUNCILS_VERSION),
     councils: z.array(councilRecordSchema),
+    pendingCouncils: z.array(pendingCouncilSchema).max(8).optional(),
   })
   .strict();
 export type CouncilsFile = z.infer<typeof councilsFileSchema>;

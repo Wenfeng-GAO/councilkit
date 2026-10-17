@@ -831,6 +831,7 @@ describe("installation registry", () => {
               cfuse: null,
             },
           ],
+          cfuse: { cld: null, standalone: null, backend: null, seat: "absent" },
         };
       }
       return {
@@ -848,6 +849,7 @@ describe("installation registry", () => {
             cfuse: null,
           },
         ],
+        cfuse: { cld: null, standalone: null, backend: null, seat: "absent" },
       };
     });
     const codexId = installationIdFor("codex", codexReal);
@@ -939,6 +941,7 @@ describe("installation registry", () => {
           cfuse: null,
         },
       ],
+      cfuse: { cld: null, standalone: null, backend: null, seat: "absent" },
     }));
     const missingId = installationIdFor("codex", missing);
     const grokId = installationIdFor("grok", dirReal);

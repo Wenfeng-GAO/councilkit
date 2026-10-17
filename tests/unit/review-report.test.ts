@@ -457,6 +457,37 @@ describe("sortReviewFindings", () => {
     expect(formatFindingSeverityStats([{ severity: null, qualifier: null, text: "x" }])).toBeNull();
   });
 
+  it("renders a reporter failover note in grey with an info icon", () => {
+    const parsed = parseReviewReport(`# Autonomous Review Report
+
+- Run: ck-review-failover
+- Task: review
+- Aggregator: Alice
+
+| Attempt | Driver/Model | 结果 | 耗时 | 工具调用 |
+| --- | --- | --- | --- | --- |
+| Bob | kimi-stream-json/k3 | failed:DRIVER_UNREACHABLE | 1s | 无过程数据 |
+| Alice | claude-stream-json/m | ok | 1s | 1 |
+- Status: partial
+- Started: 2026-08-18T10:03:21.946Z
+- Ended: 2026-08-18T10:04:21.946Z
+
+---
+
+## 结论
+
+approve
+汇总席改由 Alice（原定 Bob 没能运行）。
+`);
+    expect(parsed).not.toBeNull();
+    if (!parsed) return;
+    const html = renderToStaticMarkup(createElement(ReviewReportView, { report: parsed }));
+    expect(html).toContain("ck-reporter-failover");
+    expect(html).toContain("汇总席改由 Alice（原定 Bob 没能运行）。");
+    expect(html).toContain("<circle");
+    expect(html).not.toContain("ck-wb-decision-conflict");
+  });
+
   it("renders finding cards with those same labels", () => {
     const parsed = parseReviewReport(SAMPLE);
     expect(parsed).not.toBeNull();

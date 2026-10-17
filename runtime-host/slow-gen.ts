@@ -51,6 +51,12 @@ const CATALOGS: Record<DriverId, string[]> = {
 const path = (name: string) => `${SLOW_GEN_PATH_PREFIX}${name}`;
 
 export function slowGenDiscovery(): DiscoveryOutcome {
+  const cld = {
+    name: "cld" as const,
+    path: path("cld"),
+    source: "path" as const,
+    pathIndex: 0,
+  };
   return {
     installations: NAMES.map(([name, driverId], index) => ({
       name,
@@ -62,6 +68,7 @@ export function slowGenDiscovery(): DiscoveryOutcome {
           : null,
       cfuse: null,
     })),
+    cfuse: { cld, standalone: null, backend: null, seat: "cld" },
   };
 }
 

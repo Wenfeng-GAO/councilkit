@@ -8,13 +8,17 @@
  * Flag shapes are taken from `evidence/flag-facts.md` (measured), not memory:
  *  - claude (cld): only the `cfuse` route is supported; non-cfuse → usage.
  *    prompt → stdin; extract last `{"type":"result"}` (subtype "success",
- *    is_error != true) `.result`.
+ *    is_error != true) `.result`. When `cld` is absent, the same route runs
+ *    the standalone `cfuse` CLI (`cfuse -p … --output-format text
+ *    --skip-update`) and the deliverable is that plain text. `cfuse-claude-code`
+ *    (else `cfuse-claude`) is passed as `CLD_CFUSE_BIN` when spawning `cld`.
  *  - kimi: `kimi -m <modelId> -p <prompt> --output-format stream-json` (no
  *    --auto/-y; full autonomy comes from config). prompt → argv. Extract last
  *    `{"role":"assistant"}.content`, skipping `role:"meta"` resume lines.
  *  - codex: `codex exec -s read-only --skip-git-repo-check -m <modelId>
  *    -o <workspace>/.last-message.md -` (write access: `-s workspace-write
- *    --dangerously-bypass-approvals-and-sandbox`).
+ *    --dangerously-bypass-approvals-and-sandbox`). `auto` / `default` /
+ *    `configured` omit `-m` so the Codex CLI uses its own default model.
  *  - Seat access (#273): every seat is read-only by default; see `SeatAccess`.
  *    prompt → stdin; read the last-message file, fall back to stdout.
  */
@@ -103,6 +107,8 @@ export interface AttemptSpec {
   /** Local clone + commit for a git worktree workspace (PR reviews). */
   sourceRepo?: string;
   sourceSha?: string;
+  /** Standalone `cfuse` text mode: stdout is the deliverable, not stream-json. */
+  plainText?: boolean;
 }
 
 const EXECUTABLE_BY_DRIVER: Record<string, string> = {
@@ -115,6 +121,11 @@ const EXECUTABLE_BY_DRIVER: Record<string, string> = {
 
 export function executableForDriver(driverId: string): string | undefined {
   return EXECUTABLE_BY_DRIVER[driverId];
+}
+
+/** `auto` / `default` / `configured` leave the model flag off. */
+function codexModelArgv(modelId: string): string[] {
+  return isDefaultModelAlias(modelId) ? [] : ["-m", modelId];
 }
 
 function codexEffortArgv(agent: AgentRecord): string[] {
@@ -679,6 +690,31 @@ interface DriverInvocation {
   argv: string[];
   promptStdin: boolean;
   lastMessageFile?: string;
+  plainText?: boolean;
+}
+
+export interface ClaudeCfuseResolution {
+  executable: string;
+  mode: "cld" | "standalone";
+  /** Backend pinned into `CLD_CFUSE_BIN` when `mode` is `cld`. */
+  backend: string | null;
+}
+
+/** `cld` wins. Otherwise the standalone `cfuse` CLI is the cfuse-route seat. */
+export function resolveClaudeCfuse(env: NodeJS.ProcessEnv = process.env): ClaudeCfuseResolution {
+  const backend = findExecutable("cfuse-claude-code", env) ?? findExecutable("cfuse-claude", env);
+  const cld = findExecutable("cld", env);
+  if (cld !== null) return { executable: cld, mode: "cld", backend };
+  const standalone = findExecutable("cfuse", env);
+  if (standalone !== null) return { executable: standalone, mode: "standalone", backend: null };
+  throw errors.usage(
+    "claude-stream-json needs `cld` on PATH, or the standalone `cfuse` CLI. Install cld so `cld` is on PATH and run `cld login`, or install `cfuse`.",
+  );
+}
+
+function claudeBackendEnv(resolution: ClaudeCfuseResolution): NodeJS.ProcessEnv | undefined {
+  if (resolution.mode !== "cld" || resolution.backend === null) return undefined;
+  return { CLD_CFUSE_BIN: resolution.backend };
 }
 
 /**
@@ -712,7 +748,13 @@ const READ_ONLY_DENIED_TOOLS = ["Bash", "Edit", "Write"] as const;
  * probe exercises the driver backend, not the review's escalation path. */
 function buildInvocation(
   agent: AgentRecord,
-  opts: { prompt: string; workspace?: string; probe: boolean; access?: SeatAccess },
+  opts: {
+    prompt: string;
+    workspace?: string;
+    probe: boolean;
+    access?: SeatAccess;
+    claudeMode?: "cld" | "standalone";
+  },
 ): DriverInvocation {
   const sel = agent.driverSelection;
   const driverId = sel.driverId;
@@ -724,6 +766,13 @@ function buildInvocation(
         throw errors.usage(
           `review only supports the cfuse route for claude-stream-json (got "${sel.options.route}")`,
         );
+      }
+      if (opts.claudeMode === "standalone") {
+        // Measured invocation of the standalone CodeFuse CLI. It is not the
+        // `cld cfuse` stream-json session, so no claude permission flags.
+        const argv = ["-p", prompt, "--output-format", "text", "--skip-update"];
+        assertArgvSafe(argv);
+        return { argv, promptStdin: false, plainText: true };
       }
       const argv = ["cfuse", "--print", "--verbose", "--output-format", "stream-json"];
       if (!opts.probe) {
@@ -793,8 +842,7 @@ function buildInvocation(
           argv: [
             "exec",
             "--skip-git-repo-check",
-            "-m",
-            agent.modelId,
+            ...codexModelArgv(agent.modelId),
             ...codexEffortArgv(agent),
             "--json",
             "-",
@@ -813,8 +861,7 @@ function buildInvocation(
             : ["read-only"]),
           "--skip-git-repo-check",
           "--json",
-          "-m",
-          agent.modelId,
+          ...codexModelArgv(agent.modelId),
           ...codexEffortArgv(agent),
           "-o",
           lastMessageFile,
@@ -1032,13 +1079,16 @@ export function buildSpawnSpec(
   if (exeName === undefined) {
     throw errors.usage(`unsupported driver "${driverId}" for review`);
   }
-  const executable = resolveExecutable(exeName, env);
+  const claude = driverId === "claude-stream-json" ? resolveClaudeCfuse(env) : null;
+  const executable = claude?.executable ?? resolveExecutable(exeName, env);
   const invocation = buildInvocation(agent, {
     prompt,
     workspace,
     probe: false,
     access: opts.access ?? "read-only",
+    claudeMode: claude?.mode,
   });
+  const backendEnv = claude === null ? undefined : claudeBackendEnv(claude);
   return {
     attemptId,
     agentId: agent.id,
@@ -1048,6 +1098,7 @@ export function buildSpawnSpec(
     executable,
     cwd: workspace,
     prompt,
+    ...(backendEnv === undefined ? {} : { envOverlay: backendEnv }),
     ...invocation,
   };
 }
@@ -1067,14 +1118,21 @@ export function buildProbeSpec(
   if (exeName === undefined) {
     throw errors.usage(`unsupported driver "${driverId}" for review`);
   }
-  const executable = resolveExecutable(exeName, env);
-  const invocation = buildInvocation(agent, { prompt, workspace: cwd, probe: true });
+  const claude = driverId === "claude-stream-json" ? resolveClaudeCfuse(env) : null;
+  const executable = claude?.executable ?? resolveExecutable(exeName, env);
+  const invocation = buildInvocation(agent, {
+    prompt,
+    workspace: cwd,
+    probe: true,
+    claudeMode: claude?.mode,
+  });
   const tmp = join(cwd, ".tmp");
   try {
     mkdirSync(tmp, { recursive: true, mode: 0o700 });
   } catch {
     /* review.ts creates the probe cwd; unit tests may use a fake path */
   }
+  const backendEnv = claude === null ? undefined : claudeBackendEnv(claude);
   return {
     attemptId: probeId,
     agentId: agent.id,
@@ -1086,7 +1144,7 @@ export function buildProbeSpec(
     prompt,
     /** Probe spawns reuse warm GROK_HOME; see AttemptSpec.warmGrokHome. */
     warmGrokHome: driverId === "grok-stream-json",
-    envOverlay: { TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+    envOverlay: { TMPDIR: tmp, TMP: tmp, TEMP: tmp, ...backendEnv },
     ...invocation,
   };
 }
@@ -1111,7 +1169,12 @@ export function extractFinalOutput(
   stdout: string,
   lastMessageFile?: string,
   capturedFinalLine?: string | null,
+  plainText = false,
 ): string | null {
+  if (plainText) {
+    const text = stdout.trim();
+    return text.length > 0 ? text : null;
+  }
   switch (driverId) {
     case "claude-stream-json":
       if (capturedFinalLine !== undefined && capturedFinalLine !== null) {

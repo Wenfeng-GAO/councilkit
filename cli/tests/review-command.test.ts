@@ -2104,7 +2104,7 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
     },
   );
 
-  it("aggregator-only probe failure cancels attempts whose own driver is healthy (CANCELLED)", async () => {
+  it("uses another ready seat as reporter when the configured reporter cannot run", async () => {
     const store = new Store();
     const claude = {
       driverId: "claude-stream-json" as const,
@@ -2135,7 +2135,9 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
         return claudeEnvelope("ok");
       }
       const kind = classify(input);
-      if (kind === "aggregation") return claudeEnvelope(AGGREGATION_TEXT);
+      if (kind === "aggregation") {
+        return claudeEnvelope("## 概览\nok\n## 结论\napprove");
+      }
       return attemptEnvelope("Alice");
     };
     const exitCode = await runCapturing(
@@ -2151,19 +2153,29 @@ describe("cli review command — probes, resume, killed, heartbeat", () => {
       sink,
       { spawnImpl: spawn },
     );
-    expect(exitCode).toBe(4);
+    expect(exitCode).toBe(0);
     const outcome = sink.finished as {
+      status: string;
+      incomplete: boolean;
+      reportPath: string;
       transcriptPath: string;
-      attempts: Array<{ agentName: string; failure?: { code: string } }>;
+      attempts: Array<{ agentName: string; status: string; failure?: { code: string } }>;
     };
-    // Alice's own driver probed fine, but the run aborted before the runner:
-    // her attempt is CANCELLED; Bob's carries DRIVER_UNREACHABLE.
+    expect(outcome.status).toBe("completed");
+    expect(outcome.incomplete).toBe(true);
     const alice = outcome.attempts.find((x) => x.agentName === "Alice");
     const bob = outcome.attempts.find((x) => x.agentName === "Bob");
-    expect(alice?.failure?.code).toBe("CANCELLED");
+    expect(alice?.status).toBe("success");
     expect(bob?.failure?.code).toBe("DRIVER_UNREACHABLE");
     const records = readRecords(outcome.transcriptPath);
-    expect(records.some((r) => r.kind === "aggregation.finished")).toBe(false);
+    const started = records.find((r) => r.kind === "review.started");
+    expect((started?.aggregator as { agentName: string }).agentName).toBe("Bob");
+    const aggregation = records.find((r) => r.kind === "aggregation.finished");
+    expect(aggregation?.agentName).toBe("Alice");
+    const report = readFileSync(outcome.reportPath, "utf8");
+    expect(report).toContain("## 结论");
+    expect(report).toContain("汇总席改由 Alice（原定 Bob 没能运行）。");
+    expect(report).toContain("failed:DRIVER_UNREACHABLE");
   });
 
   it("probes a shared driver exactly once, before any workspace exists", async () => {

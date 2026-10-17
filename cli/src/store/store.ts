@@ -30,10 +30,14 @@ import {
   COUNCILS_FORMAT,
   COUNCILS_VERSION,
   type CouncilRecord,
+  type CouncilsFile,
+  type PendingCouncil,
+  type SkippedSeat,
   agentRecordSchema,
   agentsFileSchema,
   councilRecordSchema,
   councilsFileSchema,
+  pendingCouncilSchema,
 } from "./schemas";
 
 export interface StoreEnv {
@@ -178,6 +182,7 @@ export class Store {
     agentIds: string[];
     rounds: number;
     reporterAgentId: string;
+    skippedSeats?: SkippedSeat[];
   }): CouncilRecord {
     const parsed = councilRecordSchema.safeParse({
       id: randomUUID(),
@@ -188,6 +193,7 @@ export class Store {
       agentIds: input.agentIds,
       rounds: input.rounds,
       reporterAgentId: input.reporterAgentId,
+      ...(input.skippedSeats === undefined ? {} : { skippedSeats: input.skippedSeats }),
     });
     if (!parsed.success) {
       throw errors.usage(zodFailureMessage(parsed.error.issues, "invalid council"));
@@ -232,8 +238,14 @@ export class Store {
   }
 
   /** Add missing roster agents and set the reporter. Used by `init` to keep
-   * pr-jury aligned with discovered drivers without `--force`. */
-  syncCouncilRoster(councilRef: string, roster: AgentRecord[], reporterId: string): CouncilRecord {
+   * pr-jury aligned with discovered drivers without `--force`. Pass
+   * `skippedSeats` to record default seats this init left off the council. */
+  syncCouncilRoster(
+    councilRef: string,
+    roster: AgentRecord[],
+    reporterId: string,
+    skippedSeats?: SkippedSeat[],
+  ): CouncilRecord {
     const council = this.getCouncil(councilRef);
     const ids = [...council.agentIds];
     for (const agent of roster) {
@@ -242,17 +254,26 @@ export class Store {
     if (!ids.includes(reporterId)) {
       throw errors.usage("reporter must be among council agents");
     }
+    const skipsUnchanged =
+      skippedSeats === undefined ||
+      JSON.stringify(council.skippedSeats ?? []) === JSON.stringify(skippedSeats);
     if (
       ids.length === council.agentIds.length &&
       ids.every((id, i) => id === council.agentIds[i]) &&
-      council.reporterAgentId === reporterId
+      council.reporterAgentId === reporterId &&
+      skipsUnchanged
     ) {
       return council;
     }
     const file = this.readCouncils();
     const idx = file.councils.findIndex((c) => c.id === council.id);
     if (idx < 0) throw errors.usage(`no council matches ref "${redactName(councilRef)}"`);
-    const next: CouncilRecord = { ...council, agentIds: ids, reporterAgentId: reporterId };
+    const next: CouncilRecord = {
+      ...council,
+      agentIds: ids,
+      reporterAgentId: reporterId,
+      ...(skippedSeats === undefined ? {} : { skippedSeats }),
+    };
     const validated = councilRecordSchema.safeParse(next);
     if (!validated.success) {
       throw errors.usage(zodFailureMessage(validated.error.issues, "invalid council"));
@@ -299,6 +320,36 @@ export class Store {
     file.councils = file.councils.map((row) => (row.id === council.id ? next : row));
     this.writeCouncils(file);
     return next;
+  }
+
+  listPendingCouncils(): PendingCouncil[] {
+    return this.readCouncils().pendingCouncils ?? [];
+  }
+
+  getPendingCouncil(name: string): PendingCouncil | null {
+    return this.listPendingCouncils().find((row) => row.name === name) ?? null;
+  }
+
+  /** Replace any pending row with this name. Does not create a real council. */
+  savePendingCouncil(input: PendingCouncil): PendingCouncil {
+    const parsed = pendingCouncilSchema.safeParse(input);
+    if (!parsed.success) {
+      throw errors.usage(zodFailureMessage(parsed.error.issues, "invalid pending council"));
+    }
+    const file = this.readCouncils();
+    const next = (file.pendingCouncils ?? []).filter((row) => row.name !== parsed.data.name);
+    next.push(parsed.data);
+    file.pendingCouncils = next;
+    this.writeCouncils(file);
+    return parsed.data;
+  }
+
+  deletePendingCouncil(name: string): void {
+    const file = this.readCouncils();
+    const pending = file.pendingCouncils ?? [];
+    if (!pending.some((row) => row.name === name)) return;
+    file.pendingCouncils = pending.filter((row) => row.name !== name);
+    this.writeCouncils(file);
   }
 
   deleteCouncil(ref: string): { deletedId: string; freed: true } {
@@ -351,11 +402,7 @@ export class Store {
     }
   }
 
-  private readCouncils(): {
-    format: "councilkit-councils";
-    version: 1;
-    councils: CouncilRecord[];
-  } {
+  private readCouncils(): CouncilsFile {
     ensureHome(this.env);
     const text = readFileText(this.paths.councils);
     if (text === null) {
@@ -377,13 +424,16 @@ export class Store {
     return validated.data;
   }
 
-  private writeCouncils(file: {
-    format: "councilkit-councils";
-    version: 1;
-    councils: CouncilRecord[];
-  }): void {
+  private writeCouncils(file: CouncilsFile): void {
+    const pending = file.pendingCouncils ?? [];
+    const payload: CouncilsFile = {
+      format: file.format,
+      version: file.version,
+      councils: file.councils,
+      ...(pending.length > 0 ? { pendingCouncils: pending } : {}),
+    };
     try {
-      atomicWriteJson(this.paths.councils, redact(file));
+      atomicWriteJson(this.paths.councils, redact(payload));
     } catch (cause) {
       throw errors.io(`failed to write councils.json: ${ioName(cause)}`, {
         cause: ioName(cause),

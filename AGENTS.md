@@ -32,17 +32,18 @@ pnpm exec councilkit ideate "一句话创意" --json            # 产品创意�
 ### `init` 默认配置
 
 - **默认 Agent**（按 PATH 上可发现的 CLI 创建）：
-  - `review-security`（需要 `cld`）
+  - `review-security`（需要 `cld`；没有 `cld` 时 PATH 上的独立 `cfuse` CLI 也会建成这一席）
   - `review-correctness`（需要 `grok`）
   - `review-maintainability`（需要 `kimi`）
   - `review-adversarial`（需要 `grok`）
   - `review-cursor`（需要 `cursor-agent`，model = `auto`）
+  - `review-codex`（需要 `codex` 且不是明确未登录；没有顶层 `config.toml` `model` 时 model = `default`，审查不传 `-m`）
   - `ideate-product` / `ideate-engineering`（需要 grok/kimi）
-  - `ideate-challenger`（需要 `codex` **且**能从 `CODEX_HOME`/`~/.codex` 发现模型）
+  - `ideate-challenger`（需要 `codex` 且不是明确未登录；没有顶层 `config.toml` `model` 时 model = `default`，与 `review-codex` 相同，不传 `-m`）
 
 - **默认 Council**：
-  - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 不是 preferred reporter）
-  - `product-jury`（Reporter 优先 Codex，其次 product，再 engineering；已配置 Reporter 不静默换人）
+  - `pr-jury`（reporter = `review-adversarial`（grok），缺 grok 则 `review-correctness`，再缺则已发现的第一个；`review-cursor` 和 `review-codex` 不是 preferred reporter）
+  - `product-jury`（Reporter 优先 Codex，其次 product，再 engineering；已配置 Reporter 不静默换人；就绪席位不足 2 不落盘，记在 `pendingCouncils`，`ideate` 说明缺席而不是只提示再跑 init）
 
 - **行为**：已存在的 `pr-jury` 会补进新发现的默认 Agent 并把 reporter 切到 grok（若有）
 - `--force` 先删 `pr-jury` 与 `product-jury` 再重建

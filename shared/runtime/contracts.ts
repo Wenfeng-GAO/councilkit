@@ -14,10 +14,10 @@ export const CANONICAL_ORIGIN = "http://127.0.0.1:43127" as const;
 export const CANONICAL_HOST_HEADER = "127.0.0.1:43127" as const;
 
 /**
- * Lowest supported Node.js major. The Host accepts this or newer, matching
- * `engines: { node: ">=22" }` and the CI matrix (22 / 24 / 26). #282.
+ * Lowest supported Node.js. The Host accepts this floor or newer, matching
+ * `engines: { node: ">=22.22.2" }` and the CI matrix (22 / 24 / 26). #282 #372.
  */
-export { SUPPORTED_NODE_MAJOR } from "./node-gate";
+export { SUPPORTED_NODE_FLOOR, SUPPORTED_NODE_MAJOR, SUPPORTED_NODE_RANGE } from "./node-gate";
 
 /** Session capability cookie + CSRF header names (U2 security boundary). */
 export const SESSION_COOKIE_NAME = "councilkit_session" as const;

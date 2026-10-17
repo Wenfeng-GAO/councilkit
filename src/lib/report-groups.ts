@@ -1,6 +1,7 @@
 import { cliRunNeedsPoll } from "@/lib/cli-run-status";
 import { extractPrUrl } from "@/lib/fix-prompt";
 import type { ParsedReviewReport } from "@/lib/review-report";
+import { formatSeatCount } from "@/lib/seat-count";
 import { isDemoRun } from "@shared/runtime/demo-report";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
@@ -278,10 +279,7 @@ export function seatProgress(run: CliRunSummaryDto): string | null {
   const attempts = run.progress?.attempts;
   if (!attempts || attempts.length === 0) return null;
   if (run.status !== "running" && run.status !== "awaiting_orchestrator") return null;
-  const done = attempts.filter(
-    (row) => row.status === "success" || row.status === "failure" || row.status === "cancelled",
-  ).length;
-  return `${done}/${attempts.length}`;
+  return formatSeatCount(attempts);
 }
 
 function groupLabel(key: string): string {

@@ -198,7 +198,7 @@ test("生成完整本轮总览截图（桌面）", async ({ page }) => {
     <h1>审查已完成</h1>
     <p class="ck-wb-report-meta">
       <span>审查执行已完成</span>
-      <span>6/6 席位已完成</span>
+      <span>6/6 席位成功</span>
     </p>
 
     <section class="ck-finding-list">
@@ -566,7 +566,7 @@ test("生成完整本轮总览截图（移动）", async ({ page }) => {
     <h1>审查已完成</h1>
     <p class="ck-wb-report-meta">
       <span>审查执行已完成</span>
-      <span>6/6 席位已完成</span>
+      <span>6/6 席位成功</span>
     </p>
 
     <section class="ck-finding-list">

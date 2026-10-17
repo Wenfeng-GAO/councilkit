@@ -230,6 +230,52 @@ describe("cli auto driver-commands", () => {
       expect(spec.executable).toBe(join(tmp, "cld"));
     });
 
+    it("standalone cfuse: runs cfuse -p when cld is absent", () => {
+      const dir = mkdtempSync(join(tmpdir(), "councilkit-dc-cfuse-"));
+      try {
+        const cfuse = join(dir, "cfuse");
+        writeFileSync(cfuse, "#!/bin/sh\nexit 0\n");
+        chmodSync(cfuse, 0o755);
+        const spec = buildSpawnSpec(agent(CLAUDE_CFUSE), {
+          attemptId: "attempt-0",
+          workspace: "/ws",
+          prompt: "review this",
+          env: { PATH: dir, HOME: dir },
+        });
+        expect(spec.executable).toBe(cfuse);
+        expect(spec.promptStdin).toBe(false);
+        expect(spec.plainText).toBe(true);
+        expect(spec.argv).toEqual([
+          "-p",
+          "review this",
+          "--output-format",
+          "text",
+          "--skip-update",
+        ]);
+        expect(spec.argv).not.toContain("--dangerously-skip-permissions");
+        expect(
+          extractFinalOutput(spec.driverId, "  ## 发现\nok\n", undefined, null, spec.plainText),
+        ).toBe("## 发现\nok");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("pins cfuse-claude as CLD_CFUSE_BIN when cfuse-claude-code is absent", () => {
+      const alias = join(tmp, "cfuse-claude");
+      writeFileSync(alias, "#!/bin/sh\nexit 0\n");
+      chmodSync(alias, 0o755);
+      const spec = buildSpawnSpec(agent(CLAUDE_CFUSE), {
+        attemptId: "attempt-0",
+        workspace: "/ws",
+        prompt: "do it",
+        env: env(tmp),
+      });
+      expect(spec.executable).toBe(join(tmp, "cld"));
+      expect(spec.envOverlay?.CLD_CFUSE_BIN).toBe(alias);
+      expect(spec.argv[0]).toBe("cfuse");
+    });
+
     it("kimi: prompt embedded in argv via -p, no --auto/-y", () => {
       const spec = buildSpawnSpec(agent(KIMI, "kimi-code/k3"), {
         attemptId: "attempt-0",
@@ -316,6 +362,20 @@ describe("cli auto driver-commands", () => {
       });
       expect(spec.argv).toContain("--model");
       expect(spec.argv).toContain("composer-2.5");
+    });
+
+    it("codex: default model alias omits -m so the CLI uses its own model", () => {
+      for (const modelId of ["default", "auto", "configured"]) {
+        const spec = buildSpawnSpec(agent(CODEX, modelId), {
+          attemptId: "attempt-0",
+          workspace: "/ws",
+          prompt: "review",
+          env: env(tmp),
+        });
+        expect(spec.argv, modelId).not.toContain("-m");
+        expect(spec.argv, modelId).not.toContain("--model");
+        expect(spec.argv, modelId).not.toContain(modelId);
+      }
     });
 
     it("codex: stdin prompt, last-message file under workspace, skip-git-repo-check, --json", () => {
@@ -440,6 +500,12 @@ describe("cli auto driver-commands", () => {
         "stream-json",
       ]);
       expect(spec.promptStdin).toBe(false);
+    });
+
+    it("codex: default model alias omits -m on the probe", () => {
+      const spec = buildProbeSpec(agent(CODEX, "default"), probeOpts());
+      expect(spec.argv).toEqual(["exec", "--skip-git-repo-check", "--json", "-"]);
+      expect(spec.argv).not.toContain("default");
     });
 
     it("codex: minimal exec argv — no sandbox-write, no bypass, no -o", () => {

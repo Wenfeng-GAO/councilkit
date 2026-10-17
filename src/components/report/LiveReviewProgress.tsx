@@ -1,4 +1,5 @@
 import { displayLastActivity } from "@/lib/live-transcript";
+import { formatSeatCount } from "@/lib/seat-count";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import { reviewSeatIdentity, reviewSeatTabLabel, reviewSeatTitle } from "@/lib/seat-label";
 import { squadRoleName } from "@/lib/squad-workspace";
@@ -132,7 +133,7 @@ export function LiveReviewProgress({
   }
   const seats = progress.attempts.filter((row) => row.role === "attempt");
   const aggregators = progress.attempts.filter((row) => row.role === "aggregator");
-  const ended = seats.filter((row) => isEndedAttempt(row.status)).length;
+  const succeeded = seats.filter((row) => row.status === "success").length;
   const failed = seats.filter((row) => row.status === "failure").length;
   const running = seats.filter((row) => row.status === "running").length;
   const ideateGroups = run.kind === "ideate" ? groupIdeateSeats(seats) : null;
@@ -150,10 +151,7 @@ export function LiveReviewProgress({
       </div>
       <div className="ck-review-progress-summary">
         <p>
-          <strong>
-            {ended} / {seats.length}
-          </strong>{" "}
-          {run.kind === "ideate" ? "讨论席位已结束" : "审查席位已结束"}
+          <strong>{formatSeatCount(seats) ?? `0/${seats.length} 席位成功`}</strong>
         </p>
         <p>
           {running > 0 ? `${running} 席进行中` : ""}
@@ -163,7 +161,7 @@ export function LiveReviewProgress({
       <progress
         className="ck-review-meter"
         aria-label="审查席位完成进度"
-        value={ended}
+        value={succeeded}
         max={Math.max(1, seats.length)}
       />
       {failed > 0 ? (

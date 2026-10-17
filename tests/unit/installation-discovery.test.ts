@@ -152,13 +152,39 @@ describe("discoverInstallations", () => {
         cfuse: null,
       },
     ];
-    expect(outcome).toEqual({ installations: expected });
+    expect(outcome).toEqual({
+      installations: expected,
+      cfuse: {
+        cld: { name: "cld", path: join(bin, "cld"), source: "path", pathIndex: 0 },
+        standalone: null,
+        backend: {
+          name: "cfuse-claude-code",
+          path: join(later, "cfuse-claude-code"),
+          source: "path",
+          pathIndex: 1,
+        },
+        seat: "cld",
+      },
+    });
 
     const backendsOnly = discoverInstallations({
       env: { PATH: later },
       wellKnownDirs: [],
     });
-    expect(backendsOnly).toEqual({ installations: [] });
+    expect(backendsOnly).toEqual({
+      installations: [],
+      cfuse: {
+        cld: null,
+        standalone: null,
+        backend: {
+          name: "cfuse-claude-code",
+          path: join(later, "cfuse-claude-code"),
+          source: "path",
+          pathIndex: 0,
+        },
+        seat: "backend-only",
+      },
+    });
   });
 
   it.skipIf(RUNNING_AS_ROOT)(
@@ -192,6 +218,7 @@ describe("discoverInstallations", () => {
             cfuse: null,
           },
         ],
+        cfuse: { cld: null, standalone: null, backend: null, seat: "absent" },
       });
       expect(existsSync(marker)).toBe(false);
     },
@@ -227,6 +254,12 @@ describe("discoverInstallations", () => {
           cfuse: null,
         },
       ],
+      cfuse: {
+        cld: { name: "cld", path: cldOnly, source: "path", pathIndex: 0 },
+        standalone: null,
+        backend: null,
+        seat: "cld",
+      },
     });
   });
 
@@ -248,5 +281,92 @@ describe("discoverInstallations", () => {
         cfuse: null,
       },
     ]);
+    expect(outcome.cfuse).toEqual({
+      cld: null,
+      standalone: null,
+      backend: null,
+      seat: "absent",
+    });
+  });
+});
+
+describe("cfuse binary names (#371)", () => {
+  it("only cfuse is a standalone seat and not a cld installation", async () => {
+    const root = await privateDir("only-cfuse-");
+    const bin = await pathBin(root, "bin");
+    const cfuse = await writeExecutable(bin, "cfuse", "cfuse-cli");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    expect(outcome.installations).toEqual([]);
+    expect(outcome.cfuse).toEqual({
+      cld: null,
+      standalone: { name: "cfuse", path: cfuse, source: "path", pathIndex: 0 },
+      backend: null,
+      seat: "standalone",
+    });
+  });
+
+  it("only cfuse-claude is a backend and not a seat", async () => {
+    const root = await privateDir("only-cfuse-claude-");
+    const bin = await pathBin(root, "bin");
+    const backend = await writeExecutable(bin, "cfuse-claude", "wrapper");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    expect(outcome.installations).toEqual([]);
+    expect(outcome.cfuse).toEqual({
+      cld: null,
+      standalone: null,
+      backend: { name: "cfuse-claude", path: backend, source: "path", pathIndex: 0 },
+      seat: "backend-only",
+    });
+  });
+
+  it("cld plus cfuse-claude-code is the composite installation", async () => {
+    const root = await privateDir("cld-and-backend-");
+    const bin = await pathBin(root, "bin");
+    const cld = await writeExecutable(bin, "cld", "wrapper");
+    const backend = await writeExecutable(bin, "cfuse-claude-code", "backend");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    expect(outcome.installations).toEqual([
+      {
+        name: "cld",
+        driverId: "claude-stream-json",
+        wrapper: { name: "cld", path: cld, source: "path", pathIndex: 0 },
+        claude: null,
+        cfuse: { name: "cfuse-claude-code", path: backend, source: "path", pathIndex: 0 },
+      },
+    ]);
+    expect(outcome.cfuse.seat).toBe("cld");
+    expect(outcome.cfuse.backend?.path).toBe(backend);
+  });
+
+  it("prefers cfuse-claude-code over cfuse-claude when both exist", async () => {
+    const root = await privateDir("both-backends-");
+    const bin = await pathBin(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper");
+    const preferred = await writeExecutable(bin, "cfuse-claude-code", "backend");
+    await writeExecutable(bin, "cfuse-claude", "alias");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    expect(outcome.cfuse.backend?.path).toBe(preferred);
+    expect(outcome.installations[0]?.cfuse?.path).toBe(preferred);
+  });
+
+  it("uses cfuse-claude as the backend when cld is present and cfuse-claude-code is not", async () => {
+    const root = await privateDir("alias-backend-");
+    const bin = await pathBin(root, "bin");
+    await writeExecutable(bin, "cld", "wrapper");
+    const alias = await writeExecutable(bin, "cfuse-claude", "alias");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    expect(outcome.cfuse.seat).toBe("cld");
+    expect(outcome.installations[0]?.cfuse?.name).toBe("cfuse-claude");
+    expect(outcome.installations[0]?.cfuse?.path).toBe(alias);
+  });
+
+  it("finds nothing when none of the cfuse binaries or cld are present", async () => {
+    const root = await privateDir("cfuse-nothing-");
+    const bin = await pathBin(root, "bin");
+    const outcome = discoverInstallations({ env: { PATH: bin }, wellKnownDirs: [] });
+    expect(outcome).toEqual({
+      installations: [],
+      cfuse: { cld: null, standalone: null, backend: null, seat: "absent" },
+    });
   });
 });

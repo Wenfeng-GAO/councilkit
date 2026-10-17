@@ -538,7 +538,13 @@ async function runOneSpawn(
   const extracted =
     out.error !== undefined
       ? null
-      : extractFinalOutput(spec.driverId, out.stdout, spec.lastMessageFile, out.finalEventLine);
+      : extractFinalOutput(
+          spec.driverId,
+          out.stdout,
+          spec.lastMessageFile,
+          out.finalEventLine,
+          spec.plainText === true,
+        );
 
   let failure: AttemptFailure | undefined;
   if (out.error !== undefined) {
@@ -557,6 +563,11 @@ async function runOneSpawn(
       stderr: out.stderr,
       exitCode: out.exitCode,
     });
+    const delivered = extracted !== null && extracted.trim().length > 0;
+    // Exit 0 plus a final result is success. Digits and other unstructured
+    // text (including an explicit auth phrase on stderr) do not override it.
+    // A structured protocol error still fails below.
+    const finished = out.exitCode === 0 && delivered && terminal?.source !== "structured";
     if (out.exitCode !== 0) {
       const message = terminal?.message ?? formatExitFailure(out.exitCode, out.stderr);
       failure = {
@@ -565,13 +576,10 @@ async function runOneSpawn(
         errorClass: terminal?.errorClass,
         retryable: terminal?.retryable ?? true,
       };
-    } else if (terminal) {
+    } else if (!finished && terminal) {
       // Codex often logs Reconnecting... N/5 and then finishes the turn.
       // Wait out that auto-retry: exit 0 + a deliverable is success.
-      const recoveredReconnect =
-        isCodexReconnectDiagnostic(terminal.message) &&
-        extracted !== null &&
-        extracted.trim().length > 0;
+      const recoveredReconnect = isCodexReconnectDiagnostic(terminal.message) && delivered;
       if (!recoveredReconnect) {
         failure = {
           code: "EXIT",
@@ -583,7 +591,7 @@ async function runOneSpawn(
           retryable: terminal.retryable,
         };
       }
-    } else if (extracted === null || extracted.trim().length === 0) {
+    } else if (!delivered) {
       failure = {
         code: "NO_OUTPUT",
         message: "no final output extracted from driver",

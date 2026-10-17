@@ -19,9 +19,9 @@ const CLI_GATE = join(ROOT, "cli/dist/node-gate.mjs");
 const HOST = join(ROOT, "dist-host/main.mjs");
 const OLD = "v20.19.2";
 const EXACT_ZH =
-  "CouncilKit 需要 Node.js 22 或更新版本，你现在用的是 v20.19.2。升级方法：`nvm install --lts && nvm use --lts`，或者从 nodejs.org 下载 LTS 版本。";
+  "CouncilKit 需要 Node.js 22.22.2 或更新版本，你现在用的是 v20.19.2。升级方法：`nvm install 22.22.2 && nvm use 22.22.2`，或者从 nodejs.org 下载 22.22.2 或更新的 LTS 版本。";
 const EXACT_EN =
-  "CouncilKit needs Node.js 22 or newer (you have v20.19.2). Upgrade with `nvm install --lts && nvm use --lts`, or get the LTS from nodejs.org.";
+  "CouncilKit needs Node.js 22.22.2 or newer (you have v20.19.2). Upgrade with `nvm install 22.22.2 && nvm use 22.22.2`, or get 22.22.2 or a newer LTS from nodejs.org.";
 // Simulate an old Node for the spawned entry: process.version is what the gate reads.
 const FAKE_OLD = `--import=data:text/javascript,Object.defineProperty(process,"version",{value:"${OLD}"})`;
 const built = existsSync(CLI_GATE) && existsSync(HOST);
@@ -43,7 +43,7 @@ describe("NPX-03b unsupported Node copy", () => {
     expect(unsupportedNodeMessage("v18.0.0")).toContain("(you have v18.0.0)");
   });
 
-  it("NPX-03b gate writes exactly the two lines and exits 1; passes on >=22", () => {
+  it("NPX-03b gate writes exactly the two lines and exits 1; passes on >=22.22.2", () => {
     let err = "";
     let code: number | null = null;
     const io = {
@@ -60,7 +60,9 @@ describe("NPX-03b unsupported Node copy", () => {
     expect(() => enforceSupportedNode(OLD, io)).toThrow("exit");
     expect(code).toBe(1);
     expect(err).toBe(`${EXACT_ZH}\n${EXACT_EN}\n`);
-    expect(() => enforceSupportedNode("v22.0.0", io)).not.toThrow();
+    expect(() => enforceSupportedNode("v22.18.0", io)).toThrow("exit");
+    expect(() => enforceSupportedNode("v22.22.2", io)).not.toThrow();
+    expect(() => enforceSupportedNode("v24.15.0", io)).not.toThrow();
   });
 
   needBuilt("NPX-03b CLI entry --help on Node v20.19.2: stderr copy, exit 1, no help", () => {

@@ -87,15 +87,48 @@ export interface ReviewReportInput {
   /** The failure phase (attempts / aggregation / transcript / …) — lets the
    * banner distinguish "Aggregator ran and failed" from "never started". */
   failurePhase?: string;
+  /** Configured reporter could not run; another ready seat wrote the synthesis. */
+  reporterFailover?: { from: string; to: string };
+}
+
+/** Grey-line copy for the Chinese conclusion. The report page renders it with an info icon. */
+export function reporterFailoverSentence(failover: { from: string; to: string }): string {
+  return `汇总席改由 ${failover.to}（原定 ${failover.from} 没能运行）。`;
+}
+
+/** Insert the failover sentence into the conclusion, without changing the verdict line. */
+function applyReporterFailover(
+  body: string,
+  failover: { from: string; to: string } | undefined,
+): string {
+  if (failover === undefined) return body;
+  const line = reporterFailoverSentence(failover);
+  if (body.includes(line)) return body;
+  if (body.length === 0) return `## 结论\n\n${line}`;
+  const lines = body.split("\n");
+  const start = lines.findIndex((row) => /^## (?:结论|Verdict)[^\S\n]*$/.test(row));
+  if (start === -1) return `${body}\n\n## 结论\n\n${line}`;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^## /.test(lines[index] ?? "")) {
+      end = index;
+      break;
+    }
+  }
+  const next = lines.slice();
+  const blank = next[end - 1] === "" ? [] : [""];
+  next.splice(end, 0, ...blank, line, "");
+  return next.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
 /** Render the full Markdown report. */
 export function renderReviewReport(input: ReviewReportInput): string {
   const head = renderHeader(input);
-  const body =
+  const rawBody =
     input.aggregation?.status === "success" && input.aggregation.output.trim().length > 0
       ? input.aggregation.output.trim()
       : "";
+  const body = applyReporterFailover(rawBody, input.reporterFailover);
   const sections: string[] = [head];
   if (body.length > 0) {
     sections.push("---", "", body, "");
