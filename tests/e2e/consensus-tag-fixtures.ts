@@ -175,7 +175,7 @@ export function seedConsensusTagFixtures(home: string): void {
         "comment",
         "",
         "缺席：review-security（未找到 cld）",
-        "缺席：cursor（non-zero exit 1）",
+        "缺席：cursor（运行失败，退出码 1）",
         "",
         "阻塞 0。",
         "",

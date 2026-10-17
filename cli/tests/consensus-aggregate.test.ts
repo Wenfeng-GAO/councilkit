@@ -204,12 +204,19 @@ describe("missing seats", () => {
       driverFound: (executable) => executable !== "cld",
     });
     expect(absences).toContainEqual({ name: "review-security", reason: "未找到 cld" });
-    expect(absences).toContainEqual({ name: "cursor", reason: "non-zero exit 1" });
+    expect(absences).toContainEqual({ name: "cursor", reason: "运行失败，退出码 1" });
     expect(absences.some((row) => row.name === "kimi")).toBe(false);
     expect(absences.some((row) => row.reason.startsWith("未找到 grok"))).toBe(false);
     expect(
       failureAbsenceReason({ code: "EXIT", message: "please login", errorClass: "auth" }),
     ).toBe("未登录");
+    expect(failureAbsenceReason({ code: "EXIT", message: "not logged in" })).toBe("未登录");
+    expect(
+      failureAbsenceReason({
+        code: "EXIT",
+        message: "non-zero exit 1\nerror: Cannot combine --prompt with --plan.",
+      }),
+    ).toBe("运行失败，退出码 1");
 
     const md = renderReviewReport({
       runId: "ck-review-absent",
@@ -234,7 +241,8 @@ describe("missing seats", () => {
     expect(md).toContain("failed:EXIT");
     const conclusion = md.slice(md.indexOf("## 结论"), md.indexOf("## 阻塞问题"));
     expect(conclusion).toContain("缺席：review-security（未找到 cld）");
-    expect(conclusion).toContain("缺席：cursor（non-zero exit 1）");
+    expect(conclusion).toContain("缺席：cursor（运行失败，退出码 1）");
+    expect(conclusion).not.toMatch(/non-zero|exit \d/i);
     const titles = [...md.matchAll(/^## .+$/gm)].map((match) => match[0]);
     expect(titles.slice(0, 4)).toEqual(["## 结论", "## 阻塞问题", "## 需处理的问题", "## 待确认"]);
     expect(titles.at(-1)).toBe("## 附录:各审查者交付物");

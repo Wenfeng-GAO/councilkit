@@ -18,18 +18,31 @@ export function formatAbsence(absence: ReportAbsence): string {
   return `缺席：${absence.name}（${reason}）`;
 }
 
+const NOT_LOGGED_IN =
+  /未登录|not logged in|please (?:run )?\S* ?login|AUTH_REQUIRED|auth(?:entication|orization)? (?:failed|error)|unauthorized|invalid api key/i;
+
+/** Parenthetical text is Chinese. Driver diagnostics stay out of the conclusion. */
 export function failureAbsenceReason(
   failure: { code?: string; message?: string; errorClass?: string } | undefined,
 ): string {
   const message = failure?.message?.replace(/\s+/g, " ").trim() ?? "";
+  const code = failure?.code?.trim() ?? "";
   if (
     failure?.errorClass === "auth" ||
-    /未登录|not logged in|please (?:run )?\S* ?login|AUTH_REQUIRED/i.test(message)
+    code === "AUTH_REQUIRED" ||
+    NOT_LOGGED_IN.test(message) ||
+    NOT_LOGGED_IN.test(code)
   ) {
     return "未登录";
   }
-  if (message.length > 0) return message.slice(0, 160);
-  return failure?.code?.trim() || "失败";
+  const exit = /non-zero exit (\d+)/i.exec(message);
+  if (exit?.[1]) return `运行失败，退出码 ${exit[1]}`;
+  if (code === "TIMEOUT" || /\btimed out\b/i.test(message)) return "运行超时";
+  if (code === "ABORTED" || code === "CANCELLED") return "已取消";
+  if (code === "NO_OUTPUT") return "没有产出";
+  if (code === "SPAWN_ERROR") return "未能启动";
+  if (/[\u4e00-\u9fff]/.test(message) && !/[A-Za-z]{3,}/.test(message)) return message.slice(0, 80);
+  return "运行失败";
 }
 
 /**

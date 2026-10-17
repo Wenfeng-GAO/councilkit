@@ -101,7 +101,8 @@ test.describe("locked report labels", () => {
         if (item.file === "absent-seat") {
           const decision = page.getByRole("region", { name: "审查结论" });
           await expect(decision.getByText("缺席：review-security（未找到 cld）")).toBeVisible();
-          await expect(decision.getByText("缺席：cursor（non-zero exit 1）")).toBeVisible();
+          await expect(decision.getByText("缺席：cursor（运行失败，退出码 1）")).toBeVisible();
+          await expect(decision.getByText(/non-zero|exit/i)).toHaveCount(0);
         }
         await tag.scrollIntoViewIfNeeded();
         await page.screenshot({
