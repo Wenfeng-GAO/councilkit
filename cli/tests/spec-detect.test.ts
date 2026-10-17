@@ -163,6 +163,9 @@ describe("verify binding from bound spec", () => {
       "IN-12 SE-12 E2E-3 E2E-3a AC-12; noise SHA-256 UTF-8 UTF-16 ISO-8601 ISO-3166 GO-1.21 on 2026-10-16",
     );
     expect(ids).toEqual(expect.arrayContaining(["IN-12", "SE-12", "E2E-3", "E2E-3a", "AC-12"]));
+    expect(extractAcceptanceIds("IN-12. RFC-2119")).toEqual(
+      expect.arrayContaining(["IN-12", "RFC-2119"]),
+    );
     expect(ids).not.toEqual(expect.arrayContaining(["SHA-256", "UTF-8", "UTF-16", "ISO-8601"]));
     for (const rejected of [
       "SHA-256",
@@ -175,6 +178,19 @@ describe("verify binding from bound spec", () => {
     ]) {
       expect(ids).not.toContain(rejected);
     }
+  });
+
+  it("does not accept a generic id that is only a prefix of a longer token", () => {
+    const ids = extractAcceptanceIds(
+      "See CVE-2026-12345 and FOO-12-34. Still in scope: IN-12 SE-12 E2E-3 E2E-3a RFC-2119.",
+    );
+    expect(ids).toEqual(expect.arrayContaining(["IN-12", "SE-12", "E2E-3", "E2E-3a", "RFC-2119"]));
+    for (const rejected of ["CVE-2026", "CVE-2026-12345", "FOO-12", "FOO-12-34"]) {
+      expect(ids).not.toContain(rejected);
+    }
+    expect(
+      bindVerifyFromSpec({ specSource: "sec.md", specText: "CVE-2026-12345 only" }),
+    ).toBeNull();
   });
 
   it("binds an acceptance table of IN-/SE-/E2E- rows", () => {

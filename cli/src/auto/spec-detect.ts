@@ -68,16 +68,19 @@ const PATH_REF_RE =
  *   Country or language codes without a hyphen and a number never match.
  * - A dotted version (`GO-1.21`) is not an id: the match must not continue into `.\d`.
  *   `IN-12.` at the end of a sentence still matches, because the dot is not `.\d`.
+ * - A longer token (`CVE-2026-12345`, `FOO-12-34`) is not an id either. The match
+ *   must not continue into another `-<letter or digit>` segment, so a prefix
+ *   such as `CVE-2026` or `FOO-12` is not accepted on its own.
  * - `RFC-2119` matches. It has the same shape as a requirement id; it is not a
  *   hash name, an encoding, or an ISO number, so it stays accepted.
  */
 const NAMED_ACCEPTANCE_ID_RE =
   /\b(?:agentverify:[A-Za-z0-9][\w.:-]{0,80}|(?:AC|INV|AV)[-_][A-Za-z0-9][\w.-]{0,80}|A\d+|VT\d+)\b/g;
 
-const GENERIC_ACCEPTANCE_ID_RE = /\b[A-Z][A-Z0-9]{0,7}-\d+[a-z]?(?!\.\d)\b/g;
+const GENERIC_ACCEPTANCE_ID_RE = /\b[A-Z][A-Z0-9]{0,7}-\d+[a-z]?(?!\.\d)(?!-[A-Za-z0-9])\b/g;
 
 /** Any prefix-hyphen-number token, including ones the generic rule rejects. */
-const LOOSE_ID_RE = /\b[A-Za-z][A-Za-z0-9]{0,7}-\d+[A-Za-z]?(?!\.\d)\b/g;
+const LOOSE_ID_RE = /\b[A-Za-z][A-Za-z0-9]{0,7}-\d+[A-Za-z]?(?!\.\d)(?!-[A-Za-z0-9])\b/g;
 
 const REJECTED_GENERIC_ID = /^(?:SHA-(?:1|2|3|224|256|384|512)|UTF-(?:8|16|32)|ISO-\d+)$/;
 

@@ -3,6 +3,7 @@
  * Colour is not the only difference — the class names carry the shape.
  */
 import { OverviewView } from "@/components/report/workbench/OverviewView";
+import { findingMarkdown } from "@/lib/finding-marks";
 import { parseReviewReport } from "@/lib/review-report";
 import { cliRunDetailResponseSchema } from "@shared/runtime/schemas";
 import { createElement } from "react";
@@ -136,5 +137,37 @@ describe("report label shapes", () => {
     expect(decision).not.toContain("review-security");
     expect(decision).not.toContain("cld");
     expect(decision).toContain("账本无阻塞");
+  });
+});
+
+describe("findingMarkdown", () => {
+  it("separates only the title and location line", () => {
+    const markdown = findingMarkdown("空指针\n位置：`src/a.ts`\n触发与后果：调用方崩溃。");
+    expect(markdown.startsWith("空指针\n\n位置：`src/a.ts`\n")).toBe(true);
+    expect(markdown).toContain("触发与后果：调用方崩溃。");
+    expect(markdown).not.toContain("触发与后果：调用方崩溃。\n\n");
+  });
+
+  it("keeps a table, a nested list, and indented code", () => {
+    const markdown = findingMarkdown(
+      [
+        "空指针",
+        "位置：`src/a.ts`",
+        "| 列 | 值 |",
+        "| --- | --- |",
+        "| a | 1 |",
+        "- 外层",
+        "  - 内层",
+        "    const x = 1;",
+        "不变量：INV-1",
+        "规格合同减法：不要这条",
+      ].join("\n"),
+    );
+    expect(markdown).toContain("| 列 | 值 |\n| --- | --- |\n| a | 1 |");
+    expect(markdown).toContain("- 外层\n  - 内层");
+    expect(markdown).toContain("    const x = 1;");
+    expect(markdown).not.toContain("不变量");
+    expect(markdown).not.toContain("规格合同减法");
+    expect(markdown).not.toMatch(/\| 列 \| 值 \|\n\n\| --- \|/);
   });
 });

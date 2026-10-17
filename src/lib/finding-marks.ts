@@ -71,14 +71,39 @@ export function textWithoutBasis(text: string, basis: string | null): string {
     .trim();
 }
 
-/** Keep a location line from collapsing into the title. Markdown treats a
- * single newline as a space. */
+const LOCATION_LINE = /^位置\s*[:：]/;
+
+/**
+ * Keep a location line from collapsing into the title. Markdown treats a
+ * single newline as a space, so that one boundary becomes a blank line.
+ * Every other line keeps its break and its indentation: a table, a nested
+ * list, or an indented code block must survive SafeMarkdown.
+ */
 export function findingMarkdown(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .filter((line) => !/^(?:不变量|不变式|invariant)\s*[:：]/i.test(line))
-    .filter((line) => !/规格合同减法|合同内\s*Act On|不变量\s*ID/.test(line))
-    .join("\n\n");
+  const lines = text.split("\n").flatMap((line) => {
+    const trimmed = line.trim();
+    if (/^(?:不变量|不变式|invariant)\s*[:：]/i.test(trimmed)) return [];
+    if (/规格合同减法|合同内\s*Act On|不变量\s*ID/.test(line)) return [];
+    return [line.replace(/[ \t]+$/g, "")];
+  });
+  while (lines.length > 0 && lines[0]?.trim().length === 0) lines.shift();
+  while (lines.length > 0 && lines[lines.length - 1]?.trim().length === 0) lines.pop();
+  if (lines.length === 0) return "";
+  const title = lines[0]?.trim() ?? "";
+  const rest = lines.slice(1);
+  let cursor = 0;
+  while (cursor < rest.length && rest[cursor]?.trim().length === 0) cursor += 1;
+  const location = rest[cursor];
+  if (location && LOCATION_LINE.test(location.trim())) {
+    const tail = rest
+      .slice(cursor + 1)
+      .join("\n")
+      .replace(/^\n+/, "");
+    const separated = `${title}\n\n${location.trim()}`;
+    return tail.length > 0 ? `${separated}\n${tail}` : separated;
+  }
+  return [title, ...rest]
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

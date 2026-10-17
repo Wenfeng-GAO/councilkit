@@ -277,39 +277,41 @@ function sortClusters(clusters: FindingCluster[]): FindingCluster[] {
   });
 }
 
+/**
+ * Cluster by a stable representative, not by transitive pairwise edges.
+ * A matches B and B matches C must not become one defect when A does not
+ * match C — that chain used to count as 3/3 and rewrite the verdict.
+ * The representative is the highest severity, then the longest title.
+ * A later finding joins only when it matches every member already in the
+ * cluster, so the cluster stays a clique around that representative.
+ */
 function clusterFindings(findings: SeatFinding[]): FindingCluster[] {
-  const parent = findings.map((_, index) => index);
-  const find = (index: number): number => {
-    const next = parent[index] ?? index;
-    if (next === index) return index;
-    const root = find(next);
-    parent[index] = root;
-    return root;
-  };
-  const unite = (left: number, right: number): void => {
-    const a = find(left);
-    const b = find(right);
-    if (a !== b) parent[a] = b;
-  };
-  for (let i = 0; i < findings.length; i++) {
-    for (let j = i + 1; j < findings.length; j++) {
-      const left = findings[i];
-      const right = findings[j];
-      if (!left || !right) continue;
-      if (sameDefect(left.tokens, right.tokens)) unite(i, j);
-    }
-  }
-  const groups = new Map<number, SeatFinding[]>();
-  for (let i = 0; i < findings.length; i++) {
-    const finding = findings[i];
-    if (!finding) continue;
-    const root = find(i);
-    const list = groups.get(root) ?? [];
-    list.push(finding);
-    groups.set(root, list);
-  }
+  const remaining = findings.map((_, index) => index);
   const clusters: FindingCluster[] = [];
-  for (const group of groups.values()) {
+  while (remaining.length > 0) {
+    const repAt = strongestRemaining(remaining, findings);
+    const rep = findings[repAt];
+    if (!rep) break;
+    const memberIndexes = [repAt];
+    for (const index of remaining) {
+      if (index === repAt) continue;
+      const candidate = findings[index];
+      if (!candidate) continue;
+      const matchesCluster = memberIndexes.every((member) => {
+        const other = findings[member];
+        return other !== undefined && sameDefect(candidate.tokens, other.tokens);
+      });
+      if (matchesCluster) memberIndexes.push(index);
+    }
+    for (const index of memberIndexes) {
+      const at = remaining.indexOf(index);
+      if (at >= 0) remaining.splice(at, 1);
+    }
+    memberIndexes.sort((a, b) => a - b);
+    const group = memberIndexes.flatMap((index) => {
+      const finding = findings[index];
+      return finding ? [finding] : [];
+    });
     const seats: string[] = [];
     for (const finding of group) {
       if (!seats.includes(finding.seat)) seats.push(finding.seat);
@@ -329,6 +331,22 @@ function clusterFindings(findings: SeatFinding[]): FindingCluster[] {
     });
   }
   return clusters;
+}
+
+function strongestRemaining(indexes: readonly number[], findings: readonly SeatFinding[]): number {
+  let best = indexes[0] ?? 0;
+  for (const index of indexes) {
+    const candidate = findings[index];
+    const current = findings[best];
+    if (!candidate || !current) continue;
+    const rank = SEVERITY_RANK[candidate.severity] - SEVERITY_RANK[current.severity];
+    if (rank < 0) {
+      best = index;
+      continue;
+    }
+    if (rank === 0 && candidate.title.length > current.title.length) best = index;
+  }
+  return best;
 }
 
 function detailLines(body: string): string {

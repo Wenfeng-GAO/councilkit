@@ -104,6 +104,20 @@ describe("no-spec majority aggregation", () => {
     expect(summarizeSeatOutput(body).blockingCount).toBe(1);
   });
 
+  it("does not treat a transitive token chain as one 3/3 defect", () => {
+    const attempts = [
+      seat("kimi", finding("timeout retry budget exhausted", "major")),
+      seat("cursor", finding("timeout retry cache stampede", "critical")),
+      seat("codex", finding("cache stampede queue backlog", "major")),
+    ];
+    const body = shape("## 结论\ncomment\n", attempts);
+    expect(body).not.toContain("3/3");
+    expect(body).toContain("无规格依据，依据是 2/3 席一致：kimi、cursor");
+    expect(body).toContain("[待确认 · codex]");
+    expect(body).not.toMatch(/席一致：[^\n]*codex/);
+    expect(body).toMatch(/## 结论\n+changes-requested/);
+  });
+
   it("1/3 does not block and names the seat under 待确认", () => {
     const attempts = [
       seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法", "critical")),

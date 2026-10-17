@@ -616,6 +616,57 @@ describe("cli review command — end-to-end (fake spawn)", () => {
     expect(report).not.toContain("无缺席");
   });
 
+  it("new pr-jury with empty skippedSeats does not mention a seat the user deleted", async () => {
+    const store = new Store();
+    const cfuse = { driverId: "claude-stream-json" as const, options: { route: "cfuse" as const } };
+    const ids: string[] = [];
+    for (const name of [
+      "review-security",
+      "review-maintainability",
+      "review-adversarial",
+      "review-cursor",
+    ]) {
+      ids.push(
+        store.createAgent({
+          name,
+          personaPrompt: `你是 ${name}，一位独立代码审查者。`,
+          modelId: "m",
+          color: "#112233",
+          driverSelection: cfuse,
+        }).id,
+      );
+    }
+    store.createCouncil({
+      name: "pr-jury",
+      topic: "审查",
+      agentIds: ids,
+      rounds: 1,
+      reporterAgentId: ids[0] as string,
+    });
+    const councilsPath = resolvePaths().councils;
+    const file = JSON.parse(readFileSync(councilsPath, "utf8")) as {
+      councils: Array<{ skippedSeats?: unknown }>;
+    };
+    expect(file.councils[0]?.skippedSeats).toBeUndefined();
+    file.councils[0]!.skippedSeats = [];
+    writeFileSync(councilsPath, JSON.stringify(file));
+    expect(new Store().getCouncil("pr-jury").skippedSeats).toEqual([]);
+    const sink = makeSink();
+    try {
+      await runReview(["--council", "pr-jury", "--task", "x", "--no-require-spec"], sink, {
+        spawnImpl: fakeSpawn(),
+      });
+    } catch (error) {
+      if (!(error instanceof ReviewExit) || error.exitCode !== 0) throw error;
+    }
+    const report = readFileSync((sink.finished as { reportPath: string }).reportPath, "utf8");
+    expect(report).not.toContain("review-correctness");
+    expect(report).not.toContain("原因未记录");
+    expect(report).not.toContain("缺席：");
+    expect(report).not.toContain("无缺席");
+    expect(report).toContain("review-security");
+  });
+
   it("custom models reach Codex argv, probe separately and persist without changing the store", async () => {
     const reviewModels = {
       models: ["gpt-6-astra", "gpt-5.6-sol"].map((modelId) => ({
