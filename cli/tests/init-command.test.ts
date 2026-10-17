@@ -71,6 +71,7 @@ describe("councilkit init", () => {
   let oldUserHome: string | undefined;
   let oldCursorKey: string | undefined;
   let oldGrokHome: string | undefined;
+  let oldXdg: string | undefined;
 
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), "ck-init-home-"));
@@ -82,11 +83,15 @@ describe("councilkit init", () => {
     oldUserHome = process.env.HOME;
     oldCursorKey = process.env.CURSOR_API_KEY;
     oldGrokHome = process.env.GROK_HOME;
+    oldXdg = process.env.XDG_CONFIG_HOME;
     process.env.COUNCILKIT_HOME = home;
     process.env.CODEX_HOME = codexHome;
     process.env.HOME = home;
     delete process.env.GROK_HOME;
     delete process.env.CURSOR_API_KEY;
+    // GitHub ubuntu runners set XDG_CONFIG_HOME outside HOME. cld's login
+    // probe follows it, so the fixture must own that directory.
+    delete process.env.XDG_CONFIG_HOME;
   });
 
   afterEach(() => {
@@ -102,6 +107,8 @@ describe("councilkit init", () => {
     else process.env.CURSOR_API_KEY = oldCursorKey;
     if (oldGrokHome === undefined) delete process.env.GROK_HOME;
     else process.env.GROK_HOME = oldGrokHome;
+    if (oldXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = oldXdg;
     rmSync(home, { recursive: true, force: true });
     rmSync(bin, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
