@@ -450,7 +450,9 @@ export async function runReview(
       council = store.getCouncil(councilRef);
     } catch (error) {
       const pending = store.getPendingCouncil(councilRef);
-      if (pending !== null) throw errors.usage(formatPendingCouncil(pending));
+      if (pending !== null) {
+        throw errors.usage(formatPendingCouncil(pending), undefined, { verbatim: true });
+      }
       if (defaultedCouncil) {
         throw errors.usage(
           "no --council/--agents given and default pr-jury is missing; run `councilkit init` or pass --council/--agents",

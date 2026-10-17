@@ -180,6 +180,32 @@
 .ck-wb-context-right span:not(.ck-interrupt-mark) {
   color: var(--ck-secondary);
 }
+.ck-wb-seat-count {
+  display: inline-flex;
+  align-items: center;
+}
+.ck-wb-seat-count-fail,
+.ck-wb-seat-count-interrupt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ck-wb-context-right span.ck-wb-seat-count-main,
+.ck-wb-report-meta span.ck-wb-seat-count-main {
+  color: var(--ck-text);
+}
+.ck-wb-context-right span.ck-wb-seat-count-fail,
+.ck-wb-context-right span.ck-wb-seat-count-fail > span,
+.ck-wb-report-meta span.ck-wb-seat-count-fail,
+.ck-wb-report-meta span.ck-wb-seat-count-fail > span {
+  color: var(--ck-error);
+}
+.ck-wb-context-right span.ck-wb-seat-count-interrupt,
+.ck-wb-context-right span.ck-wb-seat-count-interrupt > span,
+.ck-wb-report-meta span.ck-wb-seat-count-interrupt,
+.ck-wb-report-meta span.ck-wb-seat-count-interrupt > span {
+  color: var(--ck-interrupt);
+}
 .ck-wb-context-right .ck-wb-running {
   color: var(--ck-running);
 }

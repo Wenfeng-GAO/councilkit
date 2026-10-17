@@ -1184,7 +1184,7 @@ open reports: http://127.0.0.1:43127/reports`);
         (caught: { message?: string }) => caught,
       );
       const message = error?.message ?? "";
-      expect(message).toContain("product-jury was not created");
+      expect(message).toContain("product-jury not created");
       expect(message).toContain("needs at least 2 ready seats");
       expect(message).toContain(needle);
       expect(message).not.toContain("councilkit init --json");
@@ -1222,8 +1222,7 @@ product-jury · not created (needs at least 2 ready seats), 1 ready, 2 skipped
 
 next:
   councilkit review --council pr-jury --pr <url>
-  to create product-jury, install kimi or codex (see above), then rerun:
-  councilkit init
+  to create product-jury: install kimi or codex, then rerun councilkit init
 open reports: http://127.0.0.1:43127/reports`);
     expect(grok.human).not.toContain("汇总席改由");
     expect(grok.human.split("\n").every((line) => line.length <= 80)).toBe(true);
@@ -1239,8 +1238,9 @@ open reports: http://127.0.0.1:43127/reports`);
       () => "",
       (caught: { message?: string }) => caught.message ?? "",
     );
-    expect(grokIdeate).toBe(`product-jury was not created: needs at least 2 ready seats,
-  1 ready, 2 skipped
+    expect(
+      grokIdeate,
+    ).toBe(`product-jury not created (needs at least 2 ready seats), 1 ready, 2 skipped
   ✗ ideate-engineering  skipped: kimi not installed
       install kimi so it's on PATH, then: kimi login
   ✗ ideate-challenger  skipped: codex not installed
@@ -1249,7 +1249,12 @@ open reports: http://127.0.0.1:43127/reports`);
       name: "CliError",
       exitCode: 2,
       message: grokIdeate,
+      verbatim: true,
     });
+    expect(grokIdeateHuman.split("\n")[0]).toBe(
+      "product-jury not created (needs at least 2 ready seats), 1 ready, 2 skipped",
+    );
+    expect(grokIdeateHuman.startsWith("error[")).toBe(false);
     expect(grokIdeateHuman.split("\n").every((line) => line.length <= 80)).toBe(true);
     await expectExplained("ideate-engineering");
     await expect(
@@ -1257,7 +1262,7 @@ open reports: http://127.0.0.1:43127/reports`);
         ["--council", "product-jury", "--task", "fixture", "--no-require-spec"],
         makeSink(),
       ),
-    ).rejects.toThrow(/product-jury was not created/);
+    ).rejects.toThrow(/product-jury not created/);
 
     stub(["grok", "kimi"], LOGGED_IN);
     await runInit([], makeSink());
@@ -1395,8 +1400,7 @@ next:
           },
         ],
       }),
-    ).toBe(`product-jury was not created: needs at least 2 ready seats,
-  1 ready, 1 skipped
+    ).toBe(`product-jury not created (needs at least 2 ready seats), 1 ready, 1 skipped
   ✗ ideate-product  skipped: grok not installed
       install grok so it's on PATH, then: grok login`);
   });

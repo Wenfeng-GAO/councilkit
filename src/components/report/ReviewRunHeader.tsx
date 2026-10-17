@@ -1,6 +1,7 @@
 import { cliRunPhaseHeading } from "@/lib/cli-run-status";
 import { extractPrUrl } from "@/lib/fix-prompt";
 import type { ParsedReviewReport } from "@/lib/review-report";
+import { formatSeatCount } from "@/lib/seat-count";
 import { formatAttemptMs } from "@/lib/seat-inspector";
 import { isDemoRun } from "@shared/runtime/demo-report";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
@@ -65,7 +66,7 @@ export function ReviewRunHeader({
                 </strong>
               </>
             ) : seats.length > 0 ? (
-              `：${endedSeats} / ${seats.length} 席执行完成`
+              `：${formatSeatCount(seats)}`
             ) : null}
           </span>
           {pipelineActive && pipeline ? (

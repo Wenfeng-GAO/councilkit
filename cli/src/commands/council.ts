@@ -108,7 +108,9 @@ function showCouncil(argv: string[], out: OutputSink): Promise<void> {
     return finishCouncil(out, store.getCouncil(ref));
   } catch (error) {
     const pending = store.getPendingCouncil(ref);
-    if (pending !== null) throw errors.usage(formatPendingCouncil(pending));
+    if (pending !== null) {
+      throw errors.usage(formatPendingCouncil(pending), undefined, { verbatim: true });
+    }
     throw error;
   }
 }

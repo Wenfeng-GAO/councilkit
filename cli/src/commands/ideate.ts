@@ -168,7 +168,9 @@ export async function runIdeate(
       council = store.getCouncil(councilRef);
     } catch {
       const pending = store.getPendingCouncil(councilRef);
-      if (pending !== null) throw errors.usage(formatPendingCouncil(pending));
+      if (pending !== null) {
+        throw errors.usage(formatPendingCouncil(pending), undefined, { verbatim: true });
+      }
       throw errors.usage(
         `no council "${councilRef}". Run: councilkit init --json  (creates product-jury)`,
       );

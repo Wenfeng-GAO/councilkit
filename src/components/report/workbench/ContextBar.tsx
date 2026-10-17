@@ -4,11 +4,10 @@ import { isDemoRun } from "@shared/runtime/demo-report";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
+import { SeatCount } from "./SeatCount";
 import { WorkbenchMobileMenu } from "./WorkbenchNav";
 import type { WorkbenchHostStatus } from "./host-status";
 import { ExternalLinkIcon } from "./icons";
-
-const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
 
 export function ContextBar({
   run,
@@ -19,7 +18,6 @@ export function ContextBar({
 }) {
   const status = primaryRunStatus(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
-  const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
   const sha = run.reviewEvidence?.sha ?? null;
   // 只有真实 PR 链接才可点；缺失时禁用，绝不伪造 URL。
   const prUrl = normalizeReviewPr(run.reviewEvidence?.prUrl ?? null);
@@ -43,11 +41,7 @@ export function ContextBar({
             status.text
           )}
         </span>
-        {seats.length > 0 && !isLostExecutionReview(run) ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
-        ) : null}
+        {seats.length > 0 && !isLostExecutionReview(run) ? <SeatCount attempts={seats} /> : null}
         {sha ? (
           <code title={sha}>SHA {sha.slice(0, 7)}</code>
         ) : (

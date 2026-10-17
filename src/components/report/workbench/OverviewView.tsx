@@ -18,6 +18,7 @@ import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { useState } from "react";
+import { SeatCount } from "./SeatCount";
 import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
@@ -81,8 +82,8 @@ export function OverviewView({
   const lost = isLostExecutionReview(run);
   const heading = decisionConflict ? "审查结论待核对" : reviewOverviewHeading(run);
   const seats = run.progress?.attempts.filter((row) => row.role === "attempt") ?? [];
-  const doneSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
-  const partial = seats.length > 0 && doneSeats < seats.length;
+  const finishedSeats = seats.filter((row) => ATTEMPT_TERMINAL.has(row.status)).length;
+  const partial = seats.length > 0 && finishedSeats < seats.length;
   const aggregator = run.progress?.attempts.find((row) => row.role === "aggregator") ?? null;
   const aggregatorLive =
     aggregator !== null && !ATTEMPT_TERMINAL.has(aggregator.status) && run.status === "running";
@@ -111,11 +112,7 @@ export function OverviewView({
       )}
       <p className="ck-wb-report-meta">
         {run.status === "completed" ? <span>审查执行已完成</span> : null}
-        {seats.length > 0 && !lost ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
-        ) : null}
+        {seats.length > 0 && !lost ? <SeatCount attempts={seats} /> : null}
         {run.truncated ? <span>报告超过 2MB，已截断显示</span> : null}
       </p>
       {parsed?.verdict ? (

@@ -71,8 +71,10 @@ export function renderErrorHuman(err: {
   exitCode?: number;
   message: string;
   detail?: Record<string, unknown> | undefined;
+  verbatim?: boolean;
 }): string {
   const code = err.exitCode ?? 1;
+  if (err.verbatim) return redact(err.message) as string;
   let line = `error[${code}]: ${err.message}`;
   // A multi-line message is already the human report. Appending the raw
   // detail object dumps a long JSON line; `--json` still emits `detail`.

@@ -215,9 +215,7 @@ function nextLines(councils: readonly HumanCouncil[]): string[] {
     if (council.created) continue;
     const tools = installNames(council);
     const list = tools.length > 0 ? tools : "a logged-in CLI";
-    lines.push(
-      `  to create ${council.name}, install ${list} (see above), then rerun: councilkit init`,
-    );
+    lines.push(`  to create ${council.name}: install ${list}, then rerun councilkit init`);
   }
   return lines;
 }
@@ -271,14 +269,9 @@ export function renderInitHuman(input: { councils: HumanCouncil[] }): string {
 /** Plain-language explanation for a council init did not write. Lists every skipped seat. */
 export function formatPendingCouncil(pending: PendingCouncil): string {
   const skipped = pending.skippedSeats.filter((seat) => seat.reason !== "no-model");
-  const reason = `${pending.name} was not created: needs at least ${countable(pending.minimumSeats, "ready seat", "ready seats")}`;
-  const tally = `${pending.readySeats.length} ready, ${skipped.length} skipped`;
-  // `error[2]: ` is prepended when this is printed. Break before the tally
-  // so that prefixed line still fits in 80 columns.
-  const lines =
-    `error[2]: ${reason}, ${tally}`.length <= LINE_WIDTH
-      ? [`${reason}, ${tally}`]
-      : [`${reason},`, `  ${tally}`];
+  const lines = [
+    `${pending.name} not created (needs at least ${countable(pending.minimumSeats, "ready seat", "ready seats")}), ${pending.readySeats.length} ready, ${skipped.length} skipped`,
+  ];
   if (skipped.length === 0) {
     lines.push("  ✗ no default seats were available for this council");
   }
