@@ -256,11 +256,11 @@ councilkit review <url> --resume <run-id> [--json]
    - `docs/verification/**`（含 `*acceptance*` / contract 文档）
 3. **找不到可读合同**：
    - **默认强制（`--require-spec`）**：不在 Host/CLI 启动瞬间硬退出；进入 run 后在审查阶段拒绝（`SPEC_REQUIRED`，exit 2）。拒绝文案说明缺失物与应放置路径；**不会**静默改成无合同加法对抗审查。
-   - **`--no-require-spec`**：允许继续，非合同 / 遗留模式（prompt 标明未绑定；blocking 回退严重度门禁）。
+   - **`--no-require-spec`**：允许继续。没有规格时，超过半数已完成席位（至少 2 席）各自指出同一缺陷，且至少一席为 critical/major，汇总结论必须是 `changes-requested`，并标明「无规格依据，依据是 N/M 席一致」；只有一席提出的问题进入「待确认」，不阻塞。有规格时，违反规格仍按合同内 Act On 单独判定。报告正文顺序是「结论 / 阻塞问题 / 需处理的问题 / 待确认」，各审查者附录在最后。结论里写明缺席席位和原因，例如「缺席：review-security（未找到 cld）」；某一席失败不会让整次审查崩溃。
 4. **有合同 → 自动绑定**，审查为减法：只对绑定规格中的具名不变量 / 验收 ID / agentverify 场景作 **Act On**（须同时给出可复现反例）。
-5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `A01` / `INV-*` / `VT*` / `agentverify:*`，或「验收」章节 checklist），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若规格无可具名验收点 → 仍拒绝（`SPEC_VERIFY_UNBOUND`）。
+5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `INV-*` / `A01` / `VT*` / `agentverify:*`，以及 `IN-12` / `SE-12` / `E2E-3` 这类大写前缀-数字编号；或「验收」章节的 checklist / 表格），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若规格无可具名验收点 → 仍拒绝（`SPEC_VERIFY_UNBOUND`），并列出读到的标题与候选编号。
 
-规格未覆盖的重大问题必须标为 **`[suggest-amend-spec]` /「建议修订规格」**，可展示但**默认不阻塞合并**。Aggregator 去重；nit / 纯风格 / 仅注释行号不阻塞。旧账本行若无 `contractClass` 字段，仍按原来的 critical/major 严重度门禁（兼容）。
+规格未覆盖的重大问题必须标为 **`[suggest-amend-spec]` /「建议修订规格」**，可展示但**默认不阻塞合并**。这条只适用于已绑定规格的合同外意见。Aggregator 去重；nit / 纯风格 / 仅注释行号不阻塞。旧账本行若无 `contractClass` 字段，仍按原来的 critical/major 严重度门禁（兼容）。无规格多数共识不走这条降级。
 
 #### 账本与闭环
 

@@ -180,7 +180,7 @@ describe("cli auto templates — attempt prompt", () => {
 describe("cli auto templates — aggregate prompt", () => {
   const task = { pr: "https://example.com/pr/1" };
 
-  it("contains the five aggregation sections (Chinese) and cites attempt names", () => {
+  it("contains the aggregation sections in designer order and cites attempt names", () => {
     const prompt = buildAggregatePrompt({
       aggregatorName: "R",
       task,
@@ -189,11 +189,16 @@ describe("cli auto templates — aggregate prompt", () => {
         { attemptId: "b", name: "B", status: "success", output: "## 发现\n- bar" },
       ],
     });
-    expect(prompt).toContain("## 概览");
-    expect(prompt).toContain("## 共识发现");
-    expect(prompt).toContain("## 独有发现");
-    expect(prompt).toContain("## 分歧");
-    expect(prompt).toContain("## 结论");
+    const conclusion = prompt.lastIndexOf("## 结论");
+    const blocking = prompt.lastIndexOf("## 阻塞问题");
+    const actionable = prompt.lastIndexOf("## 需处理的问题");
+    const pending = prompt.lastIndexOf("## 待确认");
+    const disagreement = prompt.lastIndexOf("## 分歧");
+    expect(conclusion).toBeGreaterThan(-1);
+    expect(conclusion).toBeLessThan(blocking);
+    expect(blocking).toBeLessThan(actionable);
+    expect(actionable).toBeLessThan(pending);
+    expect(pending).toBeLessThan(disagreement);
     // English-titled reviewer output is understood by semantics, not an error.
     expect(prompt).toContain("Findings/Verification/Verdict");
     expect(prompt).toContain("A");

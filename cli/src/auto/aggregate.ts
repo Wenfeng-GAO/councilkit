@@ -1,6 +1,4 @@
 import { assertNonEmptyMarkdown, writeCanonicalReport, writeReportCopy } from "../report/render";
-import { stripProxyPrefix } from "./driver-commands";
-import { formatDurationMs } from "./duration";
 /**
  * review report rendering (DESIGN §4, plan §"文件清单"/§"ReviewOutcome"). The
  * canonical `runs/<run-id>/report.md` is a deterministic header (with an
@@ -12,6 +10,10 @@ import { formatDurationMs } from "./duration";
  * Reuses `report/render.ts` write/assert helpers (unchanged) for the canonical
  * write + `--out` copy, so durability semantics match the `run` command.
  */
+import { collectReportAbsences } from "./absences";
+import { shapeAggregateDeliverable } from "./consensus";
+import { stripProxyPrefix } from "./driver-commands";
+import { formatDurationMs } from "./duration";
 import type { AttemptResult } from "./runner";
 import type { ReviewTask } from "./templates/review";
 
@@ -87,15 +89,26 @@ export interface ReviewReportInput {
   /** The failure phase (attempts / aggregation / transcript / …) — lets the
    * banner distinguish "Aggregator ran and failed" from "never started". */
   failurePhase?: string;
+  /** Seats that did not take part. Computed from the attempts when omitted. */
+  absences?: ReturnType<typeof collectReportAbsences>;
 }
 
 /** Render the full Markdown report. */
 export function renderReviewReport(input: ReviewReportInput): string {
   const head = renderHeader(input);
-  const body =
+  const raw =
     input.aggregation?.status === "success" && input.aggregation.output.trim().length > 0
       ? input.aggregation.output.trim()
       : "";
+  const absences = input.absences ?? collectReportAbsences(input.attempts);
+  const body = raw
+    ? shapeAggregateDeliverable({
+        markdown: raw,
+        task: input.task,
+        attempts: input.attempts,
+        absences,
+      }).trim()
+    : "";
   const sections: string[] = [head];
   if (body.length > 0) {
     sections.push("---", "", body, "");

@@ -8,6 +8,7 @@ import {
   defaultFindingListFilter,
   projectFindingList,
 } from "@/lib/finding-list";
+import { findingDisplayMark, textWithoutBasis } from "@/lib/finding-marks";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
@@ -96,6 +97,9 @@ export function OverviewView({
           <p className="ck-wb-decision-verdict">
             <span>报告意见</span>
             <strong>{VERDICT_LABEL[parsed.verdict]}</strong>
+            <span className={`ck-verdict ck-verdict-${verdictClass(parsed.verdict)}`}>
+              {parsed.verdict}
+            </span>
           </p>
           <p>
             账本门禁：
@@ -144,6 +148,7 @@ export function OverviewView({
         filter={effectiveFilter}
         onFilterChange={handleFilterChange}
       />
+      <PendingFindings parsed={parsed} />
       {disagreement && disagreement.body.trim().length > 0 ? (
         <details className="ck-wb-history ck-wb-disagreements">
           <summary>
@@ -179,5 +184,40 @@ export function OverviewView({
         </details>
       </section>
     </article>
+  );
+}
+
+function verdictClass(verdict: NonNullable<ParsedReviewReport["verdict"]>): string {
+  if (verdict === "changes-requested") return "changes";
+  return verdict;
+}
+
+function PendingFindings({ parsed }: { parsed: ParsedReviewReport | null }) {
+  const section = parsed?.sections.find((item) => item.title === "待确认");
+  const findings = section?.findings?.filter((finding) => finding.severity) ?? [];
+  if (!section || findings.length === 0) return null;
+  return (
+    <section className="ck-wb-overview-brief" aria-label="待确认">
+      <h2>待确认</h2>
+      <ul className="flex flex-col gap-2">
+        {findings.map((finding) => {
+          const mark = findingDisplayMark({
+            qualifier: finding.qualifier,
+            text: finding.text,
+            sectionTitle: "待确认",
+          });
+          return (
+            <li key={finding.text.slice(0, 80)} className="ck-finding ck-finding-nit">
+              {mark ? <span className={`ck-tag ck-tag-${mark.kind}`}>{mark.label}</span> : null}
+              <SafeMarkdown
+                className="text-sm"
+                variant="document"
+                content={textWithoutBasis(finding.text, mark?.basis ?? null)}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

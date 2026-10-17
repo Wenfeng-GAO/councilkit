@@ -62,6 +62,7 @@ import {
   prepareIdeateAuthHome,
   prepareIdeateWorkspace,
 } from "./ideate-policy";
+import { stripProcessNarration } from "./process-narration";
 
 export { IDEATE_FORBIDDEN_FLAGS } from "./ideate-policy";
 
@@ -1107,6 +1108,19 @@ export const FINAL_EVENT_LINE_CAP = 16 * 1024 * 1024;
  * boundary (reviewer finding: head+tail split made both halves invalid JSON →
  * spurious NO_OUTPUT). */
 export function extractFinalOutput(
+  driverId: string,
+  stdout: string,
+  lastMessageFile?: string,
+  capturedFinalLine?: string | null,
+): string | null {
+  const raw = extractFinalOutputRaw(driverId, stdout, lastMessageFile, capturedFinalLine);
+  if (raw === null) return null;
+  const stripped = stripProcessNarration(raw);
+  const text = stripped.trim();
+  return text.length > 0 ? stripped : raw;
+}
+
+function extractFinalOutputRaw(
   driverId: string,
   stdout: string,
   lastMessageFile?: string,

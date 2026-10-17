@@ -1,0 +1,301 @@
+/**
+ * No-spec majority rule (#377) and conclusion-first reports (#378).
+ * The recorded three-seat toy is cli/tests/fixtures/toy-go-three-seat.json.
+ */
+import { readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isFindingBlocking } from "@shared/runtime/cli-ledger";
+import { summarizeSeatOutput } from "@shared/runtime/seat-result";
+import { describe, expect, it } from "vitest";
+import { collectReportAbsences, failureAbsenceReason } from "../src/auto/absences";
+import { type ReviewReportInput, renderReviewReport } from "../src/auto/aggregate";
+import { shapeAggregateDeliverable } from "../src/auto/consensus";
+import { persistFindingsFromReport } from "../src/auto/ledger";
+import type { AttemptResult } from "../src/auto/runner";
+
+function seat(
+  name: string,
+  output: string,
+  status: AttemptResult["status"] = "success",
+): AttemptResult {
+  return {
+    attemptId: name,
+    agentId: name,
+    agentName: name,
+    driverId: "kimi-stream-json",
+    modelId: "m",
+    status,
+    output,
+    exitCode: status === "success" ? 0 : 1,
+    durationMs: 10,
+    workspace: "/ws",
+  };
+}
+
+function finding(title: string, severity = "major", extra = ""): string {
+  return `## 发现\n- [${severity}] ${title}\n  位置：\`toy.go\`\n${extra}\n\n## 结论\nchanges-requested\n`;
+}
+
+const BAD_COMMENT = [
+  "## 概览",
+  "未绑定规格，默认不阻塞。",
+  "## 共识发现",
+  "无",
+  "## 建议修订规格",
+  "- [major][suggest-amend-spec] Add 把加法改成减法",
+  "## 结论",
+  "comment",
+].join("\n");
+
+function shape(markdown: string, attempts: AttemptResult[], specSource?: string): string {
+  return shapeAggregateDeliverable({
+    markdown,
+    task: specSource ? { specSource } : {},
+    attempts,
+  });
+}
+
+function firstH2(markdown: string): string | null {
+  const match = markdown.match(/^## .+$/m);
+  return match?.[0] ?? null;
+}
+
+describe("no-spec majority aggregation", () => {
+  it("3/3 same high defect becomes changes-requested with the 依据 label", () => {
+    const attempts = [
+      seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法")),
+      seat("cursor", finding("Add 从 a + b 改为 a - b，加法被换成减法", "critical")),
+      seat("codex", finding("函数 Add 的加法被改成减法 a - b")),
+    ];
+    const body = shape(BAD_COMMENT, attempts);
+    expect(firstH2(body)).toBe("## 结论");
+    expect(body).toMatch(/## 结论\n+changes-requested/);
+    expect(body).toContain("无规格依据，依据是 3/3 席一致：kimi、cursor、codex");
+    expect(body).toContain("[多席一致 3/3]");
+    expect(body).toContain("阻塞 1。");
+    expect(summarizeSeatOutput(body).blockingCount).toBe(1);
+    expect(body).not.toMatch(/## 结论\n+comment/);
+  });
+
+  it("2/3 same high defect blocks and the third seat is 待确认", () => {
+    const attempts = [
+      seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法")),
+      seat("cursor", finding("Add 从 a + b 改为 a - b，加法被换成减法", "major")),
+      seat("codex", finding("注释过期无人维护", "minor")),
+    ];
+    const body = shape(BAD_COMMENT, attempts);
+    expect(body).toMatch(/## 结论\n+changes-requested/);
+    expect(body).toContain("无规格依据，依据是 2/3 席一致：kimi、cursor");
+    expect(body).toContain("[多席一致 2/3]");
+    expect(body).toContain("[待确认 · codex]");
+    expect(body).toContain("阻塞 1。");
+    expect(summarizeSeatOutput(body).blockingCount).toBe(1);
+  });
+
+  it("1/3 does not block and names the seat under 待确认", () => {
+    const attempts = [
+      seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法", "critical")),
+      seat("cursor", "## 发现\n无\n\n## 结论\napprove\n"),
+      seat("codex", "## 发现\n无\n\n## 结论\napprove\n"),
+    ];
+    const body = shape(BAD_COMMENT, attempts);
+    expect(firstH2(body)).toBe("## 结论");
+    expect(body).toMatch(/## 结论\n+comment/);
+    expect(body).toContain("[待确认 · kimi]");
+    expect(body).toContain("阻塞 0。");
+    expect(body).not.toContain("多席一致");
+    expect(summarizeSeatOutput(body).blockingCount).toBe(0);
+  });
+
+  it("does not merge unrelated defects just because they share a file", () => {
+    const attempts = [
+      seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法")),
+      seat("cursor", finding("日志时间戳丢了时区")),
+      seat("codex", finding("配置热加载丢了锁")),
+    ];
+    const body = shape(BAD_COMMENT, attempts);
+    expect(body).toMatch(/## 结论\n+comment/);
+    expect(body).toContain("待确认 · kimi");
+    expect(body).toContain("待确认 · cursor");
+    expect(body).toContain("待确认 · codex");
+    expect(summarizeSeatOutput(body).blockingCount).toBe(0);
+  });
+
+  it("keeps a spec-bound verdict and labels the acceptance id without the no-spec rule", () => {
+    const specBody = [
+      "## 概览",
+      "合同内一项。",
+      "## 共识发现",
+      "- [major][act-on] 空串分支被删除",
+      "  不变量：`AC-3`",
+      '  反例：Greet("") 不再问候',
+      "## 建议修订规格",
+      "- [major][suggest-amend-spec] 缓存上限没写进规格",
+      "## 结论",
+      "changes-requested",
+    ].join("\n");
+    const attempts = [
+      seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法", "critical")),
+      seat("cursor", finding("Add 从 a + b 改为 a - b，加法被换成减法", "critical")),
+      seat("codex", finding("函数 Add 的加法被改成减法 a - b", "critical")),
+    ];
+    const body = shape(specBody, attempts, "docs/design/toy.md");
+    expect(firstH2(body)).toBe("## 结论");
+    expect(body).toMatch(/## 结论\n+changes-requested/);
+    expect(body).toContain("违反规格 · AC-3");
+    expect(body).not.toContain("无规格依据，依据是");
+    expect(body).toContain("[suggest-amend-spec]");
+    const downgraded = [
+      "## 共识发现",
+      "- [major][suggest-amend-spec] 规格没写缓存",
+      "## 结论",
+      "comment",
+    ].join("\n");
+    const comment = shape(downgraded, attempts, "docs/design/toy.md");
+    expect(comment).toMatch(/## 结论\n+comment/);
+    expect(comment).not.toContain("无规格依据，依据是");
+    expect(firstH2(comment)).toBe("## 结论");
+  });
+});
+
+describe("report structure", () => {
+  it("puts 结论 first even when the aggregator wrote it last", () => {
+    const md = renderReviewReport({
+      runId: "ck-review-test",
+      startedAt: "2026-10-17T00:00:00.000Z",
+      endedAt: "2026-10-17T00:01:00.000Z",
+      task: { pr: "https://github.com/acme/repo/pull/1", specSource: "docs/plans/x.md" },
+      attempts: [seat("kimi", "## 发现\n- [nit] 命名")],
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: "agg",
+        agentName: "Agg",
+        driverId: "grok-stream-json",
+        modelId: "m",
+      },
+      aggregation: seat("Agg", BAD_COMMENT),
+      status: "completed",
+      incomplete: false,
+    } satisfies ReviewReportInput);
+    const dash = md.indexOf("\n---\n");
+    const after = md.slice(dash + 5);
+    const stop = after.indexOf("\n## 过程对比");
+    const main = stop >= 0 ? after.slice(0, stop) : after;
+    expect(firstH2(main)).toBe("## 结论");
+    expect(main.indexOf("## 结论")).toBeLessThan(main.indexOf("## 概览"));
+    const titles = [...md.matchAll(/^## .+$/gm)].map((match) => match[0]);
+    expect(titles.slice(0, 4)).toEqual(["## 结论", "## 阻塞问题", "## 需处理的问题", "## 待确认"]);
+    expect(titles.at(-1)).toBe("## 附录:各审查者交付物");
+  });
+});
+
+describe("missing seats", () => {
+  it("names a failed seat and a seat left out because its driver was missing, without failing the report", () => {
+    const attempts = [
+      seat("kimi", finding("Add 把 a + b 改成 a - b，减法替换加法")),
+      {
+        ...seat("cursor", "## 发现\n无\n\n## 结论\nchanges-requested\n", "failure"),
+        failure: { code: "EXIT", message: "non-zero exit 1" },
+      },
+    ];
+    const absences = collectReportAbsences(attempts, {
+      driverFound: (executable) => executable !== "cld",
+    });
+    expect(absences).toContainEqual({ name: "review-security", reason: "未找到 cld" });
+    expect(absences).toContainEqual({ name: "cursor", reason: "non-zero exit 1" });
+    expect(absences.some((row) => row.name === "kimi")).toBe(false);
+    expect(absences.some((row) => row.reason.startsWith("未找到 grok"))).toBe(false);
+    expect(
+      failureAbsenceReason({ code: "EXIT", message: "please login", errorClass: "auth" }),
+    ).toBe("未登录");
+
+    const md = renderReviewReport({
+      runId: "ck-review-absent",
+      startedAt: "2026-10-17T00:00:00.000Z",
+      endedAt: "2026-10-17T00:02:00.000Z",
+      task: { task: "toy go diff", requireSpec: false },
+      attempts,
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: "agg",
+        agentName: "Agg",
+        driverId: "kimi-stream-json",
+        modelId: "m",
+      },
+      aggregation: seat("Agg", BAD_COMMENT),
+      status: "completed",
+      incomplete: true,
+      absences,
+    });
+    expect(md).toContain("- Status: partial");
+    expect(md).not.toContain("- Status: failed");
+    expect(md).toContain("failed:EXIT");
+    const conclusion = md.slice(md.indexOf("## 结论"), md.indexOf("## 阻塞问题"));
+    expect(conclusion).toContain("缺席：review-security（未找到 cld）");
+    expect(conclusion).toContain("缺席：cursor（non-zero exit 1）");
+    const titles = [...md.matchAll(/^## .+$/gm)].map((match) => match[0]);
+    expect(titles.slice(0, 4)).toEqual(["## 结论", "## 阻塞问题", "## 需处理的问题", "## 待确认"]);
+    expect(titles.at(-1)).toBe("## 附录:各审查者交付物");
+  });
+});
+
+describe("recorded three-seat toy diff", () => {
+  const recorded = JSON.parse(
+    readFileSync(join(import.meta.dirname, "fixtures/toy-go-three-seat.json"), "utf8"),
+  ) as {
+    badAggregate: string;
+    seats: Array<{ name: string; output: string }>;
+  };
+
+  it("does not summarize three changes-requested seats as comment", () => {
+    const attempts = recorded.seats.map((row) => seat(row.name, row.output));
+    const before = recorded.badAggregate;
+    expect(before).toMatch(/## 结论\n+comment/);
+    expect(before).toContain("## 共识发现\n\n无");
+    const body = shape(before, attempts);
+    expect(firstH2(body)).toBe("## 结论");
+    expect(body).toMatch(/## 结论\n+changes-requested/);
+    expect(body).toContain("无规格依据，依据是 3/3 席一致：kimi、cursor、codex");
+    expect(body).toContain("无规格依据，依据是 2/3 席一致：kimi、cursor");
+    expect(body).toContain("[待确认 · codex]");
+    expect(summarizeSeatOutput(body).blockingCount).toBe(2);
+    expect(body).not.toMatch(/## 结论\n+comment/);
+
+    const report = renderReviewReport({
+      runId: "ck-review-toy",
+      startedAt: "2026-10-17T00:00:00.000Z",
+      endedAt: "2026-10-17T00:02:00.000Z",
+      task: { task: "toy go diff", requireSpec: false },
+      attempts,
+      aggregator: {
+        attemptId: "aggregator",
+        agentId: "agg",
+        agentName: "Agg",
+        driverId: "kimi-stream-json",
+        modelId: "m",
+      },
+      aggregation: seat("Agg", before),
+      status: "completed",
+      incomplete: false,
+    });
+    const dash = report.indexOf("\n---\n");
+    const main = report.slice(dash + 5, report.indexOf("\n## 过程对比"));
+    expect(firstH2(main)).toBe("## 结论");
+    expect(main).toContain("changes-requested");
+    expect(main).toContain("无规格依据，依据是 3/3 席一致：kimi、cursor、codex");
+
+    const dir = mkdtempSync(join(tmpdir(), "ck-consensus-"));
+    const file = persistFindingsFromReport({
+      runDir: dir,
+      runId: "ck-review-toy",
+      markdown: report,
+      attempts,
+    });
+    const blocking = file.findings.filter((row) => isFindingBlocking(row));
+    expect(blocking.length).toBeGreaterThan(0);
+    expect(file.findings.some((row) => row.title.includes("注释过期"))).toBe(false);
+    expect(blocking.every((row) => row.contractClass !== "out_of_spec")).toBe(true);
+  });
+});

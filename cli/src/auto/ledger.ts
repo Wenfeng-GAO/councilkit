@@ -38,6 +38,7 @@ import {
 } from "@shared/runtime/cli-ledger";
 import { appendPrivateFile, directoryEscapes } from "@shared/runtime/durable-write";
 import type { DecisionsFile } from "@shared/runtime/review-explainer/contracts";
+import { withoutConsensusBasis } from "@shared/runtime/review-explainer/pr-decisions";
 import {
   ASSESSMENT_DIAGNOSTICS_FILE,
   type AssessmentDiagnosticsFile,
@@ -53,6 +54,7 @@ import {
 import { clipUtf16 } from "@shared/text/clip-utf16";
 import { errors } from "../errors";
 import { atomicWriteJson, parseDurableJsonText, requireDurableJson } from "../store/atomic-write";
+import { isNoSpecShapedReport } from "./consensus";
 import {
   FINDING_GROUPS_FILE,
   FINDING_GROUPS_KIND,
@@ -94,6 +96,7 @@ export type { FindingsFile, LandingRecord, LedgerFinding, PlanCluster, PlanLockF
 
 const CONSENSUS_TITLES = new Set([
   "共识发现",
+  "阻塞问题",
   "consensus findings",
   "consensus",
   "共识发现（合同内 act on）",
@@ -101,7 +104,7 @@ const CONSENSUS_TITLES = new Set([
   "合同内 act on",
   "合同内 Act On",
 ]);
-const UNIQUE_TITLES = new Set(["独有发现", "unique findings", "unique"]);
+const UNIQUE_TITLES = new Set(["独有发现", "需处理的问题", "unique findings", "unique"]);
 /** Out-of-spec / suggest-amend-spec — extracted but never merge-blocking by default. */
 const OUT_OF_SPEC_TITLES = new Set([
   "建议修订规格",
@@ -122,6 +125,8 @@ const SKIP_TITLES = new Set([
   "过程对比",
   "附录",
   "附录:各审查者交付物",
+  // No-spec single-seat notes. They stay in the report and do not block.
+  "待确认",
 ]);
 
 const FILE_EXT = String.raw`[\w.-]+\.[A-Za-z][A-Za-z0-9]{0,7}`;
@@ -494,6 +499,10 @@ export function persistFindingsFromReport(input: {
     againstRange: input.againstRange,
   });
   // Keep independent findings even when the Aggregator omits a severe minority finding.
+  // A no-spec shaped report already filed single-seat notes under 待确认 (not
+  // blocking). Re-importing those seat rows would turn them into ledger blocks
+  // and would relabel a majority consensus row as a single reviewer's unique.
+  const noSpecShaped = isNoSpecShapedReport(input.markdown);
   for (const attempt of input.attempts ?? []) {
     if (attempt.status !== "success") continue;
     const independent = extractFindingsFromReport({
@@ -507,6 +516,7 @@ export function persistFindingsFromReport(input: {
     for (const row of independent.findings) {
       const matched = matchFinding(row, extracted.findings, new Set(), input.prDecisions);
       if (!matched) {
+        if (noSpecShaped) continue;
         const [distinct] = separateChangedAssertions(extracted.findings, [row], input.prDecisions);
         if (distinct && !extracted.findings.some((item) => item.id === distinct.id)) {
           extracted.findings.push({ ...distinct, source: "unique", reviewer: attempt.agentName });
@@ -514,13 +524,19 @@ export function persistFindingsFromReport(input: {
       } else {
         const stronger =
           FINDING_SEVERITIES.indexOf(row.severity) < FINDING_SEVERITIES.indexOf(matched.severity);
-        if (stronger) {
+        const consensusBasis = matched.text.includes("无规格依据，依据是");
+        if (stronger && !consensusBasis) {
           matched.severity = row.severity;
           matched.title = row.title;
           matched.source = "unique";
           matched.reviewer = attempt.agentName;
         }
-        if (row.text !== matched.text) {
+        // A consensus basis line is presentation. Folding the seat's copy of
+        // the same assertion back in would hide the saved decision.
+        if (
+          row.text !== matched.text &&
+          withoutConsensusBasis(row.text) !== withoutConsensusBasis(matched.text)
+        ) {
           matched.text = mergeFindingEvidence(
             stronger,
             `${attempt.agentName}: ${row.text}`,
@@ -819,8 +835,12 @@ function dedupeFindingsByLocus(findings: readonly LedgerFinding[]): LedgerFindin
 }
 
 function collapseSameLocusFindings(earlier: LedgerFinding, later: LedgerFinding): LedgerFinding {
-  const text =
-    later.text !== earlier.text
+  const sameAssertion = withoutConsensusBasis(earlier.text) === withoutConsensusBasis(later.text);
+  const text = sameAssertion
+    ? earlier.text.includes("无规格依据，依据是")
+      ? earlier.text
+      : later.text
+    : later.text !== earlier.text
       ? mergeFindingEvidence(true, earlier.text, later.text)
       : earlier.text;
   const invariantId = coalesceFilledField(earlier.invariantId, later.invariantId);

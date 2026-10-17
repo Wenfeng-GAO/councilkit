@@ -16,6 +16,7 @@ import {
   reviewRelationLabel,
   severityLabel,
 } from "@/lib/finding-list";
+import { findingDisplayMark } from "@/lib/finding-marks";
 import {
   type RunAttentionCounts,
   computeRunAttention,
@@ -239,6 +240,7 @@ function ProblemRow({
               <span className={`ck-ledger-status ck-ledger-${statusTone(problem)}`}>
                 {problem.statusLabel}
               </span>
+              <LedgerMark problem={problem} />
             </span>
             {(problem.blocking || problem.sourceTags.length > 0 || problem.members.length > 1) && (
               <span className="ck-finding-tags-row">
@@ -263,6 +265,24 @@ function ProblemRow({
         </div>
       </details>
     </li>
+  );
+}
+
+function LedgerMark({ problem }: { problem: FindingListProblem }) {
+  const member = problem.members[0];
+  if (!member) return null;
+  const mark = findingDisplayMark({
+    text: `${member.title}\n${member.text}`,
+    invariantId: member.invariantId,
+    contractClass: member.contractClass ?? null,
+    sectionTitle: member.text.includes("待确认 ·") ? "待确认" : null,
+  });
+  if (!mark) return null;
+  return (
+    <>
+      <span className={`ck-tag ck-tag-${mark.kind}`}>{mark.label}</span>
+      {mark.basis ? <span className="ck-tag-basis">{mark.basis}</span> : null}
+    </>
   );
 }
 

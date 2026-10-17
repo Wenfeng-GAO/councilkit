@@ -41,6 +41,7 @@ import { shellSingleQuote } from "@shared/runtime/shell-quote";
  * Exit codes follow the existing table (0/2/4/5/130).
  */
 import { z } from "zod";
+import { collectReportAbsences } from "../auto/absences";
 import {
   renderReviewReport,
   writeCanonicalReviewReport,
@@ -63,6 +64,7 @@ import {
   gitHeadSha,
   inspectPullRequest,
 } from "../auto/checkout-pr";
+import { shapeAggregateDeliverable } from "../auto/consensus";
 import {
   type AttemptSpec,
   DRIVER_PROBE_PROMPT,
@@ -120,11 +122,11 @@ import {
   spawnOnce,
 } from "../auto/runner";
 import {
-  SPEC_VERIFY_UNBOUND_MESSAGE,
   applySpecToTask,
   bindVerifyFromSpec,
   fetchPrSpecSearchText,
   formatSpecRefusal,
+  formatSpecVerifyUnbound,
   resolveSpecContract,
 } from "../auto/spec-detect";
 import {
@@ -1752,6 +1754,14 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     onLiveEvent,
   });
   liveWriter.flush(aggregation.attemptId);
+  if (aggregation.status === "success" && aggregation.output.trim().length > 0) {
+    aggregation.output = shapeAggregateDeliverable({
+      markdown: aggregation.output,
+      task: p.task,
+      attempts: results,
+      absences: collectReportAbsences(results, { env: process.env }),
+    });
+  }
 
   const aggRec: AggregationFinishedRecord = {
     kind: "aggregation.finished",
@@ -1869,6 +1879,7 @@ async function finalize(
     incomplete: spec.incomplete,
     reason,
     failurePhase: spec.failure?.phase,
+    absences: collectReportAbsences(results, { env: process.env }),
   });
 
   // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then
@@ -2565,10 +2576,13 @@ async function ensureSpecContractBound(input: {
       specText: task.specText,
     });
     if (!verify) {
-      throw errors.usage(SPEC_VERIFY_UNBOUND_MESSAGE, {
-        specSource: task.specSource,
-        code: "SPEC_VERIFY_UNBOUND",
-      });
+      throw errors.usage(
+        formatSpecVerifyUnbound({ specSource: task.specSource, specText: task.specText }),
+        {
+          specSource: task.specSource,
+          code: "SPEC_VERIFY_UNBOUND",
+        },
+      );
     }
     task.acceptanceIds = verify.acceptanceIds;
     task.verifyScheduleNote = verify.scheduleNote;
@@ -2599,10 +2613,13 @@ async function ensureSpecContractBound(input: {
     specText: detected.text,
   });
   if (!verify) {
-    throw errors.usage(SPEC_VERIFY_UNBOUND_MESSAGE, {
-      specSource: detected.source,
-      code: "SPEC_VERIFY_UNBOUND",
-    });
+    throw errors.usage(
+      formatSpecVerifyUnbound({ specSource: detected.source, specText: detected.text }),
+      {
+        specSource: detected.source,
+        code: "SPEC_VERIFY_UNBOUND",
+      },
+    );
   }
   applySpecToTask(task, detected, verify);
   out.progress(
