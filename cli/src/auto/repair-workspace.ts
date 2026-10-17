@@ -65,16 +65,6 @@ export function resolveRepairWorkspaceCwd(input: {
   );
 }
 
-export async function readRemoteUrl(
-  repo: string,
-  run: RunCommand,
-  env: NodeJS.ProcessEnv,
-  remote = "origin",
-): Promise<string | null> {
-  const urls = await readRemoteUrls(repo, run, env, remote);
-  return urls?.fetchUrl ?? null;
-}
-
 export async function readRemoteUrls(
   repo: string,
   run: RunCommand,
