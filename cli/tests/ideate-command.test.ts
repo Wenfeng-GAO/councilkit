@@ -250,7 +250,9 @@ describe("councilkit ideate", () => {
     const sink = makeSink();
     try {
       await runIdeate(
-        ["deadline idea", "--debate-rounds", "0", "--run-timeout", "200ms", "--timeout", "30s"],
+        // Setup on a slow runner can take longer than 200ms. The budget has
+        // to outlast that, then abort the proposal that is still in flight.
+        ["deadline idea", "--debate-rounds", "0", "--run-timeout", "5s", "--timeout", "30s"],
         sink,
         { spawnImpl },
       );

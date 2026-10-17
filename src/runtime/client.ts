@@ -89,6 +89,7 @@ export class RuntimeClientError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly detail?: string,
   ) {
     super(message);
     this.name = "RuntimeClientError";
@@ -131,13 +132,15 @@ export class RuntimeClient {
     const envelope = (await response.json()) as {
       ok: boolean;
       data?: unknown;
-      error?: { code: string; message: string };
+      error?: { code: string; message: string; detail?: string };
     };
     if (!response.ok || !envelope.ok) {
+      const detail = envelope.error?.detail;
       throw new RuntimeClientError(
         response.status,
         envelope.error?.code ?? "UNKNOWN",
         envelope.error?.message ?? `HTTP ${response.status}`,
+        typeof detail === "string" && detail.length > 0 ? detail : undefined,
       );
     }
     return options.schema.parse(envelope.data);

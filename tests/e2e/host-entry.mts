@@ -36,10 +36,20 @@
  *   POST /api/v1/__test__/installation — {installationId, state} flips a fake
  *                                        installation's trust state.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import type { ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   DRIVER_IDS,
   type DispatchState,
@@ -54,6 +64,9 @@ import type { ModelVerdict } from "@shared/runtime/events";
 import { generationRule, generationTimeoutsFromEnv } from "@shared/runtime/generation-timeouts";
 import type { InstallationDto } from "@shared/runtime/schemas";
 import { z } from "zod";
+import { FixExit, runFix } from "../../cli/src/commands/fix";
+import { errors } from "../../cli/src/errors";
+import type { OutputSink } from "../../cli/src/output";
 import { renderSuccessReport } from "../../cli/src/report/render";
 import { loadConfig } from "../../runtime-host/config";
 import type {
@@ -84,7 +97,7 @@ import { createSessionReconciler } from "../../runtime-host/scopes/session-recon
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
 import { slowGenDemoReport } from "../../runtime-host/slow-gen";
-import { seedReportCaseFixtures } from "./cli-run-fixtures";
+import { seedLostExecutionFixtures, seedReportCaseFixtures } from "./cli-run-fixtures";
 import { seedConsensusTagFixtures } from "./consensus-tag-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
@@ -106,8 +119,9 @@ if (process.env.COUNCILKIT_E2E === "1") {
     join(dir, "report.md"),
     "# Autonomous Review Report\n\nE2E fixture body. `<script>alert(1)</script>` stays text.\n",
   );
+  const fixtureTranscript = join(dir, "transcript.jsonl");
   writeFileSync(
-    join(dir, "transcript.jsonl"),
+    fixtureTranscript,
     `${JSON.stringify({
       kind: "review.started",
       version: 1,
@@ -124,6 +138,18 @@ if (process.env.COUNCILKIT_E2E === "1") {
       },
     })}\n`,
   );
+  // This fixture is a live run. Touch the transcript so a long e2e host
+  // does not cross the 5-minute stale window and look interrupted.
+  const keepFixtureFresh = setInterval(() => {
+    const now = new Date();
+    try {
+      utimesSync(fixtureTranscript, now, now);
+    } catch {
+      clearInterval(keepFixtureFresh);
+    }
+  }, 60_000);
+  keepFixtureFresh.unref();
+  seedLostExecutionFixtures(home);
   writeFileSync(
     join(home, "agents.json"),
     JSON.stringify({
@@ -759,6 +785,379 @@ function resetAll(
   };
 }
 
+function startE2EReReview(home: string, sourceRunId: string): Promise<{ pid: number }> {
+  const sink: OutputSink = {
+    json: true,
+    progress() {},
+    diag() {},
+    finish: () => Promise.resolve(),
+  };
+  let releaseStarted: (value: { pid: number }) => void = () => {};
+  const startedEarly = new Promise<{ pid: number }>((resolve) => {
+    releaseStarted = resolve;
+  });
+  const review = runFix(["--run", sourceRunId, "--re-review-only"], sink, {
+    reviewImpl: async (argv, _out, deps) => {
+      const sourceDir = join(home, "runs", sourceRunId);
+      if (existsSync(join(sourceDir, "e2e-rereview-fail"))) {
+        throw errors.io("forced re-review failure");
+      }
+      if (existsSync(join(sourceDir, "e2e-rereview-spawn-fail"))) {
+        const followUpRunId = `ck-review-${randomUUID()}`;
+        mkdirSync(join(home, "runs", followUpRunId), { recursive: true });
+        writeFileSync(join(home, "runs", followUpRunId, "status.json"), '{"status":"failed"}\n');
+        deps?.onRunCreated?.(followUpRunId);
+        throw new Error("DRIVER_SPAWN_FAILED");
+      }
+      if (existsSync(join(sourceDir, "e2e-rereview-seat-fail"))) {
+        const followUpRunId = `ck-review-${randomUUID()}`;
+        const followDir = join(home, "runs", followUpRunId);
+        mkdirSync(followDir, { recursive: true });
+        let task: { pr?: string; task?: string } = {};
+        try {
+          const first =
+            readFileSync(join(sourceDir, "transcript.jsonl"), "utf8").split("\n")[0] ?? "";
+          task = (JSON.parse(first) as { task?: { pr?: string; task?: string } }).task ?? {};
+        } catch {
+          task = {};
+        }
+        const now = new Date().toISOString();
+        const seat = {
+          attemptId: "attempt-security",
+          agentId: "sec",
+          agentName: "review-security",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        };
+        const aggregator = {
+          attemptId: "aggregator",
+          agentId: "adv",
+          agentName: "review-adversarial",
+          driverId: "grok-stream-json",
+          modelId: "grok-4.6",
+        };
+        writeFileSync(
+          join(followDir, "transcript.jsonl"),
+          `${JSON.stringify({
+            kind: "review.started",
+            version: 1,
+            runId: followUpRunId,
+            startedAt: now,
+            task,
+            attempts: [seat],
+            aggregator,
+          })}\n${JSON.stringify({
+            kind: "review.finished",
+            version: 1,
+            status: "failed",
+            endedAt: now,
+            incomplete: true,
+          })}\n`,
+        );
+        writeFileSync(
+          join(followDir, "status.json"),
+          `${JSON.stringify({
+            version: 1,
+            status: "failed",
+            progress: { phase: "done", attempts: [], updatedAt: now },
+            pipeline: null,
+          })}\n`,
+        );
+        deps?.onRunCreated?.(followUpRunId);
+        deps?.onSeatsStarted?.();
+        releaseStarted({ pid: process.pid });
+        const statusPath = join(sourceDir, "status.json");
+        const deadline = Date.now() + 3_000;
+        while (Date.now() < deadline) {
+          try {
+            if (readFileSync(statusPath, "utf8").includes("只重新审查当前 PR")) break;
+          } catch {
+            // status is rewritten by the host after the 200 returns
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        throw new Error("follow-up seat failed");
+      }
+      let hasReport = false;
+      try {
+        hasReport = readFileSync(join(sourceDir, "report.md"), "utf8").trim().length > 0;
+      } catch {
+        hasReport = false;
+      }
+      if (!hasReport && (argv.includes("--against") || argv.includes("--focus"))) {
+        throw new Error("scratch re-review referenced a prior report");
+      }
+      const manifestPath = join(sourceDir, "invocation-manifest.v1.json");
+      if (!hasReport && existsSync(manifestPath)) {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+          task?: { specSource?: string };
+          requireSpec?: boolean;
+        };
+        if (manifest.task?.specSource && !argv.includes(manifest.task.specSource)) {
+          throw new Error("scratch re-review dropped --spec");
+        }
+        if (manifest.requireSpec === false && !argv.includes("--no-require-spec")) {
+          throw new Error("scratch re-review dropped --no-require-spec");
+        }
+      }
+      const contextPath = join(sourceDir, "review-context.md");
+      if (!hasReport && existsSync(contextPath)) {
+        const base = readFileSync(contextPath, "utf8").match(/^- base: `([0-9a-f]{40})`/m)?.[1];
+        if (base && !argv.includes("--base-sha")) {
+          throw new Error("scratch re-review dropped --base-sha");
+        }
+        if (base && !argv.includes(base)) {
+          throw new Error("scratch re-review dropped the stored base");
+        }
+      }
+      const followUpRunId = `ck-review-${randomUUID()}`;
+      const followDir = join(home, "runs", followUpRunId);
+      mkdirSync(followDir, { recursive: true });
+      const seat = {
+        attemptId: "attempt-security",
+        agentId: "sec",
+        agentName: "review-security",
+        driverId: "grok-stream-json",
+        modelId: "grok-4.6",
+      };
+      const aggregator = {
+        attemptId: "aggregator",
+        agentId: "adv",
+        agentName: "review-adversarial",
+        driverId: "grok-stream-json",
+        modelId: "grok-4.6",
+      };
+      const taskAt = argv.indexOf("--task");
+      const task =
+        argv[0] && !argv[0].startsWith("--")
+          ? { pr: argv[0] }
+          : { task: taskAt >= 0 ? (argv[taskAt + 1] ?? "") : "" };
+      writeFileSync(
+        join(followDir, "transcript.jsonl"),
+        `${JSON.stringify({
+          kind: "review.started",
+          version: 1,
+          runId: followUpRunId,
+          startedAt: new Date().toISOString(),
+          task,
+          attempts: [seat],
+          aggregator,
+        })}\n`,
+      );
+      const now = new Date().toISOString();
+      writeFileSync(
+        join(followDir, "status.json"),
+        `${JSON.stringify({
+          version: 1,
+          status: "running",
+          progress: {
+            phase: "attempts",
+            updatedAt: now,
+            attempts: [
+              { ...seat, role: "attempt", status: "running", durationMs: null, lastActivity: null },
+            ],
+          },
+          pipeline: null,
+        })}\n`,
+      );
+      deps?.onRunCreated?.(followUpRunId);
+      deps?.onSeatsStarted?.();
+    },
+  });
+  const settled = review.then(
+    () => ({ pid: process.pid }),
+    (error: unknown) => {
+      if (error instanceof FixExit && error.exitCode === 0) return { pid: process.pid };
+      throw error;
+    },
+  );
+  void settled.catch(() => {
+    // A seat-fail resolves startedEarly first. Swallow the later rejection.
+  });
+  return Promise.race([startedEarly, settled]);
+}
+
+function plantLegacyDecoy(stored: string): string | null {
+  const path = resolve(realpathSync(process.cwd()), stored);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `AC-91 decoy ${stored}\n`);
+    const past = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    utimesSync(path, past, past);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function seedStaleReview(input: {
+  shape: "pr" | "task";
+  liveness: "dead" | "alive";
+  report?: "present" | "absent";
+  failReReview?: boolean;
+  spawnFail?: boolean;
+  seatFail?: boolean;
+  legacySpec?: "relative" | "auto";
+}): {
+  runId: string;
+  specSource?: string;
+  decoy?: string | null;
+} {
+  const home = process.env.COUNCILKIT_HOME;
+  if (home === undefined || home.length === 0) throw new Error("COUNCILKIT_HOME missing");
+  const runId = `ck-review-${randomUUID()}`;
+  const dir = join(home, "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  const staleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const pull = 1000 + (Number.parseInt(runId.slice(-4), 16) % 8000);
+  const task =
+    input.shape === "pr"
+      ? { pr: `https://github.com/acme/payments/pull/${String(pull)}` }
+      : { task: `给结算页补一张失败态说明 ${runId.slice(-8)}` };
+  const seat = {
+    attemptId: "attempt-security",
+    agentId: "sec",
+    agentName: "review-security",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  const aggregator = {
+    attemptId: "aggregator",
+    agentId: "adv",
+    agentName: "review-adversarial",
+    driverId: "grok-stream-json",
+    modelId: "grok-4.6",
+  };
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${JSON.stringify({
+      kind: "review.started",
+      version: 1,
+      runId,
+      startedAt: staleAt,
+      task,
+      attempts: [seat],
+      aggregator,
+    })}\n`,
+  );
+  const killedMidway = input.report === "absent";
+  writeFileSync(
+    join(dir, "status.json"),
+    `${JSON.stringify({
+      version: 1,
+      status: "running",
+      progress: {
+        phase: killedMidway ? "attempts" : "aggregating",
+        updatedAt: staleAt,
+        attempts: [
+          {
+            ...seat,
+            role: "attempt",
+            status: killedMidway ? "running" : "success",
+            durationMs: killedMidway ? null : 1000,
+            lastActivity: null,
+          },
+          {
+            ...aggregator,
+            role: "aggregator",
+            status: "running",
+            durationMs: 1000,
+            lastActivity: null,
+          },
+        ],
+      },
+      pipeline: null,
+    })}\n`,
+  );
+  if (killedMidway && input.shape === "pr") {
+    const base = "b4e8b1a09f6d3e2c1b0a9876543210fedcba9876";
+    writeFileSync(
+      join(dir, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task,
+        repoRealpath: "/tmp/acme-payments",
+        reviewedSha: "c4e8b1a09f6d3e2c1b0a9876543210fedcba9876",
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: false,
+        agents: [],
+        aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+    writeFileSync(
+      join(dir, "review-context.md"),
+      `# Frozen review context\n\n- head: \`c4e8b1a09f6d3e2c1b0a9876543210fedcba9876\`\n- base: \`${base}\`\n`,
+    );
+  }
+  let legacy: { specSource: string; decoy: string | null } | null = null;
+  if (killedMidway && input.shape === "task" && input.legacySpec) {
+    const specSource =
+      input.legacySpec === "relative"
+        ? "../ck-e2e-legacy-spec.md"
+        : "docs/plans/ck-e2e-legacy-plan.md";
+    legacy = { specSource, decoy: plantLegacyDecoy(specSource) };
+    writeFileSync(
+      join(dir, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task: { ...task, specSource },
+        repoRealpath: realpathSync(process.cwd()),
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: true,
+        agents: [],
+        aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+  } else if (killedMidway && input.shape === "task") {
+    const spec = join(dir, "acceptance.md");
+    writeFileSync(spec, "# 结算\n\n## 验收\n\n- [ ] 失败时展示说明\n");
+    writeFileSync(
+      join(dir, "invocation-manifest.v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        kind: "councilkit-invocation-manifest",
+        runId,
+        task: { ...task, specSource: spec },
+        repoRealpath: null,
+        reviewedSha: null,
+        timeoutMs: 1000,
+        concurrency: 1,
+        requireSpec: true,
+        agents: [],
+        aggregator: { id: "adv", driverId: "grok-stream-json", modelId: "grok-4.6" },
+        tools: [],
+      })}\n`,
+    );
+  }
+  if (input.report !== "absent") {
+    writeFileSync(join(dir, "report.md"), "# Autonomous Review Report\n\n中断前的摘要。\n");
+  }
+  if (input.failReReview === true) {
+    writeFileSync(join(dir, "e2e-rereview-fail"), "1\n");
+  }
+  if (input.spawnFail === true) {
+    writeFileSync(join(dir, "e2e-rereview-spawn-fail"), "1\n");
+  }
+  if (input.seatFail === true) {
+    writeFileSync(join(dir, "e2e-rereview-seat-fail"), "1\n");
+  }
+  if (input.liveness === "alive") {
+    writeFileSync(join(dir, "review.pid"), `${String(process.pid)}\n`);
+  } else {
+    writeFileSync(join(dir, "review.pid"), "2147483646\n");
+  }
+  return { runId, specSource: legacy?.specSource, decoy: legacy?.decoy ?? null };
+}
+
 function testRoutes(
   scopeManager: { closeAll(reason: string): Promise<void> },
   executions: { reset(): void },
@@ -773,6 +1172,58 @@ function testRoutes(
       handler: () => {
         removeDiscussDemoRun();
         return doReset();
+      },
+    },
+    {
+      method: "POST",
+      pattern: `${TEST_BASE}/seed-stale-review`,
+      auth: "session",
+      bodySchema: z.object({
+        shape: z.enum(["pr", "task"]),
+        liveness: z.enum(["dead", "alive"]),
+        report: z.enum(["present", "absent"]).optional(),
+        failReReview: z.boolean().optional(),
+        spawnFail: z.boolean().optional(),
+        seatFail: z.boolean().optional(),
+        legacySpec: z.enum(["relative", "auto"]).optional(),
+      }),
+      handler: ({ body }) =>
+        seedStaleReview(
+          body as {
+            shape: "pr" | "task";
+            liveness: "dead" | "alive";
+            report?: "present" | "absent";
+            failReReview?: boolean;
+            spawnFail?: boolean;
+            seatFail?: boolean;
+            legacySpec?: "relative" | "auto";
+          },
+        ),
+    },
+    {
+      method: "POST",
+      pattern: `${TEST_BASE}/seed-dead-discuss`,
+      auth: "session",
+      handler: () => {
+        const home = process.env.COUNCILKIT_HOME;
+        if (home === undefined || home.length === 0) throw new Error("COUNCILKIT_HOME missing");
+        const runId = `ck-run-${randomUUID()}`;
+        const dir = join(home, "runs", runId);
+        mkdirSync(dir, { recursive: true });
+        const path = join(dir, "transcript.jsonl");
+        writeFileSync(
+          path,
+          `${JSON.stringify({
+            kind: "run.started",
+            version: 1,
+            runId,
+            startedAt: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+            council: { topic: "进程已死的讨论" },
+          })}\n`,
+        );
+        const quiet = new Date(Date.now() - 16 * 60 * 1000);
+        utimesSync(path, quiet, quiet);
+        return { runId };
       },
     },
     {
@@ -1009,6 +1460,7 @@ async function main(): Promise<void> {
         if (home === undefined || home.length === 0) {
           throw new Error("COUNCILKIT_HOME missing in e2e host");
         }
+        if (input.action === "re-review") return startE2EReReview(home, input.runId);
         const runDir = join(home, "runs", input.runId);
         mkdirSync(runDir, { recursive: true });
         const ideate = input.action === "ideate";

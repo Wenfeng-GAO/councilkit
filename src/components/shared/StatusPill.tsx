@@ -1,3 +1,5 @@
+import { InterruptionMark } from "@/components/report/interruption-mark";
+
 interface StatusPillProps {
   tone: "muted" | "info" | "success" | "error" | "warn";
   text: string;
@@ -21,7 +23,11 @@ export function StatusPill({ tone, text, className = "" }: StatusPillProps) {
     <span
       className={`inline-flex items-center rounded px-2 py-0.5 text-xs leading-snug ${TONE_CLASSES[tone]} ${className}`}
     >
-      {text}
+      {text === "中断" ? (
+        <InterruptionMark iconClassName="h-3.5 w-3.5 shrink-0">{text}</InterruptionMark>
+      ) : (
+        text
+      )}
     </span>
   );
 }

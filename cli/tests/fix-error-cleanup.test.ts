@@ -288,6 +288,7 @@ describe("fix command error cleanup", () => {
         spawnImpl: refuseSpawn,
         reviewImpl: async (_argv, _out, deps) => {
           deps?.onRunCreated?.(followUpId);
+          deps?.onSeatsStarted?.();
         },
       });
       throw new Error("expected FixExit");

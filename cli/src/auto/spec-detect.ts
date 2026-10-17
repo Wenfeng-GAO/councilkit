@@ -18,9 +18,10 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
 } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseAntCodePrUrl, parseApplyPrUrl } from "@shared/runtime/pr-url";
 import { AGGREGATE_PROMPT_BUDGET, MAX_SPEC_TEXT_IN_PROMPT } from "./templates/review";
 
@@ -449,6 +450,16 @@ function truncateSpecBody(text: string, cap: number): string {
   return `${buf.subarray(0, end).toString("utf8")}\n[truncated at ${cap} bytes]`;
 }
 
+/** Absolute path of a spec file, resolved from the process cwd when relative. */
+function recordedSpecSource(candidate: string): string {
+  const absolute = isAbsolute(candidate) ? candidate : resolve(process.cwd(), candidate);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
 function resolveReadableSpecFile(
   pathOrLabel: string,
   repoRoot: string | null,
@@ -478,11 +489,12 @@ function resolveReadableSpecFile(
     // Hard refuse files larger than the aggregate prompt budget; otherwise
     // truncate to MAX_SPEC_TEXT_IN_PROMPT so reserved overhead stays available.
     if (Buffer.byteLength(body, "utf8") > AGGREGATE_PROMPT_BUDGET) continue;
-    const source =
-      repoRoot && candidate.startsWith(repoRoot)
-        ? (normalizeSpecRef(relative(repoRoot, candidate).split(sep).join("/")) ?? candidate)
-        : normalized;
-    return { source, text: truncateSpecBody(body, MAX_SPEC_TEXT_IN_PROMPT) };
+    // Record the absolute path. A later re-review runs in the Host's cwd, so a
+    // cwd-relative or repo-relative source would miss the file.
+    return {
+      source: recordedSpecSource(candidate),
+      text: truncateSpecBody(body, MAX_SPEC_TEXT_IN_PROMPT),
+    };
   }
   return null;
 }

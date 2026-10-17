@@ -21,6 +21,7 @@ interface ViewBarProps {
     seats: WorkbenchAttempt[];
     aggregators: WorkbenchAttempt[];
     hasRepair: boolean;
+    lostExecution?: boolean;
   };
   /** 返回 null 表示当前视图没有可复制内容（按钮禁用）。 */
   getCopyText: () => string | null;
@@ -115,6 +116,7 @@ export function ViewBar({
               {mobileSelect.aggregators.map((seat) => (
                 <option key={seat.attemptId} value={seat.attemptId}>
                   {reviewSeatTitle(seat)}
+                  {mobileSelect.lostExecution && seat.status === "cancelled" ? " · 中断" : ""}
                 </option>
               ))}
             </optgroup>

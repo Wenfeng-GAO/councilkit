@@ -2,6 +2,7 @@ import { cliRunNeedsPoll } from "@/lib/cli-run-status";
 import { extractPrUrl } from "@/lib/fix-prompt";
 import type { ParsedReviewReport } from "@/lib/review-report";
 import { isDemoRun } from "@shared/runtime/demo-report";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import { parseAntCodePrUrl, parseApplyPrUrl, parseGitHubPrUrl } from "@shared/runtime/pr-url";
 import { normalizeReviewPr, summarizePrCase } from "@shared/runtime/review-case";
 import type { CliRunSummaryDto } from "@shared/runtime/schemas";
@@ -96,6 +97,17 @@ export function latestRun(runs: readonly CliRunSummaryDto[]): CliRunSummaryDto |
 }
 
 /**
+ * The case card follows the latest run, except a failed 只再审一遍.
+ * That failure stays on the follow-up; the interrupted original keeps the card.
+ */
+export function caseFace(runs: readonly CliRunSummaryDto[]): CliRunSummaryDto | undefined {
+  const latest = latestRun(runs);
+  if (!latest || latest.status !== "failed" || !latest.sourceRunId) return latest;
+  const source = runs.find((run) => run.runId === latest.sourceRunId && isLostExecutionReview(run));
+  return source ?? latest;
+}
+
+/**
  * 案件类型范围：审查 = review 记录；工程班 = squad + repair 记录——
  * 纯 repair 案件永远归工程班，不会凭空出现在审查清单里。
  */
@@ -176,7 +188,7 @@ export interface CaseView {
   runs: CliRunSummaryDto[];
   /** 当前类型范围内的记录（最新在前）。 */
   scopedRuns: CliRunSummaryDto[];
-  /** 类型范围内最新的代表记录，卡片标题、状态、跳转都以它为准。 */
+  /** 卡片标题、状态、跳转用的记录。失败的复审不盖过仍中断的原 run。 */
   representative: CliRunSummaryDto;
   /** 范围内出现的类型标签（“审查”/“工程班”/…）。 */
   kindLabels: string[];
@@ -187,7 +199,7 @@ export interface CaseView {
 
 export function caseViewOf(group: RunGroup, kind: CaseKindFilter): CaseView | null {
   const scopedRuns = group.runs.filter((run) => runInKindScope(run, kind));
-  const representative = latestRun(scopedRuns);
+  const representative = caseFace(scopedRuns);
   const status = caseStatusAxis(scopedRuns);
   if (!representative || !status) return null;
   const kindLabels = [

@@ -1,5 +1,7 @@
+import { InterruptionMark } from "@/components/report/interruption-mark";
 import { primaryRunStatus } from "@/lib/cli-run-status";
 import { isDemoRun } from "@shared/runtime/demo-report";
+import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import { normalizeReviewPr } from "@shared/runtime/review-case";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { WorkbenchMobileMenu } from "./WorkbenchNav";
@@ -32,8 +34,16 @@ export function ContextBar({
         {isDemoRun(run) ? <span className="ck-demo-tag">◆ 示例数据</span> : null}
       </div>
       <div className="ck-wb-context-right">
-        <span className={status.tone === "info" ? "ck-wb-running" : undefined}>{status.text}</span>
-        {seats.length > 0 ? (
+        <span
+          className={status.tone === "info" ? "ck-wb-running ck-wb-run-status" : "ck-wb-run-status"}
+        >
+          {status.text === "中断" ? (
+            <InterruptionMark>{status.text}</InterruptionMark>
+          ) : (
+            status.text
+          )}
+        </span>
+        {seats.length > 0 && !isLostExecutionReview(run) ? (
           <span>
             {doneSeats}/{seats.length} 席位已完成
           </span>

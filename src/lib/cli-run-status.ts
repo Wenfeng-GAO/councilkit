@@ -1,4 +1,8 @@
 import type { CliRunProgressPhase } from "@shared/runtime/cli-run-phases";
+import {
+  EXECUTION_SERVICE_INTERRUPTION,
+  isLostExecutionReview,
+} from "@shared/runtime/interruption-copy";
 import type { CliRunStatusDto, CliRunSummaryDto } from "@shared/runtime/schemas";
 
 const PHASE_LABEL = {
@@ -79,6 +83,7 @@ export function cliRunStatusPill(
 export function reviewOverviewHeading(run: {
   kind: CliRunSummaryDto["kind"];
   status: CliRunStatusDto;
+  endedAt?: string | null;
   progress?: { phase: keyof typeof PHASE_LABEL } | null;
   pipeline?: {
     phase: string;
@@ -88,6 +93,7 @@ export function reviewOverviewHeading(run: {
   } | null;
   ideateIntegrity?: { incomplete: boolean } | null;
 }): string {
+  if (isLostExecutionReview(run)) return EXECUTION_SERVICE_INTERRUPTION.title;
   const status = primaryRunStatus(run);
   if (run.kind === "review" && run.status === "completed" && status.text === "已完成") {
     return "审查已完成";

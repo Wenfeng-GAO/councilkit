@@ -22,7 +22,15 @@ export {
 
 export const CLI_RUN_STATUS_FILE = "status.json";
 export const CLI_RUN_PIPELINE_PID_FILE = "pipeline.pid";
+/** Review process pid. A fix pipeline uses pipeline.pid and wins when both exist. */
+export const CLI_RUN_REVIEW_PID_FILE = "review.pid";
+/** Source run id of a follow-up started by 只再审一遍. One line, no newline required. */
+export const CLI_RUN_REREVIEW_OF_FILE = "re-review-of";
+/** Written by `councilkit fix` after it passes the still-running guard. */
+export const CLI_RUN_PIPELINE_READY_FILE = "pipeline.ready";
 export const STALE_RUNNING_MS = 5 * 60 * 1000;
+/** Dead pid: interrupt once the heartbeat is at least this old. */
+export const STALE_HEARTBEAT_MS = 30 * 1000;
 
 const PROGRESS_PHASE_SET = new Set<string>(CLI_RUN_PROGRESS_PHASES);
 
@@ -117,7 +125,16 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-/** Read-time overlay: a running sidecar without a live pid or fresh heartbeat is failed. */
+/**
+ * Read-time overlay for an autonomous run still marked running.
+ * A dead pid interrupts once the heartbeat is at least STALE_HEARTBEAT_MS old.
+ * A live pid (including SIGSTOP) interrupts once progress is at least
+ * STALE_RUNNING_MS old. A missing pid uses that same five-minute fallback,
+ * except a discussion: a live discussion pid stays running through a quiet
+ * turn, and a dead or missing discussion pid interrupts at the 30s heartbeat.
+ * Squad sidecars are unchanged. Exactly the boundary counts. The result is
+ * interrupted, never failed.
+ */
 export function reconcileRunningStatus(input: {
   status: CliRunLiveStatus;
   kind: string;
@@ -125,14 +142,32 @@ export function reconcileRunningStatus(input: {
   pid: number | null;
   nowMs?: number;
   staleMs?: number;
+  heartbeatMs?: number;
 }): CliRunLiveStatus {
   if (input.status !== "running") return input.status;
+  // Squad observe sidecars are not this overlay's autonomous runs.
   if (input.kind === "squad") return input.status;
-  if (input.pid !== null) return isPidAlive(input.pid) ? "running" : "failed";
   const updated = Date.parse(input.updatedAt ?? "");
   const now = input.nowMs ?? Date.now();
+  const age = Number.isFinite(updated) ? now - updated : null;
   const staleMs = input.staleMs ?? STALE_RUNNING_MS;
-  if (!Number.isFinite(updated) || now - updated > staleMs) return "failed";
+  const heartbeatMs = input.heartbeatMs ?? STALE_HEARTBEAT_MS;
+  if (input.kind === "discuss") {
+    // A live discussion process may stay quiet for a whole turn. A dead
+    // process, including one that left no pid file, interrupts at 30s.
+    if (input.pid !== null && isPidAlive(input.pid)) return input.status;
+    if (age === null || age >= heartbeatMs) return "interrupted";
+    return "running";
+  }
+  if (input.pid !== null) {
+    if (!isPidAlive(input.pid)) {
+      if (age === null || age >= heartbeatMs) return "interrupted";
+      return "running";
+    }
+    if (age !== null && age >= staleMs) return "interrupted";
+    return "running";
+  }
+  if (age === null || age >= staleMs) return "interrupted";
   return "running";
 }
 

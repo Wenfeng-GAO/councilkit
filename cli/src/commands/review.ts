@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { type Stats, existsSync, lstatSync, mkdirSync, rmSync } from "node:fs";
+import {
+  type Stats,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   FULL_COMMIT_SHA,
@@ -7,6 +15,7 @@ import {
   isFindingVerifiedClosed,
 } from "@shared/runtime/cli-ledger";
 import {
+  CLI_RUN_REVIEW_PID_FILE,
   CLI_RUN_STATUS_FILE,
   type CliRunLiveHeartbeat,
   liveStateFromRecords,
@@ -187,6 +196,8 @@ export interface ReviewDeps {
   worktreeRef?: string;
   /** Called as soon as the run id is known (fresh or resumed). */
   onRunCreated?: (runId: string) => void;
+  /** Called when the first review seat is about to spawn (past the spec gate). */
+  onSeatsStarted?: () => void;
 }
 
 /** Health-probe timeout (P-1): a driver that cannot answer a minimal prompt
@@ -242,6 +253,7 @@ export const REVIEW_FLAGS = {
   against: { type: "string" },
   "repair-package": { type: "string" },
   "pin-sha": { type: "string" },
+  "base-sha": { type: "string" },
   spec: { type: "string" },
   "require-spec": { type: "boolean" },
   "no-require-spec": { type: "boolean" },
@@ -268,6 +280,7 @@ const REVIEW_FLAG_DESCRIPTIONS: Record<keyof typeof REVIEW_FLAGS, string> = {
   against: "<run-id> Incremental review vs that run's findings.json.",
   "repair-package": "<file> Verify the selected repair task (with --against).",
   "pin-sha": "<40-char sha> Review exactly this commit of --repo.",
+  "base-sha": "<40-char sha> Freeze the pinned review against this base commit.",
   spec: "<path|url> Spec contract to review against.",
   "require-spec": "Refuse to run without a bound spec contract (default).",
   "no-require-spec": "Review without a bound spec contract (legacy mode).",
@@ -559,6 +572,16 @@ export async function runReview(
       throw errors.usage("--pin-sha requires --repo pointing at the candidate checkout");
     }
   }
+  const baseShaRaw = values["base-sha"] as string | undefined;
+  const baseSha = baseShaRaw !== undefined ? baseShaRaw.trim().toLowerCase() : "";
+  if (baseShaRaw !== undefined) {
+    if (!FULL_COMMIT_SHA.test(baseSha)) {
+      throw errors.usage("--base-sha must be a full 40-character commit SHA");
+    }
+    if (pinShaRaw === undefined) {
+      throw errors.usage("--base-sha requires --pin-sha");
+    }
+  }
   const pinnedRef = pinSha || deps.worktreeRef;
   let localRepo: LocalRepo | null = null;
   if (task.pr) {
@@ -839,6 +862,7 @@ export async function runReview(
   // `workspaces/` is created only AFTER probing, for attempts that will
   // actually spawn (a probe must be able to prove no workspace existed yet).
   createWorkspace(runDir);
+  writeReviewPid(runDir);
   if (repairPackage && resumeRaw === undefined) {
     atomicWriteFile(
       join(runDir, REVIEW_REPAIR_PACKAGE_FILE),
@@ -1302,6 +1326,10 @@ export async function runReview(
             expectedTargetSha = meta.baseSha;
             host = meta.host;
             out.progress(`  worktree branch: ${branch}`);
+          } else if (baseSha.length > 0) {
+            // Same-head re-review: the stored PR base, not the checkout's HEAD~1.
+            targetRef = baseSha;
+            expectedTargetSha = baseSha;
           } else {
             // Pinned candidate: freeze against the local parent without touching origin.
             targetRef = "HEAD~1";
@@ -1433,6 +1461,7 @@ export async function runReview(
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
+    clearReviewPid(runDir);
   }
 
   // A signal that arrived only during the final flush (executeReview already
@@ -1485,6 +1514,7 @@ export async function runReview(
       // also prints a 仍在运行 line; JSON mode stays silent on stderr.
       heartbeat: { intervalMs: deps.heartbeatIntervalMs, timers: deps.timers },
       humanHeartbeat: !out.json,
+      onSeatsStarted: deps.onSeatsStarted,
     };
   }
 }
@@ -1543,6 +1573,8 @@ interface ExecuteParams {
   executionRevision: ExecutionRevision | null;
   extraAssessments: DiagnosedAssessment[];
   checkoutProofs: Map<string, { head: string; clean: boolean }>;
+  /** First seat is about to spawn. Re-review publishes the follow-up only then. */
+  onSeatsStarted?: () => void;
   liveStatusWrittenAt: number;
 }
 
@@ -1551,6 +1583,7 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   // finalize a report with the Attempts that DID complete (reviewer finding:
   // finalizing with [] wrote a false "no attempts ran" report).
   const completed: AttemptResult[] = [];
+  let seatsAnnounced = false;
   const liveWriter = new LiveEventWriter(p.runDir);
   const onLiveEvent = (attemptId: string, events: readonly RawLiveEvent[]): void => {
     liveWriter.append(attemptId, events);
@@ -1563,6 +1596,10 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
     heartbeatIntervalMs: p.heartbeat?.intervalMs,
     timers: p.heartbeat?.timers,
     onAttemptStart: (attemptId: string) => {
+      if (!seatsAnnounced) {
+        seatsAnnounced = true;
+        p.onSeatsStarted?.();
+      }
       noteLiveBeat(p, attemptId, 0, null, true);
     },
     onHeartbeat: (
@@ -2170,6 +2207,24 @@ function flushTranscript(
   if (root != null) revalidateTrustedRoot(root);
   writeReviewTranscript(path, records);
   persistLiveStatus(dirname(path), records, beats);
+}
+
+function writeReviewPid(runDir: string): void {
+  try {
+    replacePrivateFile(join(runDir, CLI_RUN_REVIEW_PID_FILE), `${String(process.pid)}\n`);
+  } catch {
+    // The pid file is observational. A kill -9 still leaves the last write.
+  }
+}
+
+function clearReviewPid(runDir: string): void {
+  const path = join(runDir, CLI_RUN_REVIEW_PID_FILE);
+  try {
+    if (readFileSync(path, "utf8").trim() !== String(process.pid)) return;
+    unlinkSync(path);
+  } catch {
+    // Missing file, or the process was killed before this finally ran.
+  }
 }
 
 function persistLiveStatus(

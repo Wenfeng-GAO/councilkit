@@ -155,6 +155,20 @@ describe("RepairRunPanel", () => {
     expect(html).not.toContain(">Squad 自动修复</button>");
   });
 
+  it("drops the Squad button to ghost when the interruption card owns the solid action", () => {
+    const html = render(
+      createElement(RepairRunPanel, {
+        run: review,
+        profiles: [{ name: "default", prUrl: "p", sourceBranch: "f", base: "m" }],
+        bridgeAvailable: true,
+        squadVariant: "ghost",
+      }),
+    );
+    expect(html).toContain('data-variant="ghost"');
+    expect(html).toContain("Squad 自动修复");
+    expect(html).not.toContain('data-variant="primary"');
+  });
+
   it("links to an active parent run", () => {
     const html = render(
       createElement(RepairRunPanel, {

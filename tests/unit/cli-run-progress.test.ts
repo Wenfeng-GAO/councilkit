@@ -571,6 +571,8 @@ describe("mapSquadObserveStatus", () => {
 });
 
 describe("reconcileRunningStatus", () => {
+  const T0 = Date.parse("2026-10-16T12:00:00.000Z");
+
   it("keeps a fresh heartbeat without pid as running", () => {
     expect(
       reconcileRunningStatus({
@@ -583,16 +585,76 @@ describe("reconcileRunningStatus", () => {
     ).toBe("running");
   });
 
-  it("fails a running review with a stale heartbeat and no pid", () => {
+  it("keeps a review at 4:59 running and marks 5:00 as interrupted, never failed", () => {
+    const base = {
+      status: "running" as const,
+      kind: "review",
+      pid: null,
+      nowMs: T0,
+    };
     expect(
       reconcileRunningStatus({
-        status: "running",
-        kind: "review",
-        updatedAt: "2026-09-08T10:00:00.000Z",
-        pid: null,
-        nowMs: Date.parse("2026-09-20T00:00:00.000Z"),
+        ...base,
+        updatedAt: new Date(T0 - (5 * 60 * 1000 - 1000)).toISOString(),
       }),
-    ).toBe("failed");
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 5 * 60 * 1000).toISOString(),
+      }),
+    ).toBe("interrupted");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - (5 * 60 * 1000 + 1)).toISOString(),
+      }),
+    ).toBe("interrupted");
+  });
+
+  it("interrupts a dead pid once the heartbeat is 30 seconds old", () => {
+    const dead = 2_147_483_646;
+    expect(isPidAlive(dead)).toBe(false);
+    const base = {
+      status: "running" as const,
+      kind: "review",
+      pid: dead,
+      nowMs: T0,
+    };
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 29_000).toISOString(),
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 30_000).toISOString(),
+      }),
+    ).toBe("interrupted");
+  });
+
+  it("interrupts a live pid that has not progressed for 5 minutes", () => {
+    const base = {
+      status: "running" as const,
+      kind: "review",
+      pid: process.pid,
+      nowMs: T0,
+    };
+    expect(isPidAlive(process.pid)).toBe(true);
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - (5 * 60 * 1000 - 1000)).toISOString(),
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 5 * 60 * 1000).toISOString(),
+      }),
+    ).toBe("interrupted");
   });
 
   it("does not remap squad running status", () => {
@@ -605,6 +667,66 @@ describe("reconcileRunningStatus", () => {
         nowMs: Date.parse("2026-09-20T00:00:00.000Z"),
       }),
     ).toBe("running");
+  });
+
+  it("keeps a live discussion pid running through a long quiet turn", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "discuss",
+        updatedAt: new Date(T0 - 10 * 60 * 1000).toISOString(),
+        pid: process.pid,
+        nowMs: T0,
+      }),
+    ).toBe("running");
+  });
+
+  it("interrupts a discussion with no pid once the heartbeat is 30 seconds old", () => {
+    const base = {
+      status: "running" as const,
+      kind: "discuss",
+      pid: null,
+      nowMs: T0,
+    };
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 29_000).toISOString(),
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 30_000).toISOString(),
+      }),
+    ).toBe("interrupted");
+    expect(
+      reconcileRunningStatus({
+        ...base,
+        updatedAt: new Date(T0 - 16 * 60 * 1000).toISOString(),
+      }),
+    ).toBe("interrupted");
+  });
+
+  it("leaves ideate on the five-minute missing-pid rule", () => {
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "ideate",
+        updatedAt: new Date(T0 - 31_000).toISOString(),
+        pid: null,
+        nowMs: T0,
+      }),
+    ).toBe("running");
+    expect(
+      reconcileRunningStatus({
+        status: "running",
+        kind: "ideate",
+        updatedAt: new Date(T0 - 5 * 60 * 1000).toISOString(),
+        pid: null,
+        nowMs: T0,
+      }),
+    ).toBe("interrupted");
   });
 });
 
