@@ -3,7 +3,16 @@
  * Expected names/colors/models are the product literals, not derived from
  * the implementation under test beyond importing the command.
  */
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -289,6 +298,30 @@ exit 1
     expect(sink.human).not.toContain("config.toml");
     expect(sink.human).not.toContain(">>");
     expect(sink.human).not.toContain("seat not created");
+  });
+
+  it("does not write an existing codex config.toml and still uses the default model", async () => {
+    const original = [
+      'sandbox_mode = "read-only"',
+      "",
+      "[profiles.x]",
+      'model = "gpt-from-profile"',
+      "",
+    ].join("\n");
+    const path = join(codexHome, "config.toml");
+    writeFileSync(path, original);
+    const stamp = new Date("2020-01-01T00:00:00Z");
+    utimesSync(path, stamp, stamp);
+    const before = readFileSync(path);
+    stub(["codex"], LOGGED_IN);
+    await runInit([], makeSink());
+    const after = readFileSync(path);
+    expect(Buffer.compare(before, after)).toBe(0);
+    expect(after.toString("utf8")).toBe(original);
+    expect(statSync(path).mtimeMs).toBe(stamp.getTime());
+    const store = new Store();
+    expect(store.getAgent("review-codex").modelId).toBe("default");
+    expect(store.getCouncil("pr-jury").agentIds).toContain(store.getAgent("review-codex").id);
   });
 
   it("does not silently replace a configured product-jury reporter", async () => {
