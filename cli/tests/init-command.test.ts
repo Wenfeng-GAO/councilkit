@@ -11,6 +11,7 @@ import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { dispatch } from "../src/cli";
 import { type InitOutcome, runInit } from "../src/commands/init";
 import { ReviewExit, runReview } from "../src/commands/review";
+import { createProductJuryHint } from "../src/init/ideate-defaults";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -113,9 +114,37 @@ describe("councilkit init", () => {
   });
 
   it.each([
-    ["cfuse", "install kimi or codex"],
+    [["cfuse"], "install any two of grok, kimi, codex"],
+    [["grok"], "install kimi or codex"],
+    [["kimi"], "install grok or codex"],
+    [["codex"], "install grok or kimi"],
+  ] as const)("createProductJuryHint with %j on PATH", (names, install) => {
+    stub([...names]);
+    expect(createProductJuryHint()).toBe(
+      `to create product-jury: ${install}, then rerun councilkit init`,
+    );
+  });
+
+  it("omits the product-jury setup line when at least two ideate executables are present", async () => {
+    stub(["grok", "kimi"]);
+    expect(createProductJuryHint()).toBe(
+      "to create product-jury: install kimi or codex, then rerun councilkit init",
+    );
+    const sink = makeSink();
+    await runInit([], sink);
+    expect(
+      new Store()
+        .listCouncils()
+        .map((council) => council.name)
+        .sort(),
+    ).toEqual(["pr-jury", "product-jury"]);
+    expect(sink.lines.join("\n")).not.toContain("to create product-jury:");
+  });
+
+  it.each([
+    ["cfuse", "install any two of grok, kimi, codex"],
     ["grok", "install kimi or codex"],
-    ["kimi", "install codex"],
+    ["kimi", "install grok or codex"],
   ] as const)(
     "#387: %s-only init advertises only pr-jury and explains how to create product-jury",
     async (driver, install) => {
@@ -131,7 +160,6 @@ describe("councilkit init", () => {
       expect(human.split("\n")).toContain(
         `  to create product-jury: ${install}, then rerun councilkit init`,
       );
-      if (driver === "kimi") expect(human).not.toContain("install kimi");
       expect(human).not.toContain('ideate "<idea>" --council product-jury');
     },
   );

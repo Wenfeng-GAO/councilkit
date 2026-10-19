@@ -79,15 +79,24 @@ export const IDEATE_REPORTER_FALLBACK = [
 
 export const NEXT_IDEATE_HINT = 'councilkit ideate "<idea>" --council product-jury';
 
-/** kimi and codex are the only tools this next line names. */
-const PRODUCT_JURY_SETUP_TOOLS = ["kimi", "codex"] as const;
+/** Shown when two executables are present but product-jury still was not created (#399). */
+const PRODUCT_JURY_HINT_WHEN_READY =
+  "to create product-jury: install kimi or codex, then rerun councilkit init";
 
 /**
- * Names only the setup tools still absent. When both are already installed
- * and product-jury still cannot be created, keep the fixed pair (#399).
+ * Names installs that would bring product-jury to two ready seats.
+ * A seat is ready when its IDEATE_AGENT_SPECS executable is on PATH.
+ * cfuse does not fill an ideate seat. Two or more ready seats keep the fixed pair.
  */
 export function createProductJuryHint(env: NodeJS.ProcessEnv = process.env): string {
-  const missing = PRODUCT_JURY_SETUP_TOOLS.filter((name) => findExecutable(name, env) === null);
-  const tools = missing.length === 0 ? PRODUCT_JURY_SETUP_TOOLS : missing;
-  return `to create product-jury: install ${tools.join(" or ")}, then rerun councilkit init`;
+  const missing = IDEATE_AGENT_SPECS.filter(
+    (spec) => findExecutable(spec.executable, env) === null,
+  ).map((spec) => spec.executable);
+  const ready = IDEATE_AGENT_SPECS.length - missing.length;
+  if (ready >= 2) return PRODUCT_JURY_HINT_WHEN_READY;
+  if (ready === 0) {
+    const listed = IDEATE_AGENT_SPECS.map((spec) => spec.executable).join(", ");
+    return `to create product-jury: install any two of ${listed}, then rerun councilkit init`;
+  }
+  return `to create product-jury: install ${missing.join(" or ")}, then rerun councilkit init`;
 }

@@ -168,8 +168,10 @@ describe("councilkit ideate", () => {
   );
 
   it.each([
-    ["kimi", "install codex"],
-    ["cfuse", "install kimi or codex"],
+    ["cfuse", "install any two of grok, kimi, codex"],
+    ["grok", "install kimi or codex"],
+    ["kimi", "install grok or codex"],
+    ["codex", "install grok or kimi"],
   ] as const)(
     "#387: missing product-jury on a %s-only PATH names the setup tools still absent",
     async (only, install) => {
@@ -184,7 +186,6 @@ describe("councilkit ideate", () => {
         exitCode: 2,
         message: `no council "product-jury". to create product-jury: ${install}, then rerun councilkit init`,
       });
-      if (only === "kimi") expect((error as Error).message).not.toContain("install kimi");
     },
   );
 
