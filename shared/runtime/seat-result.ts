@@ -108,3 +108,15 @@ function firstParagraph(text: string): string | null {
   }
   return lines.length > 0 ? lines.join(" ") : null;
 }
+
+/** Missing-tool reasons are generated locally, never inferred from driver stderr. */
+export function formatMissingSeatAbsence(name: string, reason: string): string {
+  const tool = /^没有找到 (.+)。$/.exec(reason)?.[1] ?? "";
+  return `缺席：${name}（${tool}）：${reason}`;
+}
+
+export function missingSeatAbsenceLines(markdown: string): string[] {
+  return [...markdownLines(markdown)]
+    .filter((row) => !row.fenced && /^缺席：.+（.+）：没有找到 .+。$/.test(row.line))
+    .map((row) => row.line);
+}

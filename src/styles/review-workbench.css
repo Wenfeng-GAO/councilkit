@@ -1052,3 +1052,19 @@
   font-family: var(--ck-ui-font);
 }
 /* 代码块保持 mono 栈不动（.ck-doc pre 继承 report.css，不在此覆盖）。 */
+
+.ck-wb-absence {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.ck-wb-absence .ck-wb-icon {
+  flex-shrink: 0;
+  color: var(--ck-interrupt);
+}
+
+.ck-wb-absence span {
+  min-width: 0;
+}
