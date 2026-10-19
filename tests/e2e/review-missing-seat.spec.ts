@@ -15,6 +15,17 @@ test("#383 missing seat is readable with an amber circle-alert at 1280 and 390",
     const row = page.locator('[data-absence-icon="circle-alert"]');
     await expect(row).toBeVisible();
     await expect(row).toHaveText("缺席：review-kimi（kimi）：没有找到 kimi。");
+    const counts = page.locator(".ck-wb-seat-count");
+    await expect(counts).toHaveCount(2);
+    for (const count of await counts.all()) {
+      await expect(count).toBeVisible();
+      await expect(count).toHaveText("1/2 席位成功 · 1 路失败");
+      const box = await count.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box?.x).toBeGreaterThanOrEqual(0);
+      expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(width);
+    }
+    await expect(page.getByText("席位已完成")).toHaveCount(0);
     const icon = row.locator("svg.ck-wb-icon.ck-wb-icon-state");
     await expect(icon).toBeVisible();
     const colors = await icon.evaluate((el) => {

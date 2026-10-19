@@ -15,6 +15,7 @@ import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
 import { missingSeatAbsenceLines } from "@shared/runtime/seat-result";
 import { useState } from "react";
+import { SeatCount } from "./SeatCount";
 import {
   ChevronRightIcon,
   CircleAlertIcon,
@@ -112,11 +113,7 @@ export function OverviewView({
       )}
       <p className="ck-wb-report-meta">
         {run.status === "completed" ? <span>审查执行已完成</span> : null}
-        {seats.length > 0 && !lost ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
-        ) : null}
+        {lost ? null : <SeatCount attempts={run.progress?.attempts} />}
         {run.truncated ? <span>报告超过 2MB，已截断显示</span> : null}
       </p>
       {missingSeatAbsenceLines(run.markdown).map((line, index) => (

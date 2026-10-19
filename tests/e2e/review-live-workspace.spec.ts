@@ -132,7 +132,7 @@ test("固定席位工作台：过程读取失败可恢复，完成席位直读 d
   });
   await page.goto(`/reports/${runId}`);
   // 上下文栏席位计数 + 单一席位列（无重复列表/下拉）。
-  await expect(page.getByText("1/2 席位已完成").first()).toBeVisible();
+  await expect(page.getByText("1/2 席位成功").first()).toBeVisible();
   await expect(page.locator(".ck-wb-seat-row")).toHaveCount(3);
   await expect(page.getByRole("region", { name: "外部 Squad 修复任务" })).toHaveCount(0);
 
