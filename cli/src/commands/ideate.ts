@@ -318,7 +318,13 @@ export async function runIdeate(
       const key = modelConfigKey(agent);
       if (probeByKey.has(key)) continue;
       const exeName = executableForDriver(agent.driverSelection.driverId);
-      const exe = exeName === undefined ? null : findExecutable(exeName);
+      // claude's cfuse route: standalone `cfuse` first, else `cld` (#389).
+      const exe =
+        exeName === undefined
+          ? null
+          : agent.driverSelection.driverId === "claude-stream-json"
+            ? (findExecutable("cfuse") ?? findExecutable(exeName))
+            : findExecutable(exeName);
       if (exe === null) {
         const rec = {
           driverId: agent.driverSelection.driverId,

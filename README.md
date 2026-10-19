@@ -12,7 +12,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
 - **Node.js 22 或更新**（CI 覆盖 22 / 24 / 26；低于 22 会在安装和 Host 启动时明确拒绝）
 - **pnpm**
 - **至少一个已登录的本机 CLI**：
-  - `cld`（支持 `ant` / `moonshot` / `deepseek` / `cfuse` 四条 route）
+  - CodeFuse：独立 `cfuse` CLI（`cfuse -p` 能回答即可），或 `cld`（支持 `ant` / `moonshot` / `deepseek` / `cfuse` 四条 route）。`cfuse` 不是 `cld` 的必需品：命令行审查（review / apply / fix / ideate）的 `review-security` 席在 PATH 上有 `cfuse` 时直接跑 `cfuse --cc`，没有时才走 `cld cfuse`。浏览器 Host 的模型目录仍经 `cld cfuse`。
   - Codex CLI（`codex app-server`）
   - `kimi` CLI + coding plan 登录
   - `grok` CLI + `grok login`

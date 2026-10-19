@@ -186,12 +186,15 @@ export function lightweightConnectivityCheck(
     };
   }
   const find = deps.findExecutable ?? findExecutable;
-  const exe = find(exeName, env);
+  // claude's cfuse route runs standalone `cfuse` when present, else `cld`
+  // (same order as resolveCfuseRoute in the spawn spec, #386).
+  const names = driverId === "claude-stream-json" ? ["cfuse", exeName] : [exeName];
+  const exe = names.map((name) => find(name, env)).find((found) => found !== null) ?? null;
   if (exe === null) {
     return {
       ok: false,
       suspicious: false,
-      reason: `executable "${exeName}" not found`,
+      reason: `executable "${names.join('" or "')}" not found`,
       durationMs: Math.max(0, (deps.now ?? Date.now)() - started),
     };
   }

@@ -51,20 +51,23 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
   const store = new Store();
   const env = process.env;
 
+  // The cld `cfuse` route seat also runs on the standalone `cfuse` CLI (#371 #386).
+  const present = (exe: string): boolean =>
+    (exe === "cld" && findExecutable("cfuse", env) !== null) || findExecutable(exe, env) !== null;
   const available: DefaultAgentSpec[] = [];
   const missingDrivers: string[] = [];
   for (const spec of DEFAULT_AGENT_SPECS) {
-    if (findExecutable(spec.executable, env) !== null) available.push(spec);
+    if (present(spec.executable)) available.push(spec);
     else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   const ideateAvailable: IdeateAgentSpec[] = [];
   for (const spec of IDEATE_AGENT_SPECS) {
-    if (findExecutable(spec.executable, env) !== null) ideateAvailable.push(spec);
+    if (present(spec.executable)) ideateAvailable.push(spec);
     else if (!missingDrivers.includes(spec.executable)) missingDrivers.push(spec.executable);
   }
   if (available.length === 0) {
     throw errors.usage(
-      "no review drivers found on PATH (need at least one of: cld, kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
+      "no review drivers found on PATH (need at least one of: cfuse (or cld), kimi, grok, cursor-agent). Install and login to a local CLI, then retry.",
       { missingDrivers },
     );
   }

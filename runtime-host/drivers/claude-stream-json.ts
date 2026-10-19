@@ -61,6 +61,12 @@ interface RouteDef {
    * false-throttles long-running rooms into a spurious needs_rebase pause.
    */
   contextWindowTokens?: number;
+  /**
+   * Multiplier on the generic `handshakeMs` for spawn supervision and the
+   * control `initialize` reply. A route whose backend cold start is slow and
+   * serialized (cfuse) gets a larger budget instead of failing the catalog.
+   */
+  handshakeScale?: number;
 }
 
 /**
@@ -91,10 +97,19 @@ const ROUTES: Record<ClaudeRoute, RouteDef> = {
   // catalog uses the `antchat/`-prefixed form, modelAliases admits the legacy
   // id as a binding-time compatibility name (moonshot precedent) — execution
   // still uses the canonical catalog default.
+  //
+  // Cold start (#391): `initialize` waits for cfuse's own startup (local
+  // proxy, login, hub daemon) before the engine answers. Measured on the main
+  // Mac: 2.4–3.3s alone, 5.2–8.1s for six concurrent starts (they serialize,
+  // ~0.6s apart), and >15s on 2026-10-18 for every catalog request — the
+  // generic 15s budget then failed the catalog as "Unhandled internal error".
+  // 4× (60s by default) covers that; `--skip-update` keeps cfuse's
+  // self-update check out of the handshake.
   cfuse: {
-    argv: ["cfuse"],
+    argv: ["cfuse", "--skip-update"],
     modelAliases: ["GLM-5.2[1m]"],
     contextWindowTokens: 1_000_000,
+    handshakeScale: 4,
   },
 };
 
@@ -194,6 +209,10 @@ export function createClaudeStreamJsonDriver(
       return state === "closing" || state === "closed";
     }
 
+    function handshakeBudgetMs(): number {
+      return timeouts.handshakeMs * (ROUTES[currentRoute()].handshakeScale ?? 1);
+    }
+
     function sendControl(request: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (!process) return Promise.reject(new Error("driver process not running"));
       const requestId = `ck-${participantId}-${++requestCounter}`;
@@ -208,8 +227,11 @@ export function createClaudeStreamJsonDriver(
             }
           });
         }),
-        timeouts.handshakeMs,
-        () => new Error("control request timed out"),
+        handshakeBudgetMs(),
+        () =>
+          Object.assign(new Error(`control request timed out after ${handshakeBudgetMs()}ms`), {
+            runtimeCode: "HANDSHAKE_TIMEOUT",
+          }),
       );
     }
 
@@ -570,7 +592,7 @@ export function createClaudeStreamJsonDriver(
       // path (H4). A genuine supervised-spawn failure with no concurrent close
       // keeps its plain error.
       try {
-        await spawned.waitSupervised(timeouts.handshakeMs);
+        await spawned.waitSupervised(handshakeBudgetMs());
       } catch (err) {
         if (isClosingOrClosed()) {
           throw Object.assign(new Error("claude driver closed during prewarm"), {
