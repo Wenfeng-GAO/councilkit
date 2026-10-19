@@ -199,7 +199,7 @@ PR 审查需要本机已有该仓库：`--repo <path>`、`repos.json` 记忆，�
 
 CLI 直接按 PATH 解析 `cld`/`kimi`/`codex`/`grok`/`cursor-agent` 并 spawn，绕过 scope/SSE/ACK：
 
-- **claude**：仅支持 `cld cfuse` 路由（其它 route 直接 usage 报错）
+- **claude**：仅支持 `cfuse` 路由（其它 route 直接 usage 报错）。PATH 上有独立 `cfuse` 时执行 `cfuse --cc --skip-update --print --verbose --output-format stream-json …`（prompt 走 stdin，只取最后的 `result` 事件），否则执行 `cld cfuse …`，两者 flag 相同
 - **kimi**：用 `-p`（无 `--auto`，自主权限由 config 提供）
 - **codex**：用 `exec -s workspace-write --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check`
 - **grok**：直接 spawn

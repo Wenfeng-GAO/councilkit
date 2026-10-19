@@ -6,7 +6,10 @@
  * and never goes through the Runtime Host.
  *
  * Flag shapes are taken from `evidence/flag-facts.md` (measured), not memory:
- *  - claude (cld): only the `cfuse` route is supported; non-cfuse → usage.
+ *  - claude: only the `cfuse` route is supported; non-cfuse → usage. The
+ *    standalone CodeFuse CLI runs it when `cfuse` is on PATH (`cfuse --cc
+ *    --skip-update …`); otherwise `cld cfuse …`. Both run the same cfuse
+ *    claude-code engine with the same flags (see `resolveCfuseRoute`).
  *    prompt → stdin; extract last `{"type":"result"}` (subtype "success",
  *    is_error != true) `.result`.
  *  - kimi: `kimi -m <modelId> -p <prompt> --output-format stream-json` (no
@@ -644,6 +647,45 @@ export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process
   throw errors.usage(`executable "${name}" not found on PATH (review needs it installed)`);
 }
 
+/** How the claude-stream-json `cfuse` route is launched. */
+export interface CfuseRouteInvocation {
+  executable: string;
+  /** argv before the claude flags. */
+  argvPrefix: string[];
+  mode: "standalone" | "cld";
+}
+
+/**
+ * The `cfuse` route, standalone first (#386 #389): `cld cfuse` only execs
+ * `cfuse-claude-code`, which runs `cfuse --cc --dangerously-skip-permissions
+ * "$@"`. Calling the standalone `cfuse` CLI directly runs that same engine
+ * with the same claude flags, works where `cld` is not installed, and keeps
+ * read-only seats free of the wrapper's forced permission skip. `--skip-update`
+ * keeps a seat or probe from running cfuse's self-update check. Falls back to
+ * `cld cfuse`; neither present → usage error naming both.
+ */
+export function resolveCfuseRoute(env: NodeJS.ProcessEnv = process.env): CfuseRouteInvocation {
+  const cfuse = findExecutable("cfuse", env);
+  if (cfuse !== null) {
+    return { executable: cfuse, argvPrefix: ["--cc", "--skip-update"], mode: "standalone" };
+  }
+  const cld = findExecutable("cld", env);
+  if (cld !== null) return { executable: cld, argvPrefix: ["cfuse"], mode: "cld" };
+  throw errors.usage(
+    'executable "cfuse" (or "cld" for the cld cfuse route) not found on PATH (review needs it installed)',
+  );
+}
+
+/** Executable + argv prefix for a driver: claude goes through `resolveCfuseRoute`. */
+function resolveDriverLaunch(
+  driverId: string,
+  exeName: string,
+  env: NodeJS.ProcessEnv,
+): { executable: string; argvPrefix: string[] } {
+  if (driverId === "claude-stream-json") return resolveCfuseRoute(env);
+  return { executable: resolveExecutable(exeName, env), argvPrefix: [] };
+}
+
 function isExecutableFile(p: string): boolean {
   try {
     if (!statSync(p).isFile()) return false;
@@ -712,7 +754,14 @@ const READ_ONLY_DENIED_TOOLS = ["Bash", "Edit", "Write"] as const;
  * probe exercises the driver backend, not the review's escalation path. */
 function buildInvocation(
   agent: AgentRecord,
-  opts: { prompt: string; workspace?: string; probe: boolean; access?: SeatAccess },
+  opts: {
+    prompt: string;
+    workspace?: string;
+    probe: boolean;
+    access?: SeatAccess;
+    /** claude only: `resolveCfuseRoute().argvPrefix`. */
+    argvPrefix: string[];
+  },
 ): DriverInvocation {
   const sel = agent.driverSelection;
   const driverId = sel.driverId;
@@ -725,7 +774,7 @@ function buildInvocation(
           `review only supports the cfuse route for claude-stream-json (got "${sel.options.route}")`,
         );
       }
-      const argv = ["cfuse", "--print", "--verbose", "--output-format", "stream-json"];
+      const argv = [...opts.argvPrefix, "--print", "--verbose", "--output-format", "stream-json"];
       if (!opts.probe) {
         argv.push("--include-partial-messages");
         if (write) argv.push("--dangerously-skip-permissions");
@@ -837,6 +886,8 @@ function buildIdeateInvocation(
     workspace: string;
     files: ReturnType<typeof prepareIdeateWorkspace>;
     probe: boolean;
+    /** claude only: `resolveCfuseRoute().argvPrefix`. */
+    argvPrefix: string[];
   },
 ): DriverInvocation {
   const sel = agent.driverSelection;
@@ -851,7 +902,7 @@ function buildIdeateInvocation(
       }
       return {
         argv: [
-          "cfuse",
+          ...opts.argvPrefix,
           "--print",
           "--verbose",
           "--output-format",
@@ -983,12 +1034,13 @@ export function buildIdeateSpawnSpec(
   const files = prepareIdeateWorkspace(workspace);
   const auth = prepareIdeateAuthHome(driverId, env);
   try {
-    const executable = resolveExecutable(exeName, env);
+    const { executable, argvPrefix } = resolveDriverLaunch(driverId, exeName, env);
     const invocation = buildIdeateInvocation(agent, {
       prompt,
       workspace,
       files,
       probe: opts.probe === true,
+      argvPrefix,
     });
     assertIdeateRestrictedArgv(invocation.argv, driverId);
     const envOverlay = ideateEnvOverlay(driverId, workspace, auth?.dir ?? null);
@@ -1032,12 +1084,13 @@ export function buildSpawnSpec(
   if (exeName === undefined) {
     throw errors.usage(`unsupported driver "${driverId}" for review`);
   }
-  const executable = resolveExecutable(exeName, env);
+  const { executable, argvPrefix } = resolveDriverLaunch(driverId, exeName, env);
   const invocation = buildInvocation(agent, {
     prompt,
     workspace,
     probe: false,
     access: opts.access ?? "read-only",
+    argvPrefix,
   });
   return {
     attemptId,
@@ -1067,8 +1120,8 @@ export function buildProbeSpec(
   if (exeName === undefined) {
     throw errors.usage(`unsupported driver "${driverId}" for review`);
   }
-  const executable = resolveExecutable(exeName, env);
-  const invocation = buildInvocation(agent, { prompt, workspace: cwd, probe: true });
+  const { executable, argvPrefix } = resolveDriverLaunch(driverId, exeName, env);
+  const invocation = buildInvocation(agent, { prompt, workspace: cwd, probe: true, argvPrefix });
   const tmp = join(cwd, ".tmp");
   try {
     mkdirSync(tmp, { recursive: true, mode: 0o700 });

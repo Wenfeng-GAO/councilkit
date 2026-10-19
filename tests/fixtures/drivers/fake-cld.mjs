@@ -25,6 +25,7 @@
  *   unknownFrames     bool    interleave {"type":"weird_thing"} frames before deltas
  *   deltaDelayMs      number  delay between stream deltas   (default 8)
  *   ignoreInterrupt   bool    answer interrupt with success but never end the turn
+ *   initializeDelayMs number  delay before the initialize reply (slow cold start)
  *   statsPath         string  stats file prefix; stats land at `<statsPath>.<pid>`
  *
  * Stats (written after every event, tmp+rename): {pid, initializes, interrupts,
@@ -66,6 +67,8 @@ const DEFAULTS = {
   unknownFrames: false,
   deltaDelayMs: 8,
   ignoreInterrupt: false,
+  // Delay before the `initialize` reply (a slow backend cold start, e.g. cfuse).
+  initializeDelayMs: 0,
   statsPath: null,
 };
 
@@ -153,6 +156,14 @@ function handleControlRequest(frame, config) {
   if (subtype === "initialize") {
     stats.initializes += 1;
     writeStats(config);
+    if (config.initializeDelayMs > 0 && !frame.__delayed) {
+      setTimeout(
+        () => handleControlRequest({ ...frame, __delayed: true }, config),
+        config.initializeDelayMs,
+      );
+      stats.initializes -= 1;
+      return;
+    }
     send({
       type: "control_response",
       response: {

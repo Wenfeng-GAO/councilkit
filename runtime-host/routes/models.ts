@@ -44,6 +44,19 @@ export function modelRoutes(services: HostServices): Route[] {
         ),
       );
     }
+    if (runtimeCode === "HANDSHAKE_TIMEOUT") {
+      // A slow driver start is a typed, retryable gateway timeout — not a
+      // 500 "Unhandled internal error" (#391).
+      throw httpError(
+        504,
+        makeError(
+          runtimeCode,
+          "prewarm",
+          error instanceof Error ? clipUtf16(error.message, 256) : "catalog handshake timed out",
+          { retryable: true },
+        ),
+      );
+    }
     if (runtimeCode === "AUTH_REQUIRED") {
       throw httpError(
         403,
