@@ -17,6 +17,7 @@ import {
   PR_JURY_TOPIC,
 } from "../init/defaults";
 import {
+  CREATE_PRODUCT_JURY_HINT,
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
   type IdeateAgentSpec,
@@ -178,15 +179,17 @@ export async function runInit(argv: string[], out: OutputSink): Promise<void> {
     }
   }
 
+  const productCouncil = findCouncilByName(store, PRODUCT_JURY_COUNCIL_NAME);
+  const hasProductJury = productCouncil !== null && productCouncil.agentIds.length >= 2;
   const outcome: InitOutcome = {
     createdAgents: createdAgents.map(briefAgent),
     reusedAgents: reusedAgents.map(briefAgent),
     createdCouncil: createdCouncil === null ? null : briefCouncil(createdCouncil, store),
     reusedCouncil: reusedCouncil === null ? null : briefCouncil(reusedCouncil, store),
     missingDrivers,
-    next: `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}`,
+    next: hasProductJury ? `${NEXT_REVIEW_HINT} · ${NEXT_IDEATE_HINT}` : NEXT_REVIEW_HINT,
   };
-  await out.finish(outcome, (d) => renderHuman(d as InitOutcome));
+  await out.finish(outcome, (d) => renderHuman(d as InitOutcome, hasProductJury));
 }
 
 function recreateDefaults(store: Store): void {
@@ -262,7 +265,7 @@ function briefCouncil(
   return { id: council.id, name: council.name, reporter };
 }
 
-function renderHuman(outcome: InitOutcome): string {
+function renderHuman(outcome: InitOutcome, hasProductJury: boolean): string {
   const lines: string[] = [];
   const created = outcome.createdAgents.length;
   const reused = outcome.reusedAgents.length;
@@ -280,7 +283,9 @@ function renderHuman(outcome: InitOutcome): string {
   if (outcome.missingDrivers.length > 0) {
     lines.push(`missing on PATH: ${outcome.missingDrivers.join(", ")}`);
   }
-  lines.push(`next: ${outcome.next}`);
+  lines.push("next:");
+  for (const hint of outcome.next.split(" · ")) lines.push(`  ${hint}`);
+  if (!hasProductJury) lines.push(`  ${CREATE_PRODUCT_JURY_HINT}`);
   lines.push("open reports: http://127.0.0.1:43127/reports");
   return lines.join("\n");
 }

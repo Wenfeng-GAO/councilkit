@@ -77,3 +77,6 @@ export const IDEATE_REPORTER_FALLBACK = [
 ] as const;
 
 export const NEXT_IDEATE_HINT = 'councilkit ideate "<idea>" --council product-jury';
+
+export const CREATE_PRODUCT_JURY_HINT =
+  "to create product-jury: install kimi or codex, then rerun councilkit init";

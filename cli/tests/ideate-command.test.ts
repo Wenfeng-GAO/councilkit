@@ -153,6 +153,20 @@ describe("councilkit ideate", () => {
     rmSync(poisoned, { recursive: true, force: true });
   });
 
+  it.each([{ flags: [] }, { flags: ["--council", "product-jury"] }])(
+    "#387: missing product-jury gives prerequisite guidance for flags %j",
+    async ({ flags }) => {
+      const error = await runIdeate(["x", ...flags], makeSink()).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(CliError);
+      expect(error).toMatchObject({
+        exitCode: 2,
+        message:
+          'no council "product-jury". to create product-jury: install kimi or codex, then rerun councilkit init',
+      });
+      expect((error as Error).message).not.toContain("Run: councilkit init --json");
+    },
+  );
+
   function seedRoster(): { product: string; engineering: string } {
     const store = new Store();
     const product = store.createAgent({
