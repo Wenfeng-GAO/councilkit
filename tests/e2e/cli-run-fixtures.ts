@@ -408,3 +408,84 @@ export function seedLostExecutionFixtures(home: string): void {
     ].join("\n"),
   );
 }
+
+/** #383: one successful seat and one missing executable, using seeded data only. */
+export function seedMissingSeatFixture(home: string): { runId: string } {
+  const runId = "ck-review-00000000-0000-4000-8000-000000000383";
+  const dir = join(home, "runs", runId);
+  mkdirSync(dir, { recursive: true });
+  const startedAt = "2026-10-19T01:00:00.000Z";
+  const endedAt = "2026-10-19T01:01:00.000Z";
+  const present = {
+    attemptId: "attempt-0",
+    agentId: "sec",
+    agentName: "review-security",
+    driverId: "claude-stream-json",
+    modelId: "test",
+  };
+  const absent = {
+    attemptId: "attempt-1",
+    agentId: "kimi",
+    agentName: "review-kimi",
+    driverId: "kimi-stream-json",
+    modelId: "kimi-code/k3",
+  };
+  const aggregator = { ...present, attemptId: "aggregator" };
+  const records = [
+    {
+      kind: "review.started",
+      version: 1,
+      runId,
+      startedAt,
+      task: { task: "#383 missing executable" },
+      attempts: [present, absent],
+      aggregator,
+    },
+    {
+      kind: "attempt.finished",
+      version: 1,
+      ...present,
+      status: "success",
+      output: "## 概览\nok",
+      exitCode: 0,
+      durationMs: 1000,
+    },
+    {
+      kind: "attempt.finished",
+      version: 1,
+      ...absent,
+      status: "failure",
+      output: null,
+      exitCode: null,
+      durationMs: 0,
+      failure: { code: "EXECUTABLE_NOT_FOUND", message: "没有找到 kimi。" },
+    },
+    {
+      kind: "aggregation.finished",
+      version: 1,
+      ...aggregator,
+      status: "success",
+      output: "## 概览\nok\n## 结论\ncomment",
+      exitCode: 0,
+      durationMs: 1000,
+    },
+    {
+      kind: "review.finished",
+      version: 1,
+      runId,
+      endedAt,
+      status: "completed",
+      exitCode: 0,
+      incomplete: true,
+    },
+  ];
+  writeFileSync(
+    join(dir, "transcript.jsonl"),
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+  );
+  writeFileSync(
+    join(dir, "report.md"),
+    "# Autonomous Review Report\n\n- Status: partial\n\n---\n\n## 概览\n\nok\n\n## 结论\n\ncomment\n\n## 缺席的审查者\n\n缺席：review-kimi（kimi）：没有找到 kimi。\n",
+  );
+  return { runId };
+}

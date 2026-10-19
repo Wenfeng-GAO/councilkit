@@ -97,7 +97,11 @@ import { createSessionReconciler } from "../../runtime-host/scopes/session-recon
 import { createSessionCapability } from "../../runtime-host/security/session-capability";
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
 import { slowGenDemoReport } from "../../runtime-host/slow-gen";
-import { seedLostExecutionFixtures, seedReportCaseFixtures } from "./cli-run-fixtures";
+import {
+  seedLostExecutionFixtures,
+  seedMissingSeatFixture,
+  seedReportCaseFixtures,
+} from "./cli-run-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
 // host must serve the built dist/ exactly like the shipped Host does.
@@ -1170,6 +1174,16 @@ function testRoutes(
       handler: () => {
         removeDiscussDemoRun();
         return doReset();
+      },
+    },
+    {
+      method: "POST",
+      pattern: `${TEST_BASE}/seed-missing-seat`,
+      auth: "session",
+      handler: () => {
+        const home = process.env.COUNCILKIT_HOME;
+        if (!home) throw new Error("COUNCILKIT_HOME missing");
+        return seedMissingSeatFixture(home);
       },
     },
     {

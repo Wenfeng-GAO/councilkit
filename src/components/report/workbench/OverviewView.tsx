@@ -13,8 +13,16 @@ import type { ParsedReviewReport } from "@/lib/review-report";
 import { FULL_COMMIT_SHA } from "@shared/runtime/cli-ledger";
 import { isLostExecutionReview } from "@shared/runtime/interruption-copy";
 import type { CliRunDetailResponse } from "@shared/runtime/schemas";
+import { missingSeatAbsenceLines } from "@shared/runtime/seat-result";
 import { useState } from "react";
-import { ChevronRightIcon, CircleHelpIcon, Clock3Icon, STATUS_ICONS } from "./icons";
+import { SeatCount } from "./SeatCount";
+import {
+  ChevronRightIcon,
+  CircleAlertIcon,
+  CircleHelpIcon,
+  Clock3Icon,
+  STATUS_ICONS,
+} from "./icons";
 
 const ATTEMPT_TERMINAL = new Set(["success", "failure", "cancelled"]);
 
@@ -105,13 +113,15 @@ export function OverviewView({
       )}
       <p className="ck-wb-report-meta">
         {run.status === "completed" ? <span>审查执行已完成</span> : null}
-        {seats.length > 0 && !lost ? (
-          <span>
-            {doneSeats}/{seats.length} 席位已完成
-          </span>
-        ) : null}
+        {lost ? null : <SeatCount attempts={run.progress?.attempts} />}
         {run.truncated ? <span>报告超过 2MB，已截断显示</span> : null}
       </p>
+      {missingSeatAbsenceLines(run.markdown).map((line, index) => (
+        <p key={`${index}-${line}`} className="ck-wb-absence" data-absence-icon="circle-alert">
+          <CircleAlertIcon className="ck-wb-icon ck-wb-icon-state" />
+          <span>{line}</span>
+        </p>
+      ))}
       {parsed?.verdict ? (
         <section className="ck-wb-review-decision" aria-label="审查结论">
           <p className="ck-wb-decision-verdict">

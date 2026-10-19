@@ -31,6 +31,7 @@ import {
   extractAssessmentBlocks,
 } from "@shared/runtime/reviewer-assessment";
 import { reviewModelsSchema } from "@shared/runtime/schemas";
+import { formatMissingSeatAbsence } from "@shared/runtime/seat-result";
 import { shellSingleQuote } from "@shared/runtime/shell-quote";
 /**
  * `councilkit review` — N fully-autonomous agents independently review the same
@@ -823,8 +824,9 @@ export async function runReview(
     );
   }
 
-  // Build spawn specs BEFORE creating the run dir so a missing executable
-  // (exit 2) cannot leave an empty ghost under runs/.
+  // Validate before creating the run dir: fatal usage errors leave no ghost.
+  // Missing executables are per-seat failures, persisted after the scaffold exists.
+  const missingSeats: AttemptResult[] = [];
   const attemptMetas: AttemptMeta[] = [];
   const rerunSpecs: AttemptSpec[] = [];
   const rerunAgents: AgentRecord[] = [];
@@ -846,14 +848,36 @@ export async function runReview(
         task,
         workspaceMode: localRepo !== null ? "worktree" : "empty",
       });
-      const spec = buildSpawnSpec(a, { attemptId, workspace, prompt, access: task.seatAccess });
-      spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
-      rerunSpecs.push(spec);
-      rerunAgents.push(a);
+      try {
+        const spec = buildSpawnSpec(a, { attemptId, workspace, prompt, access: task.seatAccess });
+        spec.timeoutMs = timeoutForDriver(spec.driverId, timeoutMs, codexTimeoutMs);
+        rerunSpecs.push(spec);
+        rerunAgents.push(a);
+      } catch (error) {
+        missingSeats.push(missingExecutableResult(error, a, attemptId, workspace));
+      }
     }
     index++;
   }
   const aggregatorWorkspace = join(runDir, "workspaces", "aggregator");
+
+  // Resolve the Aggregator too, without probing or spawning a missing tool.
+  let aggregatorMissing: AttemptResult | null = null;
+  try {
+    buildSpawnSpec(aggregatorAgent, {
+      attemptId: "aggregator",
+      workspace: aggregatorWorkspace,
+      prompt: "",
+      access: task.seatAccess,
+    });
+  } catch (error) {
+    aggregatorMissing = missingExecutableResult(
+      error,
+      aggregatorAgent,
+      "aggregator",
+      aggregatorWorkspace,
+    );
+  }
 
   deps.onRunCreated?.(runId);
   // The run dir must exist before the first transcript flush — but
@@ -892,7 +916,7 @@ export async function runReview(
   for (const a of rerunAgents) {
     if (!probeAgents.has(probeKey(a))) probeAgents.set(probeKey(a), a);
   }
-  probeAgents.set(probeKey(aggregatorAgent), aggregatorAgent);
+  if (!aggregatorMissing) probeAgents.set(probeKey(aggregatorAgent), aggregatorAgent);
 
   const probeJobs = [...probeAgents.entries()].map(([key, probeAgent], index) => {
     const driverId = probeAgent.driverSelection.driverId;
@@ -1151,7 +1175,8 @@ export async function runReview(
   // failures: recorded, never spawned, no workspace. Reused results are
   // carried over silently (no new attempt.finished — the history already
   // has one).
-  const presolved: AttemptResult[] = [...reusedByAttemptId.values()];
+  const presolved: AttemptResult[] = [...reusedByAttemptId.values(), ...missingSeats];
+  for (const result of missingSeats) recordAttemptFinished(result);
   for (const spec of rerunSpecs) {
     const probe = probeByModel.get(probeKeysByAgent.get(spec.agentId) ?? "");
     if (probe === undefined || probe.status === "success") continue;
@@ -1211,7 +1236,7 @@ export async function runReview(
         incomplete: true,
         failure: { phase: "probe", code: "ABORTED", message: "run aborted by signal" },
       });
-    } else if (aggProbe === undefined || aggProbe.status !== "success") {
+    } else if (!aggregatorMissing && (aggProbe === undefined || aggProbe.status !== "success")) {
       // Attempts whose own driver probed OK never run either (the run aborts
       // before the runner): record them as CANCELLED so every attempt has a
       // terminal transcript record and appears in the report.
@@ -1751,43 +1776,56 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
       output: r.output,
     })),
   });
-  const aggregatorSpec = buildSpawnSpec(p.aggregatorAgent, {
-    attemptId: "aggregator",
-    workspace: p.aggregatorWorkspace,
-    prompt: aggregatePrompt,
-    access: p.task.seatAccess,
-  });
+  let aggregatorSpec: AttemptSpec | null = null;
+  let missingAggregation: AttemptResult | null = null;
+  try {
+    aggregatorSpec = buildSpawnSpec(p.aggregatorAgent, {
+      attemptId: "aggregator",
+      workspace: p.aggregatorWorkspace,
+      prompt: aggregatePrompt,
+      access: p.task.seatAccess,
+    });
+  } catch (error) {
+    missingAggregation = missingExecutableResult(
+      error,
+      p.aggregatorAgent,
+      "aggregator",
+      p.aggregatorWorkspace,
+    );
+  }
 
   p.out.progress(`  aggregator ${p.aggregatorAgent.name} synthesizing`);
   noteLiveBeat(p, "aggregator", 0, null, true);
-  const aggregation = await spawnOnce(aggregatorSpec, {
-    timeoutMs: timeoutForDriver(
-      p.aggregatorAgent.driverSelection.driverId,
-      p.timeoutMs,
-      p.codexTimeoutMs,
-    ),
-    signal: p.signal,
-    spawnImpl: p.spawnImpl,
-    frozenTools: p.frozenTools,
-    executionRevision: p.executionRevision,
-    heartbeatIntervalMs: p.heartbeat?.intervalMs,
-    timers: p.heartbeat?.timers,
-    onHeartbeat: (
-      attemptId: string,
-      agentName: string,
-      elapsedMs: number,
-      snapshot?: { lastActivity: string | null },
-    ) => {
-      noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null, true);
-      if (p.humanHeartbeat === true) {
-        p.out.progress(`  aggregator ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
-      }
-    },
-    onActivity: (attemptId, lastActivity) => {
-      noteLiveBeat(p, attemptId, undefined, lastActivity, true);
-    },
-    onLiveEvent,
-  });
+  const aggregation =
+    missingAggregation ??
+    (await spawnOnce(aggregatorSpec as AttemptSpec, {
+      timeoutMs: timeoutForDriver(
+        p.aggregatorAgent.driverSelection.driverId,
+        p.timeoutMs,
+        p.codexTimeoutMs,
+      ),
+      signal: p.signal,
+      spawnImpl: p.spawnImpl,
+      frozenTools: p.frozenTools,
+      executionRevision: p.executionRevision,
+      heartbeatIntervalMs: p.heartbeat?.intervalMs,
+      timers: p.heartbeat?.timers,
+      onHeartbeat: (
+        attemptId: string,
+        agentName: string,
+        elapsedMs: number,
+        snapshot?: { lastActivity: string | null },
+      ) => {
+        noteLiveBeat(p, attemptId, elapsedMs, snapshot?.lastActivity ?? null, true);
+        if (p.humanHeartbeat === true) {
+          p.out.progress(`  aggregator ${agentName} 仍在运行 (${formatDurationMs(elapsedMs)})`);
+        }
+      },
+      onActivity: (attemptId, lastActivity) => {
+        noteLiveBeat(p, attemptId, undefined, lastActivity, true);
+      },
+      onLiveEvent,
+    }));
   liveWriter.flush(aggregation.attemptId);
 
   const aggRec: AggregationFinishedRecord = {
@@ -1866,6 +1904,34 @@ async function executeReview(p: ExecuteParams, specs: AttemptSpec[]): Promise<Re
   });
 }
 
+/** Only a tagged resolution failure is recoverable; schema/argv errors remain fatal. */
+function missingExecutableResult(
+  error: unknown,
+  agent: AgentRecord,
+  attemptId: string,
+  workspace: string,
+): AttemptResult {
+  if (
+    !(error instanceof CliError) ||
+    error.detail?.code !== "EXECUTABLE_NOT_FOUND" ||
+    typeof error.detail.tool !== "string"
+  )
+    throw error;
+  return {
+    attemptId,
+    agentId: agent.id,
+    agentName: agent.name,
+    driverId: agent.driverSelection.driverId,
+    modelId: agent.modelId,
+    status: "failure",
+    output: "",
+    exitCode: null,
+    durationMs: 0,
+    workspace,
+    failure: { code: "EXECUTABLE_NOT_FOUND", message: `没有找到 ${error.detail.tool}。` },
+  };
+}
+
 interface FinalizeSpec {
   status: "completed" | "failed" | "interrupted";
   exitCode: number;
@@ -1888,7 +1954,7 @@ async function finalize(
   // header so an interrupted or failed run is labelled — not just "incomplete".
   const reason = spec.failure?.message;
 
-  const markdown = renderReviewReport({
+  let markdown = renderReviewReport({
     runId: p.runId,
     startedAt: p.startedAt,
     endedAt,
@@ -1907,6 +1973,14 @@ async function finalize(
     reason,
     failurePhase: spec.failure?.phase,
   });
+
+  const absenceLines = results.flatMap((result) => {
+    if (result.failure?.code !== "EXECUTABLE_NOT_FOUND") return [];
+    return [formatMissingSeatAbsence(result.agentName, result.failure.message)];
+  });
+  if (absenceLines.length > 0) {
+    markdown += `\n## 缺席的审查者\n\n${absenceLines.join("\n\n")}\n`;
+  }
 
   // Collect EVERY artifact-IO outcome first (canonical report, --out copy, then
   // the final transcript rewrite), THEN compute status/incomplete/exitCode in

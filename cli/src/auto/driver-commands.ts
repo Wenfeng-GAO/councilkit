@@ -642,9 +642,15 @@ export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process
   const found = findExecutable(name, env);
   if (found !== null) return found;
   if (name.includes("/")) {
-    throw errors.usage(`executable "${name}" not found or not executable`);
+    throw errors.usage(`executable "${name}" not found or not executable`, {
+      code: "EXECUTABLE_NOT_FOUND",
+      tool: name,
+    });
   }
-  throw errors.usage(`executable "${name}" not found on PATH (review needs it installed)`);
+  throw errors.usage(`executable "${name}" not found on PATH (review needs it installed)`, {
+    code: "EXECUTABLE_NOT_FOUND",
+    tool: name,
+  });
 }
 
 /** How the claude-stream-json `cfuse` route is launched. */
@@ -673,6 +679,7 @@ export function resolveCfuseRoute(env: NodeJS.ProcessEnv = process.env): CfuseRo
   if (cld !== null) return { executable: cld, argvPrefix: ["cfuse"], mode: "cld" };
   throw errors.usage(
     'executable "cfuse" (or "cld" for the cld cfuse route) not found on PATH (review needs it installed)',
+    { code: "EXECUTABLE_NOT_FOUND", tool: "cfuse" },
   );
 }
 
