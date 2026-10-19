@@ -9,8 +9,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SpawnImpl, SpawnInput, SpawnOutput } from "../src/auto/runner";
 import { dispatch } from "../src/cli";
-import { runInit } from "../src/commands/init";
+import { type InitOutcome, runInit } from "../src/commands/init";
 import { ReviewExit, runReview } from "../src/commands/review";
+import { createProductJuryHint } from "../src/init/ideate-defaults";
 import { resolvePaths } from "../src/store/paths";
 import { Store } from "../src/store/store";
 
@@ -20,7 +21,7 @@ interface FakeSink {
   finished: unknown;
   progress(m: string): void;
   diag(m: string): void;
-  finish(d: unknown): Promise<void>;
+  finish(d: unknown, humanRender?: (data: unknown) => string): Promise<void>;
 }
 
 function makeSink(): FakeSink {
@@ -30,8 +31,9 @@ function makeSink(): FakeSink {
     finished: undefined,
     progress: (m) => sink.lines.push(m),
     diag: () => {},
-    finish: (d) => {
+    finish: (d, humanRender) => {
       sink.finished = d;
+      if (humanRender) sink.lines.push(humanRender(d));
       return Promise.resolve();
     },
   };
@@ -109,6 +111,77 @@ describe("councilkit init", () => {
     await expect(runInit([], sink)).rejects.toMatchObject({ exitCode: 2 });
     expect(readMaybe(resolvePaths().agents)).toBeNull();
     expect(readMaybe(resolvePaths().councils)).toBeNull();
+  });
+
+  it.each([
+    [["cfuse"], "install any two of grok, kimi, codex"],
+    [["grok"], "install kimi or codex"],
+    [["kimi"], "install grok or codex"],
+    [["codex"], "install grok or kimi"],
+  ] as const)("createProductJuryHint with %j on PATH", (names, install) => {
+    stub([...names]);
+    expect(createProductJuryHint()).toBe(
+      `to create product-jury: ${install}, then rerun councilkit init`,
+    );
+  });
+
+  it("omits the product-jury setup line when at least two ideate executables are present", async () => {
+    stub(["grok", "kimi"]);
+    expect(createProductJuryHint()).toBe(
+      "to create product-jury: install kimi or codex, then rerun councilkit init",
+    );
+    const sink = makeSink();
+    await runInit([], sink);
+    expect(
+      new Store()
+        .listCouncils()
+        .map((council) => council.name)
+        .sort(),
+    ).toEqual(["pr-jury", "product-jury"]);
+    expect(sink.lines.join("\n")).not.toContain("to create product-jury:");
+  });
+
+  it.each([
+    ["cfuse", "install any two of grok, kimi, codex"],
+    ["grok", "install kimi or codex"],
+    ["kimi", "install grok or codex"],
+  ] as const)(
+    "#387: %s-only init advertises only pr-jury and explains how to create product-jury",
+    async (driver, install) => {
+      stub([driver]);
+      const sink = makeSink();
+      await runInit([], sink);
+      const outcome = sink.finished as InitOutcome;
+      expect(outcome.createdCouncil?.name).toBe("pr-jury");
+      expect(new Store().listCouncils().map((council) => council.name)).toEqual(["pr-jury"]);
+      expect(outcome.next).toBe("councilkit review --council pr-jury --pr <url>");
+      expect(outcome.next).not.toContain("product-jury");
+      const human = sink.lines.join("\n");
+      expect(human.split("\n")).toContain(
+        `  to create product-jury: ${install}, then rerun councilkit init`,
+      );
+      expect(human).not.toContain('ideate "<idea>" --council product-jury');
+    },
+  );
+
+  it("#387: advertises product-jury when created and when kept with fewer discoverable seats", async () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-6-astra"\n');
+    stub(["grok", "kimi", "codex"]);
+    const created = makeSink();
+    await runInit([], created);
+    expect(new Store().getCouncil("product-jury").agentIds).toHaveLength(3);
+    expect((created.finished as InitOutcome).next).toContain(
+      'councilkit ideate "<idea>" --council product-jury',
+    );
+    rmSync(join(bin, "grok"));
+    rmSync(join(bin, "codex"));
+    const kept = makeSink();
+    await runInit([], kept);
+    expect(new Store().getCouncil("product-jury").agentIds).toHaveLength(3);
+    expect((kept.finished as InitOutcome).next).toContain(
+      'councilkit ideate "<idea>" --council product-jury',
+    );
+    expect(kept.lines.join("\n")).not.toContain("to create product-jury:");
   });
 
   it("creates four default agents and pr-jury when cld, kimi and grok exist", async () => {

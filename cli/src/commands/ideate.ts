@@ -51,7 +51,7 @@ import {
   writeIdeateTranscript,
 } from "../auto/transcript";
 import { EXIT, errors } from "../errors";
-import { PRODUCT_JURY_COUNCIL_NAME } from "../init/ideate-defaults";
+import { PRODUCT_JURY_COUNCIL_NAME, createProductJuryHint } from "../init/ideate-defaults";
 import type { OutputSink } from "../output";
 import { atomicWriteFile } from "../store/atomic-write";
 import { ensureRunDir, resolvePaths } from "../store/paths";
@@ -167,7 +167,9 @@ export async function runIdeate(
       council = store.getCouncil(councilRef);
     } catch {
       throw errors.usage(
-        `no council "${councilRef}". Run: councilkit init --json  (creates product-jury)`,
+        councilRef === PRODUCT_JURY_COUNCIL_NAME
+          ? `no council "${councilRef}". ${createProductJuryHint()}`
+          : `no council "${councilRef}". Choose an existing council with --council or pass --agents and --reporter`,
       );
     }
     attemptAgents = store.councilAgents(council);

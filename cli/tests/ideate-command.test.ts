@@ -153,6 +153,42 @@ describe("councilkit ideate", () => {
     rmSync(poisoned, { recursive: true, force: true });
   });
 
+  it.each([{ flags: [] }, { flags: ["--council", "product-jury"] }])(
+    "#387: missing product-jury gives prerequisite guidance for flags %j",
+    async ({ flags }) => {
+      const error = await runIdeate(["x", ...flags], makeSink()).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(CliError);
+      expect(error).toMatchObject({
+        exitCode: 2,
+        message:
+          'no council "product-jury". to create product-jury: install kimi or codex, then rerun councilkit init',
+      });
+      expect((error as Error).message).not.toContain("Run: councilkit init --json");
+    },
+  );
+
+  it.each([
+    ["cfuse", "install any two of grok, kimi, codex"],
+    ["grok", "install kimi or codex"],
+    ["kimi", "install grok or codex"],
+    ["codex", "install grok or kimi"],
+  ] as const)(
+    "#387: missing product-jury on a %s-only PATH names the setup tools still absent",
+    async (only, install) => {
+      for (const name of ["cld", "kimi", "codex", "grok", "cursor-agent"]) {
+        rmSync(join(bin, name), { force: true });
+      }
+      writeFileSync(join(bin, only), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(bin, only), 0o755);
+      const error = await runIdeate(["x"], makeSink()).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CliError);
+      expect(error).toMatchObject({
+        exitCode: 2,
+        message: `no council "product-jury". to create product-jury: ${install}, then rerun councilkit init`,
+      });
+    },
+  );
+
   function seedRoster(): { product: string; engineering: string } {
     const store = new Store();
     const product = store.createAgent({
