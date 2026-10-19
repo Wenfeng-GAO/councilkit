@@ -74,7 +74,10 @@ export function renderErrorHuman(err: {
 }): string {
   const code = err.exitCode ?? 1;
   let line = `error[${code}]: ${err.message}`;
-  if (err.detail && Object.keys(err.detail).length > 0) {
+  const detailBody = err.detail?.detailBody;
+  if (typeof detailBody === "string" && detailBody.length > 0) {
+    line += `\n\n<details>\n<summary>详情</summary>\n\n${detailBody}\n\n</details>`;
+  } else if (err.detail && Object.keys(err.detail).length > 0) {
     const detailStr = JSON.stringify(redact(err.detail));
     line += `\n  detail: ${detailStr}`;
   }

@@ -115,8 +115,13 @@ describe("cli auto aggregate — section ordering", () => {
     expect(bodyIdx).toBeGreaterThan(tableIdx);
     expect(procIdx).toBeGreaterThan(bodyIdx);
     expect(appIdx).toBeGreaterThan(procIdx);
-    expect(md).toContain("## 共识发现");
-    expect(md).toContain("## 结论");
+    const titles = [...md.matchAll(/^## .+$/gm)].map((match) => match[0]);
+    expect(titles.slice(0, 4)).toEqual(["## 结论", "## 阻塞问题", "## 需处理的问题", "## 待确认"]);
+    expect(titles.filter((title) => title === "## 共识发现")).toEqual([]);
+    expect(titles.filter((title) => title === "## 独有发现")).toEqual([]);
+    expect(md).toContain("- shared");
+    expect(md).toContain("- unique");
+    expect(md).toContain("阻塞 0 个问题");
   });
 });
 

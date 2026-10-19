@@ -641,6 +641,50 @@
   color: var(--color-muted);
 }
 
+/* Locked labels: solid rectangle / outline pill / dashed grey. Not colour alone. */
+.ck-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  font-family: var(--font-command);
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+  padding: 0.12rem 0.5rem;
+  white-space: normal;
+}
+
+.ck-tag-spec {
+  color: #fff;
+  background: #e11d48;
+  border: 1px solid #e11d48;
+  border-radius: 2px;
+}
+
+.ck-tag-consensus {
+  color: #fb7185;
+  background: transparent;
+  border: 1.5px solid #e11d48;
+  border-radius: 999px;
+}
+
+.ck-tag-pending {
+  color: var(--color-muted);
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  border-radius: 2px;
+}
+
+.ck-tag-basis {
+  display: block;
+  flex: 1 0 100%;
+  width: 100%;
+  margin-top: 0.15rem;
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
 .ck-toc a[aria-current="true"] {
   color: var(--color-parchment);
   border-color: var(--color-brass);

@@ -283,6 +283,7 @@ describe("cli store", () => {
       reporterAgentId: a.id,
     });
     expect(council.reporterAgentId).toBe(a.id);
+    expect(council.skippedSeats).toBeUndefined();
 
     // Duplicate agentIds rejected.
     expect(() =>
@@ -294,6 +295,50 @@ describe("cli store", () => {
         reporterAgentId: a.id,
       }),
     ).toThrowError(/duplicates/);
+  });
+
+  it("loads skippedSeats when present and ignores a row that does not match", () => {
+    const store = makeStore(home);
+    const a = store.createAgent({
+      name: "a",
+      personaPrompt: "p",
+      modelId: "m",
+      color: "#000001",
+      driverSelection: CLAUDE_CFUSE,
+    });
+    const council = store.createCouncil({
+      name: "pr-jury",
+      topic: "t",
+      agentIds: [a.id],
+      rounds: 1,
+      reporterAgentId: a.id,
+    });
+    const paths = resolvePaths(env(home));
+    const raw = JSON.parse(readFileSync(paths.councils, "utf8")) as {
+      councils: Array<{ skippedSeats?: unknown }>;
+    };
+    raw.councils[0].skippedSeats = [
+      { seat: "broken" },
+      {
+        seat: "review-correctness",
+        driver: "grok",
+        reason: "missing",
+        next: "Install grok, then run councilkit init.",
+      },
+    ];
+    writeFileSync(paths.councils, JSON.stringify(raw));
+    const loaded = makeStore(home).getCouncil(council.id);
+    expect(loaded.skippedSeats).toEqual([
+      {
+        seat: "review-correctness",
+        driver: "grok",
+        reason: "missing",
+        next: "Install grok, then run councilkit init.",
+      },
+    ]);
+    delete raw.councils[0].skippedSeats;
+    writeFileSync(paths.councils, JSON.stringify(raw));
+    expect(makeStore(home).getCouncil(council.id).skippedSeats).toBeUndefined();
   });
 
   it("protects agents referenced by a council (no dangling refs)", () => {

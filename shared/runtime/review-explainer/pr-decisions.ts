@@ -98,6 +98,17 @@ function leadingIdentityBody(text: string, item: DecisionItem): { body: string; 
     ? { body: text.slice(marker[0].length), marked: true }
     : { body: text, marked: false };
 }
+/** Consensus basis lines are report presentation, not a new mechanism. */
+const CONSENSUS_BASIS_LINE = /^\s*无规格依据，依据是\s*\d+\/\d+\s*席一致：/;
+
+export function withoutConsensusBasis(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !CONSENSUS_BASIS_LINE.test(line))
+    .join("\n")
+    .trim();
+}
+
 function sameAssertion(skipped: DecisionItem, candidate: Candidate): boolean {
   if (!skipped.originalAssertion) return false;
   if (
@@ -111,8 +122,8 @@ function sameAssertion(skipped: DecisionItem, candidate: Candidate): boolean {
     candidate.assertionHash !== (skipped.assertionHash ?? hashAssertion(skipped.originalAssertion))
   )
     return false;
-  const text = candidate.originalAssertion ?? candidate.text;
-  const original = leadingIdentityBody(skipped.originalAssertion, skipped);
+  const text = withoutConsensusBasis(candidate.originalAssertion ?? candidate.text);
+  const original = leadingIdentityBody(withoutConsensusBasis(skipped.originalAssertion), skipped);
   const body = leadingIdentityBody(text, skipped).body;
   if (body === original.body) return true;
   // Compatibility for an older bare assertion followed by one explicit source

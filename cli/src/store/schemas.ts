@@ -66,6 +66,48 @@ export type AgentsFile = z.infer<typeof agentsFileSchema>;
 export const COUNCILS_FORMAT = "councilkit-councils" as const;
 export const COUNCILS_VERSION = 1 as const;
 
+/** Why `init` left a default seat off the council. */
+export const SKIPPED_SEAT_REASONS = ["missing", "logged-out", "no-model"] as const;
+
+/**
+ * TODO(#380): `councilkit init` writes this on cursor/first-run-onboarding-918e.
+ * The field stays optional so councils saved before it still load. When #380
+ * reaches main, replace this copy with the landed schema instead of keeping
+ * a second definition. Invalid rows are dropped so one bad entry does not
+ * make the council unreadable.
+ */
+export const skippedSeatSchema = z
+  .object({
+    seat: z.string().min(1).max(128),
+    driver: z.string().min(1).max(64),
+    reason: z.enum(SKIPPED_SEAT_REASONS),
+    next: z.string().min(1).max(4000),
+  })
+  .strict();
+export type SkippedSeat = z.infer<typeof skippedSeatSchema>;
+
+/**
+ * Drop skipped-seat rows that do not match. A missing field stays missing.
+ * Called before the strict council parse so one bad row does not reject the file.
+ */
+export function sanitizeSkippedSeats(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || !("councils" in raw)) return raw;
+  const councils = (raw as { councils?: unknown }).councils;
+  if (!Array.isArray(councils)) return raw;
+  return {
+    ...raw,
+    councils: councils.map((council) => {
+      if (!council || typeof council !== "object" || !("skippedSeats" in council)) return council;
+      const rows = (council as { skippedSeats?: unknown }).skippedSeats;
+      if (!Array.isArray(rows)) return council;
+      return {
+        ...council,
+        skippedSeats: rows.filter((row) => skippedSeatSchema.safeParse(row).success),
+      };
+    }),
+  };
+}
+
 export const councilRecordSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -86,6 +128,7 @@ export const councilRecordSchema = z
     rounds: z.number().int().positive().max(16),
     reporterAgentId: z.string().min(1).max(128),
     agentOverrides: z.record(z.string(), reviewModelSchema).optional(),
+    skippedSeats: z.array(skippedSeatSchema).max(16).optional(),
   })
   .strict();
 export type CouncilRecord = z.infer<typeof councilRecordSchema>;

@@ -114,6 +114,21 @@ comment
     });
   });
 
+  it("does not count a 待确认 major as blocking", () => {
+    const output = [
+      "## 待确认",
+      "- [major][待确认 · kimi] 只有一席看到的缓存上限",
+      "",
+      "## 结论",
+      "comment",
+    ].join("\n");
+    expect(summarizeSeatOutput(output)).toMatchObject({
+      parseStatus: "parsed",
+      findingCount: 1,
+      blockingCount: 0,
+    });
+  });
+
   it("does not count suggest-amend-spec majors as blocking", () => {
     const output = `## 概览
 

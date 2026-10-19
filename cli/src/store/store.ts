@@ -34,6 +34,7 @@ import {
   agentsFileSchema,
   councilRecordSchema,
   councilsFileSchema,
+  sanitizeSkippedSeats,
 } from "./schemas";
 
 export interface StoreEnv {
@@ -367,7 +368,7 @@ export class Store {
     } catch {
       throw errors.io("councils.json is not valid JSON (file is corrupt)");
     }
-    const validated = councilsFileSchema.safeParse(parsed);
+    const validated = councilsFileSchema.safeParse(sanitizeSkippedSeats(parsed));
     if (!validated.success) {
       throw errors.io(
         zodFailureMessage(validated.error.issues, "councils.json failed schema validation"),

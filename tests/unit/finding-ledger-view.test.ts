@@ -275,6 +275,38 @@ describe("OverviewView reading order", () => {
     },
   );
 
+  it("counts a finished single-seat report as zero blocking", () => {
+    const markdown = [
+      "# Autonomous Review Report",
+      "",
+      "---",
+      "",
+      "## 结论",
+      "",
+      "comment",
+      "",
+      "阻塞 0。",
+      "",
+      "## 待确认",
+      "",
+      "- [major][待确认 · kimi] Add 把加法改成减法",
+      "  位置：`toy.go`",
+      "",
+    ].join("\n");
+    const html = renderToStaticMarkup(
+      createElement(OverviewView, {
+        run: baseRun({ markdown, hasFindings: false, findings: [] }),
+        parsed: parseReviewReport(markdown),
+        hasRepair: false,
+        onOpenRepair: () => undefined,
+      }),
+    );
+    expect(html).toContain("账本无阻塞");
+    expect(html).not.toContain("账本未生成，尚无法判断阻塞");
+    expect(html).toContain("待确认 · kimi");
+    expect(html).not.toMatch(/Add 把加法改成减法\s*位置/);
+  });
+
   it("does not invent an all-clear gate when the ledger is missing", () => {
     const markdown = "# Autonomous Review Report\n\n---\n\n## 结论\n\napprove\n";
     const html = renderToStaticMarkup(

@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"正在读取规格文件…"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"正在读取规格文件…\n\n## 发现\n- [major] 示例缺陷\n\n## 结论\nchanges-requested\n"}

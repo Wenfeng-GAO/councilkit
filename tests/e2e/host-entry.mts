@@ -98,6 +98,7 @@ import { createSessionCapability } from "../../runtime-host/security/session-cap
 import { type HostServices, type Route, createRuntimeServer } from "../../runtime-host/server";
 import { slowGenDemoReport } from "../../runtime-host/slow-gen";
 import { seedLostExecutionFixtures, seedReportCaseFixtures } from "./cli-run-fixtures";
+import { seedConsensusTagFixtures } from "./consensus-tag-fixtures";
 
 // Force production mode before loadConfig() reads the environment: the E2E
 // host must serve the built dist/ exactly like the shipped Host does.
@@ -224,6 +225,7 @@ if (process.env.COUNCILKIT_E2E === "1") {
     })}\n`,
   );
   seedReportCaseFixtures(home, new Date().toISOString());
+  if (process.env.CK_E2E_TAG_CASES === "1") seedConsensusTagFixtures(home);
 
   const ideateDir = join(home, "runs", E2E_IDEATE_RUN_ID);
   mkdirSync(ideateDir, { recursive: true });

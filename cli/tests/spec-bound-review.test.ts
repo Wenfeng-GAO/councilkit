@@ -108,7 +108,7 @@ describe("spec-bound prompts", () => {
   it("aggregator requires dedupe and non-blocking out-of-spec / nits", () => {
     const prompt = buildAggregatePrompt({
       aggregatorName: "review-adversarial",
-      task: { task: "review the change" },
+      task: { task: "review the change", specSource: "docs/plans/example.md" },
       attempts: [
         {
           attemptId: "a1",
@@ -119,7 +119,7 @@ describe("spec-bound prompts", () => {
         },
       ],
     });
-    expect(prompt).toContain("## 建议修订规格");
+    expect(prompt).toContain("## 需处理的问题");
     expect(prompt).toContain("去重");
     expect(prompt).toContain("suggest-amend-spec");
     expect(prompt).toContain("不得因规格外或 nit 阻塞合并");

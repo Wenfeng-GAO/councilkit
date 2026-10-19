@@ -13,6 +13,7 @@ import {
   extractConventionalSpecRefs,
   fetchPrSpecSearchText,
   formatSpecRefusal,
+  formatSpecVerifyUnbound,
   isConventionalSpecPath,
   resolveSpecContract,
 } from "../src/auto/spec-detect";
@@ -155,6 +156,107 @@ describe("verify binding from bound spec", () => {
     expect(ids).toEqual(
       expect.arrayContaining(["AC-12", "INV-1", "A1", "A01", "VT3", "agentverify:cancel-path"]),
     );
+  });
+
+  it("accepts IN-/SE-/E2E- ids and ignores hash, encoding, ISO, and date lookalikes", () => {
+    const ids = extractAcceptanceIds(
+      "IN-12 SE-12 E2E-3 E2E-3a AC-12; noise SHA-256 UTF-8 UTF-16 ISO-8601 ISO-3166 GO-1.21 on 2026-10-16",
+    );
+    expect(ids).toEqual(expect.arrayContaining(["IN-12", "SE-12", "E2E-3", "E2E-3a", "AC-12"]));
+    expect(extractAcceptanceIds("IN-12. RFC-2119")).toEqual(
+      expect.arrayContaining(["IN-12", "RFC-2119"]),
+    );
+    expect(ids).not.toEqual(expect.arrayContaining(["SHA-256", "UTF-8", "UTF-16", "ISO-8601"]));
+    for (const rejected of [
+      "SHA-256",
+      "UTF-8",
+      "UTF-16",
+      "ISO-8601",
+      "ISO-3166",
+      "2026-10-16",
+      "GO-1",
+    ]) {
+      expect(ids).not.toContain(rejected);
+    }
+  });
+
+  it("does not accept a generic id that is only a prefix of a longer token", () => {
+    const ids = extractAcceptanceIds(
+      "See CVE-2026-12345 and FOO-12-34. Still in scope: IN-12 SE-12 E2E-3 E2E-3a RFC-2119.",
+    );
+    expect(ids).toEqual(expect.arrayContaining(["IN-12", "SE-12", "E2E-3", "E2E-3a", "RFC-2119"]));
+    for (const rejected of ["CVE-2026", "CVE-2026-12345", "FOO-12", "FOO-12-34"]) {
+      expect(ids).not.toContain(rejected);
+    }
+    expect(
+      bindVerifyFromSpec({ specSource: "sec.md", specText: "CVE-2026-12345 only" }),
+    ).toBeNull();
+  });
+
+  it("binds an acceptance table of IN-/SE-/E2E- rows", () => {
+    const ids = extractAcceptanceIds(
+      [
+        "# 规格",
+        "",
+        "## 验收",
+        "",
+        "| 编号 | 标准 |",
+        "| --- | --- |",
+        "| IN-12 | 加载配置 |",
+        "| SE-12 | 安全边界 |",
+        "| E2E-3 | 端到端 |",
+        "",
+      ].join("\n"),
+    );
+    expect(ids).toEqual(expect.arrayContaining(["IN-12", "SE-12", "E2E-3"]));
+  });
+
+  it("binds a prose acceptance table that has no ids yet", () => {
+    const ids = extractAcceptanceIds(
+      [
+        "## 验收标准",
+        "",
+        "| 条件 | 期望 |",
+        "| --- | --- |",
+        "| 空串仍问候 | Greet 保留空串分支 |",
+        "",
+      ].join("\n"),
+    );
+    expect(ids.some((id) => id.startsWith("accept:"))).toBe(true);
+  });
+
+  it("does not treat a hash table outside an acceptance section as acceptance points", () => {
+    const body = ["## 参考", "", "| 名称 | 值 |", "| --- | --- |", "| SHA-256 | abc |", ""].join(
+      "\n",
+    );
+    expect(extractAcceptanceIds(body)).toEqual([]);
+    expect(bindVerifyFromSpec({ specSource: "docs/design/x.md", specText: body })).toBeNull();
+  });
+
+  it("lists headings and rejected candidate ids when verify cannot bind", () => {
+    const body = [
+      "# 设计",
+      "",
+      "对照 SHA-256、UTF-8 和 ISO-8601，日期 2026-10-16，另有小写 in-12。",
+      "",
+      "## 背景",
+      "",
+      "这里没有验收表。",
+      "",
+    ].join("\n");
+    expect(bindVerifyFromSpec({ specSource: "docs/design/x.md", specText: body })).toBeNull();
+    const message = formatSpecVerifyUnbound({ specSource: "docs/design/x.md", specText: body });
+    expect(message).toContain("Headings seen:");
+    expect(message).toContain("背景");
+    expect(message).toContain("Candidate IDs seen:");
+    expect(message).toContain("SHA-256");
+    expect(message).toContain("UTF-8");
+    expect(message).toContain("ISO-8601");
+    expect(message).toContain("in-12");
+    expect(message).not.toContain("2026-10-16");
+    expect(message).toContain("## 验收");
+    expect(message).toContain("| IN-12 | 空串仍返回问候 |");
+    expect(message).toContain("IN-12, SE-12, E2E-3");
   });
 
   it("schedules verify or returns null when unbound", () => {
