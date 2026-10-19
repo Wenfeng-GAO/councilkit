@@ -112,9 +112,13 @@ describe("councilkit init", () => {
     expect(readMaybe(resolvePaths().councils)).toBeNull();
   });
 
-  it.each(["cfuse", "kimi"])(
+  it.each([
+    ["cfuse", "install kimi or codex"],
+    ["grok", "install kimi or codex"],
+    ["kimi", "install codex"],
+  ] as const)(
     "#387: %s-only init advertises only pr-jury and explains how to create product-jury",
-    async (driver) => {
+    async (driver, install) => {
       stub([driver]);
       const sink = makeSink();
       await runInit([], sink);
@@ -125,8 +129,9 @@ describe("councilkit init", () => {
       expect(outcome.next).not.toContain("product-jury");
       const human = sink.lines.join("\n");
       expect(human.split("\n")).toContain(
-        "  to create product-jury: install kimi or codex, then rerun councilkit init",
+        `  to create product-jury: ${install}, then rerun councilkit init`,
       );
+      if (driver === "kimi") expect(human).not.toContain("install kimi");
       expect(human).not.toContain('ideate "<idea>" --council product-jury');
     },
   );

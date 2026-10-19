@@ -167,6 +167,27 @@ describe("councilkit ideate", () => {
     },
   );
 
+  it.each([
+    ["kimi", "install codex"],
+    ["cfuse", "install kimi or codex"],
+  ] as const)(
+    "#387: missing product-jury on a %s-only PATH names the setup tools still absent",
+    async (only, install) => {
+      for (const name of ["cld", "kimi", "codex", "grok", "cursor-agent"]) {
+        rmSync(join(bin, name), { force: true });
+      }
+      writeFileSync(join(bin, only), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(bin, only), 0o755);
+      const error = await runIdeate(["x"], makeSink()).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CliError);
+      expect(error).toMatchObject({
+        exitCode: 2,
+        message: `no council "product-jury". to create product-jury: ${install}, then rerun councilkit init`,
+      });
+      if (only === "kimi") expect((error as Error).message).not.toContain("install kimi");
+    },
+  );
+
   function seedRoster(): { product: string; engineering: string } {
     const store = new Store();
     const product = store.createAgent({

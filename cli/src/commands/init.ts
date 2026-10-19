@@ -17,7 +17,6 @@ import {
   PR_JURY_TOPIC,
 } from "../init/defaults";
 import {
-  CREATE_PRODUCT_JURY_HINT,
   IDEATE_AGENT_SPECS,
   IDEATE_REPORTER_FALLBACK,
   type IdeateAgentSpec,
@@ -27,6 +26,7 @@ import {
   PRODUCT_JURY_ROUNDS,
   PRODUCT_JURY_TARGET_OUTPUT,
   PRODUCT_JURY_TOPIC,
+  createProductJuryHint,
 } from "../init/ideate-defaults";
 import type { OutputSink } from "../output";
 import type { AgentRecord, CouncilRecord } from "../store/schemas";
@@ -285,7 +285,7 @@ function renderHuman(outcome: InitOutcome, hasProductJury: boolean): string {
   }
   lines.push("next:");
   for (const hint of outcome.next.split(" · ")) lines.push(`  ${hint}`);
-  if (!hasProductJury) lines.push(`  ${CREATE_PRODUCT_JURY_HINT}`);
+  if (!hasProductJury) lines.push(`  ${createProductJuryHint()}`);
   lines.push("open reports: http://127.0.0.1:43127/reports");
   return lines.join("\n");
 }

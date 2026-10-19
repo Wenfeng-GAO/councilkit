@@ -3,6 +3,7 @@
  * `councilkit init` writes for `councilkit ideate`. Model ids for grok/kimi
  * reuse the existing review literals; Codex is not guessed.
  */
+import { findExecutable } from "../auto/driver-commands";
 import type { DriverSelection } from "../store/schemas";
 
 export const PRODUCT_JURY_COUNCIL_NAME = "product-jury" as const;
@@ -78,5 +79,15 @@ export const IDEATE_REPORTER_FALLBACK = [
 
 export const NEXT_IDEATE_HINT = 'councilkit ideate "<idea>" --council product-jury';
 
-export const CREATE_PRODUCT_JURY_HINT =
-  "to create product-jury: install kimi or codex, then rerun councilkit init";
+/** kimi and codex are the only tools this next line names. */
+const PRODUCT_JURY_SETUP_TOOLS = ["kimi", "codex"] as const;
+
+/**
+ * Names only the setup tools still absent. When both are already installed
+ * and product-jury still cannot be created, keep the fixed pair (#399).
+ */
+export function createProductJuryHint(env: NodeJS.ProcessEnv = process.env): string {
+  const missing = PRODUCT_JURY_SETUP_TOOLS.filter((name) => findExecutable(name, env) === null);
+  const tools = missing.length === 0 ? PRODUCT_JURY_SETUP_TOOLS : missing;
+  return `to create product-jury: install ${tools.join(" or ")}, then rerun councilkit init`;
+}
