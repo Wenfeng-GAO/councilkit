@@ -23,6 +23,7 @@ import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { reviewComparison } from "../../runtime-host/review-explainer/comparison";
 import { readFrozenFile, readFrozenReview } from "../../runtime-host/review-explainer/workspace";
+import { prepareIsolatedSource, stripUrlCredentials } from "../src/auto/git-worktree";
 import {
   BUSY_REPORT_LINE,
   claudeEnvelope,
@@ -167,5 +168,53 @@ describe("#273 SAFE-05 PR-mode fetch uses an isolated clone", () => {
     expect(head.text).toContain("a - b");
     const comparison = reviewComparison(outcome.runId, "last-commit");
     expect(JSON.stringify(comparison)).not.toContain("repository_missing");
+  });
+});
+
+/**
+ * #305 — `prepareIsolatedSource` copies `remote.origin.url` into the run's
+ * `source.git/config`. A user's origin can carry a PAT in its userinfo
+ * (`https://x-access-token:ghp_…@github.com/…`), which would then sit in
+ * cleartext inside `runs/<id>/` forever. It must be stripped first.
+ */
+describe("#305 the isolated source never persists credentials from origin", () => {
+  it("stripUrlCredentials drops userinfo and leaves clean URLs alone", () => {
+    expect(stripUrlCredentials("https://x-access-token:ghp_SECRET@github.com/acme/repo.git")).toBe(
+      "https://github.com/acme/repo.git",
+    );
+    expect(stripUrlCredentials("https://user:pw@git.example.com:8443/a/b.git")).toBe(
+      "https://git.example.com:8443/a/b.git",
+    );
+    // Already clean, or not a URL at all: untouched.
+    for (const same of [
+      "https://github.com/acme/repo.git",
+      "git@github.com:acme/repo.git",
+      "/abs/path/to/repo",
+      "../relative/repo",
+    ]) {
+      expect(stripUrlCredentials(same)).toBe(same);
+    }
+  });
+
+  it("a token in the user's origin never reaches the run's source.git config", async () => {
+    const { repo } = makeOriginAndClone();
+    const token = "ghp_" + "T".repeat(36);
+    // Point the user's origin at itself with a credential in the userinfo.
+    execFileSync("git", ["remote", "set-url", "origin", `https://x-access-token:${token}@example.invalid/acme/fixture.git`], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+
+    const runDir = mkdtempSync(join(tmpdir(), "ck-safe05-305-"));
+    try {
+      const sourceRepo = await prepareIsolatedSource({ repo, runDir });
+      const config = readFileSync(join(sourceRepo, "config"), "utf8");
+      expect(config).not.toContain(token);
+      expect(config).not.toContain("x-access-token");
+      // The URL is still usable and still points at the same host.
+      expect(config).toContain("https://example.invalid/acme/fixture.git");
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
   });
 });

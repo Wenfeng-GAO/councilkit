@@ -79,11 +79,38 @@ export async function fetchRefExclusive(opts: {
 }
 
 /**
+ * Strip credentials out of a remote URL before it is written anywhere on disk.
+ *
+ * A user's `remote.origin.url` can legitimately be
+ *   https://x-access-token:ghp_xxx@github.com/org/repo.git
+ * or carry a PAT in the userinfo. `git remote set-url` persists that verbatim
+ * into the run's `source.git/config`, i.e. a long-lived cleartext token inside
+ * `runs/<id>/`. Drop the userinfo and keep the scheme/host/path.
+ *
+ * Non-URL origins (`/abs/path`, `../rel`, `host:path` scp syntax) have no
+ * userinfo we can safely rewrite, so they pass through untouched.
+ */
+export function stripUrlCredentials(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return raw;
+  }
+  if (url.username === "" && url.password === "") return raw;
+  url.username = "";
+  url.password = "";
+  return url.toString();
+}
+
+/**
  * SAFE-05 for PR reviews (#273 part 2): a per-run bare `--shared` clone of the
  * user's repo under the run dir. PR-mode fetches (head + target) land here, so
  * a review never writes objects or refs into the user's `.git/`. The clone
  * reads the user's objects through alternates (no copy), and its `origin`
  * points at the user's real origin URL so `git fetch origin …` still works.
+ * Any credentials embedded in that URL are stripped first (#305): the run dir
+ * must never hold a cleartext token.
  * Idempotent: a resume reuses the existing source.
  */
 export async function prepareIsolatedSource(opts: {
@@ -104,7 +131,7 @@ export async function prepareIsolatedSource(opts: {
   });
   // No origin (pinned/local-only runs): the clone's own origin stays the user
   // repo path; fetching from it only reads the user's repo.
-  const originUrl = url.exitCode === 0 ? url.stdout.trim() : "";
+  const originUrl = url.exitCode === 0 ? stripUrlCredentials(url.stdout.trim()) : "";
   const repoArg = gitPositional(opts.repo);
   const destArg = gitPositional(dest);
   if (repoArg === null || destArg === null) {
