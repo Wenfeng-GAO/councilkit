@@ -23,7 +23,6 @@ import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { reviewComparison } from "../../runtime-host/review-explainer/comparison";
 import { readFrozenFile, readFrozenReview } from "../../runtime-host/review-explainer/workspace";
-import { prepareIsolatedSource, stripUrlCredentials } from "../src/auto/git-worktree";
 import {
   BUSY_REPORT_LINE,
   claudeEnvelope,
@@ -34,6 +33,7 @@ import {
 } from "../../tests/review-explainer/cli-harness";
 import { type RunCommand, defaultRunCommand } from "../src/auto/checkout-pr";
 import { DRIVER_PROBE_PROMPT } from "../src/auto/driver-commands";
+import { prepareIsolatedSource, stripUrlCredentials } from "../src/auto/git-worktree";
 import type { SpawnImpl } from "../src/auto/runner";
 import { ReviewExit, runReview } from "../src/commands/review";
 
@@ -198,12 +198,21 @@ describe("#305 the isolated source never persists credentials from origin", () =
 
   it("a token in the user's origin never reaches the run's source.git config", async () => {
     const { repo } = makeOriginAndClone();
-    const token = "ghp_" + "T".repeat(36);
+    const token = `ghp_${"T".repeat(36)}`;
     // Point the user's origin at itself with a credential in the userinfo.
-    execFileSync("git", ["remote", "set-url", "origin", `https://x-access-token:${token}@example.invalid/acme/fixture.git`], {
-      cwd: repo,
-      encoding: "utf8",
-    });
+    execFileSync(
+      "git",
+      [
+        "remote",
+        "set-url",
+        "origin",
+        `https://x-access-token:${token}@example.invalid/acme/fixture.git`,
+      ],
+      {
+        cwd: repo,
+        encoding: "utf8",
+      },
+    );
 
     const runDir = mkdtempSync(join(tmpdir(), "ck-safe05-305-"));
     try {
