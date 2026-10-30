@@ -135,9 +135,7 @@ describe("#303 --no-require-spec with an auto-detected spec that has no acceptan
     expect(caught.exitCode).toBe(0);
     expect(
       sink.lines.some(
-        (l) =>
-          l.includes("narrative-plan.md") &&
-          l.includes("但没有验收 ID，按非合同模式审查"),
+        (l) => l.includes("narrative-plan.md") && l.includes("但没有验收 ID，按非合同模式审查"),
       ),
     ).toBe(true);
     const finished = sink.finished as { status?: string; failure?: unknown };
