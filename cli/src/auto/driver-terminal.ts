@@ -179,7 +179,3 @@ export function classifyDriverTerminal(input: {
     message: redactDriverDiagnostic(stderr),
   };
 }
-
-export function isRetryableTerminal(terminal: DriverTerminal | null): boolean {
-  return terminal?.retryable !== false;
-}
