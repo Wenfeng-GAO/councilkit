@@ -17,6 +17,7 @@ CouncilKit 组织本地、结构化的多 Agent 讨论：用户创建 Room、加
   - `kimi` CLI + coding plan 登录
   - `grok` CLI + `grok login`
   - `cursor-agent` CLI + `cursor-agent login`（或 `CURSOR_API_KEY`）
+- **GitHub CLI（`gh`）2.46 或更新**：review / apply / fix 处理 GitHub PR 时需要（`gh pr view`）。更低的版本不支持；`councilkit doctor` 会报告已安装的 gh 版本是否达标。
 
 认证统一为 `installation-managed`：本机 Runtime Installation 自行解析凭据，CouncilKit 从不读取或存储 API Key。
 

@@ -12,6 +12,8 @@ import type {
   InstallationsResponse,
   ModelCatalogResponse,
 } from "@shared/runtime/schemas";
+import { type RunCommand, defaultRunCommand } from "../auto/checkout-pr";
+import { findExecutable } from "../auto/driver-commands";
 import { errors } from "../errors";
 import { HostClient } from "../host/client";
 import { listTrusted } from "../host/installations";
@@ -24,8 +26,27 @@ export type DoctorHost = Pick<
   "health" | "listInstallations" | "modelCatalog" | "profileReadiness"
 >;
 
+/** gh floor for GitHub PR review/apply/fix (#302): gh 2.46 predates
+ * `baseRefOid`, so checkout-pr retries without it and fills the base SHA via
+ * `git ls-remote`. doctor reports the installed gh against this floor. */
+export const MIN_SUPPORTED_GH = { major: 2, minor: 46 } as const;
+
+const GH_PROBE_TIMEOUT_MS = 5000;
+const GH_VERSION_RE = /gh version (\d+)\.(\d+)(?:\.(\d+))?/;
+
+export interface GhVersionInfo {
+  found: boolean;
+  /** Normalized "major.minor.patch"; null when unparseable. */
+  version: string | null;
+  /** Null = unknown (probe failed or unparseable output). */
+  supported: boolean | null;
+  detail: string | null;
+}
+
 export interface DoctorDeps {
   host?: DoctorHost;
+  /** Injectable gh probe (tests). Never allowed to change exit behaviour. */
+  ghVersion?: () => Promise<GhVersionInfo>;
 }
 
 export async function runDoctor(
@@ -70,6 +91,8 @@ export async function runDoctor(
     }),
   );
 
+  const gh = await probeGhVersionSafe(deps.ghVersion);
+
   const result = {
     reachable: true,
     origin: CANONICAL_ORIGIN,
@@ -80,6 +103,7 @@ export async function runDoctor(
       state: i.state,
     })),
     drivers: driverSummary,
+    gh,
   };
 
   await out.finish(result, (d) => renderHuman(d as typeof result));
@@ -140,6 +164,66 @@ async function overlayLoginProbe(
   }
 }
 
+export function parseGhVersionLine(stdout: string): {
+  major: number;
+  minor: number;
+  patch: number;
+} | null {
+  const m = GH_VERSION_RE.exec(stdout);
+  if (!m) return null;
+  return { major: Number(m[1]), minor: Number(m[2]), patch: m[3] === undefined ? 0 : Number(m[3]) };
+}
+
+/** Numeric major.minor compare, so 2.100 > 2.46. */
+export function ghVersionSupported(v: { major: number; minor: number }): boolean {
+  return (
+    v.major > MIN_SUPPORTED_GH.major ||
+    (v.major === MIN_SUPPORTED_GH.major && v.minor >= MIN_SUPPORTED_GH.minor)
+  );
+}
+
+export async function probeGhVersion(
+  runCommand: RunCommand = defaultRunCommand,
+): Promise<GhVersionInfo> {
+  if (findExecutable("gh") === null) {
+    return { found: false, version: null, supported: null, detail: "not found on PATH" };
+  }
+  const result = await runCommand({
+    executable: "gh",
+    argv: ["--version"],
+    cwd: process.cwd(),
+    timeoutMs: GH_PROBE_TIMEOUT_MS,
+  });
+  if (result.exitCode !== 0 || result.error !== undefined) {
+    return { found: true, version: null, supported: null, detail: "`gh --version` failed" };
+  }
+  const parsed = parseGhVersionLine(result.stdout);
+  if (parsed === null) {
+    return {
+      found: true,
+      version: null,
+      supported: null,
+      detail: "could not parse `gh --version` output",
+    };
+  }
+  return {
+    found: true,
+    version: `${parsed.major}.${parsed.minor}.${parsed.patch}`,
+    supported: ghVersionSupported(parsed),
+    detail: null,
+  };
+}
+
+/** Advisory only: the gh probe must never throw, hang, or change doctor's exit
+ * code, so any failure collapses to an "unknown" report. */
+async function probeGhVersionSafe(probe?: () => Promise<GhVersionInfo>): Promise<GhVersionInfo> {
+  try {
+    return await (probe ?? (() => probeGhVersion()))();
+  } catch {
+    return { found: false, version: null, supported: null, detail: "probe error" };
+  }
+}
+
 function renderHuman(d: {
   reachable: boolean;
   origin: string;
@@ -151,6 +235,7 @@ function renderHuman(d: {
     trustedInstallationIds: string[];
     catalogProbe: { ok: boolean; catalog?: string[]; error?: string };
   }[];
+  gh: GhVersionInfo;
 }): string {
   const lines: string[] = [];
   lines.push(`councilkit doctor — Host reachable at ${d.origin}`);
@@ -166,7 +251,19 @@ function renderHuman(d: {
       `  ${dr.driverId}: trusted=${dr.trustedCount} catalogProbe=${dr.catalogProbe.ok ? "ok" : "fail"}${dr.catalogProbe.catalog ? ` (${dr.catalogProbe.catalog.length} models)` : ""}${dr.catalogProbe.error ? ` — ${dr.catalogProbe.error}` : ""}`,
     );
   }
+  lines.push(`  gh: ${renderGhLine(d.gh)}`);
   return lines.join("\n");
+}
+
+function renderGhLine(gh: GhVersionInfo): string {
+  if (!gh.found) {
+    return gh.detail === "probe error"
+      ? "unknown (probe error)"
+      : "not found (GitHub PR review/apply/fix needs gh >= 2.46)";
+  }
+  if (gh.supported === true) return `${gh.version} (ok, >= 2.46)`;
+  if (gh.supported === false) return `${gh.version} (below minimum 2.46 — upgrade gh)`;
+  return `installed, version unknown${gh.detail ? ` (${gh.detail})` : ""}`;
 }
 
 function reportUnreachable(out: OutputSink, error: unknown): void {

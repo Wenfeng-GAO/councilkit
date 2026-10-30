@@ -1,6 +1,11 @@
 import { RuntimeClientError } from "@/runtime/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runDoctor } from "../src/commands/doctor";
+import {
+  type DoctorHost,
+  ghVersionSupported,
+  parseGhVersionLine,
+  runDoctor,
+} from "../src/commands/doctor";
 import { CliError } from "../src/errors";
 import { type OutputSink, createOutput } from "../src/output";
 
@@ -124,5 +129,145 @@ describe("CK-4 doctor login overlay", () => {
     expect(result.drivers).toHaveLength(1);
     expect(result.drivers[0]?.catalogProbe.ok).toBe(false);
     expect(result.drivers[0]?.catalogProbe.error).toContain("先运行 `kimi login`");
+  });
+});
+
+describe("doctor gh version line (#302)", () => {
+  function humanSink(): OutputSink & { finished: unknown } {
+    return {
+      json: false,
+      finished: undefined,
+      progress() {},
+      diag() {},
+      finish(data, humanRender) {
+        this.finished = humanRender ? humanRender(data) : data;
+        return Promise.resolve();
+      },
+    };
+  }
+
+  function fakeHost(): DoctorHost {
+    return {
+      async health() {
+        return {
+          apiVersion: "v1",
+          hostInstanceId: "h-1",
+          node: { version: "v22.14.0", major: 22 },
+          drivers: [{ driverId: "kimi-stream-json", capability: "ready" }],
+        };
+      },
+      async listInstallations() {
+        return {
+          installations: [
+            {
+              installationId: "inst-kimi-1",
+              driverId: "kimi-stream-json",
+              state: "trusted",
+              executablePath: null,
+              fingerprint: null,
+              components: [],
+              detail: null,
+            },
+          ],
+        };
+      },
+      async modelCatalog() {
+        return { catalog: ["kimi-code/k3"], cachedAt: "2026-01-01T00:00:00.000Z" };
+      },
+      async profileReadiness() {
+        return {
+          readiness: { state: "ready", detail: null },
+          binding: null,
+          cachedAt: "2026-01-01T00:00:00.000Z",
+        };
+      },
+    };
+  }
+
+  function jsonSink(): OutputSink & { finished: unknown } {
+    return {
+      json: true,
+      finished: undefined,
+      progress() {},
+      diag() {},
+      finish(data) {
+        this.finished = data;
+        return Promise.resolve();
+      },
+    };
+  }
+
+  it("reports a supported gh version in JSON and human output", async () => {
+    const sink = jsonSink();
+    await runDoctor([], sink, {
+      host: fakeHost(),
+      ghVersion: async () => ({ found: true, version: "2.46.0", supported: true, detail: null }),
+    });
+    const result = sink.finished as { gh: { version: string; supported: boolean } };
+    expect(result.gh.version).toBe("2.46.0");
+    expect(result.gh.supported).toBe(true);
+
+    const human = humanSink();
+    await runDoctor([], human, {
+      host: fakeHost(),
+      ghVersion: async () => ({ found: true, version: "2.46.0", supported: true, detail: null }),
+    });
+    expect(String(human.finished)).toContain("gh: 2.46.0 (ok, >= 2.46)");
+  });
+
+  it("flags an unsupported gh version with an upgrade hint", async () => {
+    const human = humanSink();
+    await runDoctor([], human, {
+      host: fakeHost(),
+      ghVersion: async () => ({ found: true, version: "2.45.0", supported: false, detail: null }),
+    });
+    expect(String(human.finished)).toContain("gh: 2.45.0 (below minimum 2.46 — upgrade gh)");
+  });
+
+  it("degrades gracefully when gh is missing", async () => {
+    const human = humanSink();
+    await expect(
+      runDoctor([], human, {
+        host: fakeHost(),
+        ghVersion: async () => ({
+          found: false,
+          version: null,
+          supported: null,
+          detail: "not found on PATH",
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    expect(String(human.finished)).toContain("gh: not found");
+  });
+
+  it("degrades gracefully when the probe fails", async () => {
+    const human = humanSink();
+    await expect(
+      runDoctor([], human, {
+        host: fakeHost(),
+        ghVersion: async () => ({
+          found: true,
+          version: null,
+          supported: null,
+          detail: "`gh --version` failed",
+        }),
+      }),
+    ).resolves.toBeUndefined();
+    expect(String(human.finished)).toContain(
+      "gh: installed, version unknown (`gh --version` failed)",
+    );
+  });
+
+  it("compares gh versions numerically, not as strings", () => {
+    expect(parseGhVersionLine("gh version 2.46.0 (2024-01-01)")).toEqual({
+      major: 2,
+      minor: 46,
+      patch: 0,
+    });
+    expect(parseGhVersionLine("not a version")).toBeNull();
+    expect(ghVersionSupported({ major: 2, minor: 46 })).toBe(true);
+    expect(ghVersionSupported({ major: 2, minor: 100 })).toBe(true);
+    expect(ghVersionSupported({ major: 2, minor: 45 })).toBe(false);
+    expect(ghVersionSupported({ major: 3, minor: 0 })).toBe(true);
   });
 });

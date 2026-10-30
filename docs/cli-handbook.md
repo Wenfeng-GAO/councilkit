@@ -258,7 +258,7 @@ councilkit review <url> --resume <run-id> [--json]
    - **默认强制（`--require-spec`）**：不在 Host/CLI 启动瞬间硬退出；进入 run 后在审查阶段拒绝（`SPEC_REQUIRED`，exit 2）。拒绝文案说明缺失物与应放置路径；**不会**静默改成无合同加法对抗审查。
    - **`--no-require-spec`**：允许继续，非合同 / 遗留模式（prompt 标明未绑定；blocking 回退严重度门禁）。
 4. **有合同 → 自动绑定**，审查为减法：只对绑定规格中的具名不变量 / 验收 ID / agentverify 场景作 **Act On**（须同时给出可复现反例）。
-5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `A01` / `INV-*` / `VT*` / `agentverify:*`，或「验收」章节 checklist），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若规格无可具名验收点 → 仍拒绝（`SPEC_VERIFY_UNBOUND`）。
+5. **Verify 挂钩**：从绑定规格正文提取验收点（`AC-*` / `A01` / `INV-*` / `VT*` / `agentverify:*`，或「验收」章节 checklist），写入 Attempt/Aggregator 提示的「验收点（verify）」；合同审查之后/同时对照这些点验证。若**显式 `--spec` 指定**的规格无可具名验收点 → 仍拒绝（`SPEC_VERIFY_UNBOUND`）。自动探测（PR 正文指向 `docs/plans/` 等）命中的规格若无可具名验收点，则按非合同模式继续，并打印 `spec: 找到 …，但没有验收 ID，按非合同模式审查 (--no-require-spec)`；默认 `--require-spec` 下**没有**任何规格绑定才在审查阶段拒绝（`SPEC_REQUIRED`）。
 
 规格未覆盖的重大问题必须标为 **`[suggest-amend-spec]` /「建议修订规格」**，可展示但**默认不阻塞合并**。Aggregator 去重；nit / 纯风格 / 仅注释行号不阻塞。旧账本行若无 `contractClass` 字段，仍按原来的 critical/major 严重度门禁（兼容）。
 
