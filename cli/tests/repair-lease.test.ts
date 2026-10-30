@@ -218,9 +218,13 @@ describe("writer lease CAS", () => {
     });
     expect(synced).toBe(true);
 
-    expect(() => releaseWriterLease({ repo: "github.com/acme/repo", sourceBranch: "feat-x", holderRunId: runId })).toThrow(
-      /writer|alive|pid/i,
-    );
+    expect(() =>
+      releaseWriterLease({
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        holderRunId: runId,
+      }),
+    ).toThrow(/writer|alive|pid/i);
 
     releaseWriterLease({
       repo: "github.com/acme/repo",
@@ -240,8 +244,18 @@ describe("writer lease CAS", () => {
       holderRunId: runId,
       pid: process.pid,
     });
-    updateWriterPids({ repo: "github.com/acme/repo", sourceBranch: "feat-x", holderRunId: runId, writerPids: [11] });
-    updateWriterPids({ repo: "github.com/acme/repo", sourceBranch: "feat-x", holderRunId: runId, writerPids: [11, 22] });
+    updateWriterPids({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderRunId: runId,
+      writerPids: [11],
+    });
+    updateWriterPids({
+      repo: "github.com/acme/repo",
+      sourceBranch: "feat-x",
+      holderRunId: runId,
+      writerPids: [11, 22],
+    });
 
     expect(JSON.parse(readFileSync(leasePath, "utf8")).writerPids).toEqual([11, 22]);
   });
@@ -265,7 +279,12 @@ describe("writer lease CAS", () => {
       }),
     ).toBe(false);
     expect(
-      updateWriterPids({ repo: "github.com/acme/repo", sourceBranch: "other", holderRunId: runId, writerPids: [process.pid] }),
+      updateWriterPids({
+        repo: "github.com/acme/repo",
+        sourceBranch: "other",
+        holderRunId: runId,
+        writerPids: [process.pid],
+      }),
     ).toBe(false);
 
     expect(JSON.parse(readFileSync(writerLeasePath(home, key), "utf8")).writerPids).toBeUndefined();
@@ -280,12 +299,21 @@ describe("writer lease CAS", () => {
       holderRunId: runId,
       pid: process.pid,
     });
-    expect(updateWriterPids({ repo: "github.com/acme/repo", sourceBranch: "feat-x", holderRunId: runId, writerPids: [] })).toBe(
-      false,
-    );
     expect(
-      updateWriterPids({ repo: "github.com/acme/repo", sourceBranch: "feat-x", holderRunId: runId, writerPids: [0, -3] }),
+      updateWriterPids({
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        holderRunId: runId,
+        writerPids: [],
+      }),
+    ).toBe(false);
+    expect(
+      updateWriterPids({
+        repo: "github.com/acme/repo",
+        sourceBranch: "feat-x",
+        holderRunId: runId,
+        writerPids: [0, -3],
+      }),
     ).toBe(false);
   });
 });
-

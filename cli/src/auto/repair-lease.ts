@@ -68,7 +68,6 @@ export function acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease 
   return takeExisting(existing, next, alive, input.reclaim, isHolderSettled, path);
 }
 
-
 /**
  * Add the writer pids discovered after the lease was granted.
  *
