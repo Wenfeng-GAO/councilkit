@@ -68,6 +68,36 @@ export function acquireWriterLease(input: AcquireWriterLeaseInput): WriterLease 
   return takeExisting(existing, next, alive, input.reclaim, isHolderSettled, path);
 }
 
+
+/**
+ * Add the writer pids discovered after the lease was granted.
+ *
+ * The lease is acquired before the squad bridge starts any writer, so at
+ * acquire time the pid list is empty. Without this call the on-disk lease keeps
+ * `writerPids: undefined`, `releaseWriterLease` finds nothing alive, and a
+ * terminal repair releases the lock while a writer is still running (#305 P1).
+ * Only the current holder may extend its own lease; best-effort by design.
+ */
+export function updateWriterPids(input: {
+  repo: string;
+  sourceBranch: string;
+  holderRunId: string;
+  writerPids: number[];
+}): boolean {
+  const pids = input.writerPids.filter((pid) => Number.isInteger(pid) && pid > 0);
+  if (pids.length === 0) return false;
+  const key = writerLeaseKey({ repo: input.repo, sourceBranch: input.sourceBranch });
+  const path = writerLeasePath(resolvePaths().home, key);
+  const text = readFileText(path);
+  if (text === null) return false;
+  const existing = parseWriterLease(text);
+  if (existing === null) return false;
+  if (existing.holderRunId !== input.holderRunId) return false;
+  const merged = Array.from(new Set([...(existing.writerPids ?? []), ...pids]));
+  atomicWriteJson(path, { ...existing, writerPids: merged });
+  return true;
+}
+
 export function releaseWriterLease(input: {
   repo: string;
   sourceBranch: string;

@@ -97,7 +97,7 @@ import {
   writeExecutionRecord,
 } from "./repair-deadline-supervisor";
 import { ensureRepairHandoff } from "./repair-handoff";
-import { acquireWriterLease, releaseWriterLease } from "./repair-lease";
+import { acquireWriterLease, releaseWriterLease, updateWriterPids } from "./repair-lease";
 import {
   type RepairCycle,
   type RepairState,
@@ -668,6 +668,15 @@ export async function executeRepairLoop(input: {
       if (!settledResume.ok) return settledResume.outcome;
       if (bridge.writerPids) {
         state = patchState(input.runDir, { ...state, writerPids: settledResume.pids });
+        // The lease is granted before any writer exists, so its pid list starts
+        // empty. Push the live pids into the lease too, otherwise a terminal
+        // repair releases the lock while this writer is still running.
+        updateWriterPids({
+          repo: profile.repo,
+          sourceBranch: profile.sourceBranch,
+          holderRunId: input.runId,
+          writerPids: settledResume.pids,
+        });
       }
       const boundResume = bindOfficialExpectedPolicy(bridge, taskId, input.runDir, state);
       if (!boundResume.ok) {
@@ -835,6 +844,15 @@ export async function executeRepairLoop(input: {
       if (!settledStart.ok) return settledStart.outcome;
       if (bridge.writerPids) {
         state = patchState(input.runDir, { ...state, writerPids: settledStart.pids });
+        // The lease is granted before any writer exists, so its pid list starts
+        // empty. Push the live pids into the lease too, otherwise a terminal
+        // repair releases the lock while this writer is still running.
+        updateWriterPids({
+          repo: profile.repo,
+          sourceBranch: profile.sourceBranch,
+          holderRunId: input.runId,
+          writerPids: settledStart.pids,
+        });
       }
       const boundStart = bindOfficialExpectedPolicy(bridge, started.taskId, input.runDir, state);
       if (!boundStart.ok) {
