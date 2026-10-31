@@ -1,0 +1,41 @@
+cli/tests/auto-driver-commands.test.ts
+  s_0ec53e1a039992::t_cdc133a34231da 82-85,88-91
+  s_0ec53e1a039992::t_9a231d5b9c40ba 599
+  s_0ec53e1a039992::t_558c091744e051 78-81,86-87
+  s_0ec53e1a039992::t_f7b4043592a117 6,15
+  s_0ec53e1a039992::t_bb5b3f4b57ee2b 643,647
+  s_0ec53e1a039992::t_43ec3ad1241c16 600-642,644-646,648-680,682-706
+  s_0ec53e1a039992::t_4cc9b13e897ba8 681
+cli/src/auto/driver-commands.ts
+  s_0ec53e1a039992::t_7e694f462eab56 434-446,448-456,462-463,470-494,499-503
+  s_0ec53e1a039992::t_3c8fe9e30a5fc7 30
+  s_0ec53e1a039992::t_3a1d42949ebaf6 495-498
+  s_0ec53e1a039992::t_0df4c02376cd62 457-461,464-469
+  s_0ec53e1a039992::t_3d0bc1a6a8f3cd 447
+  s_0ec53e1a039992::t_fc0ca5ff8cebda 572
+cli/tests/repair-terminal-resume.test.ts
+  s_0ec53e1a039992::t_6825f5ac922916 1
+  s_0ec53e1a039992::t_1311d873bbacd5 14
+  s_0ec53e1a039992::t_62e33a6522186a 519
+  s_0ec53e1a039992::t_427d7cda5e209a 448-451,453-460,462-518,520-542
+  s_0ec53e1a039992::t_1528643733ace8 452,461
+cli/src/auto/repair-run.ts
+  s_0ec53e1a039992::t_89b93dd09f04ab 69
+  s_0ec53e1a039992::t_de3b378789bb8d 177,184-214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ed6c5c3f3d7bbe3ed93f2688e8a9706db220e006",
+  "prompts": {},
+  "sessions": {
+    "s_0ec53e1a039992": {
+      "agent_id": {
+        "tool": "antcc",
+        "id": "7ab6564b-cb3e-4b7a-874b-0ba5fdab38da",
+        "model": "antchat/GLM-5.3"
+      },
+      "human_author": "恒拙 <hengzhuo.gwf@antgroup.com>"
+    }
+  }
+}
