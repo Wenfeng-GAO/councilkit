@@ -27,6 +27,7 @@ import { createHash } from "node:crypto";
 import {
   constants,
   accessSync,
+  appendFileSync,
   chmodSync,
   closeSync,
   existsSync,
@@ -430,6 +431,76 @@ export function disposeIsolatedGrokHome(cwd: string | null | undefined): void {
   }
 }
 
+/**
+ * Belt-and-suspenders against token exfiltration by commit (BRIDGE-CRED-001):
+ * the per-cwd `.grok-home` lives inside workspace clones (review worktrees,
+ * repair-bridge target repos) whose commits may be published, so an agent that
+ * runs `git add -A` must never see it as stageable. `.git/info/exclude` is the
+ * only git-native mechanism that is never committed (a `.gitignore` file would
+ * pollute the target repo's working tree and the PR diff). Idempotent and
+ * best-effort: a non-git cwd, a vanished `info/` dir, or any IO error is a
+ * silent no-op — the dispose-on-terminal path remains the primary defense.
+ */
+export function addGrokHomeGitExclude(cwd: string): void {
+  try {
+    const dotGit = join(cwd, ".git");
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(dotGit);
+    } catch {
+      return; // not a git repo — nothing to exclude from
+    }
+    let gitDir: string;
+    if (st.isDirectory()) {
+      gitDir = dotGit;
+    } else if (st.isFile()) {
+      // Linked worktree: `.git` is a `gitdir: <path>` pointer file. `info/exclude`
+      // is shared with common dir (verified via `git rev-parse --git-common-dir`:
+      // git consults <common>/info/exclude, never the per-worktree gitdir), so
+      // follow the `commondir` file when it exists; without it the pointer target
+      // IS the common dir.
+      const match = /^gitdir:[ \t]*(.+)$/m.exec(readFileSync(dotGit, "utf8"));
+      if (!match) return;
+      let resolved = resolve(match[1].trim());
+      try {
+        resolved = resolve(resolved, readFileSync(join(resolved, "commondir"), "utf8").trim());
+      } catch {
+        // no commondir — keep the pointer target
+      }
+      try {
+        if (!statSync(resolved).isDirectory()) return;
+      } catch {
+        return;
+      }
+      gitDir = resolved;
+    } else {
+      return;
+    }
+    const excludePath = join(gitDir, "info", "exclude");
+    const entry = `${GROK_ISOLATED_HOME_DIR}/`;
+    let existing: string;
+    try {
+      existing = readFileSync(excludePath, "utf8");
+    } catch {
+      existing = "";
+    }
+    for (const line of existing.split(/\r?\n/)) {
+      if (line.trim() === entry) return;
+    }
+    try {
+      mkdirSync(dirname(excludePath), { recursive: true });
+    } catch {
+      return;
+    }
+    // Missing exclude file → start clean; existing file without a trailing
+    // newline → separate our entry from the previous last line.
+    const leading = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    appendFileSync(excludePath, `${leading}${entry}\n`);
+  } catch {
+    // unreadable or unwritable — git exclusion is best-effort
+  }
+}
+
 /** Process-lifetime warm GROK_HOME for probes (credentials + skills=false only). */
 let warmGrokHomeDir: string | null = null;
 
@@ -498,6 +569,7 @@ function isolateGrokHome(
   } catch {
     return null;
   }
+  addGrokHomeGitExclude(cwd);
   const ideate = existsSync(join(cwd, IDEATE_POLICY_MARKER));
   if (!ideate) {
     const src = nonBlank(origHome) ?? join(homedir(), ".grok");

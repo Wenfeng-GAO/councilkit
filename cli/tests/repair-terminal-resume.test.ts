@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
 import { recoveryActionFor } from "@shared/runtime/repair-progress";
 import { SQUAD_BRIDGE_CONTRACT_VERSION } from "@shared/runtime/squad-bridge-contract";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawnEnvForDriver } from "../src/auto/driver-commands";
 import {
   executionRecordPath,
   readExecutionRecord,
@@ -443,5 +444,100 @@ describe("terminal repair resume", () => {
       lastError: "refusing to start a deadline_enforced execution",
     });
     expect(readExecutionRecord(recordPath)?.pids).toEqual([7]);
+  });
+
+  // BRIDGE-CRED-001: the repair-bridge orchestrator runs with a per-workspace
+  // GROK_HOME credential copy that must not persist after the loop ends.
+  it("removes the workspace grok credential copy when the repair loop reaches a terminal", async () => {
+    const resumed: string[] = [];
+    const bridge: RepairCommandDeps["bridge"] = {
+      start: () => {
+        throw new Error("must not start");
+      },
+      prepare: async () => {
+        throw new Error("must not prepare");
+      },
+      resume: (request: { taskId: string }) => {
+        resumed.push(request.taskId);
+        return {
+          taskId: request.taskId,
+          event: {
+            kind: "stopped" as const,
+            journal: {
+              candidateSha: SHA,
+              invalidated: false,
+              independentReview: false,
+              independentVerify: false,
+              requiredGatesPassed: false,
+              gatePolicyHash: "unknown",
+            },
+          },
+        };
+      },
+      stop: () => ({ kind: "stopped" as const }),
+      status: () => {
+        throw new Error("must not poll");
+      },
+      requestPublish: () => {
+        throw new Error("must not publish");
+      },
+      writerPids: () => [4242],
+    };
+    const deps = depsFor(bridge);
+    const dir = await bootstrap(deps);
+    const recordPath = arm(dir, TASK_ID);
+    writeExecutionRecord(recordPath, markExecutionStarted(baseExecution(), [7], 1));
+    // `cycleAlreadyLaunched` reads the frozen bridge identity for the cycle.
+    const frozenTaskDir = join(home, "squad-tasks", TASK_ID);
+    mkdirSync(frozenTaskDir, { recursive: true });
+    writeFileSync(
+      join(frozenTaskDir, "councilkit-bridge.json"),
+      JSON.stringify({ nativeSession: "native-session-mine" }),
+    );
+
+    // Reproduce the real bridge spawn side effect (`spawnChild` →
+    // `spawnEnvForDriver`): the orchestrator's GROK_HOME is a copy of the
+    // user's REAL auth.json / credentials.json inside the workspace.
+    const grokSrc = mkdtempSync(join(tmpdir(), "ck-cred-src-"));
+    try {
+      writeFileSync(join(grokSrc, "auth.json"), '{"token":"real-user-token"}');
+      writeFileSync(join(grokSrc, "credentials.json"), '{"credentials":"real"}');
+      spawnEnvForDriver(
+        "grok-stream-json",
+        home,
+        { PATH: "/bin", GROK_HOME: grokSrc },
+        { localProxyPort: () => null },
+      );
+      const grokHome = join(home, ".grok-home");
+      expect(existsSync(join(grokHome, "auth.json"))).toBe(true);
+      expect(existsSync(join(grokHome, "credentials.json"))).toBe(true);
+
+      const out = makeSink();
+      await expect(runRepair(["resume", "--run", REPAIR_ID], out, deps)).rejects.toBeInstanceOf(
+        RepairExit,
+      );
+      expect(resumed).toEqual([TASK_ID]);
+      expect(out.finished).toMatchObject({
+        businessResult: "needs_attention",
+        reasonCode: "squad_failed",
+      });
+
+      // Terminal reached → no credential copy remains anywhere in the
+      // publishable workspace, and disposal is repeat-safe.
+      expect(existsSync(grokHome)).toBe(false);
+      const leftover: string[] = [];
+      const walk = (dirPath: string): void => {
+        for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+          const path = join(dirPath, entry.name);
+          if (entry.isDirectory()) walk(path);
+          else if (entry.name === "auth.json" || entry.name === "credentials.json")
+            leftover.push(path);
+        }
+      };
+      walk(home);
+      expect(leftover).toEqual([]);
+    } finally {
+      rmSync(grokSrc, { recursive: true, force: true });
+    }
   });
 });

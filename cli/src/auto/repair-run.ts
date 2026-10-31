@@ -66,6 +66,7 @@ import type { OutputSink } from "../output";
 import { atomicWriteFile, atomicWriteJson } from "../store/atomic-write";
 import { resolvePaths } from "../store/paths";
 import { type CheckedOutPr, defaultRunCommand, inspectPullRequest } from "./checkout-pr";
+import { disposeIsolatedGrokHome } from "./driver-commands";
 import { loadFindingGroups } from "./finding-groups";
 import {
   codeTraceFromReview,
@@ -173,14 +174,44 @@ export async function defaultRepairReviewImpl(
   return { runId: created, incomplete: run?.reviewEvidence?.complete !== true };
 }
 
-export async function executeRepairLoop(input: {
+export interface RepairLoopInput {
   runId: string;
   runDir: string;
   sourceRunId: string;
   profileName: string;
   out: OutputSink;
   deps?: RepairLoopDeps;
-}): Promise<RepairLoopOutcome> {
+}
+
+/**
+ * The repair-bridge orchestrator runs with a per-workspace GROK_HOME copy of
+ * the user's REAL grok credentials (`<workspace>/.grok-home`, see
+ * `spawnEnvForDriver` → `isolateGrokHome`). Unlike the per-cwd review
+ * attempts, the repair workspace persists on disk and its commits are
+ * published, so the copy may not linger after the loop ends. `finish()`
+ * funnels every planned terminal — approved / needs_attention / stopped,
+ * including the stop that `waitForCandidate` issues on timeout or abort — but
+ * uncaught crashes would skip it, so disposal runs in this `finally`,
+ * mirroring the review path's invariant (`runner.ts` disposes per spawn):
+ * after ANY repair-loop terminal, no `.grok-home` remains at rest.
+ * `disposeIsolatedGrokHome` is best-effort and a no-op when the directory is
+ * already gone.
+ */
+export async function executeRepairLoop(input: RepairLoopInput): Promise<RepairLoopOutcome> {
+  try {
+    return await runRepairLoop(input);
+  } finally {
+    let workspaceCwd: string | null | undefined;
+    try {
+      workspaceCwd = readRepairState(input.runDir)?.workspaceCwd;
+    } catch {
+      workspaceCwd = undefined;
+    }
+    disposeIsolatedGrokHome(workspaceCwd ?? null);
+  }
+}
+
+async function runRepairLoop(input: RepairLoopInput): Promise<RepairLoopOutcome> {
   const deps = input.deps ?? {};
   const now = deps.now ?? (() => new Date().toISOString());
   let state = readRepairState(input.runDir);

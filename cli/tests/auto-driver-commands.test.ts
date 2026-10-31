@@ -3,6 +3,7 @@
  * construction is checked structurally, output extraction against canned
  * stream-json fixtures, executable resolution against a temp PATH dir.
  */
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -11,6 +12,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,6 +74,20 @@ function captureError(fn: () => unknown): CliError {
 
 describe("cli auto driver-commands", () => {
   let tmp: string;
+
+  // Local git hooks (e.g. `.git/ai` writers) can race a just-abandoned repo
+  // during recursive cleanup on macOS (ENOTEMPTY); retry instead of flaking.
+  const rmtree = async (target: string): Promise<void> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        rmSync(target, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        if (attempt >= 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+  };
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), "councilkit-dc-"));
@@ -578,6 +594,114 @@ describe("cli auto driver-commands", () => {
       expect(readFileSync(join(again.GROK_HOME ?? "", "config.toml"), "utf8")).toBe(
         ISOLATED_GROK_CONFIG,
       );
+    });
+
+    it("git-excludes .grok-home in the checkout it spawns into (BRIDGE-CRED-001)", async () => {
+      const root = mkdtempSync(join(tmpdir(), "ck-grok-excl-"));
+      try {
+        const repo = join(root, "repo");
+        mkdirSync(repo);
+        const git = (args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+        git(["init", "-b", "main"]);
+        git(["config", "user.email", "crew@example.com"]);
+        git(["config", "user.name", "crew"]);
+        writeFileSync(join(repo, "README.md"), "ok\n");
+        git(["add", "."]);
+        git(["commit", "-m", "init"]);
+
+        spawnEnvForDriver(
+          "grok-stream-json",
+          repo,
+          { PATH: "/bin" },
+          { localProxyPort: () => null },
+        );
+        const exclude = join(repo, ".git", "info", "exclude");
+        const linesOf = (text: string) => text.split(/\r?\n/);
+        expect(linesOf(readFileSync(exclude, "utf8"))).toContain(`${GROK_ISOLATED_HOME_DIR}/`);
+
+        // Idempotent: a second spawn (e.g. a repair resume) adds no duplicate entry.
+        spawnEnvForDriver(
+          "grok-stream-json",
+          repo,
+          { PATH: "/bin" },
+          { localProxyPort: () => null },
+        );
+        expect(
+          linesOf(readFileSync(exclude, "utf8")).filter(
+            (line) => line === `${GROK_ISOLATED_HOME_DIR}/`,
+          ),
+        ).toHaveLength(1);
+
+        // The credential copy is invisible to `git add -A`, and no .gitignore
+        // is ever created in the user's working tree.
+        git(["add", "-A"]);
+        expect(git(["ls-files"])).not.toContain(GROK_ISOLATED_HOME_DIR);
+        expect(git(["check-ignore", "-q", `${GROK_ISOLATED_HOME_DIR}/auth.json`])).toBe("");
+        expect(existsSync(join(repo, ".gitignore"))).toBe(false);
+      } finally {
+        await rmtree(root);
+      }
+    });
+
+    it("git-excludes .grok-home for a linked git worktree via its gitdir pointer", async () => {
+      const root = mkdtempSync(join(tmpdir(), "ck-grok-excl-wt-"));
+      try {
+        const repo = join(root, "repo");
+        const project = join(root, "project");
+        execFileSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
+        execFileSync("git", ["-C", repo, "config", "user.email", "crew@example.com"], {
+          encoding: "utf8",
+        });
+        execFileSync("git", ["-C", repo, "config", "user.name", "crew"], { encoding: "utf8" });
+        execFileSync("git", ["-C", repo, "commit", "--allow-empty", "-m", "init"], {
+          encoding: "utf8",
+        });
+        execFileSync("git", ["-C", repo, "worktree", "add", project, "-b", "wt"], {
+          encoding: "utf8",
+        });
+
+        spawnEnvForDriver(
+          "grok-stream-json",
+          project,
+          { PATH: "/bin" },
+          { localProxyPort: () => null },
+        );
+        expect(existsSync(join(project, ".gitignore"))).toBe(false);
+        expect(
+          execFileSync("git", ["-C", project, "check-ignore", "-q", ".grok-home/auth.json"], {
+            encoding: "utf8",
+          }),
+        ).toBe("");
+      } finally {
+        await rmtree(root);
+      }
+    });
+
+    it("disposeIsolatedGrokHome is a safe no-op when .grok-home is missing or a symlink", () => {
+      const absent = join(tmpdir(), `ck-grok-absent-${Date.now()}`);
+      expect(() => disposeIsolatedGrokHome(absent)).not.toThrow();
+      expect(() => disposeIsolatedGrokHome(null)).not.toThrow();
+
+      const cwd = mkdtempSync(join(tmpdir(), "ck-grok-symlink-"));
+      try {
+        const victim = mkdtempSync(join(tmpdir(), "ck-grok-victim-"));
+        writeFileSync(join(victim, "keep.txt"), "not yours\n");
+        symlinkSync(victim, join(cwd, GROK_ISOLATED_HOME_DIR));
+        disposeIsolatedGrokHome(cwd);
+        expect(existsSync(join(victim, "keep.txt"))).toBe(true);
+        expect(existsSync(join(cwd, GROK_ISOLATED_HOME_DIR))).toBe(true);
+        try {
+          rmSync(victim, { recursive: true, force: true });
+        } catch {
+          // sandboxed FS cleanup
+        }
+      } finally {
+        try {
+          rmSync(cwd, { recursive: true, force: true });
+        } catch {
+          // sandboxed FS cleanup
+        }
+      }
     });
 
     it("grok probes use a 3-minute budget", () => {
