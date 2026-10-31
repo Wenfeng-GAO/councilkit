@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { reviewComparison } from "../../runtime-host/review-explainer/comparison";
 import { readFrozenFile, readFrozenReview } from "../../runtime-host/review-explainer/workspace";
@@ -222,6 +222,60 @@ describe("#305 the isolated source never persists credentials from origin", () =
       expect(config).not.toContain("x-access-token");
       // The URL is still usable and still points at the same host.
       expect(config).toContain("https://example.invalid/acme/fixture.git");
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * #404 follow-up — the credential stripping must only apply to http(s), and a
+ * relative filesystem origin must be rebased onto the user's repo before it
+ * lands in the run's `source.git/config`.
+ */
+describe("#404 ssh login users survive; relative origins resolve", () => {
+  it("stripUrlCredentials keeps ssh:// and git+ssh:// users byte-identical", () => {
+    for (const same of [
+      "ssh://git@github.com/acme/f.git",
+      "ssh://alice@host/p",
+      "ssh://git@host:22/p",
+      "git+ssh://git@github.com/a/b.git",
+    ]) {
+      expect(stripUrlCredentials(same)).toBe(same);
+    }
+    // https credentials still stripped.
+    expect(stripUrlCredentials("https://x-access-token:ghp_SECRET@github.com/acme/repo.git")).toBe(
+      "https://github.com/acme/repo.git",
+    );
+  });
+
+  it("a relative origin is rebased onto the user's repo and still resolves", async () => {
+    // Real fixture: a bare repo the user's clone points at with a RELATIVE
+    // origin (`../origin.git`) — what a hand `git remote set-url` writes.
+    const seed = join(home, "seed-rel");
+    mkdirSync(seed);
+    git(seed, "init", "-q", "-b", "main");
+    git(seed, "config", "user.email", "t@t");
+    git(seed, "config", "user.name", "t");
+    writeFileSync(join(seed, "f.txt"), "x\n");
+    git(seed, "add", "-A");
+    git(seed, "commit", "-qm", "base");
+    const bare = join(home, "origin.git");
+    git(home, "clone", "-q", "--bare", seed, bare);
+    const repo = join(home, "repo-rel");
+    git(home, "clone", "-q", bare, repo);
+    git(repo, "remote", "set-url", "origin", "../origin.git");
+
+    const runDir = mkdtempSync(join(tmpdir(), "ck-safe05-rel-"));
+    try {
+      const sourceRepo = await prepareIsolatedSource({ repo, runDir });
+      const origin = git(sourceRepo, "config", "--get", "remote.origin.url");
+      expect(origin).toBe(resolve(repo, "../origin.git"));
+      // Against the run dir, '../origin.git' does not exist: ls-remote must
+      // actually resolve through the rebased absolute path.
+      expect(git(sourceRepo, "ls-remote", "origin", "refs/heads/main").split(/\s+/)[0]).toBe(
+        git(bare, "rev-parse", "refs/heads/main"),
+      );
     } finally {
       rmSync(runDir, { recursive: true, force: true });
     }

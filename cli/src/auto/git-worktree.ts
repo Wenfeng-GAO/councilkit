@@ -6,7 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { ISOLATED_SOURCE_DIR } from "@shared/runtime/cli-home";
 import { errors } from "../errors";
 import { type TrustedRoot, assertWithinRoot, revalidateTrustedRoot } from "../fs-safe";
@@ -87,6 +87,10 @@ export async function fetchRefExclusive(opts: {
  * into the run's `source.git/config`, i.e. a long-lived cleartext token inside
  * `runs/<id>/`. Drop the userinfo and keep the scheme/host/path.
  *
+ * Only http(s) treat userinfo as credentials. An `ssh://` (or `git+ssh://`)
+ * user is a login identity — GitHub requires `git@`, and OpenSSH otherwise
+ * falls back to the OS username — so it must survive verbatim, port included.
+ *
  * Non-URL origins (`/abs/path`, `../rel`, `host:path` scp syntax) have no
  * userinfo we can safely rewrite, so they pass through untouched.
  */
@@ -97,10 +101,39 @@ export function stripUrlCredentials(raw: string): string {
   } catch {
     return raw;
   }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return raw;
   if (url.username === "" && url.password === "") return raw;
   url.username = "";
   url.password = "";
   return url.toString();
+}
+
+/** scp-like syntax `[user@]host:path`: a colon before any slash. */
+function looksLikeScpSyntax(raw: string): boolean {
+  const colon = raw.indexOf(":");
+  if (colon < 0) return false;
+  const slash = raw.indexOf("/");
+  return slash < 0 || colon < slash;
+}
+
+/**
+ * Rebase the user's `remote.origin.url` for the isolated source config.
+ *
+ * The URL is read from the user's repo, so a relative filesystem origin
+ * (`../bare.git`) is meaningful there — but verbatim in the run's
+ * `source.git/config` it resolves against the run dir, where the target does
+ * not exist (#404 regression). Resolve it against the repo it was read from.
+ * URL forms (ssh/https/file/…), absolute paths and scp-like syntax stay
+ * untouched; http(s) credentials are still stripped.
+ */
+function resolveOriginForRun(raw: string, repo: string): string {
+  if (raw === "") return "";
+  try {
+    new URL(raw);
+  } catch {
+    if (!isAbsolute(raw) && !looksLikeScpSyntax(raw)) return resolve(repo, raw);
+  }
+  return stripUrlCredentials(raw);
 }
 
 /**
@@ -109,8 +142,10 @@ export function stripUrlCredentials(raw: string): string {
  * a review never writes objects or refs into the user's `.git/`. The clone
  * reads the user's objects through alternates (no copy), and its `origin`
  * points at the user's real origin URL so `git fetch origin …` still works.
- * Any credentials embedded in that URL are stripped first (#305): the run dir
- * must never hold a cleartext token.
+ * Any credentials embedded in that URL are stripped first (#305), and a
+ * relative filesystem origin is rebased onto the user's repo (#404): the run
+ * dir must never hold a cleartext token, and the origin must still resolve
+ * from inside `source.git/`.
  * Idempotent: a resume reuses the existing source.
  */
 export async function prepareIsolatedSource(opts: {
@@ -131,7 +166,7 @@ export async function prepareIsolatedSource(opts: {
   });
   // No origin (pinned/local-only runs): the clone's own origin stays the user
   // repo path; fetching from it only reads the user's repo.
-  const originUrl = url.exitCode === 0 ? stripUrlCredentials(url.stdout.trim()) : "";
+  const originUrl = url.exitCode === 0 ? resolveOriginForRun(url.stdout.trim(), opts.repo) : "";
   const repoArg = gitPositional(opts.repo);
   const destArg = gitPositional(dest);
   if (repoArg === null || destArg === null) {
